@@ -102,11 +102,18 @@ impl NodeId {
         dead_code,
         reason = "crate-private registration seam consumed by T13 (flow builder) / T11 (binding)"
     )]
-    pub(crate) fn from_name(_name: &str) -> Self {
-        // TDD RED STUB — deliberately ignores the name so the identity-from-name
-        // tests (reorder-stability, rename-sensitivity, distinct identities) fail.
-        // The green step replaces this with the real name-derived hash.
-        Self(0)
+    pub(crate) fn from_name(name: &str) -> Self {
+        // FxHash-free, dependency-free: FNV-1a over the name bytes. A stable,
+        // deterministic hash is all identity needs here; the fingerprint's own
+        // hash function is T0.7/T41's concern, not this equality token's.
+        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+        let mut hash = FNV_OFFSET;
+        for byte in name.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        Self(hash)
     }
 }
 
@@ -284,7 +291,13 @@ mod tests {
     /// downstream byte-identical fingerprint (C21).
     #[test]
     fn identity_is_a_pure_function_of_the_name() {
-        assert_eq!(NodeId::from_name("stage-one"), NodeId::from_name("stage-one"));
-        assert_ne!(NodeId::from_name("stage-one"), NodeId::from_name("stage-two"));
+        assert_eq!(
+            NodeId::from_name("stage-one"),
+            NodeId::from_name("stage-one")
+        );
+        assert_ne!(
+            NodeId::from_name("stage-one"),
+            NodeId::from_name("stage-two")
+        );
     }
 }
