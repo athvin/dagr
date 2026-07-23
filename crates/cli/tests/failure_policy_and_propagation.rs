@@ -160,6 +160,37 @@ impl Task for Skips {
     }
 }
 
+/// A memory-hog task that **holds the whole working-memory pool until the run is
+/// cancelled**, then returns. It cooperatively spins on its per-attempt
+/// cancellation signal and returns the moment it observes the flip. Its purpose is
+/// purely structural: by occupying the entire pinned memory pool for the whole
+/// pre-stop window it keeps a serialized, ready-but-unstarted sibling **provably
+/// pending** (never admitted) until the stop-under-failure settles that sibling
+/// `cancelled`. This closes the initial-frontier permit-release race in
+/// `stop_mode_cancels_pending_unrelated_default_and_runs_contingency`, where the
+/// failing node cannot itself hold its permit until the stop it triggers (its
+/// *return* is the trigger). No wall clock, no sleep — only the cancellation flag it
+/// observes. Its own terminal state is not asserted. (Mirror of the identical helper
+/// in `cancellation_core_and_drain.rs`.)
+struct HoldsMemoryUntilCancelled;
+impl Task for HoldsMemoryUntilCancelled {
+    type Input = ();
+    type Output = u64;
+    async fn run(&mut self, c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+        // Spin cooperatively until the loop has entered cancellation (observed
+        // through this attempt's child signal). Bounded so a regression that never
+        // propagates the stop cannot hang the test — the fallback return then leaves
+        // the gate non-vacuous.
+        for _ in 0..100_000 {
+            if c.cancellation().is_cancelled() {
+                return Ok(0);
+            }
+            tokio::task::yield_now().await;
+        }
+        Ok(0)
+    }
+}
+
 /// A one-input pass-through consumer (data-dependent, always `all-succeeded`).
 struct PassThrough;
 impl Task for PassThrough {
@@ -644,25 +675,40 @@ fn continue_independent_runs_unrelated_branch() {
     assert_eq!(report.outcome, RunOutcome::Failed);
 }
 
-/// Stop-on-first-failure cancels a pending unrelated default-rule node. Admission
-/// is serialized by pinning the memory pool so only one costed node fits at a
-/// time: `bad` is admitted first and fails; the unrelated default-rule node
-/// `later` is still pending (waiting for capacity) and ends `cancelled`, never
-/// admitted after the failure. A firing `any-failed` contingency (zero cost,
-/// ordered after `bad`) still runs. (C15 def-of-done: stop admits no further
-/// default work; pending unrelated → cancelled; contingency still runs.)
+/// Stop-on-first-failure cancels a pending unrelated default-rule node. A firing
+/// `any-failed` contingency (zero cost, ordered after `bad`) still runs.
+/// (C15 def-of-done: stop admits no further default work; pending unrelated →
+/// cancelled; contingency still runs.)
+///
+/// Determinism (same observable-signal gating the C16 sibling
+/// `stop_on_first_failure_routes_through_cancellation_core_with_failure_origin`
+/// uses): `later`'s `cancelled` terminal depends on the stop landing **before**
+/// `later` is admitted. `bad` fails and triggers the stop, but it cannot itself
+/// hold a pool permit until the stop takes effect — its *return* is what triggers
+/// the stop. So rather than assume the stop-cancel beats the scheduler re-offering
+/// `pending` and admitting `later` (the observed CI flake: `later` came back
+/// `succeeded`, not `cancelled`), admission is **serialized by pinning the memory
+/// pool**: `bad` is made cost-free and a separate `keeper` node occupies the
+/// **entire** pinned memory pool until the run is cancelled. That keeps the
+/// unrelated default-rule `later` provably pending (never admitted) across the whole
+/// pre-stop window — the stop settles it `cancelled` before any permit it could grab
+/// is freed. `later` consumes nothing from `bad`/`keeper` (no data edge), so it stays
+/// an unrelated default-rule node. No wall clock, no sleep.
 #[test]
 fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
     use dagr_core::admission::PoolCapacities;
 
-    // `bad` and `later` each declare 10 bytes of working memory; the memory pool
-    // is pinned to 10, so exactly one fits — admission is serialized. `bad` is
-    // admitted first (name order) and fails before `later` can be admitted, so
-    // stop mode cancels `later` (pending, unrelated) while the zero-cost
-    // `contingency` (any-failed, ordered after `bad`) still fires.
+    // `keeper` and `later` each declare 10 bytes of working memory; the memory pool
+    // is pinned to 10, so exactly one fits — admission is serialized. `keeper` grabs
+    // the sole permit (name order: `bad` < `keeper` < `later`; `bad` is cost-free)
+    // and holds it until the run is cancelled, so `later` is still pending (waiting
+    // for capacity) when the stop lands and ends `cancelled`, never admitted after
+    // the failure. The zero-cost `contingency` (any-failed, ordered after `bad`)
+    // still fires. `keeper`'s own terminal is not asserted.
     let costed = || NodePolicy::new().working_memory(10);
     let mut flow = Flow::new();
-    let _bad = flow.register_source_with("bad", &Fails, costed());
+    let _bad = flow.register_source_with("bad", &Fails, NodePolicy::new());
+    let _keeper = flow.register_source_with("keeper", &Succeeds, costed());
     let _later = flow.register_source_with("later", &Succeeds, costed());
     let _n = flow.register_source_with_trigger(
         "contingency",
@@ -677,6 +723,14 @@ fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
     runners.insert(
         "bad".into(),
         SourceRunner::boxed("bad", Fails, slot_for::<u64>("bad", 0)),
+    );
+    runners.insert(
+        "keeper".into(),
+        SourceRunner::boxed(
+            "keeper",
+            HoldsMemoryUntilCancelled,
+            slot_for::<u64>("keeper", 0),
+        ),
     );
     runners.insert(
         "later".into(),
