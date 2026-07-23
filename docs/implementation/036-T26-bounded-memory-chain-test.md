@@ -64,7 +64,39 @@ Each scenario is independently checkable and derives from a C10 acceptance crite
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket declared "None." and `docs/tasks.md`'s T26 entry carries no `Q:`
+items; the following implementation decisions arose during the work and are
+recorded here per the open-questions duty.
+
+- **Which memory instrument bears the peak assertion?** Resolved: **both**, with
+  the exact per-run `ResidencyLedger` peak (a deterministic integer, arch.md
+  C10's accounting hook the run artifact folds) as the *load-bearing* assertion,
+  and the ticket-required test-only instrumented `#[global_allocator]` (live/peak
+  allocated bytes, never RSS) as a corroborating allocator-level restatement. The
+  ledger peak is per-run and needs no coordination; the allocator counter is
+  process-global, so every test that reads it — or that deliberately allocates a
+  chain-length-proportional amount (the non-vacuity leak proof) — takes a
+  process-wide serialisation lock so parallel test execution cannot pollute the
+  reading. Both are allocator-level; neither reads process RSS, per arch.md C10's
+  accounting rule.
+- **"Run artifact summary reports peak measured slot residency" (test-plan
+  bullet / DoD line).** Resolved: the M1 run-loop driver (T24) does **not** yet
+  fold a run-artifact summary carrying the peak figure — the merged coverage
+  matrix records that facet as *"Deferred to C23 (T44): measured peak slot
+  residency appearing in the run artifact … rendering the artifact number is
+  C23's."* This ticket therefore asserts the observable seam available at M1: the
+  `ResidencyLedger::peak` hook (the number the C23 artifact will fold) is
+  non-zero and consistent with the bounded peak. The rendered-artifact assertion
+  stays owned by T44; asserting it here would steal C23's scope (ticket-conventions
+  §7/§8). Recorded additively in `docs/coverage-matrix.md`'s C10 row.
+- **Terminal-node release requires a consumer.** Resolved: a non-retained slot
+  with zero consumers is never triggered to release (the release gate advances
+  only on a consumer lease's closure-return), so the synthetic chain appends a
+  trivial zero-residency **sink** node that drains the last producer through a
+  real `ConsumerLease`. This makes a fully non-retained chain end at zero counted
+  residency — the honest C10 end state — while the `retain_terminal` variant marks
+  the last producer retained so exactly one value survives and is redeemable. No
+  T17 behaviour is changed; the sink only exercises the existing release path.
 
 ## Out of scope
 - Implementing or amending the slot itself, the release rule, the type-erased slot storage, or the redemption API — those are T17; this ticket only exercises them.
