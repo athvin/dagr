@@ -50,7 +50,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **027** · [T17 — C10: output slots](027-T17-output-slots.md) · M · feature — after T14, T0.2
 - [x] **028** · [T18 — C11: readiness tracker](028-T18-readiness-tracker.md) · M · feature — after T14, T0.4
 - [x] **029** · [T19 — C19: event stream writer](029-T19-event-stream-writer.md) · M · feature — after T4, T13, T0.6
-- [ ] **030** · [T20 — C14: single-attempt execution core](030-T20-single-attempt-execution-core.md) · M · feature — after T16, T17, T19
+- [x] **030** · [T20 — C14: single-attempt execution core](030-T20-single-attempt-execution-core.md) · M · feature — after T16, T17, T19
 - [ ] **031** · [T21 — C14: per-attempt timeout](031-T21-per-attempt-timeout.md) · S · feature — after T20, T0.3
 - [ ] **032** · [T22 — C14: retry with jittered exponential backoff](032-T22-retry-with-backoff.md) · M · feature — after T20
 - [ ] **033** · [T23 — C14: panic containment](033-T23-panic-containment.md) · S · feature — after T20
