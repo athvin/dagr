@@ -87,22 +87,26 @@ pub struct NodeId(u64);
 impl NodeId {
     /// Derive the identity token for a node registered under `name`.
     ///
-    /// Crate-private: identity is minted here, at the single registration seam,
-    /// and nowhere else. It is a pure function of the name — reorder-stable and
-    /// rename-sensitive by construction — so this is *not* a lookup (it manufactures
-    /// no handle and consults no registry; it only hashes the name the caller
-    /// already holds). The real builder (T13) supplies the name from the
-    /// author's declaration and pairs the resulting id with the node.
-    // The registration seam is consumed by T13's flow builder (and T11's binding
-    // API), which have not shipped yet, so in a non-test build nothing outside
-    // this module calls it. `allow`, not `expect`: the crate's own `#[cfg(test)]`
-    // unit tests DO exercise it, so the dead-code lint does not fire under
-    // `cfg(test)` and an `expect` would be unfulfilled there.
-    #[allow(
-        dead_code,
-        reason = "crate-private registration seam consumed by T13 (flow builder) / T11 (binding)"
-    )]
-    pub(crate) fn from_name(name: &str) -> Self {
+    /// Identity is minted here, at the single registration seam. It is a pure
+    /// function of the name — reorder-stable and rename-sensitive by construction
+    /// — so this is *not* a lookup: it **manufactures no handle** and **consults
+    /// no registry**; it only hashes the name the caller already holds. The real
+    /// builder (T13) supplies the name from the author's declaration and pairs the
+    /// resulting id with the node.
+    ///
+    /// # Not a C2 escape hatch
+    ///
+    /// This is deliberately **public** because hand-construction of a
+    /// [`RunContext`](crate::context::RunContext) — the C8 / T16 test-kit
+    /// guarantee (feeds T60) — names the nodes a teardown context covers, and a
+    /// teardown developer identifies covered nodes by their author-declared name.
+    /// Exposing it does **not** weaken C2: a `NodeId` is an opaque identity token
+    /// with no route back to a name or to a [`Handle`], and this function returns
+    /// no [`Handle`] and reaches into no runtime node registry (dagr has none).
+    /// The unforgeable-[`Handle`]/no-lookup contract is about *handles* and about
+    /// a *lookup service*, neither of which this touches.
+    #[must_use]
+    pub fn from_name(name: &str) -> Self {
         // FxHash-free, dependency-free: FNV-1a over the name bytes. A stable,
         // deterministic hash is all identity needs here; the fingerprint's own
         // hash function is T0.7/T41's concern, not this equality token's.
