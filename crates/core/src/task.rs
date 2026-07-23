@@ -108,8 +108,11 @@
 //!   part of the task's signature but its whole-graph delivery and mode-conflict
 //!   checking are C3 / assembly (T11 / T14); this ticket enforces only the
 //!   type-level bounds.
-//! - The **run context**'s actual capabilities are C8 / T16 — the [`RunContext`]
-//!   here is a minimal placeholder referenced by shape.
+//! - The **run context**'s capabilities are C8 / T16 — [`RunContext`] is
+//!   re-exported here from [`crate::context`]; T9 fixed only that the work
+//!   receives a `&RunContext`, and T16 fleshed the type out (identities, attempt,
+//!   parameters, data interval, cancellation, span, registry/scratch seams)
+//!   without changing this signature.
 //! - The **attempt runner**, retries, timeouts, and the runner's richer outcome
 //!   taxonomy (timeout, panic) are C14 (T20+); this ticket guarantees only the
 //!   *shape* (`&mut self`) that makes sequential re-runs safe.
@@ -120,6 +123,13 @@
 use std::future::Future;
 
 use crate::error::TaskError;
+
+// The **run context** every task invocation receives (arch.md C8). Its full
+// field set and capabilities live in [`crate::context`] (C8 / T16); it is
+// re-exported here so `dagr_core::task::RunContext` — the path T9's tests and the
+// task signature use — continues to resolve. T9 fixed only that the work receives
+// a `&RunContext`; T16 fleshed the type out without changing [`Task::run`].
+pub use crate::context::RunContext;
 
 /// The execution class a task declares — the fourth of C1's four declared
 /// elements. It says *which kind of thread* the work belongs on (C13); the
@@ -146,39 +156,6 @@ impl Default for ExecutionClass {
     /// (arch.md C1: *"default await-bound"*).
     fn default() -> Self {
         Self::AwaitBound
-    }
-}
-
-/// The read-only handle every task invocation is told about the run it is part
-/// of (arch.md `### C8 · Run context`).
-///
-/// **This is a minimal placeholder seam.** C1 (this ticket, T9) only fixes that
-/// the work receives a run-context *reference*; the context's real fields —
-/// run/pipeline/node identity, attempt number and maximum, parameters, an
-/// optional data interval, a cancellation signal, a logging span, and the
-/// resource-registry and durable-scratch accessors — and its hand-construction
-/// path for tests are **C8 / T16's** to add. Downstream code should treat this
-/// type by name and shape only; T16 fleshes it out without changing the
-/// [`Task::run`] signature.
-#[derive(Debug, Default)]
-#[non_exhaustive]
-pub struct RunContext {
-    // Intentionally empty at this milestone. Fields land in T16 (C8). `RunContext`
-    // is `#[non_exhaustive]` so adding them then is not a breaking change, and
-    // holds no mutable shared state and no route back to the scheduler (C8).
-}
-
-impl RunContext {
-    /// Construct a stub context for exercising a single task in isolation, with
-    /// no runtime, no store, and no registry running.
-    ///
-    /// This is the seam C28 (single-task testing) and C8 (`RunContext`
-    /// hand-construction) build on; T16 replaces it with the full field set. It
-    /// exists now so this ticket's task tests can call [`Task::run`] with a
-    /// context reference by shape.
-    #[must_use]
-    pub fn for_test() -> Self {
-        Self::default()
     }
 }
 

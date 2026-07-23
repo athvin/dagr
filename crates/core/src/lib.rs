@@ -43,14 +43,33 @@
 //! - [`binding::NodeBinding`] — the trigger-rule typestate that makes any rule
 //!   other than `all-succeeded` inexpressible on a data-dependent node.
 //!
-//! The flow builder (C7 / T13), assembly (T14), the run context's real
-//! capabilities (C8 / T16), and the M1+ execution tickets land later; this crate
-//! grows one component at a time.
+//! The **C8 run context** (ticket T16): what every task invocation is told about
+//! the run it is part of.
+//!
+//! - [`context::RunContext`] — the read-only, hand-constructable handle passed
+//!   into [`task::Task::run`], carrying run/pipeline/node identity, the current
+//!   attempt and the maximum, opaque parameters, an optional
+//!   [`context::DataInterval`], an observe-only [`context::CancellationSignal`], a
+//!   [`context::LogSpan`], and the [`context::ResourceRegistry`] /
+//!   [`context::ScratchStore`] accessor seams (registry substance is T30, scratch
+//!   is T53). Built by hand with [`context::RunContext::builder`] /
+//!   [`context::RunContext::for_test`] — no runtime, store, registry, clock, or
+//!   network — which feeds the single-task test kit (C28 / T60).
+//! - [`context::ResourceRequirements`] — the resource-requirement *declaration*
+//!   plumbing a node records at registration, queryable for bootstrap validation
+//!   (T30) and later graph-artifact rendering (C20).
+//! - [`context::CoveredNodeStates`] / [`context::TerminalState`] — the
+//!   teardown-only view of covered nodes' terminal states (C17), from arch.md's
+//!   normative taxonomy; the runtime-side population is C17 / T52.
+//!
+//! The flow builder (C7 / T13), assembly (T14), and the M1+ execution tickets
+//! land later; this crate grows one component at a time.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
 pub mod binding;
+pub mod context;
 pub mod error;
 pub mod handle;
 pub mod task;
@@ -59,6 +78,11 @@ pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, ReceiveMode, RegisteredNode,
     Shared, TriggerRule, MAX_INPUT_ARITY,
 };
+pub use context::{
+    CancellationSignal, CancellationSource, CoveredNodeStates, DataInterval, LogSpan, PipelineId,
+    ResourceRegistry, ResourceRequirement, ResourceRequirements, RunContext, RunContextBuilder,
+    RunId, ScratchError, ScratchStore, TerminalState,
+};
 pub use error::{TaskError, TaskErrorClass};
 pub use handle::{Handle, NodeId};
-pub use task::{ExecutionClass, RunContext, Task};
+pub use task::{ExecutionClass, Task};
