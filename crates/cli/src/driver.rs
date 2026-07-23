@@ -89,7 +89,10 @@ use dagr_artifact::event_stream::{
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
 use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
 use dagr_core::assembly::AssemblyError;
-use dagr_core::context::{PipelineId, RunContext, RunId as CoreRunId, TerminalState};
+use dagr_core::context::{
+    CancellationOrigin, CancellationSource, PipelineId, RunContext, RunId as CoreRunId,
+    TerminalState,
+};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
 use dagr_core::flow::{FailureMode, Pipeline};
 use dagr_core::handle::NodeId;
@@ -135,10 +138,187 @@ pub fn current_execution_surface() -> ExecutionSurface {
 }
 
 /// The default bounded grace period the driver waits for a zombie closure to
-/// return at natural run end (arch.md C16; T35 makes it a flag). A blocking
-/// timeout's leftover thread is given at most this long before a `zombie-at-exit`
-/// event is emitted and the run proceeds.
+/// return at natural run end **and** for in-flight cooperative work to return on
+/// the cancellation drain (arch.md C16; T35 makes it a flag). A blocking timeout's
+/// leftover thread — or an await-bound attempt asked to stop — is given at most
+/// this long before it is left behind (`zombie-at-exit` at natural end, or
+/// `abandoned` on the cancellation path) and the run proceeds.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(10);
+
+/// The default teardown deadline (arch.md C16 / C17): the wall-clock budget a
+/// teardown phase is allowed under its own fresh, uncancelled signal. T35 does not
+/// run teardown (that is T52); it only **consumes** this value for the worst-case
+/// [shutdown-budget](ShutdownBudget) arithmetic printed at startup.
+pub const DEFAULT_TEARDOWN_DEADLINE: Duration = Duration::from_secs(15);
+
+/// The bounded final event-stream flush allowance (arch.md C16): the last, bounded
+/// window the process spends flushing the event stream before exit. T35 folds it
+/// into the printed [shutdown budget](ShutdownBudget); the fsync/flush mechanics
+/// and the unwritable-sink exit code are T36's.
+pub const DEFAULT_FINAL_FLUSH: Duration = Duration::from_secs(2);
+
+/// The worst-case **shutdown budget** (arch.md `### C16`): grace + teardown
+/// deadline + bounded final flush. The binary prints this at startup so a
+/// misconfiguration (a budget that does not fit the orchestrator's kill window —
+/// the defaults assume Kubernetes' 30-second `terminationGracePeriodSeconds`) is
+/// visible *before it matters*. This is arithmetic, not hope; the [total](Self::total)
+/// is the sum of the three components, and [`Display`](std::fmt::Display) renders
+/// the arithmetic and the total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShutdownBudget {
+    grace: Duration,
+    teardown_deadline: Duration,
+    final_flush: Duration,
+}
+
+impl ShutdownBudget {
+    /// The cooperative grace period component (this ticket's flag).
+    #[must_use]
+    pub fn grace(&self) -> Duration {
+        self.grace
+    }
+
+    /// The teardown-deadline component (C17; consumed here for the arithmetic).
+    #[must_use]
+    pub fn teardown_deadline(&self) -> Duration {
+        self.teardown_deadline
+    }
+
+    /// The bounded final-flush component (a fixed 2 s allowance).
+    #[must_use]
+    pub fn final_flush(&self) -> Duration {
+        self.final_flush
+    }
+
+    /// The worst-case total: grace + teardown deadline + final flush.
+    #[must_use]
+    pub fn total(&self) -> Duration {
+        self.grace + self.teardown_deadline + self.final_flush
+    }
+}
+
+impl std::fmt::Display for ShutdownBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "shutdown budget: grace {}s + teardown-deadline {}s + final-flush {}s = {}s worst-case",
+            self.grace.as_secs(),
+            self.teardown_deadline.as_secs(),
+            self.final_flush.as_secs(),
+            self.total().as_secs(),
+        )
+    }
+}
+
+/// Compute the worst-case [shutdown budget](ShutdownBudget) from the effective
+/// `grace` and `teardown_deadline` flag values (arch.md C16): grace + teardown
+/// deadline + a fixed [bounded final flush](DEFAULT_FINAL_FLUSH). The binary prints
+/// this at startup so a misconfiguration is visible before it matters.
+#[must_use]
+pub fn shutdown_budget(grace: Duration, teardown_deadline: Duration) -> ShutdownBudget {
+    ShutdownBudget {
+        grace,
+        teardown_deadline,
+        final_flush: DEFAULT_FINAL_FLUSH,
+    }
+}
+
+/// The programmatic **cancellation trigger** the caller obtains from
+/// [`RunConfig::cancel_handle`] (arch.md `### C16`; T35).
+///
+/// This is the internal cancellation entry point exercised from a test or, in
+/// production, the seam the **T36** OS-signal handler will drive — *not* an
+/// OS-signal wiring itself. Firing it ([`cancel`](Self::cancel)) requests
+/// cancellation of the run with an [external-interrupt](CancellationOrigin::ExternalInterrupt)
+/// origin; the driver observes the request, stops admitting new work, drains
+/// in-flight work within the grace period, and terminates. It is cheaply cloneable
+/// and idempotent — firing twice changes nothing.
+#[derive(Debug, Clone)]
+pub struct CancelHandle {
+    trigger: Arc<CancelTrigger>,
+}
+
+impl CancelHandle {
+    /// Request cancellation of the run (external-interrupt origin). Idempotent: the
+    /// first fire wins the recorded origin; a later fire changes nothing.
+    pub fn cancel(&self) {
+        self.trigger.request(CancellationOrigin::ExternalInterrupt);
+    }
+}
+
+/// The shared cancellation-request state behind a [`CancelHandle`] and the run
+/// loop. It records *whether* cancellation was requested and its **origin**
+/// (first-request-wins), and notifies the loop so it can react promptly without
+/// polling. The run-scoped [`CancellationSource`] the attempts observe is separate
+/// (owned by the loop) and flipped when the loop acts on a request; this state is
+/// only the *request channel* into the loop.
+#[derive(Debug, Default)]
+struct CancelTrigger {
+    // The first-request-wins origin; `None` until requested. A `Mutex<Option<_>>`
+    // rather than an atomic because the origin is a two-variant enum and the
+    // set-once discipline is clearest expressed as "insert if empty".
+    origin: Mutex<Option<CancellationOrigin>>,
+    // The run loop's attempt-channel sender, installed by the loop at startup. A
+    // request pushes a `CANCEL_WAKE_SENTINEL` `AttemptDone` through the **same**
+    // channel the loop already awaits, so the loop wakes on a request without a
+    // separate select/poll — no extra tokio feature (no `macros`/`select!`) is
+    // needed. `None` before a run starts or after it ends (a late request is then a
+    // harmless no-op).
+    waker: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AttemptDone>>>,
+}
+
+impl CancelTrigger {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Install the loop's wake channel (called once by the loop at startup). A
+    /// cancellation [request](Self::request) then wakes the loop through it.
+    fn install_waker(&self, tx: tokio::sync::mpsc::UnboundedSender<AttemptDone>) {
+        *self.waker.lock().expect("cancel-waker mutex not poisoned") = Some(tx);
+    }
+
+    /// Uninstall the wake channel at run end, so a late request cannot touch a
+    /// finished loop.
+    fn clear_waker(&self) {
+        *self.waker.lock().expect("cancel-waker mutex not poisoned") = None;
+    }
+
+    /// Record a cancellation request with `origin` (first request wins the origin)
+    /// and wake the loop by pushing the sentinel onto its channel. Idempotent on the
+    /// origin; a request after the loop ended is a harmless no-op.
+    fn request(&self, origin: CancellationOrigin) {
+        {
+            let mut guard = self
+                .origin
+                .lock()
+                .expect("cancel-origin mutex not poisoned");
+            if guard.is_none() {
+                *guard = Some(origin);
+            }
+        }
+        if let Some(tx) = self
+            .waker
+            .lock()
+            .expect("cancel-waker mutex not poisoned")
+            .as_ref()
+        {
+            let _ = tx.send(AttemptDone {
+                node: CANCEL_WAKE_SENTINEL.to_string(),
+                state: TerminalState::Cancelled,
+                events: Vec::new(),
+            });
+        }
+    }
+
+    /// The recorded origin, or `None` if no cancellation was requested.
+    fn recorded_origin(&self) -> Option<CancellationOrigin> {
+        *self
+            .origin
+            .lock()
+            .expect("cancel-origin mutex not poisoned")
+    }
+}
 
 // ===========================================================================
 // Configuration
@@ -157,10 +337,16 @@ pub struct RunConfig {
     base: String,
     run_id: Option<String>,
     grace: Duration,
+    teardown_deadline: Duration,
     parameters: BTreeMap<String, String>,
     data_interval: Option<[String; 2]>,
     capacities: PoolCapacities,
     failure_mode: FailureMode,
+    // The programmatic cancellation trigger (C16 / T35): a shared request channel a
+    // caller (a test, or T36's future signal handler) fires and the run loop
+    // observes. Cloned into the loop; a `CancelHandle` handed out by
+    // `cancel_handle` shares the same `Arc`. Never serialized/compared.
+    cancel_trigger: Arc<CancelTrigger>,
 }
 
 impl RunConfig {
@@ -172,6 +358,7 @@ impl RunConfig {
             base: base.into(),
             run_id: None,
             grace: DEFAULT_GRACE,
+            teardown_deadline: DEFAULT_TEARDOWN_DEADLINE,
             parameters: BTreeMap::new(),
             data_interval: None,
             // Admission pools default to **unconstrained** (T31 takes capacities as
@@ -183,6 +370,10 @@ impl RunConfig {
             // failure cancels nothing, so an unset mode leaves the M1 loop's
             // behaviour unchanged. Stop-on-first-failure is opt-in.
             failure_mode: FailureMode::default(),
+            // A fresh, un-fired cancellation trigger. Unless a caller fires the
+            // handle (or stop-on-first-failure routes through the core), the run is
+            // never cancelled and its behaviour is unchanged from T24/T34.
+            cancel_trigger: Arc::new(CancelTrigger::new()),
         }
     }
 
@@ -194,11 +385,55 @@ impl RunConfig {
         self
     }
 
-    /// Set the bounded zombie grace period (default [`DEFAULT_GRACE`]).
+    /// Set the cooperative **grace period** (default [`DEFAULT_GRACE`], 10 s;
+    /// arch.md C16). This is the single operator flag this ticket owns: it bounds
+    /// *both* the zombie wait at natural run end (T24) and the cancellation drain
+    /// wait for in-flight cooperative work (T35), and it drives the printed
+    /// [shutdown budget](ShutdownBudget). On cancellation, in-flight await-bound
+    /// attempts are asked to stop and given up to this long to return before being
+    /// recorded `abandoned`.
     #[must_use]
     pub fn grace(mut self, grace: Duration) -> Self {
         self.grace = grace;
         self
+    }
+
+    /// The **effective** grace period this run will honour (the override if set,
+    /// else [`DEFAULT_GRACE`]).
+    #[must_use]
+    pub fn effective_grace(&self) -> Duration {
+        self.grace
+    }
+
+    /// Set the **teardown deadline** (default [`DEFAULT_TEARDOWN_DEADLINE`], 15 s;
+    /// arch.md C16 / C17). T35 only **consumes** this value for the worst-case
+    /// [shutdown-budget](ShutdownBudget) arithmetic printed at startup; teardown
+    /// execution under its own fresh, uncancelled signal and this deadline is T52.
+    #[must_use]
+    pub fn teardown_deadline(mut self, deadline: Duration) -> Self {
+        self.teardown_deadline = deadline;
+        self
+    }
+
+    /// The worst-case [shutdown budget](ShutdownBudget) for this run: the effective
+    /// grace + the teardown deadline + the bounded final flush. Printed at startup.
+    #[must_use]
+    pub fn shutdown_budget(&self) -> ShutdownBudget {
+        shutdown_budget(self.grace, self.teardown_deadline)
+    }
+
+    /// Obtain the programmatic **cancellation trigger** for this run (arch.md C16;
+    /// T35). Firing the returned [`CancelHandle`] requests cancellation with an
+    /// external-interrupt origin; the driver stops admitting new work, drains
+    /// in-flight work within the grace period, and terminates. This is the internal
+    /// entry point a test drives and the seam T36's OS-signal handler will fire —
+    /// wiring an actual SIGINT/SIGTERM to it is **not** this ticket's. Multiple
+    /// handles may be obtained; they all drive the same run.
+    #[must_use]
+    pub fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            trigger: Arc::clone(&self.cancel_trigger),
+        }
     }
 
     /// Record the run's parameters for the `run-started` header (name→value).
@@ -388,6 +623,14 @@ pub struct RunReport {
     /// embeds both the pipeline identity and the run-unique id, two concurrent
     /// runs — even of the same binary and pipeline — write disjoint files.
     pub stream_path: String,
+    /// Why the run was cancelled, or [`None`] if it was not cancelled (arch.md
+    /// C16). Recorded so the C26 exit-code logic (T55) can prefer *run failure over
+    /// cancellation*: a [`FailureUnderStop`](CancellationOrigin::FailureUnderStop)
+    /// origin means a failure triggered the cancellation (failure wins), while an
+    /// [`ExternalInterrupt`](CancellationOrigin::ExternalInterrupt) with no run
+    /// failure is reported as a cancellation. This ticket records the origin; it
+    /// does not own the exit-code mapping.
+    pub cancellation_origin: Option<CancellationOrigin>,
 }
 
 // ===========================================================================
@@ -565,6 +808,13 @@ where
     // Capture the allowlisted environment values (empty allowlist → nothing).
     let captured_env = capture_env(env_allowlist);
 
+    // --- Print the worst-case shutdown budget at startup (arch.md C16): grace +
+    // teardown deadline + bounded final flush. Printed before anything runs so a
+    // misconfiguration (a budget that would not fit the orchestrator's kill window)
+    // is visible before it matters. Operator-facing, so it goes to stderr and never
+    // into the event stream.
+    eprintln!("{}", config.shutdown_budget());
+
     // --- The assembly-failure path: the store/stream are already open, so an
     // assembly failure still records itself (arch.md C19). Emit a fingerprint-less
     // header and a run-finished carrying the assembly-failed outcome, then return.
@@ -588,6 +838,8 @@ where
                 terminal_states: BTreeMap::new(),
                 run_id: run_id_str,
                 stream_path,
+                // No node ran, so no cancellation path was entered.
+                cancellation_origin: None,
             };
         }
     };
@@ -645,6 +897,8 @@ where
             terminal_states: BTreeMap::new(),
             run_id: run_id_str,
             stream_path,
+            // No node ran, so no cancellation path was entered.
+            cancellation_origin: None,
         };
     }
 
@@ -658,7 +912,7 @@ where
     // too-big-node bootstrap check above already rejected any node that could never
     // fit, so the loop's admission never strands a can-never-fit node here.
     let admission = AdmissionController::new(config.capacities);
-    let (outcome, terminal_states) = run_loop(
+    let (outcome, terminal_states, cancellation_origin) = run_loop(
         &pipeline,
         &run_id_str,
         pipeline_name,
@@ -668,6 +922,7 @@ where
         config.failure_mode,
         &admission,
         &config.capacities,
+        &config.cancel_trigger,
         &mut writer,
     );
 
@@ -679,6 +934,7 @@ where
         terminal_states,
         run_id: run_id_str,
         stream_path,
+        cancellation_origin,
     }
 }
 
@@ -704,6 +960,41 @@ struct AttemptDone {
     events: Vec<AttemptEvent>,
 }
 
+/// The reserved sentinel node name for a **cancellation wake** pushed through the
+/// attempt channel (C16 / T35). A real node name is never empty (assembly rejects
+/// an empty name), so an [`AttemptDone`] carrying this name is unambiguously the
+/// cancellation-request wake, not a finished attempt. Routing the wake through the
+/// *same* channel the loop already awaits keeps the loop a plain `recv().await` — no
+/// `tokio::select!` (and so no added `macros` feature) is needed for the loop to
+/// react promptly to a request.
+const CANCEL_WAKE_SENTINEL: &str = "";
+
+/// The shared set of node names currently **in flight** (admitted, not yet
+/// terminal) — the drain target when the run is cancelled (C16 / T35). A name is
+/// inserted when the node is admitted and removed when its [`AttemptDone`] is
+/// received; whatever remains after the grace-bounded drain is recorded
+/// `abandoned`. Shared behind an `Arc<Mutex<_>>` because `admit` inserts from the
+/// (framework-runtime) loop while the loop removes on completion.
+type LiveSet = Arc<Mutex<std::collections::BTreeSet<String>>>;
+
+/// The **immutable shared context** every admission/dispatch helper reads: the
+/// assembled pipeline, the run identity, the type-erased runners, the C13 execution
+/// dispatcher, the loop's attempt channel, the C12 admission controller, the
+/// run-scoped C16 cancellation token, and the in-flight [`LiveSet`]. Bundling these
+/// keeps `offer_or_pend`/`admit`/`drain_pending`/`apply_decisions` to a small
+/// argument list (the per-call mutable state — `pending`, `in_flight`, the writer,
+/// the terminal maps — is still passed explicitly, because it is mutated).
+struct AdmitCtx<'a> {
+    pipeline: &'a Pipeline,
+    run_id: &'a str,
+    runners: &'a Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
+    dispatcher: &'a Dispatcher,
+    tx: &'a tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    admission: &'a AdmissionController,
+    run_cancel: &'a CancellationSource,
+    live: &'a LiveSet,
+}
+
 /// The readiness-driven execution loop (arch.md C11; the driver's half of the
 /// run-end condition).
 ///
@@ -718,6 +1009,16 @@ struct AttemptDone {
 /// (blocking timeouts) and emits a `zombie-at-exit` event for each. Returns the
 /// overall outcome and the per-node terminal states.
 #[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the readiness-driven execution loop is one cohesive state machine (admit → \
+              await → feed back → drain-on-cancel → post-drain → bounded zombie wait); \
+              splitting its single `block_on` future across functions would fragment the \
+              shared mutable loop state (in-flight count, live set, pending queue, \
+              cancellation flags) without aiding readability. The self-contained steps \
+              (per-attempt recording, abandonment, cancellation entry, message receipt) \
+              are already extracted into helpers."
+)]
 fn run_loop<S, C>(
     pipeline: &Pipeline,
     run_id: &str,
@@ -728,8 +1029,13 @@ fn run_loop<S, C>(
     failure_mode: FailureMode,
     admission: &AdmissionController,
     capacities: &PoolCapacities,
+    cancel_trigger: &Arc<CancelTrigger>,
     writer: &mut EventStreamWriter<S, C>,
-) -> (RunOutcome, BTreeMap<String, TerminalState>)
+) -> (
+    RunOutcome,
+    BTreeMap<String, TerminalState>,
+    Option<CancellationOrigin>,
+)
 where
     S: EventSink,
     C: MonotonicClock,
@@ -755,11 +1061,32 @@ where
     let runners = Arc::new(Mutex::new(runners));
     let mut terminal_states: BTreeMap<String, TerminalState> = BTreeMap::new();
     let mut zombie_candidates: Vec<String> = Vec::new();
+    // The run-scoped cancellation token (C16 / T35): the driver owns it, each
+    // admitted attempt observes a per-attempt child (threaded into its
+    // `RunContext`), and the cancellation core flips it so every in-flight attempt
+    // observes cancellation at once. Uncancelled unless the trigger fires or
+    // stop-on-first-failure routes through the core — so a non-cancelled run's
+    // attempts observe exactly the fresh-uncancelled signal T24/T34 gave them.
+    let run_cancel = CancellationSource::new();
+    // The recorded cancellation origin (first-cause-wins), surfaced to the report
+    // for the C26 exit-code precedence (T55). `None` for a non-cancelled run.
+    let mut cancel_origin: Option<CancellationOrigin> = None;
 
     framework.block_on(async {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AttemptDone>();
+        // Install the loop's wake channel on the cancellation trigger so a request
+        // (the programmatic handle now; T36's signal handler later) wakes the loop by
+        // pushing a sentinel through this same channel — no `select!` needed.
+        cancel_trigger.install_waker(tx.clone());
         // Nodes admitted and not yet reported terminal — the "in flight" count.
         let mut in_flight: usize = 0;
+        // The **names** of nodes currently in flight (admitted, not yet terminal).
+        // On cancellation this is exactly the set of attempts to drain and classify
+        // `cancelled`/`abandoned`. Maintained alongside `in_flight`: a name is
+        // inserted when the node is admitted and removed when its `AttemptDone`
+        // arrives. Under a non-cancelled run it is only bookkeeping.
+        let live: Arc<Mutex<std::collections::BTreeSet<String>>> =
+            Arc::new(Mutex::new(std::collections::BTreeSet::new()));
         // Ready nodes that could not yet acquire their C12 permit (a pool at
         // capacity), oldest-ready-first (T31). Each is re-offered when a permit is
         // released — a terminal outcome frees capacity, which is what unblocks the
@@ -773,24 +1100,41 @@ where
         // continue-independent mode this stays false and the loop admits exactly as
         // the M1 driver did.
         let mut stopping = false;
+        // C16 / T35 · **full-drain cancellation** (an external interrupt): admit
+        // nothing new *at all* (not even a firing contingency) and grace-drain the
+        // in-flight attempts, reclassifying an in-flight-at-cancel return to
+        // `cancelled` and a non-returning attempt to `abandoned` after grace. This
+        // is deliberately distinct from `stopping`: a **stop-on-first-failure** also
+        // routes through the cancellation core (it flips the run token and records a
+        // failure origin) but keeps T34's exact loop behaviour — it admits firing
+        // contingencies and lets the in-flight complete naturally, so a non-cancelled
+        // stop run is byte-for-byte the T34 run. Only an external interrupt sets this.
+        let mut draining = false;
+        // The single grace deadline for the whole drain, set once when the full drain
+        // begins: `now + grace`. The drain waits for in-flight attempts only until
+        // this instant, then abandons whatever remains — the bound that guarantees
+        // termination even if a task ignores cancellation. `None` until the drain
+        // begins.
+        let mut drain_deadline: Option<tokio::time::Instant> = None;
+
+        // The immutable shared context every admission/dispatch helper reads.
+        let actx = AdmitCtx {
+            pipeline,
+            run_id,
+            runners: &runners,
+            dispatcher: &dispatcher,
+            tx: &tx,
+            admission,
+            run_cancel: &run_cancel,
+            live: &live,
+        };
 
         // Offer the initial-ready frontier (every zero-dependency source node) to
         // admission. A node that fits its pools is admitted (in flight); one that
         // does not waits in `pending` for a release.
         for id in tracker.initial_ready().to_vec() {
             if let Some(name) = node_name(pipeline, id) {
-                offer_or_pend(
-                    pipeline,
-                    run_id,
-                    &name,
-                    &runners,
-                    &dispatcher,
-                    &tx,
-                    admission,
-                    writer,
-                    &mut pending,
-                    &mut in_flight,
-                );
+                offer_or_pend(&actx, &name, writer, &mut pending, &mut in_flight);
             }
         }
 
@@ -799,36 +1143,80 @@ where
         // back into the tracker; each unlocked decision either offers a ready node
         // to admission or records a propagated terminal (which cascades, without
         // executing). A terminal outcome also releases that attempt's permit, so
-        // the pending waiters are re-offered against the freed capacity.
+        // the pending waiters are re-offered against the freed capacity. A
+        // cancellation request (fired even synchronously before the first wait,
+        // e.g. by a source that already finished) reaches the loop as the
+        // `CANCEL_WAKE_SENTINEL` message the trigger pushed onto this same channel.
         while in_flight > 0 {
-            let Some(done) = rx.recv().await else { break };
-            in_flight -= 1;
-            // Drain this attempt's buffered records into the single-owner writer.
-            for ev in &done.events {
-                let _ = write_attempt_event(writer, ev);
-            }
-            record_terminal(&done.node, done.state, &mut terminal_states);
-            if is_zombie_candidate(done.state) {
-                zombie_candidates.push(done.node.clone());
+            // Await the next channel message: a finished attempt, or a cancellation
+            // wake (a `CANCEL_WAKE_SENTINEL` `AttemptDone` the trigger pushed). Once a
+            // full drain has begun the wait is bounded by the single grace deadline —
+            // whatever has not returned by then is abandoned and the run proceeds, the
+            // bound that guarantees termination even if a task ignores cancellation.
+            let Some(done) = recv_next(&mut rx, draining, drain_deadline).await else {
+                break;
+            };
+
+            // A cancellation wake (the reserved-name sentinel): enter the cancellation
+            // core (full drain — an external interrupt), which arms the drain
+            // deadline. It is not a real attempt, so it does not decrement `in_flight`.
+            if done.node == CANCEL_WAKE_SENTINEL {
+                if !draining {
+                    enter_cancellation(
+                        &actx,
+                        cancel_trigger.recorded_origin(),
+                        true,
+                        grace,
+                        &mut cancel_origin,
+                        &mut draining,
+                        &mut stopping,
+                        &mut drain_deadline,
+                        &mut pending,
+                        &mut in_flight,
+                    );
+                }
+                continue;
             }
 
+            in_flight -= 1;
+            live.lock()
+                .expect("live set not poisoned")
+                .remove(&done.node);
+            // Write the attempt's buffered records, classify its (possibly
+            // cancellation-reclassified) terminal, and record it exactly once.
+            let recorded_state = record_attempt_outcome(
+                &done,
+                draining,
+                writer,
+                &mut terminal_states,
+                &mut zombie_candidates,
+            );
+
             // C15 / T34 · stop-on-first-failure. The instant the first failure-like
-            // terminal is observed under stop mode, stop admitting default-rule
-            // non-teardown work and cancel every default-rule node still waiting for
-            // capacity (pending, unrelated to the failure). The in-flight drain
-            // completes on its own; consume-nothing non-default-rule contingencies
-            // whose rule fires on the resulting picture are admitted as they become
-            // ready (below). Teardown-node ordering after the contingencies (C17) is
-            // a documented, deliberately-unimplemented carve-out left to T52.
+            // terminal is observed under stop mode, route through the cancellation
+            // core with a failure origin: stop admitting default-rule non-teardown
+            // work and cancel every pending default-rule node unrelated to the
+            // failure. The in-flight drain completes on its own; consume-nothing
+            // non-default-rule contingencies whose rule fires on the resulting
+            // picture are admitted as they become ready (below). Teardown-node
+            // ordering after the contingencies (C17) is left to T52.
             if failure_mode == FailureMode::StopOnFirstFailure
                 && !stopping
-                && is_failure_like(done.state)
+                && is_failure_like(recorded_state)
             {
-                stopping = true;
-                cancel_pending_default_nodes(
-                    pipeline,
-                    &tx,
-                    admission,
+                // `full_drain = false`: keep T34's loop behaviour exactly (firing
+                // contingencies still admitted; in-flight completes naturally). The
+                // core still flips the run token (so any cooperative in-flight work
+                // can observe cancellation) and records the failure origin.
+                enter_cancellation(
+                    &actx,
+                    Some(CancellationOrigin::FailureUnderStop),
+                    false,
+                    grace,
+                    &mut cancel_origin,
+                    &mut draining,
+                    &mut stopping,
+                    &mut drain_deadline,
                     &mut pending,
                     &mut in_flight,
                 );
@@ -837,19 +1225,16 @@ where
             // Feed the executed-terminal outcome back into the tracker and act on
             // every decision it unlocks (ready → offer to admission or, under an
             // active stop, cancel a default-rule node / admit a firing contingency;
-            // propagated → record).
+            // propagated → record). Under an active cancellation, a newly-ready node
+            // is never admitted — it is settled `cancelled` (no new work).
             let id = NodeId::from_name(&done.node);
-            let decisions = tracker.notify_terminal(id, done.state);
+            let decisions = tracker.notify_terminal(id, recorded_state);
             apply_decisions(
-                pipeline,
-                run_id,
+                &actx,
                 &decisions,
-                &runners,
-                &dispatcher,
-                &tx,
-                admission,
                 writer,
                 stopping,
+                draining,
                 &mut terminal_states,
                 &mut zombie_candidates,
                 &mut pending,
@@ -859,33 +1244,41 @@ where
             // before it reported done), so freed capacity may now admit a waiter.
             // Re-offer the pending queue oldest-first, admitting whatever now fits.
             // Under an active stop only non-default-rule contingencies remain in
-            // `pending` (the default ones were cancelled at the stop transition), so
-            // this admits only firing contingencies.
-            drain_pending(
-                pipeline,
-                run_id,
-                &runners,
-                &dispatcher,
-                &tx,
-                admission,
-                writer,
-                &mut pending,
-                &mut in_flight,
-            );
+            // `pending` (the default ones were cancelled at the stop transition); a
+            // full drain cancels those too and admits nothing, so it is skipped.
+            if !draining {
+                drain_pending(&actx, writer, &mut pending, &mut in_flight);
+            }
+        }
+
+        // C16 / T35 · post-drain. If the full drain left attempts in flight past
+        // grace, record each as `abandoned` and proceed — the bound that guarantees
+        // the run terminates even when a task ignores cancellation.
+        if draining {
+            abandon_leftover(&live, writer, &mut terminal_states, &mut zombie_candidates);
         }
 
         // Natural run end: nothing pending, nothing in flight. Give any zombie
         // candidate (a blocking timeout whose leftover work has not confirmed
         // return — the M1 ledger that would confirm it is T31) at most the grace
         // period, then emit a zombie-at-exit event for each. This does not change
-        // any node's terminal state (a timed-out node stays timed-out).
+        // any node's terminal state (a timed-out node stays timed-out; an abandoned
+        // node stays abandoned). On the full-drain path the drain above already
+        // spent up to grace waiting for in-flight work, so this is not double-counted
+        // for cancelled runs — the leftover candidates were already past grace.
         if !zombie_candidates.is_empty() {
-            tokio::time::sleep(grace).await;
+            if !draining {
+                tokio::time::sleep(grace).await;
+            }
             for node in &zombie_candidates {
                 let _ = writer.zombie_at_exit(node);
             }
         }
     });
+
+    // Uninstall the cancellation wake channel: the loop has ended, so a late request
+    // (a signal racing shutdown, T36) must not touch this finished run's channel.
+    cancel_trigger.clear_waker();
 
     // Shut the dispatcher's task surfaces down **without joining** any
     // abandoned-but-running (zombie) blocking/compute closure: a leftover thread
@@ -898,7 +1291,176 @@ where
     dispatcher.shutdown_background();
 
     let outcome = overall_outcome(&terminal_states);
-    (outcome, terminal_states)
+    (outcome, terminal_states, cancel_origin)
+}
+
+/// Await the next loop message (C16 / T35). Returns the next [`AttemptDone`] — a
+/// finished attempt or a `CANCEL_WAKE_SENTINEL` cancellation wake — or [`None`] to
+/// stop the loop (the channel closed, or, once a full drain is under way, the grace
+/// deadline elapsed with work still in flight). During the drain the wait is bounded
+/// by `drain_deadline` (`now + grace`, set when the drain began), which is the bound
+/// that guarantees termination even if a task ignores cancellation.
+async fn recv_next(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AttemptDone>,
+    draining: bool,
+    drain_deadline: Option<tokio::time::Instant>,
+) -> Option<AttemptDone> {
+    if draining {
+        let deadline = drain_deadline.expect("deadline set when the drain began");
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        // `Ok(msg)` is the received message (or channel-closed `None`); `Err` is the
+        // grace deadline firing — both stop the drain when they yield `None`.
+        tokio::time::timeout_at(deadline, rx.recv())
+            .await
+            .unwrap_or(None)
+    } else {
+        rx.recv().await
+    }
+}
+
+/// Write a finished attempt's buffered records and record its terminal state,
+/// classifying a return that raced a full-drain cancellation (C16 / T35).
+///
+/// An attempt that was still in flight when the run was **externally** cancelled
+/// (`draining`) and returns within grace, without having reached a terminal before
+/// the drain began, is recorded `cancelled` — the run is being torn down and its
+/// output is discarded regardless of the raw outcome the aborted work produced. On
+/// such a reclassify the attempt's own `NodeTerminal` buffered record (its raw
+/// terminal) is suppressed and the authoritative `cancelled` node-terminal is
+/// emitted instead; the opening records still write, so the stream honestly shows
+/// the attempt ran and was cut short. Otherwise the attempt keeps its real terminal
+/// (a stop-on-first-failure keeps T34's exact outcomes). `record_terminal` is
+/// exactly-once, so a late report never overwrites a prior classification. Returns
+/// the recorded terminal state.
+fn record_attempt_outcome<S, C>(
+    done: &AttemptDone,
+    draining: bool,
+    writer: &mut EventStreamWriter<S, C>,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+    zombie_candidates: &mut Vec<String>,
+) -> TerminalState
+where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let reclassified = draining && !terminal_states.contains_key(&done.node);
+    let recorded_state = if reclassified {
+        TerminalState::Cancelled
+    } else {
+        done.state
+    };
+    for ev in &done.events {
+        if reclassified && matches!(ev, AttemptEvent::NodeTerminal { .. }) {
+            continue;
+        }
+        let _ = write_attempt_event(writer, ev);
+    }
+    record_terminal(&done.node, recorded_state, terminal_states);
+    if reclassified {
+        let _ = writer.node_terminal(&done.node, wire_terminal(recorded_state));
+    }
+    if is_zombie_candidate(recorded_state) {
+        zombie_candidates.push(done.node.clone());
+    }
+    recorded_state
+}
+
+/// Record every attempt still in flight past the cancellation grace as `abandoned`
+/// (C16 / T35). Each is a node whose closure ignored cancellation and did not
+/// return within grace; the driver does not wait for it. `record_terminal` is
+/// exactly-once, so a node that did reach a terminal is left untouched; an
+/// abandoned closure is a zombie candidate (its thread may run on and is reaped at
+/// process exit — a `zombie-at-exit` event, C19).
+fn abandon_leftover<S, C>(
+    live: &LiveSet,
+    writer: &mut EventStreamWriter<S, C>,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+    zombie_candidates: &mut Vec<String>,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let leftover: Vec<String> = live
+        .lock()
+        .expect("live set not poisoned")
+        .iter()
+        .cloned()
+        .collect();
+    for node in leftover {
+        if !terminal_states.contains_key(&node) {
+            record_terminal(&node, TerminalState::Abandoned, terminal_states);
+            let _ = writer.node_terminal(&node, wire_terminal(TerminalState::Abandoned));
+            zombie_candidates.push(node);
+        }
+    }
+}
+
+/// Enter the cancellation core (arch.md `### C16`; T35). The single internal entry
+/// point every cancellation origin routes through:
+///
+/// - **records the origin** (first cause wins) so the C26 exit-code precedence
+///   (T55) can later prefer run failure over cancellation;
+/// - **flips the run token** so every live per-attempt child observes cancellation
+///   at once (in-flight cooperative work can return `cancelled`), exactly once and
+///   idempotently;
+/// - **cancels every pending default-rule node** waiting for capacity (T34's
+///   resolved rule — a pending unrelated default node ends `cancelled`), while a
+///   non-default-rule contingency in `pending` is kept for a stop-mode run;
+/// - sets `stopping` (T34's admit-no-more-default-work rule).
+///
+/// `full_drain` selects the drain discipline. An **external interrupt** passes
+/// `true`: the caller then enters the grace-bounded drain that admits nothing at
+/// all and reclassifies in-flight returns `cancelled`/`abandoned`. A
+/// **stop-on-first-failure** passes `false`: the loop keeps T34's exact behaviour
+/// (firing contingencies still run, in-flight completes naturally), so a
+/// non-cancelled stop run is byte-for-byte the T34 run — the core only adds the
+/// token flip and the recorded origin.
+#[allow(clippy::too_many_arguments)]
+fn enter_cancellation(
+    ctx: &AdmitCtx,
+    origin: Option<CancellationOrigin>,
+    full_drain: bool,
+    grace: Duration,
+    cancel_origin: &mut Option<CancellationOrigin>,
+    draining: &mut bool,
+    stopping: &mut bool,
+    drain_deadline: &mut Option<tokio::time::Instant>,
+    pending: &mut std::collections::VecDeque<String>,
+    in_flight: &mut usize,
+) {
+    let (tx, admission) = (ctx.tx, ctx.admission);
+    // Record the origin once (first cause wins — a failure that then triggers a
+    // later external interrupt keeps the failure origin for C26 precedence).
+    if cancel_origin.is_none() {
+        *cancel_origin = origin;
+    }
+    // Flip the run-scoped token: every live per-attempt child now observes
+    // cancellation (idempotent — a second flip changes nothing).
+    ctx.run_cancel.cancel();
+    if full_drain {
+        // Arm the single grace deadline for the whole drain and enter drain mode.
+        *draining = true;
+        *drain_deadline = Some(tokio::time::Instant::now() + grace);
+    }
+    // T34's admit-no-more-default-work + cancel-pending-unrelated-default rule. On
+    // the first transition only; a repeat is a no-op (pending already partitioned).
+    if !*stopping {
+        *stopping = true;
+        cancel_pending_default_nodes(ctx.pipeline, tx, admission, pending, in_flight);
+    }
+    // A full drain additionally declines to keep even the non-default-rule
+    // contingencies still waiting for capacity — an external interrupt admits
+    // nothing at all. (Under stop mode these are kept and re-offered by
+    // `drain_pending`.) Cancelling them here settles them terminally so the run
+    // does not strand them past drain end.
+    if full_drain {
+        let leftover: Vec<String> = pending.drain(..).collect();
+        for name in leftover {
+            cancel_node(&name, admission, tx, in_flight);
+        }
+    }
 }
 
 /// The C12 declared cost of `name`, read from its C5 node policy (T29) — the
@@ -918,15 +1480,9 @@ fn declared_cost(pipeline: &Pipeline, name: &str) -> PoolCost {
 /// pool is at capacity it is **held** in `pending` (oldest-ready-first) to be
 /// re-offered when a release frees capacity. Under the default unconstrained pools
 /// every ready node fits, so this admits at once (the M1 behaviour).
-#[allow(clippy::too_many_arguments)]
 fn offer_or_pend<S, C>(
-    pipeline: &Pipeline,
-    run_id: &str,
+    ctx: &AdmitCtx,
     name: &str,
-    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    dispatcher: &Dispatcher,
-    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
-    admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
     pending: &mut std::collections::VecDeque<String>,
     in_flight: &mut usize,
@@ -934,12 +1490,11 @@ fn offer_or_pend<S, C>(
     S: EventSink,
     C: MonotonicClock,
 {
-    let cost = declared_cost(pipeline, name);
+    let admission = ctx.admission;
+    let cost = declared_cost(ctx.pipeline, name);
     match admission.try_admit(name, &cost) {
         Some(permit) => {
-            admit(
-                pipeline, run_id, name, runners, dispatcher, tx, writer, permit,
-            );
+            admit(ctx, name, writer, permit);
             *in_flight += 1;
         }
         // The node did not fit the pool's *current* remaining capacity. It either
@@ -955,7 +1510,7 @@ fn offer_or_pend<S, C>(
         // no-runner defect below. This is only the defensive driver-level guard; the
         // full bootstrap-time rejection of too-big nodes is deferred to T32.
         None if !admission.can_ever_fit(&cost) => {
-            reject_over_demand(name, admission, &cost, tx);
+            reject_over_demand(name, admission, &cost, ctx.tx);
             *in_flight += 1;
         }
         None => pending.push_back(name.to_string()),
@@ -1070,14 +1625,8 @@ fn cancel_pending_default_nodes(
 /// Walks `pending` front to back; each waiter that now fits its pools is admitted
 /// and removed, and a waiter that still does not fit stays queued behind its place
 /// — the oldest waiter is never bypassed by a younger one that would delay it.
-#[allow(clippy::too_many_arguments)]
 fn drain_pending<S, C>(
-    pipeline: &Pipeline,
-    run_id: &str,
-    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    dispatcher: &Dispatcher,
-    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
-    admission: &AdmissionController,
+    ctx: &AdmitCtx,
     writer: &mut EventStreamWriter<S, C>,
     pending: &mut std::collections::VecDeque<String>,
     in_flight: &mut usize,
@@ -1091,12 +1640,10 @@ fn drain_pending<S, C>(
     let mut index = 0;
     while index < pending.len() {
         let name = pending[index].clone();
-        let cost = declared_cost(pipeline, &name);
-        if let Some(permit) = admission.try_admit(&name, &cost) {
+        let cost = declared_cost(ctx.pipeline, &name);
+        if let Some(permit) = ctx.admission.try_admit(&name, &cost) {
             pending.remove(index);
-            admit(
-                pipeline, run_id, &name, runners, dispatcher, tx, writer, permit,
-            );
+            admit(ctx, &name, writer, permit);
             *in_flight += 1;
             // Restart from the front: admitting one may have consumed the capacity
             // a still-waiting older node needs, so re-check oldest-first.
@@ -1132,17 +1679,8 @@ fn drain_pending<S, C>(
 /// outcome; a blocking/compute timeout zombie that runs on past its mark keeps
 /// holding it until its closure actually returns (this driver does not fabricate an
 /// early release, and dispatch does not change permit mechanics).
-#[allow(clippy::too_many_arguments)]
-fn admit<S, C>(
-    pipeline: &Pipeline,
-    run_id: &str,
-    name: &str,
-    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    dispatcher: &Dispatcher,
-    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
-    writer: &mut EventStreamWriter<S, C>,
-    permit: Permit,
-) where
+fn admit<S, C>(actx: &AdmitCtx, name: &str, writer: &mut EventStreamWriter<S, C>, permit: Permit)
+where
     S: EventSink,
     C: MonotonicClock,
 {
@@ -1155,12 +1693,13 @@ fn admit<S, C>(
     // override if set (assembly already rejected any illegal override — T29), else
     // the task's declared class. An unknown node (a framework defect handled below)
     // defaults to await-bound.
-    let class = pipeline.node(node_id).map_or(
+    let class = actx.pipeline.node(node_id).map_or(
         ExecutionClass::AwaitBound,
         dagr_core::flow::PipelineNode::effective_class,
     );
 
-    let Some(mut runner) = runners
+    let Some(mut runner) = actx
+        .runners
         .lock()
         .expect("runners mutex not poisoned")
         .remove(name)
@@ -1169,7 +1708,7 @@ fn admit<S, C>(
         // rather than hang the run. Report it as a permanent failure terminal. The
         // permit drops here, releasing its cost (the attempt never ran).
         drop(permit);
-        let _ = tx.send(AttemptDone {
+        let _ = actx.tx.send(AttemptDone {
             node: name.to_string(),
             state: TerminalState::Failed,
             events: Vec::new(),
@@ -1177,9 +1716,25 @@ fn admit<S, C>(
         return;
     };
 
-    let run_id = run_id.to_string();
+    // Register this node as in flight (C16 / T35): on cancellation the drain reads
+    // this set to know which attempts to await and, past grace, abandon. Removed by
+    // the loop when the attempt's `AttemptDone` arrives.
+    actx.live
+        .lock()
+        .expect("live set not poisoned")
+        .insert(name.to_string());
+
+    // The per-attempt **child** cancellation signal (C16 / T35): each attempt
+    // observes its own child of the run-scoped token, so a run cancel reaches every
+    // live attempt at once while the task-facing side stays observe-only. A
+    // non-cancelled run's child is never flipped, so the attempt sees exactly the
+    // fresh-uncancelled signal it did before this ticket.
+    let attempt_signal = actx.run_cancel.child().signal();
+
+    let run_id = actx.run_id.to_string();
     let name_owned = name.to_string();
-    let tx = tx.clone();
+    let dispatcher = actx.dispatcher;
+    let tx = actx.tx.clone();
     // The attempt future — driven on the surface `class` names. It owns the runner,
     // the buffering sink, and the permit; producing the `(state, events)` the loop
     // records once the attempt returns.
@@ -1188,6 +1743,7 @@ fn admit<S, C>(
         // framework runtime; the loop drains it into the writer in order.
         let mut sink = BufferingSink::default();
         let ctx = RunContext::builder(CoreRunId::new(run_id), PipelineId::new("pipeline"), node_id)
+            .cancellation(attempt_signal)
             .build();
         let state = runner.run(&ctx, &mut sink).await;
         // Release the C12 permit at the attempt's terminal state (its working
@@ -1219,15 +1775,11 @@ fn admit<S, C>(
 /// `in_flight` by [`offer_or_pend`].
 #[allow(clippy::too_many_arguments)]
 fn apply_decisions<S, C>(
-    pipeline: &Pipeline,
-    run_id: &str,
+    ctx: &AdmitCtx,
     decisions: &[Decision],
-    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    dispatcher: &Dispatcher,
-    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
-    admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
     stopping: bool,
+    draining: bool,
     terminal_states: &mut BTreeMap<String, TerminalState>,
     zombie_candidates: &mut Vec<String>,
     pending: &mut std::collections::VecDeque<String>,
@@ -1236,22 +1788,21 @@ fn apply_decisions<S, C>(
     S: EventSink,
     C: MonotonicClock,
 {
+    let pipeline = ctx.pipeline;
     for decision in decisions {
         match decision {
             Decision::Ready(id) => {
                 if let Some(name) = node_name(pipeline, *id) {
-                    // C15 / T34: under an active stop, a newly-ready **default-rule**
-                    // node is cancelled rather than admitted (no further default work
-                    // after the first failure); a **non-default-rule** contingency
-                    // whose rule fired on the failure picture is the work a failure is
-                    // meant to trigger, so it is still admitted.
-                    if stopping && is_default_rule_node(pipeline, &name) {
-                        cancel_node(&name, admission, tx, in_flight);
+                    // C16 / T35: under a **full drain** (an external interrupt) no
+                    // new work is admitted at all — every newly-ready node is settled
+                    // `cancelled` (including a contingency). C15 / T34: under a
+                    // **stop** only, a newly-ready **default-rule** node is cancelled
+                    // while a **non-default-rule** contingency whose rule fired is the
+                    // work a failure is meant to trigger, so it is still admitted.
+                    if draining || (stopping && is_default_rule_node(pipeline, &name)) {
+                        cancel_node(&name, ctx.admission, ctx.tx, in_flight);
                     } else {
-                        offer_or_pend(
-                            pipeline, run_id, &name, runners, dispatcher, tx, admission, writer,
-                            pending, in_flight,
-                        );
+                        offer_or_pend(ctx, &name, writer, pending, in_flight);
                     }
                 }
             }

@@ -54,7 +54,34 @@ Build the internal cancellation core and graceful-drain behaviour for a run, ind
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were open at authoring. Three design decisions taken during implementation are
+recorded here (all within the ticket's stated scope):
+
+- **The programmatic cancellation trigger surface.** Because `drive()` runs the run
+  synchronously to completion, the internal cancellation entry point is exposed as a
+  cheaply-cloneable `driver::CancelHandle` obtained from `RunConfig::cancel_handle()`.
+  Firing it requests cancellation with an `ExternalInterrupt` origin. It wakes the run
+  loop by pushing a reserved-name sentinel `AttemptDone` through the loop's own
+  attempt channel, so the loop stays a plain `recv().await` with **no** added tokio
+  feature (no `macros`/`select!`) — honouring the supply-chain constraint (the cli
+  crate's `tokio` still carries only `rt-multi-thread`/`time`/`sync`; no new deps).
+  This is the seam T36's OS-signal handler will fire; wiring an actual SIGINT/SIGTERM
+  is out of scope here.
+- **Classifying an in-flight-at-cancel return.** On a full drain (an external
+  interrupt), an attempt still in flight when cancellation fired that returns within
+  grace is recorded `cancelled` regardless of the raw outcome its aborted work
+  produced — the run is being torn down and the output is discarded, and the attempt's
+  own raw node-terminal record is suppressed in favour of the authoritative
+  `cancelled` (its opening records still write, so the stream honestly shows the
+  attempt ran and was cut short). An attempt that reached a terminal *before* the drain
+  keeps it; `record_terminal` is exactly-once. This keys on the full drain, not on
+  stop-mode, so a stop-on-first-failure run keeps T34's exact per-node outcomes.
+- **Stop-on-first-failure vs external interrupt.** Both route through the single
+  `enter_cancellation` core (flip the run token, record the origin), but only an
+  external interrupt sets the full-drain discipline (admit nothing at all, grace-drain,
+  reclassify). A stop-on-first-failure keeps T34's loop behaviour byte-for-byte (firing
+  contingencies still run, in-flight completes naturally) and records a
+  `FailureUnderStop` origin, so a non-cancelled stop run is unchanged from T34.
 
 ## Out of scope
 - OS-signal handling (SIGTERM/SIGINT → cancel), the final event-stream flush with fsync, and the bounded-wait/distinct-exit-code behaviour for an unwritable sink at shutdown — all owned by T36.

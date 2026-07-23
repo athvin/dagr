@@ -278,11 +278,11 @@ pub use binding::{
     Shared, TriggerRule, MAX_INPUT_ARITY,
 };
 pub use context::{
-    surface_requirements, BootstrapFailure, BootstrapOutcome, CancellationSignal,
-    CancellationSource, CoveredNodeStates, DataInterval, LogSpan, MissingResourceError, PipelineId,
-    RegistryError, ResourceRegistry, ResourceRegistryBuilder, ResourceRequirement,
-    ResourceRequirements, RunContext, RunContextBuilder, RunId, ScratchError, ScratchStore, Secret,
-    TerminalState,
+    surface_requirements, BootstrapFailure, BootstrapOutcome, CancellationOrigin,
+    CancellationSignal, CancellationSource, CoveredNodeStates, DataInterval, LogSpan,
+    MissingResourceError, PipelineId, RegistryError, ResourceRegistry, ResourceRegistryBuilder,
+    ResourceRequirement, ResourceRequirements, RunContext, RunContextBuilder, RunId, ScratchError,
+    ScratchStore, Secret, TerminalState,
 };
 pub use error::{TaskError, TaskErrorClass};
 pub use execution::{
