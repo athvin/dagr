@@ -68,8 +68,9 @@
 //! `TimedOut` (T21) and `Panicked` (T23) variants those tickets add **without
 //! reshaping** the four T20 owns.
 
-use crate::context::{RunContext, TerminalState};
+use crate::context::{PipelineId, RunContext, RunId, TerminalState};
 use crate::error::{TaskError, TaskErrorClass};
+use crate::handle::NodeId;
 use crate::slot::Slot;
 use crate::task::Task;
 
@@ -138,6 +139,30 @@ pub enum AttemptEvent {
         node: String,
         /// The 1-based attempt number, from the C8 context.
         attempt: u32,
+    },
+    /// The node entered a **backoff/waiting phase** between two attempts (T22):
+    /// a retry-eligible attempt failed and the retry loop is waiting `delay`
+    /// before dispatching the next attempt. This names the backoff interval as a
+    /// distinct, measurable phase (feeding the C23 phase timings — arch.md C14
+    /// "record the waiting … phases"), so the interval between the failing
+    /// attempt and the next attempt start is attributable to *backoff*, not to
+    /// executing.
+    ///
+    /// It is emitted **after** the failing attempt's closing outcome record and
+    /// **before** the next attempt's `attempt-started`. `attempt` is the number
+    /// of the attempt that just failed (the one being backed off *from*); the
+    /// next attempt is `attempt + 1`. Only the retry loop (T22) emits this; a
+    /// single attempt (T20 / T21) never does.
+    BackoffStarted {
+        /// The node's author-declared identity name (T13).
+        node: String,
+        /// The 1-based number of the attempt that just failed — the retry loop
+        /// waits before dispatching attempt `attempt + 1`.
+        attempt: u32,
+        /// The scheduled backoff delay (base·factor^n, capped, with jitter) the
+        /// loop waits before the next attempt. Recorded as the phase's measured
+        /// interval; the actual sleeping is the driver's (T24/T33).
+        delay: Duration,
     },
     /// The node reached a terminal state from the normative taxonomy (arch.md
     /// Vocabulary), carrying the classified state.
@@ -340,6 +365,37 @@ where
     T: Task<Input = ()>,
     S: AttemptEventSink + ?Sized,
 {
+    // A single attempt IS terminal: run the attempt (emitting the opening
+    // events + the exactly-one attempt-outcome record) and then, because the
+    // node ends here, emit the node-terminal record. The retry loop (T22)
+    // instead calls the no-terminal helper per attempt and emits *one*
+    // node-terminal record when the loop ends.
+    let outcome = run_one_attempt(task, node, ctx, slot, sink).await;
+    emit_node_terminal(node, outcome.terminal_state(), sink);
+    outcome
+}
+
+/// Run one attempt end to end and emit its opening events plus the **exactly-one
+/// attempt-outcome record**, but **not** the node-terminal record.
+///
+/// This is the shared body of [`run_attempt`] and the retry loop
+/// ([`run_with_retries`], T22): the loop drives this once per attempt (so each
+/// attempt gets its own outcome record) and emits the single node-terminal
+/// record itself when the loop terminates. Splitting the terminal record out is
+/// what lets a retried node have many attempt-outcome records but exactly one
+/// node-terminal record, while keeping [`run_attempt`]'s single-attempt
+/// behaviour byte-identical (it composes this with the terminal emission).
+async fn run_one_attempt<T, S>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()>,
+    S: AttemptEventSink + ?Sized,
+{
     let attempt = ctx.attempt();
 
     // (1) The attempt span is already open on the `RunContext` (C8/C25), keyed
@@ -376,9 +432,10 @@ where
         },
     };
 
-    // (7) Closing per-transition event = the exactly-one attempt-outcome record,
-    // then the node-terminal record carrying the classified state.
-    emit_closing_events(node, attempt, outcome, sink);
+    // (7) The exactly-one attempt-outcome record for this attempt. The
+    // node-terminal record is the caller's to emit (once), so a retried node
+    // gets one outcome record per attempt but a single node-terminal record.
+    emit_attempt_outcome_record(node, attempt, outcome, sink);
 
     outcome
 }
@@ -393,6 +450,23 @@ where
 /// record: success → `attempt-succeeded`; timeout → `attempt-timed-out`;
 /// permanent/retry-eligible/skip → `attempt-failed`.
 fn emit_closing_events<S>(node: &str, attempt: u32, outcome: AttemptOutcome, sink: &mut S)
+where
+    S: AttemptEventSink + ?Sized,
+{
+    emit_attempt_outcome_record(node, attempt, outcome, sink);
+    emit_node_terminal(node, outcome.terminal_state(), sink);
+}
+
+/// Emit **only** the exactly-one attempt-outcome record for one attempt (arch.md
+/// C14 / C19), without the node-terminal record.
+///
+/// Split out of [`emit_closing_events`] so the retry loop ([`run_with_retries`],
+/// T22) can emit one outcome record **per attempt** while deferring the *single*
+/// node-terminal record to the moment the loop actually terminates — a retried
+/// node has many attempt-outcome records but exactly one node-terminal record.
+/// A single attempt (T20 / T21) composes this with [`emit_node_terminal`] via
+/// [`emit_closing_events`], so their behaviour is byte-identical to before.
+fn emit_attempt_outcome_record<S>(node: &str, attempt: u32, outcome: AttemptOutcome, sink: &mut S)
 where
     S: AttemptEventSink + ?Sized,
 {
@@ -412,9 +486,18 @@ where
             attempt,
         }),
     }
+}
+
+/// Emit the single node-terminal record carrying the classified terminal state.
+/// The retry loop calls this exactly once, at loop termination; a single attempt
+/// calls it via [`emit_closing_events`].
+fn emit_node_terminal<S>(node: &str, state: TerminalState, sink: &mut S)
+where
+    S: AttemptEventSink + ?Sized,
+{
     sink.emit(AttemptEvent::NodeTerminal {
         node: node.into(),
-        state: outcome.terminal_state(),
+        state,
     });
 }
 
@@ -780,5 +863,403 @@ impl LateResultBarrier {
     pub fn write_scratch(&self) -> bool {
         // A timed-out attempt never writes scratch.
         false
+    }
+}
+
+// ===========================================================================
+// C14 · retry with jittered exponential backoff (T22)
+// ===========================================================================
+//
+// This wraps the single-attempt core ([`run_one_attempt`], shared with
+// [`run_attempt`], T20) in a **bounded retry loop**. After each failed attempt
+// the loop consults the outcome classification and either schedules another
+// attempt after a jittered exponential backoff or terminates the node (arch.md
+// C14: "either fill the slot, schedule another attempt after a backoff, or reach
+// a terminal failure"). It re-decides nothing T20/T21 owns: it reuses their
+// classification ([`AttemptOutcome::is_retry_eligible`]) and event contract, and
+// forks no attempt logic.
+//
+// # Determinism — no global RNG, no clock, inside the retry logic
+//
+// Jitter needs randomness but the retry logic must be reproducible in tests, so
+// two things are **injected** rather than read from ambient state:
+//
+// - the **jitter source** is a caller-supplied [`Jitter`] (a tiny dependency-free
+//   seeded PRNG for production, [`SeededJitter`]; a pinned/zero source for tests,
+//   [`NoJitter`]). The loop never reads a thread/global RNG, so the exact backoff
+//   sequence is assertable.
+// - the **backoff wait** is a caller-supplied timer future factory
+//   (`FnMut(Duration) -> impl Future`). The loop only *computes* the delay and
+//   awaits the caller's future — it never reads the system clock. The driver
+//   (T24 / T33) arms a real `tokio::time` sleep on the isolated framework runtime
+//   there; a unit test passes a future that records the delay and resolves at
+//   once. This keeps `dagr-core` runtime-agnostic and dependency-free, exactly as
+//   the T21 timeout race did.
+//
+// # Interim M1 surface → migrates into C5 policy in M2 (T29)
+//
+// [`RetryConfig`] is a **deliberately small, self-contained interim knob**. Its
+// conservative default is **no retries** (a single attempt), matching C5's
+// stated default. In M2 this shape folds into the full C5 node-policy struct —
+// that migration is T29's concern (which this ticket blocks); nothing here
+// implements the policy surface, the defaults hash, or the graph-artifact
+// disclosure of the effective policy.
+
+use std::time::Duration;
+
+/// An **injectable, deterministic** jitter source for backoff (T22).
+///
+/// Jitter spreads simultaneous retries so a fan-out does not resynchronize
+/// (arch.md C14: "Backoff delays are jittered, so a fan-out of simultaneous
+/// retries does not resynchronize"). But tests must be reproducible, so the
+/// retry loop reads jitter **only** through this port — never a thread/global
+/// RNG or the system clock. Production passes a seeded PRNG ([`SeededJitter`]);
+/// tests pass a pinned source ([`NoJitter`], or a seeded one for the fan-out
+/// spread test).
+///
+/// [`next_unit`](Jitter::next_unit) returns the next pseudo-random draw in the
+/// half-open unit interval `[0, 1)`; [`Backoff`] maps it into the jitter window
+/// around the nominal exponential delay.
+pub trait Jitter {
+    /// The next pseudo-random draw in `[0, 1)`. Deterministic given the source's
+    /// state — a seeded source replays the identical sequence.
+    fn next_unit(&mut self) -> f64;
+}
+
+/// A **no-jitter** source: every draw is `0.0`, so [`Backoff`] yields the exact
+/// nominal `base·factor^n` (capped) schedule with no spread.
+///
+/// This is the pinned source the deterministic backoff tests use to assert the
+/// exact sequence, and it is also the honest default when jitter is undesired.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoJitter;
+
+impl Jitter for NoJitter {
+    fn next_unit(&mut self) -> f64 {
+        0.0
+    }
+}
+
+/// A tiny **dependency-free, seeded** PRNG usable as a [`Jitter`] source
+/// (`splitmix64`).
+///
+/// `dagr-core` is kept dependency-free (arch.md "Stability"), so rather than pull
+/// `rand`/`fastrand` for the default jitter this uses `splitmix64` — a
+/// well-known, small, fast, `unsafe`-free integer generator — to produce the
+/// unit draws. A given seed **replays the identical sequence**, which is what
+/// makes the backoff schedule assertable in tests (a distinct seed per node
+/// produces distinct draws, which is what spreads a fan-out).
+///
+/// This is *not* a cryptographic RNG and does not need to be: jitter only needs
+/// a well-spread, reproducible spread of retry wake times. The production driver
+/// seeds one per node (e.g. from the node identity) so a fan-out of identical
+/// nodes still draws distinct delays.
+#[derive(Debug, Clone)]
+pub struct SeededJitter {
+    state: u64,
+}
+
+impl SeededJitter {
+    /// A seeded jitter source. The same `seed` replays the identical draw
+    /// sequence (deterministic); distinct seeds diverge (spreading a fan-out).
+    #[must_use]
+    pub fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+}
+
+impl Jitter for SeededJitter {
+    fn next_unit(&mut self) -> f64 {
+        // splitmix64: advance the state, then avalanche it into a well-mixed
+        // 64-bit output. Dependency-free and `unsafe`-free.
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        // Map the top 53 bits into [0, 1) — the standard f64 unit construction,
+        // exact and never reaching 1.0.
+        (z >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// The **backoff schedule** (T22): exponential in the attempt index, clamped to a
+/// cap, and jittered so a fan-out does not resynchronize (arch.md C14).
+///
+/// For a 0-based attempt index `n` (the wait *after* the `n`-th failed attempt,
+/// before attempt `n + 1`), the **nominal** delay is `base · factor^n`, clamped
+/// so it never exceeds `cap` — later delays sit exactly at the cap. Jitter then
+/// spreads the *actual* delay within `[0, nominal]` using a caller-supplied
+/// [`Jitter`] draw (full jitter): `delay = nominal · draw` when the draw is in
+/// `[0, 1)`, with [`NoJitter`] collapsing that to exactly `nominal`. The
+/// jittered delay is itself clamped to the cap, so **no scheduled delay ever
+/// exceeds the cap**, jitter or not.
+///
+/// # Why full jitter
+///
+/// Full jitter (`[0, nominal]`) maximises decorrelation of simultaneous retries
+/// — the property the C14 acceptance criterion "a fan-out of simultaneous
+/// retries does not resynchronize" demands — and keeps the delay bounded above
+/// by the nominal (hence by the cap). The window is documented here as part of
+/// the interim surface that migrates into C5 policy (T29).
+#[derive(Debug, Clone, Copy)]
+pub struct Backoff {
+    base: Duration,
+    factor: f64,
+    cap: Duration,
+}
+
+impl Backoff {
+    /// A backoff schedule with the given `base` delay, exponential growth
+    /// `factor` (per attempt), and maximum `cap`. Pass [`Duration::MAX`] for an
+    /// effectively-uncapped schedule.
+    #[must_use]
+    pub fn new(base: Duration, factor: f64, cap: Duration) -> Self {
+        Self { base, factor, cap }
+    }
+
+    /// The **nominal** (pre-jitter) delay for 0-based attempt index `n`:
+    /// `base · factor^n`, clamped to the cap. Later indices sit exactly at the
+    /// cap. Public for testing and driver introspection; the loop uses
+    /// [`delay_for`](Backoff::delay_for), which applies jitter on top.
+    #[must_use]
+    pub fn nominal_delay(&self, n: u32) -> Duration {
+        // Compute in f64 seconds, guarding overflow by clamping to the cap. A
+        // `factor` >= 1 grows without bound, so `saturating` behaviour falls out
+        // of the min-with-cap below.
+        let base_secs = self.base.as_secs_f64();
+        let scaled = base_secs * self.factor.powi(n as i32);
+        // A non-finite or overflowing product is clamped to the cap.
+        if !scaled.is_finite() {
+            return self.cap;
+        }
+        let nominal = Duration::try_from_secs_f64(scaled).unwrap_or(self.cap);
+        nominal.min(self.cap)
+    }
+
+    /// The **scheduled** delay for 0-based attempt index `n`: the nominal
+    /// exponential delay with full jitter applied from `jitter`, clamped to the
+    /// cap.
+    ///
+    /// Jitter is **subtractive full jitter** relative to the nominal: a draw of
+    /// `0` yields **exactly** the nominal (so [`NoJitter`] reproduces the exact
+    /// nominal exponential-and-capped sequence), and a larger draw shortens the
+    /// delay toward zero — the scheduled delay is `nominal · (1 − draw)`, lying in
+    /// the half-open window `(0, nominal]`. Because the window's upper bound is
+    /// the nominal (itself clamped to the cap), **no scheduled delay ever exceeds
+    /// the cap**, jitter or not. Anchoring the window at the nominal (rather than
+    /// scaling *up* from it) is what keeps the ticket's two facets consistent:
+    /// "pinned to zero → nominal" and "within the jitter window around the
+    /// nominal, never above the cap."
+    #[must_use]
+    pub fn delay_for<J: Jitter + ?Sized>(&self, n: u32, jitter: &mut J) -> Duration {
+        let nominal = self.nominal_delay(n);
+        // Subtractive full jitter: draw in [0, 1) removes up to the whole nominal.
+        // Clamp the draw defensively so a misbehaving source can never lengthen
+        // the delay past the nominal (and hence past the cap) or below zero.
+        let draw = jitter.next_unit().clamp(0.0, 1.0);
+        let jittered_secs = nominal.as_secs_f64() * (1.0 - draw);
+        let jittered = Duration::try_from_secs_f64(jittered_secs).unwrap_or(nominal);
+        jittered.min(self.cap)
+    }
+}
+
+/// The **interim per-node retry configuration** (T22): maximum attempt count plus
+/// the [`Backoff`] schedule, with a conservative default of **no retries**.
+///
+/// # Classification-gated retry
+///
+/// Only outcomes classified **retry-eligible** ([`AttemptOutcome::is_retry_eligible`]
+/// — a retry-eligible failure or a timeout, arch.md C14) consume the budget and
+/// trigger a backoff. A permanent failure, a deliberate skip, and success end the
+/// loop immediately with no further attempts and no backoff — a permanent error
+/// is never retried regardless of remaining budget.
+///
+/// # Conservative default
+///
+/// [`RetryConfig::default`] is **one attempt** (no retries) — the C5 stated
+/// default ("no retries"). A node with the default config performs exactly one
+/// attempt and then fails on a retry-eligible error, proving the default is
+/// honestly non-retrying.
+///
+/// # Interim M1 surface → C5 policy in M2 (T29)
+///
+/// This is a deliberately small, self-contained knob introduced as an interim M1
+/// surface. In M2 it **migrates into the C5 node-policy struct** (retries +
+/// backoff shape live there alongside timeout, cost, trigger rule, …) — that
+/// migration is **T29**'s concern (which this ticket blocks). Nothing here
+/// implements the policy struct, its defaults hash, or the graph-artifact
+/// disclosure of the effective policy.
+#[derive(Debug, Clone, Copy)]
+pub struct RetryConfig {
+    max_attempts: u32,
+    backoff: Backoff,
+}
+
+impl RetryConfig {
+    /// A retry configuration allowing up to `max_attempts` **total** attempts
+    /// (not retries-beyond-the-first: `max_attempts == 1` is the no-retry case,
+    /// `3` allows the initial attempt plus two retries) with the given
+    /// [`Backoff`] schedule. `max_attempts` is clamped to at least one — a node
+    /// always gets at least a single attempt.
+    #[must_use]
+    pub fn new(max_attempts: u32, backoff: Backoff) -> Self {
+        Self {
+            max_attempts: max_attempts.max(1),
+            backoff,
+        }
+    }
+
+    /// The maximum **total** number of attempts (initial attempt included).
+    /// Always at least one.
+    #[must_use]
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// The backoff schedule the loop waits between attempts.
+    #[must_use]
+    pub fn backoff(&self) -> &Backoff {
+        &self.backoff
+    }
+}
+
+impl Default for RetryConfig {
+    /// The conservative default: **no retries** — a single attempt. The backoff
+    /// is present but never consulted under a single attempt.
+    fn default() -> Self {
+        // A zero base means even a hypothetical retry would wait nothing; the
+        // real guard is `max_attempts == 1`, which schedules no backoff at all.
+        Self {
+            max_attempts: 1,
+            backoff: Backoff::new(Duration::ZERO, 2.0, Duration::MAX),
+        }
+    }
+}
+
+/// Run a node through the **bounded retry loop** (T22; arch.md `### C14`).
+///
+/// This is the retry driver that turns the single-attempt runner into what C14
+/// describes: for each attempt in turn it runs the attempt (via the shared
+/// single-attempt core, emitting the opening events and the exactly-one
+/// attempt-outcome record per attempt), then:
+///
+/// - **success / permanent failure / deliberate skip** — the loop ends
+///   immediately; no backoff, no further attempt. (Only success fills the slot.)
+/// - **retry-eligible failure / timeout** — if the budget still has attempts
+///   left, the loop enters a **named backoff phase** ([`AttemptEvent::BackoffStarted`],
+///   feeding C23 phase timings), waits the jittered exponential delay by awaiting
+///   the caller-provided `timer` future, then dispatches the next attempt; if the
+///   budget is exhausted, the node reaches its terminal failure (`failed` for a
+///   retry-eligible failure whose retries ran out, `timed-out` for a timeout on
+///   the last permitted attempt).
+///
+/// Exactly **one** node-terminal record is emitted, when the loop terminates —
+/// carrying the last attempt's classified terminal state — even though each
+/// attempt emitted its own attempt-outcome record (gapless, increasing attempt
+/// numbers).
+///
+/// # Determinism (no global RNG / clock in the loop)
+///
+/// - `jitter` is the injected [`Jitter`] source — the loop reads no thread/global
+///   RNG. `SeededJitter` replays deterministically; `NoJitter` yields the exact
+///   nominal schedule.
+/// - `timer` is a caller-supplied factory `FnMut(Duration) -> impl Future<Output = ()>`.
+///   The loop *computes* the delay and awaits the caller's future; it reads no
+///   system clock. The driver (T24 / T33) arms a real isolated-runtime sleep
+///   there; a test passes a future that records the delay and resolves at once.
+///
+/// # C1 exclusivity — no premature re-entry
+///
+/// `task` is taken by `&mut self` (C1) and each attempt is `await`ed to
+/// completion **before** the next is dispatched, so attempt `n + 1` never begins
+/// until attempt `n`'s closure has returned — the same task instance is never
+/// running concurrently with a prior attempt. (The await-bound future-drop and
+/// blocking/compute zombie-deferral of a *timed-out* attempt are T21's; this loop
+/// composes with them via the outcome classification and does not re-decide
+/// them.)
+///
+/// # Arguments
+///
+/// - `task` — the node's work, taken by value and driven `&mut` per attempt (C1).
+/// - `node` — the node's author-declared name (keys every emitted record).
+/// - `run` / `pipeline` — the run and pipeline identities the per-attempt
+///   [`RunContext`] carries (C8); the loop mints a fresh context per attempt with
+///   the incremented attempt number and the configured maximum, so the task
+///   observes which attempt it is on.
+/// - `slot` — the node's single once-writable output slot (C10), filled only on a
+///   successful attempt.
+/// - `sink` — the abstract C19 emission port (T24 adapts it; tests capture).
+/// - `config` — the interim [`RetryConfig`] (max attempts + backoff shape).
+/// - `jitter` — the injected deterministic [`Jitter`] source.
+/// - `timer` — the caller-provided backoff timer factory (the sleeping seam).
+///
+/// Returns the **last** attempt's classified [`AttemptOutcome`] — the one whose
+/// terminal state the node ends in.
+#[allow(clippy::too_many_arguments, reason = "the interim retry surface threads \
+    the run/pipeline identity, slot, sink, config, jitter, and timer explicitly; \
+    these fold into the C5 policy + driver context in M2 (T29/T24)")]
+pub async fn run_with_retries<T, S, F, Fut>(
+    mut task: T,
+    node: &str,
+    run: RunId,
+    pipeline: PipelineId,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+    config: &RetryConfig,
+    jitter: &mut (impl Jitter + ?Sized),
+    mut timer: F,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()>,
+    S: AttemptEventSink + ?Sized,
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let node_id = NodeId::from_name(node);
+    let max_attempts = config.max_attempts();
+
+    // Attempt numbers are 1-based (C8); the backoff schedule is 0-based on the
+    // *failed*-attempt index. The loop runs attempt 1..=max_attempts, stopping
+    // early on any non-retry-eligible outcome or once the budget is spent.
+    let mut attempt: u32 = 1;
+    loop {
+        // Mint a fresh per-attempt context carrying this attempt number and the
+        // configured maximum (C8), so the task observes which attempt it is on.
+        let ctx = RunContext::builder(run.clone(), pipeline.clone(), node_id)
+            .attempt(attempt)
+            .max_attempts(max_attempts)
+            .build();
+
+        // One attempt end to end (opening events + exactly-one outcome record),
+        // driven `&mut` and awaited to completion before any next attempt (C1).
+        let outcome = run_one_attempt(&mut task, node, &ctx, slot, sink).await;
+
+        // Classification-gated: only a retry-eligible outcome with budget left
+        // schedules another attempt; everything else terminates the node now.
+        let budget_left = attempt < max_attempts;
+        if outcome.is_retry_eligible() && budget_left {
+            // Enter a named backoff phase: compute the jittered exponential delay
+            // for this (0-based) failed-attempt index, record it as a distinct
+            // measurable interval (C23), then await the caller's timer future.
+            let delay = config.backoff().delay_for(attempt - 1, jitter);
+            sink.emit(AttemptEvent::BackoffStarted {
+                node: node.into(),
+                attempt,
+                delay,
+            });
+            // The wait: await the caller-provided timer future. The loop reads no
+            // clock — the driver's future decides when the delay has elapsed.
+            timer(delay).await;
+            attempt += 1;
+            continue;
+        }
+
+        // Terminal: emit the single node-terminal record and return the outcome.
+        // (A retry-eligible failure whose budget ran out ends `failed`; a timeout
+        // on the last attempt ends `timed-out`; success/permanent/skip end at
+        // their own terminal state — all via the outcome's terminal_state.)
+        emit_node_terminal(node, outcome.terminal_state(), sink);
+        return outcome;
     }
 }
