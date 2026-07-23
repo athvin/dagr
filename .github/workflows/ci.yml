@@ -86,13 +86,24 @@ jobs:
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # --- Tests (includes the coverage-matrix integration test, SL8machine) ------
+  # --- Tests (includes the coverage-matrix integration test, SL8machine, and
+  # the T8 compile-failure UI harness) ---------------------------------------
+  # `cargo test --workspace` already runs the UI harness
+  # (crates/core/tests/ui.rs), which compiles each tests/ui/*.rs sample under
+  # the pinned toolchain (the rustc beside $CARGO — 1.95.0 here) and asserts
+  # both type names appear. The explicit step below runs it on its own first so
+  # a UI-snapshot mismatch is legible in the job log and unambiguously gates the
+  # build (T8 DoD: "runs under the pinned toolchain in CI on every pull request
+  # and gates the build"). It never blesses — DAGR_BLESS is unset, so a stale
+  # snapshot fails here rather than being silently rewritten.
   test:
     name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - name: compile-failure UI harness (T8, pinned toolchain)
+        run: cargo test -p dagr-core --test ui
       - name: cargo test --workspace
         run: cargo test --workspace
 

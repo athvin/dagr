@@ -55,6 +55,25 @@
 //! stale snapshot fails the build (nonzero exit) rather than being silently
 //! overwritten. The regenerated file is a reviewable diff, not a binary blob.
 //!
+//! # Why this harness is hand-built rather than `trybuild`
+//!
+//! The ticket names a "trybuild/UI-test harness." `trybuild` (and `ui_test`)
+//! match a captured `.stderr` **exactly**, line by line, against a checked-in
+//! snapshot. That is directly incompatible with what C3 and C28 require and
+//! what the T8 Test plan demands ("prose churn does not break the suite"): the
+//! assertion must key **only** on the two type-name substrings and tolerate
+//! wording, spans, and note count. There is no trybuild configuration that
+//! turns its exact-match into substring-only matching, so a trybuild-driven
+//! snapshot would either be brittle (full exact prose) or fail (substrings
+//! only). This harness is therefore a small, self-contained trybuild-*style*
+//! runner — a dedicated `tests/ui/` directory, one entry point, checked-in
+//! snapshots, a single-command blessing flow — with the both-type-names
+//! assertion the spec actually asks for. A welcome consequence: it adds **no**
+//! third-party dependency (the trybuild tree pulls `unicode-ident`, whose
+//! `(MIT OR Apache-2.0) AND Unicode-3.0` license would force a `Unicode-3.0`
+//! exception into `deny.toml`), keeping the core dependency set minimal
+//! (arch.md "Stability"). Recorded as a T8 design-decision resolution.
+//!
 //! # Toolchain-bump contract
 //!
 //! When the pinned toolchain in `rust-toolchain.toml` (a T7 policy artifact)
@@ -153,12 +172,13 @@ fn snapshot_header(stem: &str) -> String {
     )
 }
 
-/// Extract the two type names an `expected `X`, found `Y`` E0308 diagnostic
-/// carries. Used only by the blessing flow to seed a snapshot's substring list;
-/// it is intentionally simple — a human reviews the blessed diff.
+/// Extract the two type names an E0308 `expected .., found ..` diagnostic
+/// carries (the words after the `expected` and `found` backtick markers). Used
+/// only by the blessing flow to seed a snapshot's substring list; it is
+/// intentionally simple — a human reviews the blessed diff.
 fn extract_type_names(diagnostic: &str) -> Vec<String> {
     let mut names = Vec::new();
-    for (marker, _) in [("expected `", ()), ("found `", ())] {
+    for marker in ["expected `", "found `"] {
         if let Some(start) = diagnostic.find(marker) {
             let rest = &diagnostic[start + marker.len()..];
             if let Some(end) = rest.find('`') {
@@ -228,7 +248,10 @@ fn ui() {
             );
             let body = format!("{}{}\n", snapshot_header(&stem), names.join("\n"));
             fs::write(&snapshot_path, body).unwrap_or_else(|e| {
-                panic!("blessing {}: could not write snapshot: {e}", snapshot_path.display())
+                panic!(
+                    "blessing {}: could not write snapshot: {e}",
+                    snapshot_path.display()
+                )
             });
             eprintln!("blessed {}", snapshot_path.display());
             continue;
@@ -283,7 +306,10 @@ fn pinned_toolchain_governs_output() {
         .lines()
         .find_map(|line| {
             let line = line.trim();
-            let rest = line.strip_prefix("channel")?.trim_start().strip_prefix('=')?;
+            let rest = line
+                .strip_prefix("channel")?
+                .trim_start()
+                .strip_prefix('=')?;
             Some(rest.trim().trim_matches('"').to_owned())
         })
         .expect("rust-toolchain.toml declares a pinned channel");
