@@ -14,12 +14,15 @@
 //! artifacts only, so it does not weaken the C24 renderer-independence
 //! guarantee that the crate graph enforces.
 //!
-//! At this milestone the crate is an empty, compiling placeholder created by
-//! ticket T1. The verb implementations and exit-code contract land in later
-//! tickets (T55, T56).
+//! The first concrete code lands with ticket T24 (034): the M1 **run-loop
+//! driver** in [`driver`], the component that orchestrates one complete run from
+//! an assembled pipeline to a truthful end. The verb implementations and
+//! exit-code contract still land in later tickets (T55, T56).
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
+
+pub mod driver;
 
 #[cfg(test)]
 mod tests {
