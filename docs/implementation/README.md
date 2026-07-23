@@ -53,7 +53,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **030** · [T20 — C14: single-attempt execution core](030-T20-single-attempt-execution-core.md) · M · feature — after T16, T17, T19
 - [x] **031** · [T21 — C14: per-attempt timeout](031-T21-per-attempt-timeout.md) · S · feature — after T20, T0.3
 - [x] **032** · [T22 — C14: retry with jittered exponential backoff](032-T22-retry-with-backoff.md) · M · feature — after T20
-- [ ] **033** · [T23 — C14: panic containment](033-T23-panic-containment.md) · S · feature — after T20
+- [x] **033** · [T23 — C14: panic containment](033-T23-panic-containment.md) · S · feature — after T20
 - [ ] **034** · [T24 — M1 run-loop driver](034-T24-m1-run-loop-driver.md) · M · feature — after T18, T20, T0.6
 - [ ] **035** · [T25 — C11: termination property test](035-T25-termination-property-test.md) · M · feature (tests) — after T24
 - [ ] **036** · [T26 — C10: bounded-memory chain test](036-T26-bounded-memory-chain-test.md) · S · feature (tests) — after T17, T24
