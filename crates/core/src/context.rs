@@ -177,6 +177,10 @@ impl DataInterval {
 #[derive(Debug, Clone)]
 pub struct CancellationSignal {
     flag: Arc<AtomicBool>,
+    // The parent run token, present when this signal came from a per-attempt
+    // child (C16 / T35): a task observes cancellation when its own attempt token
+    // is cancelled OR the run token it descends from is cancelled.
+    parent: Option<Arc<CancellationSource>>,
 }
 
 impl CancellationSignal {
@@ -184,9 +188,17 @@ impl CancellationSignal {
     /// may do with the signal: observe it and return promptly (recorded
     /// `cancelled`) or not (recorded `abandoned` — C16). There is no lever to
     /// cancel the run from the task side.
+    ///
+    /// A signal derived from a per-attempt [child](CancellationSource::child)
+    /// observes cancellation when either its own attempt token or the run token it
+    /// descends from has been cancelled — a run cancel reaches every attempt.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.is_cancelled())
     }
 }
 
@@ -197,9 +209,29 @@ impl CancellationSignal {
 /// what makes the task-facing side a read channel and not a lever. A test flips
 /// cancellation with [`cancel`](Self::cancel) to exercise a task's observation of
 /// it; the runner does the same on the cancellation path (C16).
+///
+/// # Run-scoped token with per-attempt children (C16 / T35)
+///
+/// A source is the **run-scoped token** the driver owns; [`child`](Self::child)
+/// hands each spawned attempt its **per-attempt child**. Cancelling the run
+/// ([`cancel`](Self::cancel) on the run source) cancels **every live child**
+/// exactly once (the children observe the same flip), and a second cancel changes
+/// nothing ([`is_cancelled`](Self::is_cancelled) is idempotent). Cancelling a
+/// **child** ([`cancel`](Self::cancel) on the child — the per-attempt path a C12
+/// timeout uses) cancels **only that child**: its siblings and the parent run
+/// source stay uncancelled, so a single attempt's cancellation is never mistaken
+/// for the run being cancelled.
 #[derive(Debug, Clone, Default)]
 pub struct CancellationSource {
+    // This source's own flag: set by `cancel()` on this source, or observed set
+    // because a parent's cancel propagated (see `parent`). A child observes
+    // cancelled when *either* its own flag or any ancestor's flag is set, so a run
+    // cancel reaches every child while a child cancel touches only its own flag.
     flag: Arc<AtomicBool>,
+    // The parent run token, if this is a per-attempt child. A child is cancelled
+    // when its own `flag` is set OR its `parent` is cancelled; the parent is
+    // never reached back through here, so a child cancel cannot cancel the parent.
+    parent: Option<Arc<CancellationSource>>,
 }
 
 impl CancellationSource {
@@ -209,21 +241,72 @@ impl CancellationSource {
         Self::default()
     }
 
+    /// A **per-attempt child** of this run source (C16 / T35). The child is
+    /// cancelled when *this* source is cancelled (a run cancel reaches every live
+    /// child) or when the child itself is cancelled; cancelling the child does
+    /// **not** cancel this parent or any sibling. Any number of children may be
+    /// derived; each is independent on its own flag but shares the parent's.
+    #[must_use]
+    pub fn child(&self) -> CancellationSource {
+        CancellationSource {
+            flag: Arc::new(AtomicBool::new(false)),
+            parent: Some(Arc::new(self.clone())),
+        }
+    }
+
+    /// Whether cancellation has been raised for this source — its own flag, or any
+    /// ancestor's (a run cancel observed through a child). Idempotent: a second
+    /// [`cancel`](Self::cancel) leaves this `true` with no further effect.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.is_cancelled())
+    }
+
     /// The observe-only [`CancellationSignal`] this source drives — the one a
     /// [`RunContext`] carries. Any number of signals may share one source; they
-    /// all observe the same flip.
+    /// all observe the same flip, including a parent run cancel observed through a
+    /// per-attempt child.
     #[must_use]
     pub fn signal(&self) -> CancellationSignal {
         CancellationSignal {
             flag: Arc::clone(&self.flag),
+            parent: self.parent.clone(),
         }
     }
 
-    /// Raise cancellation. Every [`CancellationSignal`] derived from this source
-    /// now observes [`is_cancelled`](CancellationSignal::is_cancelled) as `true`.
+    /// Raise cancellation on **this** source. Every [`CancellationSignal`] derived
+    /// from this source — and, if this is the run source, every per-attempt
+    /// [`child`](Self::child) — now observes cancellation. On a child, this cancels
+    /// only that child; the parent run source and siblings are untouched.
+    /// Idempotent.
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
     }
+}
+
+/// Why the run was cancelled (arch.md `### C16`; C26 exit-code precedence).
+///
+/// The cancellation core (T35) records the **origin** of a cancellation so the
+/// later exit-code logic (C26 / T55) can prefer *run failure over cancellation*:
+/// a cancellation triggered by a failure under stop-on-first-failure must not mask
+/// the failure, whereas an externally-originated interrupt with no run failure is
+/// reported as a cancellation. This ticket only *records* the origin; it does not
+/// own the exit-code mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CancellationOrigin {
+    /// A node ended failure-like under [stop-on-first-failure](crate::flow::FailureMode)
+    /// (C15 / T34), which routed through the cancellation core. The run failure
+    /// wins over the cancellation in the C26 precedence.
+    FailureUnderStop,
+    /// An external interrupt (an operator/orchestrator termination signal). The
+    /// **wiring** of an OS signal to this origin is **T36**; T35 records the origin
+    /// value so the entry point exists and is exercised.
+    ExternalInterrupt,
 }
 
 /// The **dagr-owned** logging span a task's attempt runs inside (arch.md
