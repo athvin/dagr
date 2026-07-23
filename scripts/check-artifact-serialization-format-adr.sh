@@ -97,7 +97,11 @@ if has '^#+[[:space:]]+Status' && has 'accepted'; then
 else
   bad "status: the ADR must be recorded in an Accepted status"
 fi
-if has 'draft|proposed'; then
+# NB: scoped to a draft/proposed *status declaration* — a bare "draft" appears
+# legitimately in this ADR ("JSON Schema draft 2020-12"), so we only reject
+# draft/proposed as an ADR STATUS (adjacent to the Status heading / "status:"),
+# not the standalone word.
+if has 'status[^[:alnum:]]+(draft|proposed)' || has '(draft|proposed)[^[:alnum:]]+status'; then
   bad "status: the ADR must not be draft/proposed"
 else
   pass "status: no draft/proposed status leaked in"
