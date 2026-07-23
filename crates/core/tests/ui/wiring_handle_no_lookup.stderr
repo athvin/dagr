@@ -1,0 +1,25 @@
+# Compile-failure snapshot for `wiring_handle_no_lookup.rs` — ticket T12 (024).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C2; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# Neither the REAL `Flow` builder nor the finalized `Pipeline` exposes a
+# by-name/index/string handle lookup, so both attempts are "no method" errors.
+# The substrings are the stable, toolchain-pinned facets: the error CODE `E0599`
+# (method not found) and BOTH surface type names (`Flow`, `Pipeline`) — together
+# "there is no lookup by name, index, or string key on either surface."
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+E0599
+Flow
+Pipeline
