@@ -1,0 +1,11 @@
+# PLACEHOLDER snapshot (tests-first / RED commit) — ticket T8 (007).
+#
+# The harness (tests/ui.rs) and the sample (wrong_type_binding.rs) exist; this
+# snapshot is intentionally WRONG so the harness fails RED before the real
+# snapshot is blessed in. It names a second type substring the diagnostic does
+# NOT contain, so the both-type-names assertion fails — proving the harness
+# genuinely requires both names. The green commit replaces this with the blessed
+# snapshot naming `ExpectedWidget` and `SuppliedGadget`.
+
+ExpectedWidget
+NotYetBlessedSecondTypeName
