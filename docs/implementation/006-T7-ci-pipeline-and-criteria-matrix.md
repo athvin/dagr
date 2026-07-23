@@ -49,7 +49,34 @@ These validate the *tooling* this ticket delivers — the matrix-verification sc
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None stated. One implicit tension surfaced and was resolved during
+implementation (recorded here per the tests-first / open-questions duty):
+
+- **`unmapped` — "fails on any unmapped machine criterion" (Objective, DoD
+  line 7) vs. the explicit `unmapped` build-provenance row (DoD line 9) and
+  quality-gates.md §3's "`unmapped` is allowed until the mapped test ships."**
+  Resolution: the verifier distinguishes **owed-here** from **deferred**. A
+  machine criterion still `unmapped` is a build failure *only* when its covering
+  test was owed by this ticket — its `Covered-by` column is `T7`, empty, or `—`.
+  A machine criterion whose covering test ships in a later ticket is legitimately
+  `unmapped` and names that future ticket in `Covered-by`; that is the normal
+  early state and passes. This is the only reading that satisfies both the flat
+  Objective wording and DoD line 9, and it matches the orchestrator's boundary
+  rule ("`unmapped` is allowed for criteria whose covering tests have not shipped
+  yet"). The rule and its rationale are documented in
+  [`docs/coverage-matrix.md`](../coverage-matrix.md) ("How the verifier reads
+  this file") and enforced by
+  [`scripts/check-coverage-matrix.sh`](../../scripts/check-coverage-matrix.sh)
+  with a self-test
+  ([`scripts/check-coverage-verifier-selftest.sh`](../../scripts/check-coverage-verifier-selftest.sh),
+  case "Unmapped machine criterion fails").
+- **Build provenance (DoD line 9).** No component emits provenance yet, so it is
+  carried as an `unmapped` obligation folded into **C20**'s row (its governing
+  criterion), deferred to **T40**, and called out in `docs/coverage-matrix.md`
+  ("Build-provenance row"). It is not a separate arch.md criterion, so it gets
+  no invented criterion row.
+- **`tasks.md` T7 `Q:` items.** The T7 entry in `docs/tasks.md` carries no `Q:`
+  items; nothing additional to resolve.
 
 ## Out of scope
 - Writing the actual product/component tests that machine criteria will eventually map to — until they exist their matrix rows carry `unmapped` placeholders; this ticket only builds the gate and the classification scaffold. Filling in mappings is the job of each component ticket.
