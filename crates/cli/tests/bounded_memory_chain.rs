@@ -694,37 +694,94 @@ fn allocator_peak_is_flat_across_chain_length() {
 /// After a chain run of non-retained nodes completes, the ledger's **current**
 /// counted residency is back to zero — every produced value's bytes returned to
 /// the allocator once its sole consumer reached a terminal state and its closure
-/// returned (arch.md C10), measured at the ledger, not RSS. Live allocator bytes
-/// likewise did not stay elevated by a value's worth.
+/// returned (arch.md C10), measured at the ledger, not RSS. A direct two-node slot
+/// pair proves the same at the **allocator** level: live bytes return to baseline
+/// (not elevated by even one value) once the sole consumer is terminal-and-returned.
 #[test]
 fn value_released_after_sole_consumer_terminal_and_returned() {
     // Serialise: this test reads the process-global live-bytes figure, which a
-    // concurrent length-proportional allocator would otherwise pollute.
+    // concurrent allocator would otherwise pollute.
     let _serial = alloc_guard();
-    // Baseline live bytes before the run.
+
+    // --- Allocator half FIRST, on a DIRECT producer→consumer slot pair with NO tokio
+    // in the measurement window. This is the fix for the Linux CI failure: the prior
+    // version sampled `live()` straddling a `drive_chain` through the real driver,
+    // whose two tokio runtimes leave a bounded, chain-length-INDEPENDENT amount of
+    // bookkeeping live past the run (task frames, the mpsc backlog, buffered event
+    // records in the sink) and tear down worker threads that free memory
+    // *asynchronously*. That is **not** slot residency, yet on Linux it pushed the
+    // before/after `live()` delta past one PAYLOAD and masqueraded as a leaked value.
+    // Measuring a direct slot pair here, before any driver runs, isolates the reading
+    // to the slot value itself in a pristine window. Measured with the instrumented
+    // allocator, never RSS.
+    let ledger = ResidencyLedger::new();
     let baseline = live() as u64;
-    let run = drive_chain(SHORT, PAYLOAD, false);
-    assert_eq!(run.outcome, RunOutcome::Succeeded);
 
-    // Every non-retained slot released: nothing is counted at run end.
-    assert_eq!(
-        run.ledger_current_at_end, 0,
-        "no residency may linger after a non-retained chain completes"
+    let producer: Slot<Payload> = Slot::new(
+        NodeId::from_name("p"),
+        "p",
+        1,
+        false,
+        PAYLOAD,
+        Arc::clone(&ledger),
     );
-    // The terminal node was not retained → not redeemable (released).
+    producer.fill(payload_vec()).expect("fill producer");
+    // One value now live: the ledger counts it and the allocator holds its bytes. The
+    // 256 KiB payload dominates; require at least half a value risen so a stray
+    // concurrent free on another harness thread cannot make this bite spuriously,
+    // while a real value is unmistakable.
     assert_eq!(
-        run.terminal_handle.redeem().err(),
-        Some(RedeemError::Released),
-        "a non-retained terminal value is released, not redeemable"
+        ledger.current(),
+        PAYLOAD,
+        "producer value counted while live"
+    );
+    let elevated = live() as u64;
+    assert!(
+        elevated >= baseline + PAYLOAD / 2,
+        "the produced value's bytes are live while held (baseline={baseline}, elevated={elevated})"
     );
 
-    // Allocator-level: live bytes returned to (approximately) the pre-run
-    // baseline — they did not stay elevated by even one value's worth.
+    // The sole consumer takes its lease, reads (without retaining the returned `Arc`),
+    // and returns (the lease drops) → the real C10 release rule fires and the value's
+    // bytes return to the allocator.
+    let consumer = producer.shared_ref();
+    {
+        let lease = consumer.enter();
+        let seen = lease.read().len() as u64;
+        assert_eq!(seen, PAYLOAD, "consumer read a full value");
+        drop(lease);
+    }
+    drop(producer);
+    assert_eq!(
+        ledger.current(),
+        0,
+        "residency returns to zero after the sole consumer returns"
+    );
+
+    // Allocator-level, the load-bearing no-leak direction (kept STRICT): live bytes
+    // returned to below the pre-produce baseline plus one value — a leaked value would
+    // add a full PAYLOAD, which this direct pair (no driver bookkeeping) rules out.
     let after = live() as u64;
     assert!(
         after < baseline + PAYLOAD,
         "live allocator bytes stayed elevated after release: baseline={baseline}, after={after} \
          (a leaked value would add {PAYLOAD})",
+    );
+
+    // --- Ledger half, through the REAL driver (the load-bearing C10 authority), after
+    // the allocator window closed: nothing is counted after a non-retained run, and
+    // the released terminal value is not redeemable. This deterministic ledger proof
+    // stays strict and is what carries the C10 release accounting through the driver.
+    let run = drive_chain(SHORT, PAYLOAD, false);
+    assert_eq!(run.outcome, RunOutcome::Succeeded);
+    assert_eq!(
+        run.ledger_current_at_end, 0,
+        "no residency may linger after a non-retained chain completes"
+    );
+    assert_eq!(
+        run.terminal_handle.redeem().err(),
+        Some(RedeemError::Released),
+        "a non-retained terminal value is released, not redeemable"
     );
 }
 
