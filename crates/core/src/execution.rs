@@ -969,6 +969,10 @@ impl SeededJitter {
 }
 
 impl Jitter for SeededJitter {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "exact by construction: `z >> 11` is a 53-bit integer (≤ f64's mantissa) and `1u64 << 53` is a power of two — the standard lossless [0,1) unit-float construction"
+    )]
     fn next_unit(&mut self) -> f64 {
         // splitmix64: advance the state, then avalanche it into a well-mixed
         // 64-bit output. Dependency-free and `unsafe`-free.
@@ -977,8 +981,9 @@ impl Jitter for SeededJitter {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
-        // Map the top 53 bits into [0, 1) — the standard f64 unit construction,
-        // exact and never reaching 1.0.
+        // Map the top 53 bits into [0, 1) — the standard f64 unit construction.
+        // Both casts are exact: `z >> 11` fits in 53 bits (≤ f64's mantissa) and
+        // `1u64 << 53` is a power of two, so no precision is actually lost.
         (z >> 11) as f64 / (1u64 << 53) as f64
     }
 }
@@ -1028,7 +1033,10 @@ impl Backoff {
         // `factor` >= 1 grows without bound, so `saturating` behaviour falls out
         // of the min-with-cap below.
         let base_secs = self.base.as_secs_f64();
-        let scaled = base_secs * self.factor.powi(n as i32);
+        // A huge `n` would overflow the schedule anyway; clamp the exponent to
+        // `i32::MAX` (the delay is clamped to the cap below regardless).
+        let exponent = i32::try_from(n).unwrap_or(i32::MAX);
+        let scaled = base_secs * self.factor.powi(exponent);
         // A non-finite or overflowing product is clamped to the cap.
         if !scaled.is_finite() {
             return self.cap;
@@ -1196,9 +1204,12 @@ impl Default for RetryConfig {
 ///
 /// Returns the **last** attempt's classified [`AttemptOutcome`] — the one whose
 /// terminal state the node ends in.
-#[allow(clippy::too_many_arguments, reason = "the interim retry surface threads \
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the interim retry surface threads \
     the run/pipeline identity, slot, sink, config, jitter, and timer explicitly; \
-    these fold into the C5 policy + driver context in M2 (T29/T24)")]
+    these fold into the C5 policy + driver context in M2 (T29/T24)"
+)]
 pub async fn run_with_retries<T, S, F, Fut>(
     mut task: T,
     node: &str,

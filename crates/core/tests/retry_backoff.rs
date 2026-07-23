@@ -297,7 +297,10 @@ fn retry_eligible_is_retried_up_to_the_budget_and_no_further() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(3, Backoff::new(Duration::from_millis(10), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        3,
+        Backoff::new(Duration::from_millis(10), 2.0, Duration::MAX),
+    );
 
     let outcome = block_on(run_with_retries(
         AlwaysRetryable {
@@ -331,7 +334,11 @@ fn retry_eligible_is_retried_up_to_the_budget_and_no_further() {
         "exactly one node-terminal record for the retried node"
     );
     // Two backoffs (before attempt 2 and before attempt 3), none after the last.
-    assert_eq!(timer.waited().len(), 2, "backoff before each retry, not after");
+    assert_eq!(
+        timer.waited().len(),
+        2,
+        "backoff before each retry, not after"
+    );
 }
 
 /// **A single successful retry stops the loop.** Fails retry-eligibly on attempt
@@ -344,7 +351,10 @@ fn a_single_successful_retry_stops_the_loop() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(3, Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        3,
+        Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX),
+    );
     let value = Report { rows: 7 };
 
     let outcome = block_on(run_with_retries(
@@ -364,7 +374,11 @@ fn a_single_successful_retry_stops_the_loop() {
         |d| timer.timer(d),
     ));
 
-    assert_eq!(invocations.load(Ordering::SeqCst), 2, "exactly two attempts");
+    assert_eq!(
+        invocations.load(Ordering::SeqCst),
+        2,
+        "exactly two attempts"
+    );
     assert_eq!(outcome, AttemptOutcome::Succeeded);
     assert!(slot.is_filled(), "slot filled with the successful value");
     assert_eq!(*slot.shared_ref().read(), value);
@@ -372,7 +386,11 @@ fn a_single_successful_retry_stops_the_loop() {
         sink.last_terminal(),
         Some(dagr_core::TerminalState::Succeeded)
     );
-    assert_eq!(timer.waited().len(), 1, "exactly one backoff before the retry");
+    assert_eq!(
+        timer.waited().len(),
+        1,
+        "exactly one backoff before the retry"
+    );
 }
 
 /// **Permanent error is never retried, regardless of remaining budget.** Max 5,
@@ -383,7 +401,10 @@ fn permanent_error_is_never_retried() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(5, Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        5,
+        Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX),
+    );
 
     let outcome = block_on(run_with_retries(
         PermanentlyFails {
@@ -420,7 +441,10 @@ fn deliberate_skip_is_not_retried() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(5, Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        5,
+        Backoff::new(Duration::from_millis(5), 2.0, Duration::MAX),
+    );
 
     let outcome = block_on(run_with_retries(
         DecidesToSkip {
@@ -436,9 +460,16 @@ fn deliberate_skip_is_not_retried() {
         |d| timer.timer(d),
     ));
 
-    assert_eq!(invocations.load(Ordering::SeqCst), 1, "skip runs exactly once");
+    assert_eq!(
+        invocations.load(Ordering::SeqCst),
+        1,
+        "skip runs exactly once"
+    );
     assert_eq!(outcome, AttemptOutcome::Skipped);
-    assert_eq!(sink.last_terminal(), Some(dagr_core::TerminalState::Skipped));
+    assert_eq!(
+        sink.last_terminal(),
+        Some(dagr_core::TerminalState::Skipped)
+    );
     assert!(timer.waited().is_empty(), "no backoff scheduled for a skip");
 }
 
@@ -458,9 +489,18 @@ fn backoff_is_exponential_and_capped() {
     // No jitter: assert the exact nominal sequence off the pure schedule fn.
     // Attempt index n (0-based, for the wait *after* attempt n+1):
     //   n=0 → 100ms, n=1 → 200ms, n=2 → 400ms, n=3 → 800ms→cap 500ms, ...
-    assert_eq!(backoff.delay_for(0, &mut NoJitter), Duration::from_millis(100));
-    assert_eq!(backoff.delay_for(1, &mut NoJitter), Duration::from_millis(200));
-    assert_eq!(backoff.delay_for(2, &mut NoJitter), Duration::from_millis(400));
+    assert_eq!(
+        backoff.delay_for(0, &mut NoJitter),
+        Duration::from_millis(100)
+    );
+    assert_eq!(
+        backoff.delay_for(1, &mut NoJitter),
+        Duration::from_millis(200)
+    );
+    assert_eq!(
+        backoff.delay_for(2, &mut NoJitter),
+        Duration::from_millis(400)
+    );
     assert_eq!(
         backoff.delay_for(3, &mut NoJitter),
         cap,
@@ -517,11 +557,14 @@ fn jittered_delay_never_exceeds_the_cap() {
 
     // Full jitter over a seeded source: draw many delays across attempt indices
     // and assert none exceeds the cap and each is nonnegative.
-    let mut jitter = SeededJitter::new(0xC0FFEE);
+    let mut jitter = SeededJitter::new(0x00C0_FFEE);
     for n in 0..12u32 {
         for _ in 0..50 {
             let d = backoff.delay_for(n, &mut jitter);
-            assert!(d <= cap, "jittered delay {d:?} exceeds cap {cap:?} at n={n}");
+            assert!(
+                d <= cap,
+                "jittered delay {d:?} exceeds cap {cap:?} at n={n}"
+            );
         }
     }
 }
@@ -534,16 +577,16 @@ fn jittered_delay_never_exceeds_the_cap() {
 #[test]
 fn jittered_backoff_does_not_resynchronize_a_fan_out() {
     let base = Duration::from_millis(100);
-    let cap = Duration::from_secs(60); // high cap so the cap does not flatten the spread
+    let cap = Duration::from_mins(1); // high cap so the cap does not flatten the spread
     let backoff = Backoff::new(base, 2.0, cap);
 
     // Each of the N nodes draws its first backoff (attempt index 0) from a jitter
     // source seeded distinctly per node — modelling N nodes that entered backoff
     // at the same instant.
-    let n_nodes = 16;
+    let n_nodes: u64 = 16;
     let first_wakes: Vec<Duration> = (0..n_nodes)
         .map(|node_seed| {
-            let mut jitter = SeededJitter::new(0x1234_0000 + node_seed as u64);
+            let mut jitter = SeededJitter::new(0x1234_0000 + node_seed);
             backoff.delay_for(0, &mut jitter)
         })
         .collect();
@@ -558,7 +601,10 @@ fn jittered_backoff_does_not_resynchronize_a_fan_out() {
     // nominal base (100ms) and never exceeds the cap. With full jitter the window
     // is (0, nominal]; assert the loose, source-agnostic bounds.
     for d in &first_wakes {
-        assert!(*d <= base, "jittered first backoff {d:?} exceeds nominal base");
+        assert!(
+            *d <= base,
+            "jittered first backoff {d:?} exceeds nominal base"
+        );
         assert!(*d <= cap);
     }
 }
@@ -594,7 +640,10 @@ fn exactly_one_attempt_outcome_record_per_attempt() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(3, Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        3,
+        Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX),
+    );
 
     let _ = block_on(run_with_retries(
         SucceedsOnAttempt {
@@ -634,8 +683,14 @@ fn exactly_one_attempt_outcome_record_per_attempt() {
             )
         })
         .collect();
-    assert!(matches!(outcome_events[0], AttemptEvent::AttemptFailed { .. }));
-    assert!(matches!(outcome_events[1], AttemptEvent::AttemptFailed { .. }));
+    assert!(matches!(
+        outcome_events[0],
+        AttemptEvent::AttemptFailed { .. }
+    ));
+    assert!(matches!(
+        outcome_events[1],
+        AttemptEvent::AttemptFailed { .. }
+    ));
     assert!(matches!(
         outcome_events[2],
         AttemptEvent::AttemptSucceeded { .. }
@@ -657,7 +712,10 @@ fn attempt_number_is_visible_to_the_task() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(3, Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        3,
+        Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX),
+    );
 
     let _ = block_on(run_with_retries(
         SucceedsOnAttempt {
@@ -768,7 +826,10 @@ fn no_premature_re_entry_attempts_are_strictly_sequential() {
         async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Report, TaskError> {
             // No other attempt of this instance may be in flight (C1).
             let concurrent = self.in_flight.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(concurrent, 0, "a prior attempt was still running (C1 violated)");
+            assert_eq!(
+                concurrent, 0,
+                "a prior attempt was still running (C1 violated)"
+            );
             self.log.lock().unwrap().push("enter");
             self.log.lock().unwrap().push("exit");
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -781,7 +842,10 @@ fn no_premature_re_entry_attempts_are_strictly_sequential() {
     let slot = fresh_slot();
     let mut sink = CapturingSink::default();
     let timer = RecordingTimer::new();
-    let cfg = RetryConfig::new(3, Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX));
+    let cfg = RetryConfig::new(
+        3,
+        Backoff::new(Duration::from_millis(1), 2.0, Duration::MAX),
+    );
 
     let _ = block_on(run_with_retries(
         Sequential {
