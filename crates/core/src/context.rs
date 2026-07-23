@@ -1118,6 +1118,7 @@ pub struct RunContext {
     resources: ResourceRegistry,
     scratch: ScratchStore,
     covered_terminal_states: Option<CoveredNodeStates>,
+    temp_dir: Option<std::path::PathBuf>,
 }
 
 impl RunContext {
@@ -1242,6 +1243,25 @@ impl RunContext {
     pub fn covered_terminal_states(&self) -> Option<&CoveredNodeStates> {
         self.covered_terminal_states.as_ref()
     }
+
+    /// The run's **per-run temp directory** (arch.md `### C16`; C16/T36), or
+    /// [`None`] when the context was hand-built with no run store (the C8 test
+    /// path).
+    ///
+    /// Everything a task writes **locally** — scratch files, intermediates it
+    /// materializes on the local filesystem before persisting a durable reference
+    /// (C2 output ownership) — goes under this directory. The convention confines a
+    /// run's local debris so it can be reclaimed: a cooperative task that observes
+    /// cancellation within grace removes what it wrote here, and the whole directory
+    /// is removed by the run's end or by the **next** invocation regardless of how
+    /// the prior process ended (arch.md C16). The directory lives under the run-store
+    /// base at `<base>/<pipeline>/<run-id>/tmp/`; the runtime creates it at bootstrap
+    /// and threads it here. This is the *path*, not a handle — a task uses ordinary
+    /// filesystem operations under it.
+    #[must_use]
+    pub fn temp_dir(&self) -> Option<&std::path::Path> {
+        self.temp_dir.as_deref()
+    }
 }
 
 /// The hand-construction builder for a [`RunContext`] (arch.md C8 / C28).
@@ -1264,6 +1284,7 @@ pub struct RunContextBuilder {
     resources: ResourceRegistry,
     scratch: ScratchStore,
     covered_terminal_states: Option<CoveredNodeStates>,
+    temp_dir: Option<std::path::PathBuf>,
 }
 
 impl RunContextBuilder {
@@ -1280,6 +1301,7 @@ impl RunContextBuilder {
             resources: ResourceRegistry::default(),
             scratch: ScratchStore::default(),
             covered_terminal_states: None,
+            temp_dir: None,
         }
     }
 
@@ -1345,6 +1367,17 @@ impl RunContextBuilder {
         self
     }
 
+    /// Supply the run's **per-run temp directory** (arch.md C16), reachable by a
+    /// task through [`RunContext::temp_dir`]. The runtime threads the real
+    /// `<base>/<pipeline>/<run-id>/tmp/` path here at bootstrap (C16 / T36); omit it
+    /// for the no-run-store hand-built context (the C8 test path), which reports
+    /// [`None`].
+    #[must_use]
+    pub fn temp_dir(mut self, temp_dir: std::path::PathBuf) -> Self {
+        self.temp_dir = Some(temp_dir);
+        self
+    }
+
     /// Build the immutable [`RunContext`]. Every field is populated: the required
     /// identities, the attempt/max, and — for any field not explicitly set — its
     /// spec-consistent default (no parameters, no data interval, a fresh
@@ -1373,6 +1406,7 @@ impl RunContextBuilder {
             resources: self.resources,
             scratch: self.scratch,
             covered_terminal_states: self.covered_terminal_states,
+            temp_dir: self.temp_dir,
         }
     }
 }

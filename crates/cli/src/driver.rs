@@ -223,6 +223,45 @@ pub fn shutdown_budget(grace: Duration, teardown_deadline: Duration) -> Shutdown
     }
 }
 
+/// The **shutdown exit selection** a completed drive surfaces for the C26
+/// exit-code contract (arch.md `### C16` / `### C26`; ticket T36).
+///
+/// The driver **reports** which of these applies; it does **not** own the numeric
+/// C26 code table (that is T55). The selection follows C26 precedence:
+///
+/// 1. [`RunFailure`](ShutdownExit::RunFailure) — a non-teardown node ended
+///    `failed`/`timed-out` (a genuine run failure). **Highest precedence:** a run
+///    failure wins over cancellation *and* over a sink failure at shutdown.
+/// 2. [`SinkFailure`](ShutdownExit::SinkFailure) — the event sink was unwritable at
+///    the final flush. Distinct from a run failure: the failure to *record* is a
+///    sink fault (C19 "event stream unwritable"), not a node ending failed. Reported
+///    only when no node failed; the process waited a **bounded** time for the flush
+///    and did not hang (C16 / C26).
+/// 3. [`Cancelled`](ShutdownExit::Cancelled) — the run was cancelled by an external
+///    interrupt (a termination signal / the `CancelHandle` seam) with no run failure
+///    and a writable stream. Reported only for externally-originated termination.
+/// 4. [`Success`](ShutdownExit::Success) — the run completed and its stream was
+///    flushed cleanly.
+///
+/// A cancellation driven by *stop-on-first-failure* (a `FailureUnderStop` origin)
+/// surfaces as [`RunFailure`](ShutdownExit::RunFailure), because a run failure
+/// caused it — the origin the report also records lets the caller keep that
+/// precedence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownExit {
+    /// The run completed and its final flush succeeded.
+    Success,
+    /// A non-teardown node ended `failed`/`timed-out` — a run failure (highest
+    /// precedence).
+    RunFailure,
+    /// The run was cancelled by external termination with no run failure and a
+    /// writable stream.
+    Cancelled,
+    /// The event sink was unwritable at the final flush (bounded wait, distinct
+    /// code — never a hang, never a success/plain-cancellation report).
+    SinkFailure,
+}
+
 /// The programmatic **cancellation trigger** the caller obtains from
 /// [`RunConfig::cancel_handle`] (arch.md `### C16`; T35).
 ///
@@ -631,6 +670,12 @@ pub struct RunReport {
     /// failure is reported as a cancellation. This ticket records the origin; it
     /// does not own the exit-code mapping.
     pub cancellation_origin: Option<CancellationOrigin>,
+    /// The C26 **shutdown exit selection** for this run (arch.md C16 / C26; T36):
+    /// which of run-failure / sink-failure / cancellation / success applies, by C26
+    /// precedence. Derived from the run outcome, the cancellation origin, and whether
+    /// the bounded final flush succeeded. The driver reports it; T55 owns the numeric
+    /// code table.
+    pub shutdown_exit: ShutdownExit,
 }
 
 // ===========================================================================
@@ -815,6 +860,10 @@ where
     // into the event stream.
     eprintln!("{}", config.shutdown_budget());
 
+    // --- The per-run temp-directory convention (arch.md C16; T36). Create this
+    // run's own temp dir and sweep prior runs' leftovers (see `bootstrap_temp_dir`).
+    let temp_dir = bootstrap_temp_dir(&config.base, pipeline_name, &run_id_str);
+
     // --- The assembly-failure path: the store/stream are already open, so an
     // assembly failure still records itself (arch.md C19). Emit a fingerprint-less
     // header and a run-finished carrying the assembly-failed outcome, then return.
@@ -832,7 +881,9 @@ where
             };
             let _ = writer.run_started(header);
             let _ = writer.run_finished(RunOutcome::AssemblyFailed);
-            let _ = writer.finish();
+            // The bounded final flush + temp reclaim run even on this early path (no
+            // node executed, but the temp dir was created).
+            let flush_ok = finalize_shutdown(&mut writer, &temp_dir);
             return RunReport {
                 outcome: RunOutcome::AssemblyFailed,
                 terminal_states: BTreeMap::new(),
@@ -840,6 +891,7 @@ where
                 stream_path,
                 // No node ran, so no cancellation path was entered.
                 cancellation_origin: None,
+                shutdown_exit: select_shutdown_exit(RunOutcome::AssemblyFailed, None, flush_ok),
             };
         }
     };
@@ -891,7 +943,7 @@ where
         // return. No node executed (zero attempts), and the run does not hang.
         eprintln!("{failure}");
         let _ = writer.run_finished(RunOutcome::BootstrapFailed);
-        let _ = writer.finish();
+        let flush_ok = finalize_shutdown(&mut writer, &temp_dir);
         return RunReport {
             outcome: RunOutcome::BootstrapFailed,
             terminal_states: BTreeMap::new(),
@@ -899,6 +951,7 @@ where
             stream_path,
             // No node ran, so no cancellation path was entered.
             cancellation_origin: None,
+            shutdown_exit: select_shutdown_exit(RunOutcome::BootstrapFailed, None, flush_ok),
         };
     }
 
@@ -923,11 +976,12 @@ where
         &admission,
         &config.capacities,
         &config.cancel_trigger,
+        &temp_dir,
         &mut writer,
     );
 
     let _ = writer.run_finished(outcome);
-    let _ = writer.finish();
+    let flush_ok = finalize_shutdown(&mut writer, &temp_dir);
 
     RunReport {
         outcome,
@@ -935,7 +989,65 @@ where
         run_id: run_id_str,
         stream_path,
         cancellation_origin,
+        shutdown_exit: select_shutdown_exit(outcome, cancellation_origin, flush_ok),
     }
+}
+
+/// The shutdown finalize shared by every exit path (arch.md `### C16`; T36):
+/// perform the **bounded final flush** and reclaim the run's **per-run temp
+/// directory**, returning whether the flush succeeded.
+///
+/// The [final flush](final_flush) is the single fsync-at-run-end/cancellation
+/// boundary (C19); a `false` return is the unwritable-sink-at-shutdown fault
+/// (bounded, not a hang) the caller maps onto the distinct sink-failure exit. The
+/// [temp cleanup](crate::temp::cleanup_temp_dir) removes this run's temp directory
+/// whether the run ended normally or was cancelled — best-effort by design (a racing
+/// zombie thread may hold a file open, and the process exits promptly rather than
+/// blocking on it).
+fn finalize_shutdown<S, C>(writer: &mut EventStreamWriter<S, C>, temp_dir: &std::path::Path) -> bool
+where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let flush_ok = final_flush(writer);
+    crate::temp::cleanup_temp_dir(temp_dir);
+    flush_ok
+}
+
+/// Bootstrap the run's per-run temp directory (arch.md `### C16`; T36) and return
+/// its path.
+///
+/// Creates this run's own `<base>/<pipeline>/<run-id>/tmp/` synchronously — a task
+/// needs it the moment it runs; everything a task writes locally goes under it
+/// (reached through the [context](RunContext::temp_dir)), and the driver removes it
+/// at run end (normal or cancelled). Then reclaims any leftover per-run temp
+/// directories from **prior** runs of this pipeline (regardless of how the prior
+/// process ended — an abrupt kill leaves debris the next invocation sweeps),
+/// confined to this pipeline (dagr reaps no other process's work — a permanent
+/// non-goal). The reclamation is best-effort housekeeping over what a *previous*
+/// process left behind and is independent of the current run, so it runs on a
+/// **detached background thread**, kept off the bootstrap-to-loop hot path so its
+/// O(retained-runs) directory scan never adds latency or jitter to the run about to
+/// start. It touches only the ephemeral `tmp/` subtree of *other* run directories,
+/// never a reserved output and never the current run's own temp dir.
+fn bootstrap_temp_dir(base: &str, pipeline: &str, run_id: &str) -> std::path::PathBuf {
+    let temp_dir = crate::temp::per_run_temp_dir(base, pipeline, run_id);
+    if let Err(err) = crate::temp::create_temp_dir(&temp_dir) {
+        // Non-fatal to record-keeping: a task that needs the temp dir will surface
+        // its own error. Report best-effort to stderr (never into the stream).
+        eprintln!(
+            "could not create per-run temp directory {}: {err}",
+            temp_dir.display()
+        );
+    }
+    let (base, pipeline, keep) = (base.to_string(), pipeline.to_string(), run_id.to_string());
+    // Detached: never joined. A sweep that outlives this process is simply the
+    // *following* invocation's to finish — the guarantee is eventual reclamation by
+    // a next invocation, not a synchronous one.
+    std::thread::spawn(move || {
+        crate::temp::reclaim_leftover_temp_dirs(&base, &pipeline, &keep);
+    });
+    temp_dir
 }
 
 /// Capture the values of the allowlisted environment variable names, in name
@@ -993,6 +1105,10 @@ struct AdmitCtx<'a> {
     admission: &'a AdmissionController,
     run_cancel: &'a CancellationSource,
     live: &'a LiveSet,
+    // The run's per-run temp directory (arch.md C16; T36), threaded into each
+    // attempt's `RunContext` so a task reaches its confined local scratch through
+    // the context. Created at bootstrap and reclaimed at run end by the driver.
+    temp_dir: &'a std::path::Path,
 }
 
 /// The readiness-driven execution loop (arch.md C11; the driver's half of the
@@ -1030,6 +1146,7 @@ fn run_loop<S, C>(
     admission: &AdmissionController,
     capacities: &PoolCapacities,
     cancel_trigger: &Arc<CancelTrigger>,
+    temp_dir: &std::path::Path,
     writer: &mut EventStreamWriter<S, C>,
 ) -> (
     RunOutcome,
@@ -1127,6 +1244,7 @@ where
             admission,
             run_cancel: &run_cancel,
             live: &live,
+            temp_dir,
         };
 
         // Offer the initial-ready frontier (every zero-dependency source node) to
@@ -1735,6 +1853,10 @@ where
     let name_owned = name.to_string();
     let dispatcher = actx.dispatcher;
     let tx = actx.tx.clone();
+    // The run's per-run temp directory (arch.md C16; T36), threaded into the
+    // attempt's context so a task reaches its confined local scratch through the
+    // context (`RunContext::temp_dir`). Owned into the future so it outlives `actx`.
+    let temp_dir = actx.temp_dir.to_path_buf();
     // The attempt future — driven on the surface `class` names. It owns the runner,
     // the buffering sink, and the permit; producing the `(state, events)` the loop
     // records once the attempt returns.
@@ -1744,6 +1866,7 @@ where
         let mut sink = BufferingSink::default();
         let ctx = RunContext::builder(CoreRunId::new(run_id), PipelineId::new("pipeline"), node_id)
             .cancellation(attempt_signal)
+            .temp_dir(temp_dir)
             .build();
         let state = runner.run(&ctx, &mut sink).await;
         // Release the C12 permit at the attempt's terminal state (its working
@@ -1874,4 +1997,71 @@ fn overall_outcome(terminal_states: &BTreeMap<String, TerminalState>) -> RunOutc
     } else {
         RunOutcome::Succeeded
     }
+}
+
+/// The **bounded final flush** at shutdown (arch.md `### C16`; C19 fsync-at-run-end;
+/// T36). Perform the single run-end/cancellation `fsync` through the sink
+/// (`writer.finish()`), and report whether it succeeded.
+///
+/// Returns `true` when the flush completed (the stream is complete and durable),
+/// `false` when the sink was **unwritable at shutdown** — the distinct sink-failure
+/// path. The `finish` call is itself the bounded operation: the sink's `flush`
+/// either returns or errors, so the wait is bounded by the sink and never a hang;
+/// the caller maps a `false` here onto [`ShutdownExit::SinkFailure`] within the
+/// [final-flush budget](DEFAULT_FINAL_FLUSH). On failure a best-effort report goes
+/// to stderr (operator-facing, never into the event stream), per T0.6 §5.
+fn final_flush<S, C>(writer: &mut EventStreamWriter<S, C>) -> bool
+where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    match writer.finish() {
+        Ok(()) => true,
+        Err(fault) => {
+            // Best-effort stderr report; do not hang, do not pretend success.
+            eprintln!("final flush failed at shutdown: {fault}");
+            false
+        }
+    }
+}
+
+/// Select the C26 [shutdown exit](ShutdownExit) by precedence (arch.md C16 / C26;
+/// T36): run failure > sink failure > cancellation > success.
+///
+/// `outcome` is the overall run outcome, `origin` the recorded cancellation origin
+/// (if any), and `flush_ok` whether the [bounded final flush](final_flush)
+/// succeeded. A run failure (a non-teardown node ended `failed`/`timed-out`, which
+/// also covers a `FailureUnderStop` cancellation) wins over everything; otherwise a
+/// failed final flush is the distinct sink-failure code; otherwise an external
+/// interrupt is a cancellation; otherwise success. The driver reports this — T55
+/// owns the numeric mapping.
+fn select_shutdown_exit(
+    outcome: RunOutcome,
+    origin: Option<CancellationOrigin>,
+    flush_ok: bool,
+) -> ShutdownExit {
+    // 1. Run failure wins (a genuine node failure, incl. a stop-on-first-failure
+    //    cancellation whose origin is a failure; an assembly/bootstrap failure is
+    //    likewise a run failure for exit-code purposes — the full C26 code table and
+    //    its distinct assembly/bootstrap codes are T55's, so they fold under
+    //    `RunFailure` here, which this ticket does not claim to enumerate).
+    let failed = matches!(
+        outcome,
+        RunOutcome::Failed | RunOutcome::AssemblyFailed | RunOutcome::BootstrapFailed
+    ) || origin == Some(CancellationOrigin::FailureUnderStop);
+    if failed {
+        return ShutdownExit::RunFailure;
+    }
+    // 2. Sink failure at shutdown — distinct from a run failure.
+    if !flush_ok {
+        return ShutdownExit::SinkFailure;
+    }
+    // 3. Cancellation by external interrupt with a writable stream.
+    if origin == Some(CancellationOrigin::ExternalInterrupt)
+        || matches!(outcome, RunOutcome::Cancelled)
+    {
+        return ShutdownExit::Cancelled;
+    }
+    // 4. A clean success.
+    ShutdownExit::Success
 }

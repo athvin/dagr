@@ -73,7 +73,35 @@ Setup: a pipeline that saturates all task workers with blocking work (mirroring 
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were carried by the ticket. Two implementation choices the Objective/Test-plan
+left to the implementer were resolved and are recorded here:
+
+- **Second-signal behavior (escalate vs. idempotent).** The Objective says *"the
+  first signal starts the budgeted shutdown and subsequent ones do not shortcut the
+  final flush,"* and the Test plan's *"Repeated signals during shutdown do not
+  corrupt the stream"* requires the second signal to *not* abort the final flush.
+  **Resolved: subsequent signals are idempotent, not escalating.** Both the routing
+  (`dagr_cli::signals::route_signal` / `SignalRouter`) and the underlying
+  `CancelHandle::cancel` (first-request-wins) are re-entry hardened: a second/third
+  signal is counted (observed, never dropped) but does **not** re-fire cancellation
+  and does **not** `process::exit` to force an immediate exit that would truncate the
+  stream the shutdown budget already bounds. A second-signal-forces-immediate-exit
+  policy was rejected precisely because it contradicts the ticket's flush guarantee.
+  Proven by `a_second_signal_is_idempotent_and_does_not_shortcut_the_flush`.
+- **Temp-directory placement + reclamation timing.** The per-run temp dir lives at
+  `<base>/<pipeline>/<run-id>/tmp/` (alongside the T0.6 §3 reserved
+  `events.jsonl`/`graph.json`/`run.json`/`scratch/`, never colliding), reachable
+  through `RunContext::temp_dir`. The current run's dir is created **synchronously**
+  at bootstrap (a task needs it immediately); the **next-invocation reclamation** of
+  *prior* runs' leftover `tmp/` subtrees runs on a **detached background thread**,
+  kept off the bootstrap-to-loop hot path so its O(retained-runs) scan adds no
+  latency/jitter to the starting run (and never touches a reserved output or the
+  current run's own dir). This keeps the governing T35 suite's timing unperturbed.
+- **Dependency.** `tokio`'s `signal` feature was enabled (reusing the existing tokio
+  dependency) rather than adding `ctrlc`/`signal-hook`; on unix it transitively pulls
+  `mio` + `signal-hook-registry` (both MIT OR Apache-2.0, resolved to MIT — no
+  `deny.toml` change). `libc` is a unix-only **dev-dependency** for the end-to-end
+  real-signal test only.
 
 ## Out of scope
 - The cancellation core itself — run-scoped token, per-attempt children, grace period, graceful drain, `cancelled`/`abandoned` classification, and the shutdown-budget arithmetic printed at startup — all belong to T35 and are consumed here, not rebuilt.
