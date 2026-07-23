@@ -560,19 +560,42 @@ fn non_returning_work_is_abandoned_after_grace_and_run_terminates() {
 /// **`cancelled`, `abandoned`, and `failed` are distinct with no
 /// cross-contamination.** Three concurrent nodes: one cooperates (cancelled), one
 /// ignores (abandoned), one fails before cancellation (failed).
+///
+/// Determinism (same observable-signal gating the sibling fixes use): `failed` here
+/// depends on the failure landing **before** cancellation, so `bad` must be recorded
+/// terminal before the trigger fires — otherwise the full-drain core reclassifies its
+/// in-flight-at-cancel return to `cancelled` (the observed ~1-2% flake:
+/// `bad` came back `cancelled`, not `failed`). Rather than assume the failure beats the
+/// cancel wake on the shared loop channel, admission is **serialized by pinning the
+/// memory pool** (identical technique to `no_new_admission_after_cancellation` and
+/// `stop_on_first_failure_...`): the pool holds exactly one costed node's worth, and
+/// `bad` and `trigger` each cost the whole pool. Initial-frontier offers go in name
+/// order (`bad` < `coop` < `ignorer` < `trigger`), so `bad` grabs the sole permit and
+/// `trigger` is held in `pending`; the driver releases `bad`'s permit and records it
+/// `failed` **before** re-offering `pending` and admitting `trigger`, which only then
+/// fires the cancel. The `coop`/`ignorer` nodes stay zero-cost, so they are admitted
+/// concurrently and are provably still in flight when cancellation lands — exactly what
+/// their `cancelled`/`abandoned` terminals require. No wall clock, no sleep.
 #[test]
 fn cancelled_abandoned_and_failed_are_distinct() {
+    use dagr_core::admission::PoolCapacities;
+
     let release = Arc::new(Mutex::new(false));
+    // `bad` and `trigger` each cost the whole pinned pool; `coop`/`ignorer` are
+    // zero-cost so they run concurrently and stay in flight until cancellation lands.
+    let costed = || NodePolicy::new().working_memory(10);
 
     let mut flow = Flow::new();
-    let _f = flow.register_source("bad", &Fails);
+    let _f = flow.register_source_with("bad", &Fails, costed());
     let _c = flow.register_source("coop", &Succeeds);
     let _i = flow.register_source("ignorer", &Succeeds);
-    let _tr = flow.register_source("trigger", &Succeeds);
+    let _tr = flow.register_source_with("trigger", &Succeeds, costed());
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35").grace(SHORT_GRACE);
+    let cfg = RunConfig::new("/tmp/dagr-t35")
+        .grace(SHORT_GRACE)
+        .capacities(PoolCapacities::new().memory(10));
     let handle = cfg.cancel_handle();
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
