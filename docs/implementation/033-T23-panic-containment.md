@@ -69,7 +69,65 @@ Setup: a fixture resource (a stand-in pooled connection) whose guarded operation
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+
+The ticket's original list was "None," and the `docs/tasks.md` T23 entry carries
+**resolutions**, not `Q:` items ("Resolved: startup check refuses `panic=abort`
+… `AssertUnwindSafe` at the boundary; resource poisoning documented …; hook
+installed once, coexists with test harness"). Both open-question sources
+(ticket-conventions §5) are therefore discharged by the design already fixed in
+arch.md C14, the T3 ADR (016), and that tasks entry. Recorded below are the
+**sub-decisions** T23 had latitude on, each resolved against those governing
+sources rather than picked silently:
+
+- **Terminal state of a caught panic — `failed`, not a distinct `panicked`
+  state.** arch.md's Vocabulary lists **nine** terminal states and defines
+  `failed` as *"Permanent failure, retries exhausted, or a caught panic."* There
+  is **no** `panicked` terminal state. Resolved: a caught panic maps to
+  `TerminalState::Failed` via a new `AttemptOutcome::Panicked` classification
+  (the reserved variant T20 named). The *classification* is distinct (`Panicked`)
+  so the runner can attribute and message it, but the *terminal state* is
+  `failed`, exactly as the T3 ADR §5 mapping table fixes (panic → `failed`,
+  failure-like).
+- **Retry-eligibility of a panic — never retried.** T3 ADR §4/§5 and the "panic
+  is a permanent failure" rejected-alternative fix panic → **permanent** failure
+  → not retry-eligible; retrying a body that panicked risks poisoned shared state
+  (the prescribed pattern is poisoning, not blind retry). Resolved:
+  `AttemptOutcome::Panicked::is_retry_eligible()` is `false`, so
+  `run_with_retries` stops after the panicking attempt with the budget untouched
+  — panic composes with T22 by ending the loop, exactly like a permanent failure.
+- **Panic-message capture rule.** Following the dagx prior art (§4) and the T3
+  ADR spike: downcast the panic payload to `&'static str` then `String`, and use
+  the literal `"unknown panic"` when it is neither. The captured message is
+  carried on the `AttemptEvent::AttemptPanicked` outcome record (the C19 record
+  the driver stamps). The default hook's stderr print is suppressed *only for the
+  contained attempt's own panic* by the framework hook's attribution path — never
+  globally for the process.
+- **Catching a panic from an *async* future.** The catch boundary wraps the
+  future's **poll** (`catch_unwind(AssertUnwindSafe(|| fut.poll(cx)))`), not just
+  a sync closure, so a panic that unwinds *during* an `.await` is contained. This
+  is a small dependency-free `CatchUnwindPoll` adapter (heap-pinned like T21's
+  `RaceFuture`, hence `Unwind`-safe to poll with **no `unsafe`**); the `futures`
+  crate's `CatchUnwind` is deliberately **not** added (`dagr-core` stays
+  dependency-free). A future that already panicked is *fused*: it is dropped and
+  never polled again.
+- **Making the `panic = "abort"` startup check test-controllable.** The real
+  check reads the compiled unwind strategy. Because a test binary cannot itself
+  be compiled `panic = "abort"` (it would abort, not fail assertably), the check
+  is expressed as a pure function `check_panic_strategy(PanicStrategy) ->
+  Result<(), BootstrapRefusal>` over an explicit `PanicStrategy` enum, plus a
+  thin `detect_panic_strategy()` that reports the compiled strategy. Tests drive
+  the pure function with both strategies; the refusal message names the required
+  profile setting (`panic = "unwind"`). The driver (T24) calls
+  `detect_panic_strategy()` then the pure check at bootstrap.
+- **Hook idempotency + chaining mechanism.** A `std::sync::Once` installs the
+  framework hook exactly once (safe under concurrent first-use); the hook
+  **captures the previously-installed hook** (including the test harness's) and
+  **calls it**, so both behaviours survive. Attribution is via a
+  `thread_local!` node-name cell set by a scope guard around the caught poll.
+- **Resource poisoning is an author pattern, not a framework guarantee.** Proven
+  by a worked example test (a pooled resource poisoned after a caught panic, not
+  returned to rotation) and stated in the attempt-boundary rustdoc; the framework
+  makes no guarantee about arbitrary shared state after a caught panic.
 
 ## Out of scope
 - Per-attempt timeout semantics and permit release on timeout — that is T21 (C14). This ticket does not touch timeout classification or the abandoned-but-running / zombie accounting path (C12), except to leave those paths undisturbed.
