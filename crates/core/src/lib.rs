@@ -50,14 +50,36 @@
 //!   into [`task::Task::run`], carrying run/pipeline/node identity, the current
 //!   attempt and the maximum, opaque parameters, an optional
 //!   [`context::DataInterval`], an observe-only [`context::CancellationSignal`], a
-//!   [`context::LogSpan`], and the [`context::ResourceRegistry`] /
-//!   [`context::ScratchStore`] accessor seams (registry substance is T30, scratch
-//!   is T53). Built by hand with [`context::RunContext::builder`] /
+//!   [`context::LogSpan`], and the [`context::ResourceRegistry`] (C9) /
+//!   [`context::ScratchStore`] accessor seams (scratch substance is T53). Built
+//!   by hand with [`context::RunContext::builder`] /
 //!   [`context::RunContext::for_test`] — no runtime, store, registry, clock, or
 //!   network — which feeds the single-task test kit (C28 / T60).
+//!
+//! The **C9 resource registry** (ticket T30): dependency injection for
+//! long-lived external clients, built once in the developer's `main`.
+//!
+//! - [`context::ResourceRegistry`] / [`context::ResourceRegistryBuilder`] — the
+//!   immutable, type-keyed store a task reads through
+//!   [`context::RunContext::resources`]. Resources are retrieved by concrete type
+//!   ([`ResourceRegistry::get`](context::ResourceRegistry::get), no string
+//!   lookup); registering a second resource of the identical type fails
+//!   construction as ambiguous ([`context::RegistryError`]); two same-typed
+//!   resources are distinguished by newtype wrappers; stored resources are
+//!   `Send + Sync + 'static` (a non-thread-safe client uses the documented
+//!   owning-worker pattern). Any resource is replaceable by a fake in a test with
+//!   no task change.
+//! - [`context::Secret`] — the secret marker wrapper with **no** `Debug`/`Display`
+//!   path, so the framework never renders secret material onto a
+//!   framework-controlled output path (the guarantee boundary is C25; end-to-end
+//!   redaction is T45, building on this wrapper and its sentinel hook).
 //! - [`context::ResourceRequirements`] — the resource-requirement *declaration*
-//!   plumbing a node records at registration, queryable for bootstrap validation
-//!   (T30) and later graph-artifact rendering (C20).
+//!   plumbing a node records at registration, validated at bootstrap by
+//!   [`ResourceRegistry::validate_requirements`](context::ResourceRegistry::validate_requirements)
+//!   (a missing resource yields a [`context::BootstrapFailure`] naming the
+//!   resource and its requiring nodes, distinct from an assembly failure, with
+//!   zero attempts recorded) and surfaced for the graph artifact (C20) by
+//!   [`context::surface_requirements`].
 //! - [`context::CoveredNodeStates`] / [`context::TerminalState`] — the
 //!   teardown-only view of covered nodes' terminal states (C17), from arch.md's
 //!   normative taxonomy; the runtime-side population is C17 / T52.
@@ -254,9 +276,11 @@ pub use binding::{
     Shared, TriggerRule, MAX_INPUT_ARITY,
 };
 pub use context::{
-    CancellationSignal, CancellationSource, CoveredNodeStates, DataInterval, LogSpan, PipelineId,
-    ResourceRegistry, ResourceRequirement, ResourceRequirements, RunContext, RunContextBuilder,
-    RunId, ScratchError, ScratchStore, TerminalState,
+    surface_requirements, BootstrapFailure, BootstrapOutcome, CancellationSignal,
+    CancellationSource, CoveredNodeStates, DataInterval, LogSpan, MissingResourceError, PipelineId,
+    RegistryError, ResourceRegistry, ResourceRegistryBuilder, ResourceRequirement,
+    ResourceRequirements, RunContext, RunContextBuilder, RunId, ScratchError, ScratchStore, Secret,
+    TerminalState,
 };
 pub use error::{TaskError, TaskErrorClass};
 pub use execution::{
