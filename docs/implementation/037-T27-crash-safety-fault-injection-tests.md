@@ -54,7 +54,42 @@ Each scenario is independently checkable and derived from a C19 or C28 acceptanc
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were open in the ticket. Two implementation choices arose while building the
+suite and are resolved here as prose (per the ticket-conventions open-questions
+duty):
+
+- **Real child-process kill vs deterministic truncation.** The DoD's kill-point
+  clause reads as a real child killed by an uncatchable signal, but the T27
+  process rules require the suite to be deterministic in CI — *"no real crashes of
+  the test process, no wall-clock/network; simulate a 'crash' as a
+  truncated/partial stream that the tolerant reader must still parse up to the
+  last complete record."* Resolution: the crash is simulated by truncating the
+  **genuine** bytes the real `EventStreamWriter` produced (the default local-file
+  sink does not fsync per event — T0.6 §6, so the crash-visible bytes are exactly
+  the appended-so-far prefix, possibly cut mid-line) at **seeded** offsets landing
+  *at*, *before*, and *part-way through* each event write, then feeding the
+  truncation to the real tolerant reader. This exercises the identical invariant an
+  uncatchable-signal kill would (a valid prefix with ≤1 trailing partial, gapless
+  sequences) with none of the process-kill nondeterminism, and every randomized
+  trial records its seed so a CI failure reproduces exactly. This is the process
+  rule's explicit instruction, not a weakening of the acceptance.
+
+- **Where the sink-failure "moves to cancelling / exits with the sink-failure
+  code" contract is asserted.** The merged M1 run-loop driver (T24) deliberately
+  **absorbs** a sink fault (`let _ = writer.…`) and scoped the cancel-and-exit
+  *reaction* — the cancellation fan-out, the best-effort stderr report, and the
+  numeric exit code — out to T36 (signals/flush) and T55 (the C26 exit-code
+  table, still `unmapped`). That absorption is by design (the T24 module doc lists
+  fault injection T27 and cancellation T34/T36 as later tickets), **not** a safety
+  bug, so no production behavior was changed. Resolution: the sink-failure contract
+  is asserted at the **writer/sink seam** — the exact seam T0.6 §5/§6 says T27
+  binds against — where the documented `SinkFault { reason: "event stream
+  unwritable" }` actually surfaces and `RunOutcome::Cancelled` is the run-level
+  outcome. The exit code is resolved **by its documented cause** (the
+  `EVENT_STREAM_UNWRITABLE` constant + the `cancelled` outcome), never by a
+  hard-coded number, so renumbering the C26 table in one place keeps the tests
+  correct. If a later ticket wires the driver's cancel-and-exit reaction, it
+  inherits this same cause without changing these tests.
 
 ## Out of scope
 - The event-stream writer itself — the record encoding, the gapless-sequence machinery, and the run-started event carrying the full header — is T19; this ticket only asserts the guarantees the writer already provides.
