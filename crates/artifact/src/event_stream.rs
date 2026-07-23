@@ -39,7 +39,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 
-use serde::Serialize;
 use uuid::Uuid;
 
 /// The schema-version string stamped on every event record (T4 §3).
@@ -302,93 +301,408 @@ impl std::error::Error for SinkFault {
 /// informational wall stamp, and an authoritative monotonic offset onto every
 /// record, then appends and flushes it to the sink before the transition is
 /// treated as recorded (write-through, no user-space buffering — T0.6 §6).
-#[allow(dead_code)] // fields consumed by the implementation commit (TDD skeleton)
 pub struct EventStreamWriter<S: EventSink, C: MonotonicClock> {
+    /// The injected two-operation sink (T0.6 §1).
     sink: S,
+    /// The authoritative monotonic clock; its zero is the run-start instant.
     clock: C,
+    /// The run identity, stamped on every record (T0.6 §7).
     run_id: String,
+    /// The pipeline identity, stamped on every record.
     pipeline: String,
+    /// The next sequence number to assign — gapless, strictly increasing,
+    /// starting at `0` on `run-started` (T0.6 §7).
     next_seq: u64,
-    wall: Box<dyn FnMut() -> u64 + Send>,
+    /// The informational wall-clock source (Unix milliseconds). Never used for
+    /// durations — offsets are authoritative (T0.6 §7).
+    wall: fn() -> u64,
+    /// Once a sink append/flush has faulted, the run is unwritable; the writer
+    /// refuses to keep appending (a run that cannot record should stop).
     faulted: bool,
 }
 
-#[allow(
-    clippy::missing_panics_doc,
-    clippy::missing_errors_doc,
-    clippy::unused_self,
-    clippy::needless_pass_by_value,
-    missing_docs,
-    unused_variables
-)]
 impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
-    // Skeleton signatures so the C19 test suite compiles and FAILS (TDD: tests
-    // fail first). The real bodies land in the implementation commit.
-
     /// Construct the writer at bootstrap from an injected sink, clock, run id,
-    /// and pipeline identity. The clock's zero is the captured run-start instant.
+    /// and pipeline identity.
+    ///
+    /// The clock's zero is the captured run-start instant, so its
+    /// [`elapsed_ns`](MonotonicClock::elapsed_ns) is the authoritative offset. No
+    /// record is written by construction — the first record is emitted by
+    /// [`run_started`](Self::run_started). The wall-clock stamp defaults to Unix
+    /// milliseconds and is informational only.
+    #[must_use]
     pub fn new(sink: S, clock: C, run_id: RunId, pipeline: impl Into<String>) -> Self {
-        let _ = (&sink, &clock, &run_id);
-        let _ = pipeline.into();
-        todo!("implemented after failing tests are committed")
+        Self {
+            sink,
+            clock,
+            run_id: run_id.0,
+            pipeline: pipeline.into(),
+            next_seq: 0,
+            wall: unix_millis,
+            faulted: false,
+        }
     }
 
-    /// Emit the `run-started` record carrying the full run-artifact header.
-    pub fn run_started(&mut self, header: RunStartedHeader) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit a `node-ready` record.
-    pub fn node_ready(&mut self, node: &str) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit a `node-admitted` record.
-    pub fn node_admitted(&mut self, node: &str) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit an `attempt-started` record.
-    pub fn attempt_started(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit an `attempt-succeeded` record.
-    pub fn attempt_succeeded(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit an `attempt-failed` record.
-    pub fn attempt_failed(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit a `node-terminal` record carrying the normative terminal state.
-    pub fn node_terminal(&mut self, node: &str, state: TerminalState) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit a `zombie-at-exit` record (C14).
-    pub fn zombie_at_exit(&mut self, node: &str) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Emit the `run-finished` record carrying the run outcome.
-    pub fn run_finished(&mut self, outcome: RunOutcome) -> Result<(), SinkFault> {
-        todo!()
-    }
-
-    /// Flush (fsync via the sink) at run end or cancellation.
-    pub fn finish(&mut self) -> Result<(), SinkFault> {
-        todo!()
+    /// Override the informational wall-clock source (default: Unix
+    /// milliseconds).
+    ///
+    /// The wall stamp is **informational only** — never used for durations
+    /// (offsets are authoritative — T0.6 §7) — so overriding it changes no
+    /// behavior that matters to a consumer. It exists to make the record bytes
+    /// fully deterministic under test (the wall stamp is a record's analog of an
+    /// artifact's excluded generation-time field, T4 §6): holding it fixed lets
+    /// two emissions of the same record be byte-identical.
+    #[must_use]
+    pub fn with_wall_clock(mut self, wall: fn() -> u64) -> Self {
+        self.wall = wall;
+        self
     }
 
     /// The stream file path this writer writes under, given the resolved base
     /// location: `<base>/<pipeline>/<run-id>/events.jsonl` (T0.6 §3).
+    ///
+    /// Because the path embeds both the pipeline identity and the run-unique
+    /// run id, two concurrent runs — even of the same binary and pipeline —
+    /// write disjoint files (T0.6 §3; C19 concurrent-run disjointness).
     #[must_use]
     pub fn stream_path(&self, base: &str) -> String {
-        todo!()
+        format!(
+            "{base}/{}/{}/{EVENTS_FILE_NAME}",
+            self.pipeline, self.run_id
+        )
     }
+
+    /// Emit the `run-started` record carrying the full run-artifact header.
+    ///
+    /// The record carries every header field known at start — run identity,
+    /// pipeline identity, both fingerprints *when assembly succeeded*, parameters,
+    /// data interval, allowlisted captured environment, and resume lineage — and
+    /// omits overall outcome and summary, which exist only at run end (C19). A
+    /// stream that ends immediately after it still identifies its run completely.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn run_started(&mut self, header: RunStartedHeader) -> Result<(), SinkFault> {
+        self.emit(&Event::RunStarted(header))
+    }
+
+    /// Emit a `node-ready` record.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn node_ready(&mut self, node: &str) -> Result<(), SinkFault> {
+        self.emit(&Event::NodeReady { node: node.into() })
+    }
+
+    /// Emit a `node-admitted` record.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn node_admitted(&mut self, node: &str) -> Result<(), SinkFault> {
+        self.emit(&Event::NodeAdmitted { node: node.into() })
+    }
+
+    /// Emit an `attempt-started` record (attempt numbers are 1-based).
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn attempt_started(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
+        self.emit(&Event::AttemptStarted {
+            node: node.into(),
+            attempt,
+        })
+    }
+
+    /// Emit an `attempt-succeeded` record.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn attempt_succeeded(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
+        self.emit(&Event::AttemptSucceeded {
+            node: node.into(),
+            attempt,
+        })
+    }
+
+    /// Emit an `attempt-failed` record.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn attempt_failed(&mut self, node: &str, attempt: u32) -> Result<(), SinkFault> {
+        self.emit(&Event::AttemptFailed {
+            node: node.into(),
+            attempt,
+        })
+    }
+
+    /// Emit a `node-terminal` record carrying the normative terminal state.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn node_terminal(&mut self, node: &str, state: TerminalState) -> Result<(), SinkFault> {
+        self.emit(&Event::NodeTerminal {
+            node: node.into(),
+            state,
+        })
+    }
+
+    /// Emit a `zombie-at-exit` record (a leftover thread still running at process
+    /// exit — C14; it changes no node's terminal state).
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn zombie_at_exit(&mut self, node: &str) -> Result<(), SinkFault> {
+        self.emit(&Event::ZombieAtExit { node: node.into() })
+    }
+
+    /// Emit the `run-finished` record carrying the overall run outcome.
+    ///
+    /// This records only the *outcome*; the summary (metrics, critical path) is
+    /// C22/C23 fold-time work (T42/T43), deliberately not here.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn run_finished(&mut self, outcome: RunOutcome) -> Result<(), SinkFault> {
+        self.emit(&Event::RunFinished { outcome })
+    }
+
+    /// Emit an arbitrary [`Event`], the same path every typed helper takes.
+    ///
+    /// The run loop (T24) that produces transitions may name the [`Event`]
+    /// variants directly; the typed helpers above are the ergonomic surface.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn emit_event(&mut self, event: &Event) -> Result<(), SinkFault> {
+        self.emit(event)
+    }
+
+    /// Flush (fsync, via the sink's `flush`) at run end or cancellation.
+    ///
+    /// This is the single fsync boundary the spec promises (T0.6 §6): the writer
+    /// does **not** fsync per event; it asks the sink to make its accepted bytes
+    /// durable exactly once, at the known-complete boundary. Call it at
+    /// `run-finished` and at cancellation.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink's flush fails.
+    pub fn finish(&mut self) -> Result<(), SinkFault> {
+        self.sink.flush().map_err(|source| {
+            self.faulted = true;
+            SinkFault {
+                reason: EVENT_STREAM_UNWRITABLE,
+                source,
+            }
+        })
+    }
+
+    /// Whether a prior append/flush faulted (the run is unwritable).
+    #[must_use]
+    pub fn is_faulted(&self) -> bool {
+        self.faulted
+    }
+
+    /// The gapless sequence number the next record will carry.
+    #[must_use]
+    pub fn next_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    /// Build the canonical envelope, append-and-record it, then advance the
+    /// sequence. Write-through: the record reaches the sink before this returns
+    /// (no user-space buffering — T0.6 §6). A sink error is a run-level fault.
+    fn emit(&mut self, event: &Event) -> Result<(), SinkFault> {
+        let seq = self.next_seq;
+        let offset_ns = self.clock.elapsed_ns();
+        let wall = (self.wall)();
+        let line = self.canonical_line(seq, wall, offset_ns, event);
+        self.sink.append_line(line.as_bytes()).map_err(|source| {
+            self.faulted = true;
+            SinkFault {
+                reason: EVENT_STREAM_UNWRITABLE,
+                source,
+            }
+        })?;
+        // Only advance after a successful append: a faulted record leaves no gap.
+        self.next_seq += 1;
+        Ok(())
+    }
+
+    /// Serialize one record to its canonical single-line JSON bytes plus the
+    /// terminating newline (T4 §1, §6).
+    fn canonical_line(&self, seq: u64, wall: u64, offset_ns: u64, event: &Event) -> String {
+        let (kind, body) = event_wire(event);
+        // Build the envelope as a serde_json::Value, then emit canonically
+        // (sorted keys, compact) — serde_json does not sort keys by default.
+        let mut envelope = serde_json::Map::new();
+        envelope.insert(
+            "schema_version".into(),
+            serde_json::Value::from(EVENT_STREAM_SCHEMA_VERSION),
+        );
+        envelope.insert(
+            "run_id".into(),
+            serde_json::Value::from(self.run_id.clone()),
+        );
+        envelope.insert("seq".into(), serde_json::Value::from(seq));
+        envelope.insert("wall".into(), serde_json::Value::from(wall));
+        envelope.insert("offset_ns".into(), serde_json::Value::from(offset_ns));
+        envelope.insert("event".into(), serde_json::Value::from(kind));
+        envelope.insert("body".into(), body);
+        let value = serde_json::Value::Object(envelope);
+        let mut out = String::new();
+        canonical_write(&value, &mut out);
+        out.push('\n');
+        out
+    }
+}
+
+// === Canonicalization (T4 §6) =============================================
+
+/// Write a JSON value in the T4 canonical form: object keys sorted
+/// lexicographically by byte order, compact (no insignificant whitespace),
+/// integers only. This is what makes two emissions of the same record
+/// byte-identical.
+fn canonical_write(value: &serde_json::Value, out: &mut String) {
+    match value {
+        serde_json::Value::Object(map) => {
+            out.push('{');
+            // BTreeMap gives lexicographic (byte-order) key ordering.
+            let sorted: BTreeMap<&String, &serde_json::Value> = map.iter().collect();
+            for (i, (k, v)) in sorted.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_json_string(k, out);
+                out.push(':');
+                canonical_write(v, out);
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(items) => {
+            out.push('[');
+            for (i, v) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                canonical_write(v, out);
+            }
+            out.push(']');
+        }
+        serde_json::Value::String(s) => write_json_string(s, out),
+        // Booleans, integers, and null render identically to serde_json's compact
+        // form; all dagr numeric fields are integers (T4 §6), so no float
+        // formatting hazard arises.
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// Emit a JSON string with minimal, deterministic escaping (T4 §6): escape only
+/// what JSON requires (`"`, `\`, and control chars U+0000–U+001F); non-ASCII
+/// printable characters are emitted literally as UTF-8, never `\u`-escaped.
+fn write_json_string(s: &str, out: &mut String) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Map an [`Event`] to its `(wire-kind-name, body)` pair. The body is a
+/// `serde_json` object; `run-started` and `run-finished` carry structured
+/// bodies, and per-node events carry `{node, ...}`.
+fn event_wire(event: &Event) -> (&'static str, serde_json::Value) {
+    use serde_json::json;
+    match event {
+        Event::RunStarted(h) => ("run-started", run_started_body(h)),
+        Event::NodeReady { node } => ("node-ready", json!({ "node": node })),
+        Event::NodeAdmitted { node } => ("node-admitted", json!({ "node": node })),
+        Event::AttemptStarted { node, attempt } => (
+            "attempt-started",
+            json!({ "node": node, "attempt": attempt }),
+        ),
+        Event::AttemptSucceeded { node, attempt } => (
+            "attempt-succeeded",
+            json!({ "node": node, "attempt": attempt }),
+        ),
+        Event::AttemptFailed { node, attempt } => (
+            "attempt-failed",
+            json!({ "node": node, "attempt": attempt }),
+        ),
+        Event::NodeTerminal { node, state } => (
+            "node-terminal",
+            json!({ "node": node, "state": state.as_str() }),
+        ),
+        Event::ZombieAtExit { node } => ("zombie-at-exit", json!({ "node": node })),
+        Event::RunFinished { outcome } => ("run-finished", json!({ "outcome": outcome.as_str() })),
+    }
+}
+
+/// Build the `run-started` body: every header field known at start, omitting the
+/// fingerprints and resume lineage when they are absent (assembly-failed variant).
+fn run_started_body(h: &RunStartedHeader) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "pipeline".into(),
+        serde_json::Value::from(h.pipeline.clone()),
+    );
+    if let Some(fp) = &h.fingerprint_structural {
+        body.insert(
+            "fingerprint_structural".into(),
+            serde_json::Value::from(fp.clone()),
+        );
+    }
+    if let Some(fp) = &h.fingerprint_policy {
+        body.insert(
+            "fingerprint_policy".into(),
+            serde_json::Value::from(fp.clone()),
+        );
+    }
+    body.insert("parameters".into(), string_map(&h.parameters));
+    if let Some([start, end]) = &h.data_interval {
+        body.insert(
+            "data_interval".into(),
+            serde_json::Value::Array(vec![
+                serde_json::Value::from(start.clone()),
+                serde_json::Value::from(end.clone()),
+            ]),
+        );
+    }
+    body.insert("captured_env".into(), string_map(&h.captured_env));
+    if let Some(from) = &h.resumed_from {
+        body.insert("resumed_from".into(), serde_json::Value::from(from.clone()));
+    }
+    serde_json::Value::Object(body)
+}
+
+/// Convert a name→value `BTreeMap` into a JSON object value.
+fn string_map(map: &BTreeMap<String, String>) -> serde_json::Value {
+    let obj: serde_json::Map<String, serde_json::Value> = map
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::from(v.clone())))
+        .collect();
+    serde_json::Value::Object(obj)
+}
+
+/// Unix milliseconds — the informational wall-clock stamp. Never used for
+/// durations (offsets are authoritative — T0.6 §7).
+fn unix_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 // === Run identity ==========================================================
@@ -429,11 +743,65 @@ pub struct ReadStream {
     pub trailing_partial_discarded: bool,
 }
 
-/// Tolerantly read a JSONL event stream, discarding at most one trailing partial
-/// record (C19 / T4 §1). Skeleton — implemented after the failing tests land.
-#[allow(clippy::missing_errors_doc, dead_code, unused_variables)]
-pub fn read_records(_bytes: &[u8]) -> Result<ReadStream, ReadError> {
-    todo!("implemented after failing tests are committed")
+/// Tolerantly read a JSONL event stream, discarding **at most one trailing
+/// partial record** (C19 / T4 §1).
+///
+/// This is the reader half of the writer/reader contract the crash-safety suite
+/// (T27) and the run-artifact fold (C22 / T42) build on. It parses each physical
+/// line independently:
+///
+/// - Every complete line (terminated by `\n`) must parse; a **non-final** line
+///   that fails to parse is a corruption, reported as a [`ReadError`].
+/// - An **unterminated final line** (the bytes after the last `\n`) is the single
+///   tolerated trailing partial: it is discarded and
+///   [`trailing_partial_discarded`](ReadStream::trailing_partial_discarded) is
+///   set — this is the abrupt-kill tolerance, because the default sink does not
+///   fsync per event (T0.6 §6).
+///
+/// It needs nothing but the bytes — no live writer, no run object — which is what
+/// makes the stream self-contained for folding (C22).
+///
+/// # Errors
+/// Returns a [`ReadError`] if a non-final (fully terminated) line fails to parse.
+pub fn read_records(bytes: &[u8]) -> Result<ReadStream, ReadError> {
+    let mut records = Vec::new();
+    let mut trailing_partial_discarded = false;
+
+    // Split on '\n'. A trailing '\n' yields a final empty segment (no partial);
+    // a missing trailing '\n' yields a non-empty final segment (the partial).
+    let mut segments: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
+    // The element after the last '\n' is the "tail": empty if the stream ended
+    // on a newline (a clean boundary), non-empty if the final record was cut.
+    let tail = segments.pop().unwrap_or(&[]);
+    let has_partial_tail = !tail.is_empty();
+
+    for (i, seg) in segments.iter().enumerate() {
+        // A blank line between records is not a record; skip it defensively.
+        if seg.is_empty() {
+            continue;
+        }
+        match serde_json::from_slice::<serde_json::Value>(seg) {
+            Ok(v) => records.push(v),
+            // A terminated line that does not parse is genuine corruption, not
+            // the tolerated trailing partial.
+            Err(_) => return Err(ReadError { line: i }),
+        }
+    }
+
+    if has_partial_tail {
+        // The one tolerated trailing partial. If it happens to parse as valid
+        // JSON (a complete-but-unterminated final record), keep it; otherwise
+        // discard it. Either way we tolerate exactly one unterminated tail.
+        match serde_json::from_slice::<serde_json::Value>(tail) {
+            Ok(v) => records.push(v),
+            Err(_) => trailing_partial_discarded = true,
+        }
+    }
+
+    Ok(ReadStream {
+        records,
+        trailing_partial_discarded,
+    })
 }
 
 /// A corruption error: a **non-final** line failed to parse (not the tolerated
@@ -452,9 +820,90 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-// A private marker so the skeleton's `Serialize`-bound helper compiles; the
-// real canonicalization lands with the implementation commit.
-#[allow(dead_code)]
-fn _canonical_placeholder<T: Serialize>(_value: &T) -> String {
-    String::new()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_write_sorts_object_keys() {
+        // Build with keys deliberately out of order.
+        let mut map = serde_json::Map::new();
+        map.insert("zebra".into(), serde_json::Value::from(1));
+        map.insert("alpha".into(), serde_json::Value::from(2));
+        map.insert("middle".into(), serde_json::Value::from(3));
+        let value = serde_json::Value::Object(map);
+        let mut out = String::new();
+        canonical_write(&value, &mut out);
+        assert_eq!(out, r#"{"alpha":2,"middle":3,"zebra":1}"#);
+    }
+
+    #[test]
+    fn canonical_write_is_compact_and_recursive() {
+        let value = serde_json::json!({
+            "b": {"y": 1, "x": 2},
+            "a": [3, 2, 1],
+        });
+        let mut out = String::new();
+        canonical_write(&value, &mut out);
+        // Outer keys sorted (a<b), inner keys sorted (x<y), arrays preserve
+        // order (arrays are ordered, not sorted), compact whitespace.
+        assert_eq!(out, r#"{"a":[3,2,1],"b":{"x":2,"y":1}}"#);
+    }
+
+    #[test]
+    fn string_escaping_is_minimal_and_utf8() {
+        let mut out = String::new();
+        write_json_string("a\"b\\c\nd\te—é", &mut out);
+        // Quote/backslash/control escaped; the em dash and é stay literal UTF-8.
+        assert_eq!(out, "\"a\\\"b\\\\c\\nd\\te—é\"");
+    }
+
+    #[test]
+    fn generate_produces_a_uuidv7() {
+        let id = RunId::generate();
+        // Parses as a UUID and carries version 7.
+        let parsed = Uuid::parse_str(id.as_str()).expect("valid UUID");
+        assert_eq!(parsed.get_version_num(), 7, "run id is a UUIDv7");
+    }
+
+    #[test]
+    fn operator_id_is_verbatim() {
+        let id = RunId::from_operator("job-42/attempt-1");
+        assert_eq!(
+            id.as_str(),
+            "job-42/attempt-1",
+            "honored verbatim (T0.6 §4)"
+        );
+    }
+
+    #[test]
+    fn reader_reports_nonfinal_corruption() {
+        // A terminated line that does not parse (in the middle) is corruption,
+        // not the tolerated trailing partial.
+        let bytes = b"{\"a\":1}\nnot json\n{\"b\":2}\n";
+        let err = read_records(bytes).unwrap_err();
+        assert_eq!(err.line, 1);
+    }
+
+    #[test]
+    fn reader_handles_empty_and_newline_only() {
+        assert_eq!(read_records(b"").unwrap().records.len(), 0);
+        assert!(!read_records(b"").unwrap().trailing_partial_discarded);
+        // A lone record with no trailing newline is the tolerated partial only if
+        // it fails to parse; a complete-but-unterminated final record is kept.
+        let r = read_records(b"{\"a\":1}").unwrap();
+        assert_eq!(r.records.len(), 1);
+        assert!(!r.trailing_partial_discarded);
+    }
+
+    #[test]
+    fn terminal_and_outcome_wire_names_are_normative() {
+        // Spot-check the exact arch.md "Vocabulary" spellings.
+        assert_eq!(TerminalState::UpstreamSkipped.as_str(), "upstream-skipped");
+        assert_eq!(
+            TerminalState::SatisfiedFromPrior.as_str(),
+            "satisfied-from-prior"
+        );
+        assert_eq!(RunOutcome::AssemblyFailed.as_str(), "assembly-failed");
+    }
 }

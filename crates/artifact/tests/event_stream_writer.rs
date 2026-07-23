@@ -171,6 +171,13 @@ fn as_obj(line: &[u8]) -> serde_json::Map<String, serde_json::Value> {
     v.as_object().expect("record is a JSON object").clone()
 }
 
+/// A fixed informational wall-clock stamp. Byte-identity of two emissions of the
+/// same record is defined with the wall stamp held equal — the record's analog
+/// of the artifact's excluded generation-time field (T4 §6).
+fn fixed_wall() -> u64 {
+    1_700_000_000_000
+}
+
 // === Tests ================================================================
 
 #[test]
@@ -508,20 +515,22 @@ fn canonical_bytes_are_deterministic_and_sorted() {
         ManualClock::new(),
         RunId::from_operator("r"),
         "p",
-    );
+    )
+    .with_wall_clock(fixed_wall);
     let mut w2 = EventStreamWriter::new(
         sink2.clone(),
         ManualClock::new(),
         RunId::from_operator("r"),
         "p",
-    );
+    )
+    .with_wall_clock(fixed_wall);
     w1.run_started(header()).unwrap();
     w2.run_started(header()).unwrap();
 
     assert_eq!(
         sink1.lines()[0],
         sink2.lines()[0],
-        "byte-identical canonical output"
+        "byte-identical canonical output (wall stamp held equal, T4 §6)"
     );
 
     // Top-level keys are sorted and compact (no spaces after ':' or ',').
