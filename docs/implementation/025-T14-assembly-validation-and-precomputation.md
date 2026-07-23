@@ -84,7 +84,37 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None. (The ticket section and the `docs/tasks.md` T14 entry carry no `Q:` items.)
+
+### Implementation-seam resolutions (recorded during T14)
+Three non-obvious seam choices the ADRs sanction but leave to T14; recorded here
+so T29/T41/T57 inherit them:
+
+- **The `NodePolicy` seam vs the full C5 struct (T29).** T14 depends on T13/T0.5,
+  and T29 (the full C5 node-policy struct) depends on *T14* — so the policy
+  fields assembly must read do not exist yet. Resolution: `dagr_core::assembly`
+  defines the **minimal policy seam** carrying exactly the fields assembly reads
+  (durability, retention, retries, teardown, the per-pool `CostVector`, class
+  override) with the conservative C5 defaults. T29 expands this seam into the
+  full policy struct (backoff, timeout, trigger rule, group, emission, policy-hash
+  participation). This honors the ticket's *"reads policy fields … but does not
+  define them"* against the actual T29-after-T14 dependency order.
+- **The durable-contract witness mechanism (T0.8 §5 left it to T14/T57).** Stable
+  Rust has no specialization, so a generic registrar cannot ask "does `T::Output`
+  implement `DurableOutput`?". Resolution: the witness is captured at the **typed
+  registration site** — `Flow::register_source_durable` / `Flow::register_durable`
+  are bounded on `T::Output: DurableOutput` and record a `DurableWitness::Present`;
+  every other path records `Absent`. Marking a node durable via the ordinary
+  policy path (witness `Absent`) is exactly the durable-without-contract case
+  assembly rejects — an **assembly** failure, not a compile error, as T0.8 §5
+  requires. T57 supersedes the `DurableOutput` marker with the full trait pair.
+- **The fingerprint digest (T41 owns the algorithm).** T14 populates the
+  fingerprint slot using the T0.7 field composition and a deterministic,
+  registration-order-independent, unambiguously-framed canonical byte encoding —
+  enough for "assemble twice → byte-identical". The concrete **BLAKE3-v1**
+  algorithm and its versioning (C21 / T41) and the artifact wire schema (C20 /
+  T40) are downstream; T14's digest is a dependency-free FNV-1a stand-in (the same
+  family `NodeId::from_name` already uses), adding **no** core-crate dependency.
 
 ## Out of scope
 - The bootstrap phase itself: capacity/cost-fit rejection, missing-declared-resource rejection, parameter parsing and validation, and the ACTUAL capture of allowlisted environment values all belong to bootstrap (T24/T29 and the bootstrap consumer of the T0.5 seam), not here — this ticket only declares the allowlist and defers the cost-fit check.

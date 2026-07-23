@@ -79,15 +79,32 @@
 //!   group-label slot (C6 / T51) carried alongside identity but **excluded** from
 //!   it.
 //!
-//! Assembly *validation and precomputation* (C7 / T14) — duplicate-name
-//! reporting, the empty-pipeline check, class-override validation, the
-//! zero-consumer warning, consumer/dependency counts, execution order, and the
-//! fingerprint — and the M1+ execution tickets land later; this crate grows one
-//! component at a time.
+//! The **C7 assembly validation and precomputation** (ticket T14): the total,
+//! pure pass that turns the immutable [`Pipeline`] into a validated,
+//! runtime-ready [`AssemblyArtifact`].
+//!
+//! - [`flow::Pipeline::assemble`] — reports **every** problem it finds (never
+//!   just the first): duplicate node names (naming both declarations), an empty
+//!   pipeline, invalid execution-class overrides, durable-without-contract nodes,
+//!   ownership-mode conflicts, and nonzero teardown costs. It precomputes what
+//!   the runtime consumes — per-node consumer counts, remaining-dependency
+//!   counts, a topological execution order, and the fingerprint slot — and freezes
+//!   them into the immutable artifact. Assembly is **pure** (no network,
+//!   filesystem, clock, credentials, or parameter values) and performs **no**
+//!   capacity/cost-fit check (that is bootstrap's, T0.5).
+//! - [`assembly::NodePolicy`] — the minimal C5 policy seam assembly reads
+//!   (durability, retention, retries, teardown, cost, class override); the full
+//!   C5 policy struct is T29's.
+//! - [`assembly::DurableOutput`] — the durable-output contract marker (C27 /
+//!   T0.8) whose presence assembly checks for a durable-marked node.
+//!
+//! The M1+ execution tickets land later; this crate grows one component at a
+//! time.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+pub mod assembly;
 pub mod binding;
 pub mod context;
 pub mod error;
@@ -95,6 +112,10 @@ pub mod flow;
 pub mod handle;
 pub mod task;
 
+pub use assembly::{
+    AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, FingerprintSlot,
+    NodePolicy, Problem, ProblemKind, Warning,
+};
 pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, ReceiveMode, RegisteredNode,
     Shared, TriggerRule, MAX_INPUT_ARITY,

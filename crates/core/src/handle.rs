@@ -119,6 +119,15 @@ impl NodeId {
         }
         Self(hash)
     }
+
+    /// The opaque inner value, exposed **crate-internally only** as a total,
+    /// stable sort key. Assembly (T14) sorts upstream-id lists by this to
+    /// deduplicate and count dependencies deterministically; it is not a public
+    /// route back to a name or a handle (identity stays opaque — C2).
+    #[must_use]
+    pub(crate) fn sort_key(self) -> u64 {
+        self.0
+    }
 }
 
 /// A typed claim on a value that does not exist yet (arch.md `### C2 · Handle`).
