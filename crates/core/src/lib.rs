@@ -119,6 +119,26 @@
 //!   node's value is exchanged for its handle once the run has ended; a released
 //!   value is not redeemable ([`slot::RedeemError`]).
 //!
+//! The **C11 readiness tracker** (ticket T18): the pure decision engine that
+//! decides what is eligible to run, and when.
+//!
+//! - [`readiness::ReadinessTracker`] — maintains a per-node remaining-dependency
+//!   countdown seeded from T14's precomputed counts; a
+//!   [`notify_terminal`](readiness::ReadinessTracker::notify_terminal) call
+//!   decrements every dependent and, once a node's countdown reaches zero (every
+//!   upstream terminal), evaluates its trigger rule — emitting the node as
+//!   [`Ready`](readiness::Decision::Ready) when the rule fires, or assigning a
+//!   [`PropagatedTerminal`](readiness::Decision::PropagatedTerminal) state without
+//!   executing when it can never fire (which itself cascades). It surfaces the
+//!   source frontier ([`initial_ready`](readiness::ReadinessTracker::initial_ready))
+//!   and a [`pending_count`](readiness::ReadinessTracker::pending_count) for T24's
+//!   "nothing pending" run-end signal. Pure: no spawning, scheduling, timing, or
+//!   event writing.
+//! - [`readiness::evaluate_rule`] — the pure rule-evaluation seam over all three
+//!   T0.4 rules (`all-succeeded`, `all-terminal`, `any-failed`); M1 wires the
+//!   `all-succeeded` path onto runtime nodes, leaving the other two reachable for
+//!   T34.
+//!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
 //!
@@ -131,6 +151,7 @@ pub mod context;
 pub mod error;
 pub mod flow;
 pub mod handle;
+pub mod readiness;
 pub mod slot;
 pub mod task;
 
@@ -150,6 +171,7 @@ pub use context::{
 pub use error::{TaskError, TaskErrorClass};
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
+pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
 pub use slot::{
     ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,
     SlotRef,

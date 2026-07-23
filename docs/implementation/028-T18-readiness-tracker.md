@@ -73,7 +73,61 @@ Each scenario is independently checkable and drives the tracker directly with sy
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None. (The ticket section says "None," and the `docs/tasks.md` T18 entry carries
+no `Q:` items — its text is descriptive.)
+
+### Implementation-seam resolutions (recorded during T18)
+Non-obvious seam choices the ticket and its governing ADRs sanction but leave to
+the implementer; recorded here so T24 (the run-loop driver that consumes the
+tracker) inherits them:
+
+- **`ReadinessTracker::new` takes both `&Pipeline` and `&AssemblyArtifact`.** T14's
+  `AssemblyArtifact` exposes the precomputed **remaining-dependency counts** (the
+  countdown seed C11 needs) and the topological order, but **not** the
+  dependents/edge structure — the tracker must decrement each *dependent* of a
+  terminated node, which requires the upstream→downstream adjacency the pipeline's
+  recorded `data_edges()` carry. Resolution: construction consumes the count from
+  the artifact (exactly as T14 precomputed it — the tracker recomputes nothing) and
+  reads the dependents map and per-node trigger rules from the immutable pipeline.
+  This keeps the graph shape fixed at assembly (no runtime graph mutation) and the
+  countdown *derived* from T14's precomputation, per the scope boundary.
+
+- **The propagated-terminal cascade is a work-queue inside one `notify_terminal`
+  call.** A can-never-fire node is assigned its propagated state *and* that
+  assignment is itself a terminal notification for its own dependents (C11 · DoD 6).
+  Resolution: `notify_terminal` runs a bounded work queue — a propagated terminal
+  is pushed back onto the queue so its dependents decrement in the *same* call,
+  with **no intervening execution** and no re-entrant driver round-trip. The
+  returned `Vec<Decision>` is the complete transitive set that notification
+  unlocked, so the driver acts on ready nodes and records propagated terminals
+  without having to re-drive the tracker.
+
+- **`evaluate_rule` is a free function, the seam's single evaluation point.** The
+  rule-evaluation seam is a pure `fn(TriggerRule, &[TerminalState]) -> RuleOutcome`
+  accepting **all three** T0.4 rules, so `all-terminal` and `any-failed` are
+  reachable without reshaping the tracker (their *runtime firing* is T34, C15). M1
+  wires only `all-succeeded` onto runtime nodes (the typestate — T11 — makes
+  non-default rules inexpressible on data-dependent nodes, and no ordering-only
+  non-default node exists until T50), but the seam does **not** hard-code
+  `all-succeeded`: the `all-terminal` (always fires) and `any-failed`
+  (fires-on-failure-like / else `skipped`) table entries are implemented and tested
+  through the same function.
+
+- **Propagated-state origin identity is the deciding upstream, by class.** A
+  propagated `upstream-failed` / `upstream-skipped` carries the **originating
+  node's identity** (Vocabulary; T0.4). Resolution: the origin is the
+  earliest-recorded upstream whose state-class matches the propagated state's class
+  (first failure-like for `upstream-failed`, first skip-like for
+  `upstream-skipped`, first stop-like for `cancelled`), falling back to the first
+  non-success upstream for the cross-class "otherwise" branch — deterministic and
+  never a fabricated foreign identity.
+
+- **A re-notified or already-decided node is a no-op.** A node's terminal state is
+  decided exactly once (Vocabulary; C11 · DoD 12). The driver must record a
+  propagated-terminal node's state and **not** run or re-notify it; if it does,
+  `notify_terminal` returns no decisions and the first terminal state stands. This
+  is the "exactly once" guard, stated so T24 does not double-drive a propagated
+  node.
 
 ## Out of scope
 - **The run-loop driver (T24):** admitting ready nodes, spawning attempts, feeding outcomes back, run-started/run-finished events, the bounded grace wait for zombie closures, and the "in flight" half of the run-end condition. This ticket only supplies the pure readiness decisions T24 drives; the tracker does not spawn or time anything.
