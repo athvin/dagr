@@ -39,7 +39,30 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket file, and `docs/tasks.md`'s T67 entry carries no `Q:` items.
+Two implementation decisions were resolved during authoring and are recorded here
+for traceability (neither moves a merged decision; both stay inside this ticket's
+tests-only scope):
+
+- **How the two runs are launched concurrently and made to overlap
+  deterministically.** `drive()` is a synchronous call that builds its own
+  isolated framework + task runtimes internally, so "concurrent" is realised by
+  spawning each `drive()` on its own `std::thread`, each with its own injected
+  `MemorySink` + `TickClock` and its own `RunConfig`. Genuine simultaneity (an
+  overlapping *write* window, not two sequential runs) is forced by a shared
+  `std::sync::Barrier` of width 2: a `gate` source task in each run rendezvouses
+  at it and blocks until both runs have arrived, so both are provably mid-run and
+  emitting attempt events at the same instant. This is synchronised on an
+  observable signal, never a sleep, and asserts nothing about which run wins —
+  avoiding the T35-style ordering-race flake — because partition-by-identity is
+  order-independent by design.
+- **Where directory disjointness is observed.** No production `LocalFileSink`
+  has shipped yet (the injected `EventSink` is the T0.6 §1 seam), so stream
+  *content* disjointness is asserted over each run's own in-memory sink bytes,
+  while on-disk *directory* disjointness is asserted against the real
+  `<base>/<pipeline>/<run-id>/` directories that `drive()` itself creates at
+  bootstrap (the per-run temp dir), enumerated after both runs complete. The two
+  are complementary halves of the C19 "disjoint files" guarantee.
 
 ## Out of scope
 - Any inter-process coordination, arbitration, cross-run locking, or capacity-sharing between simultaneous runs — the tool deliberately does not coordinate between processes (that "ends in building a scheduler"); pool-pinning to split machine capacity across runs is the operator's call via the C12 flag and belongs to admission-control tickets (T31/T32), not here.
