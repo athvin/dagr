@@ -1,0 +1,22 @@
+# Compile-failure snapshot for `ordering_edge_back_edge.rs` — ticket T0.9 (015).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# The two substrings are the stable, toolchain-pinned facets of the "no
+# after-the-fact edge API" guarantee: the error CODE `E0599` (no such method) and
+# the method name `add_ordering_edge` that the surface deliberately does not
+# provide. Both are stable v1 facets of "a back-edge cannot be added afterward."
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+E0599
+add_ordering_edge
