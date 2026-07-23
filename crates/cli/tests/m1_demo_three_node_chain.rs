@@ -428,13 +428,33 @@ fn run_demo() -> (Vec<u8>, RunOutcome) {
     // Assemble through the public assembly pass — an end user's `assemble()`.
     pipeline.assemble().expect("the demo pipeline assembles");
 
-    // TDD red: the per-node runners are not yet wired onto the plan, so the demo
-    // does not yet execute the chain. Driving an empty plan records only the
-    // run-boundary records, so every assertion about the three nodes' transitions
-    // and the retry fails — the failing-test-first state. The next commit wires
-    // the real runners (SourceRunner / RetryingRunner / SinkRunner) so the chain
-    // executes, the middle node retries, and the walker's assertions pass.
-    let runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+    // Output slots: source has one consumer (transform), transform one (sink),
+    // sink none.
+    let source_slot = slot_for::<u64>(SOURCE, 1);
+    let transform_slot = slot_for::<u64>(TRANSFORM, 1);
+    let sink_slot = slot_for::<u64>(SINK, 0);
+
+    let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+    runners.insert(
+        SOURCE.into(),
+        SourceRunner::boxed(SOURCE, Source { value: SEED }, Arc::clone(&source_slot)),
+    );
+    runners.insert(
+        TRANSFORM.into(),
+        RetryingRunner::boxed(
+            TRANSFORM,
+            FlakyTransform,
+            source_slot.shared_ref(),
+            Arc::clone(&transform_slot),
+            // Two attempts total (one retry), with a negligible backoff schedule —
+            // the wait future resolves immediately, so no wall-clock time passes.
+            RetryConfig::new(2, Backoff::new(Duration::ZERO, 2.0, Duration::ZERO)),
+        ),
+    );
+    runners.insert(
+        SINK.into(),
+        SinkRunner::boxed(SINK, Sink, transform_slot.shared_ref(), sink_slot),
+    );
 
     let sink = MemorySink::default();
     let report = drive(

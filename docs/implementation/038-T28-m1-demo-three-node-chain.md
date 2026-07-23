@@ -73,7 +73,41 @@ This ticket's concrete deliverables:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were listed. Two decisions surfaced while building the demo against the
+merged M1 stack, resolved here as prose (no new open question):
+
+- **The retry surfaces *two* `attempt-failed` records on the raw C19 stream, not
+  one.** The closed C19 event vocabulary has no dedicated `backoff` event, so the
+  T22 retry loop's backoff-phase marker (`AttemptEvent::BackoffStarted`, the named
+  interval that folds into the run artifact at C22/T42) is mapped by the run-loop
+  driver (T24, `write_attempt_event`) onto an `attempt-failed` record, exactly like
+  the genuine first-attempt failure. The middle node's ordered transition sequence
+  is therefore `node-ready → node-admitted → attempt-started → attempt-failed
+  (the real retryable failure) → attempt-failed (the backoff marker) → node-admitted
+  → attempt-started → attempt-succeeded → node-terminal(succeeded)`. The demo asserts
+  the **real** driver output honestly (two `attempt-failed`, two `attempt-started`,
+  one `attempt-succeeded`, one terminal) rather than an idealized single-failure
+  shape. This is existing merged behaviour, not a demo change — the demo does not
+  patch it.
+
+- **The middle node's input edge opts into clone-on-read.** Because `transform`
+  retries (its `NodePolicy` grants a retry), an *owned* input edge into it is an
+  assembly error (C1/C3/T0.2 — "an owned edge into a retrying node without
+  clone-on-read fails assembly"). The demo wires `source.clone_on_read()` into
+  `transform`, the honest authoring pattern for a node whose attempts must each see
+  a fresh input — exercising the public binding API as a user would, not working
+  around the check.
+
+**Coverage-matrix note (matrix contract / quality-gates §3):** T28 maps **no new**
+row in `docs/coverage-matrix.md`. It is the executable **M1 done-when** (arch.md
+Build order), an integration proof that composes the already-merged M1 pieces; the
+component criteria it exercises (C7, C8, C10, C11, C14, C19) are already mapped to
+their owning tickets' unit suites, and the M1 system-level facets (`SL1`–`SL7`) are
+already `unmapped`/deferred to their owning tickets (T64, T12, T27, T41, T62, T43,
+T61, T65) — none is `Covered-by T28`. The T65 acceptance gate is the ticket that
+folds this demo into the system-level matrix as the M1 done-when (T28 **blocks**
+T65). Mapping a row to this demo would double-map a criterion the verifier already
+binds elsewhere, so the honest action is no change, recorded here.
 
 ## Out of scope
 - **Any M2+ capability.** No admission control / memory pools (C12–C13), no failure-policy variants beyond what the linear chain needs (C15), no cancellation, grace periods, or `abandoned` state (C16). The middle node fails *retryably and recovers*; it does not exercise timeout or abandonment paths.
