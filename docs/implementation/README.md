@@ -62,7 +62,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 
 ## M2 — It survives
 
-- [ ] **039** · [T29 — C5: node policy](039-T29-node-policy.md) · M · feature — after T14, T22, T0.4, T0.5
+- [x] **039** · [T29 — C5: node policy](039-T29-node-policy.md) · M · feature — after T14, T22, T0.4, T0.5
 - [ ] **040** · [T30 — C9: resource registry](040-T30-resource-registry.md) · M · feature — after T16
 - [ ] **041** · [T31 — C12: admission pools and permit lifecycle](041-T31-admission-pools-and-permits.md) · M · feature — after T24, T29, T0.3
 - [ ] **042** · [T32 — C12: container limit detection](042-T32-container-limit-detection.md) · M · feature — after T31
