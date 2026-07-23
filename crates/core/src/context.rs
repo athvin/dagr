@@ -194,11 +194,7 @@ impl CancellationSignal {
     /// descends from has been cancelled — a run cancel reaches every attempt.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-            || self
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.is_cancelled())
+        self.flag.load(Ordering::SeqCst) || self.parent.as_ref().is_some_and(|p| p.is_cancelled())
     }
 }
 
@@ -259,11 +255,7 @@ impl CancellationSource {
     /// [`cancel`](Self::cancel) leaves this `true` with no further effect.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-            || self
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.is_cancelled())
+        self.flag.load(Ordering::SeqCst) || self.parent.as_ref().is_some_and(|p| p.is_cancelled())
     }
 
     /// The observe-only [`CancellationSignal`] this source drives — the one a

@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::{
-    drive, shutdown_budget, CancelHandle, NodeRunner, RunConfig, RunPlan,
-    DEFAULT_FINAL_FLUSH, DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE,
+    drive, shutdown_budget, CancelHandle, NodeRunner, RunConfig, RunPlan, DEFAULT_FINAL_FLUSH,
+    DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE,
 };
 use dagr_core::assembly::NodePolicy;
 use dagr_core::binding::TriggerRule;
@@ -339,7 +339,10 @@ fn child_cancel_does_not_touch_siblings_or_parent() {
     let b = run.child();
 
     a.cancel();
-    assert!(a.signal().is_cancelled(), "the cancelled child is cancelled");
+    assert!(
+        a.signal().is_cancelled(),
+        "the cancelled child is cancelled"
+    );
     assert!(
         !b.signal().is_cancelled(),
         "the sibling child stays uncancelled"
@@ -400,7 +403,10 @@ fn prompt_cooperative_observer_is_cancelled() {
         Some("cancelled"),
         "a prompt cooperative observer is recorded cancelled"
     );
-    assert_ne!(terminal_of(&sink.bytes(), "waiter").as_deref(), Some("failed"));
+    assert_ne!(
+        terminal_of(&sink.bytes(), "waiter").as_deref(),
+        Some("failed")
+    );
     assert_eq!(terminal_count(&sink.bytes(), "waiter"), 1);
     stream_is_complete_and_parseable(&sink.bytes());
     assert_eq!(report.outcome, RunOutcome::Cancelled);
@@ -477,7 +483,11 @@ fn non_returning_work_is_abandoned_after_grace_and_run_terminates() {
         "abandoned is the node's single terminal state (never a second)"
     );
     stream_is_complete_and_parseable(&sink.bytes());
-    assert_eq!(report.outcome, RunOutcome::Failed, "abandoned is failure-like");
+    assert_eq!(
+        report.outcome,
+        RunOutcome::Failed,
+        "abandoned is failure-like"
+    );
     // The drive returned without waiting indefinitely: it terminated in roughly the
     // grace window, far under any hang. A generous ceiling keeps CI non-flaky.
     assert!(
@@ -555,7 +565,11 @@ fn cancelled_abandoned_and_failed_are_distinct() {
         Some("abandoned")
     );
     for node in ["bad", "coop", "ignorer"] {
-        assert_eq!(terminal_count(&sink.bytes(), node), 1, "{node} decided once");
+        assert_eq!(
+            terminal_count(&sink.bytes(), node),
+            1,
+            "{node} decided once"
+        );
     }
     stream_is_complete_and_parseable(&sink.bytes());
 }
@@ -570,9 +584,10 @@ fn no_new_admission_after_cancellation() {
 
     let costed = || NodePolicy::new().working_memory(10);
     let mut flow = Flow::new();
-    // `trigger` fires cancellation the moment it runs; `later` is a costed
-    // default-rule node that has not yet been admitted (pool serialized to one).
-    let _tr = flow.register_source_with("trigger", &Succeeds, costed());
+    // `a_trigger` fires cancellation the moment it runs; `later` is a costed
+    // default-rule node that has not yet been admitted (pool serialized to one, and
+    // the trigger sorts first so it is admitted before `later`).
+    let _tr = flow.register_source_with("a_trigger", &Succeeds, costed());
     let _later = flow.register_source_with("later", &Succeeds, costed());
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
@@ -584,13 +599,13 @@ fn no_new_admission_after_cancellation() {
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
-        "trigger".into(),
+        "a_trigger".into(),
         SourceRunner::boxed(
-            "trigger",
+            "a_trigger",
             FiresCancel {
                 handle: handle.clone(),
             },
-            slot_for::<u64>("trigger", 0),
+            slot_for::<u64>("a_trigger", 0),
         ),
     );
     runners.insert(
@@ -614,7 +629,11 @@ fn no_new_admission_after_cancellation() {
         "a ready-but-unstarted node is settled cancelled, not executed, after cancellation"
     );
     assert!(
-        !has_event(&parse_events(&sink.bytes()), "attempt-started", Some("later")),
+        !has_event(
+            &parse_events(&sink.bytes()),
+            "attempt-started",
+            Some("later")
+        ),
         "no new attempt is spawned after cancellation"
     );
     stream_is_complete_and_parseable(&sink.bytes());
@@ -736,10 +755,22 @@ fn shutdown_budget_is_grace_plus_teardown_plus_flush_and_reflects_flags() {
 
     // The printed line shows the arithmetic and the total.
     let line = budget.to_string();
-    assert!(line.contains("27"), "the printed budget shows the total: {line}");
-    assert!(line.contains("10"), "the printed budget shows the grace: {line}");
-    assert!(line.contains("15"), "the printed budget shows the teardown: {line}");
-    assert!(line.contains('2'), "the printed budget shows the flush: {line}");
+    assert!(
+        line.contains("27"),
+        "the printed budget shows the total: {line}"
+    );
+    assert!(
+        line.contains("10"),
+        "the printed budget shows the grace: {line}"
+    );
+    assert!(
+        line.contains("15"),
+        "the printed budget shows the teardown: {line}"
+    );
+    assert!(
+        line.contains('2'),
+        "the printed budget shows the flush: {line}"
+    );
 
     // Overriding grace changes the total accordingly.
     let overridden = shutdown_budget(Duration::from_secs(5), DEFAULT_TEARDOWN_DEADLINE);
@@ -781,8 +812,17 @@ fn non_cancelled_run_is_unchanged() {
         TickClock::default(),
     );
     assert_eq!(report.outcome, RunOutcome::Succeeded);
-    assert_eq!(report.cancellation_origin, None, "no cancellation, no origin");
-    assert_eq!(terminal_of(&sink.bytes(), "a").as_deref(), Some("succeeded"));
-    assert_eq!(terminal_of(&sink.bytes(), "b").as_deref(), Some("succeeded"));
+    assert_eq!(
+        report.cancellation_origin, None,
+        "no cancellation, no origin"
+    );
+    assert_eq!(
+        terminal_of(&sink.bytes(), "a").as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(
+        terminal_of(&sink.bytes(), "b").as_deref(),
+        Some("succeeded")
+    );
     stream_is_complete_and_parseable(&sink.bytes());
 }
