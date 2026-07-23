@@ -61,7 +61,37 @@ Each scenario uses a rig with pinned pool capacities and a ledger observer. Unle
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were listed in the ticket or its `docs/tasks.md` T37 entry. Two implementation
+decisions with no contested default are recorded here for the reviewer:
+
+- **Test level — the merged ledger + timeout/residency seams, not a fresh
+  driver-level abandonment run.** The matrix is the *permit-ledger release rule*
+  per outcome × class (arch.md C12 "Permits are released on … each verified by a
+  test that induces that specific outcome"). The honesty invariant lives in the
+  C12 ledger (`AdmissionController`, `Permit::drop`, `mark_zombie`, the
+  `ResidencyLedger` slot lease) composed with the real T21 `TimeoutDecision` /
+  `LateResultBarrier` / `ZombieObserver` mark and the T23/T35 outcome taxonomy. The
+  suite drives exactly those merged pieces (`crates/core/tests/permit_release_matrix.rs`),
+  which keeps every sample at a point the test controls — the load-bearing T0.3
+  trick makes "the closure returned" *definitionally* "the permit was dropped", so
+  a still-running blocking/compute closure is modelled by holding the permit guard
+  behind an explicit gate. The driver-level abandonment-past-grace path is already
+  covered end-to-end by T35 (`crates/cli/tests/cancellation_core_and_drain.rs`); T37
+  is the ledger-honesty matrix that T31 (041) explicitly deferred, not a second copy
+  of T35's drive loop.
+- **The abandonment cell is blocking/compute-only.** An await-bound attempt's
+  future is droppable, so cancellation drops it and releases immediately — there is
+  no unkillable thread to leave behind (arch.md C14 / T0.3 ADR §1). The matrix is
+  therefore not a full Cartesian product: the `abandoned` HELD cell exists only for
+  Blocking and Compute, which the headline test and the focused abandonment test
+  both encode.
+
+Non-vacuity was proven by temporarily neutering the ledger's `Inner::release`
+(`crates/core/src/admission.rs`) to a no-op: 11 of the 12 matrix tests went red on
+the `counted(pool) == 0` no-leak assertion (only the pure event/taxonomy test,
+which touches no ledger, stayed green), then the one-line probe was reverted (the
+production file's `git diff` is empty). A skipped or too-early release makes the
+matrix fail.
 
 ## Out of scope
 - Implementing or changing the permit lifecycle, the per-class timeout, panic containment, or the cancellation machinery — those land in T31, T21, T23, and T35 respectively; this ticket only *tests* their composed behaviour and may only fix defects the tests surface in the honesty invariant.
