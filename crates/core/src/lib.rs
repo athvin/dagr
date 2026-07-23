@@ -139,6 +139,31 @@
 //!   `all-succeeded` path onto runtime nodes, leaving the other two reachable for
 //!   T34.
 //!
+//! The **C14 single-attempt execution core** (ticket T20): the load-bearing
+//! spine of the attempt runner — running *one* attempt of *one* node.
+//!
+//! - [`execution::run_attempt`] — the runtime-agnostic `async fn` that opens the
+//!   attempt span (already on the [`RunContext`]), records
+//!   the admission phase marker, dispatches the already-placed
+//!   [`Task::run`](task::Task) work and awaits it, classifies the outcome
+//!   into the normative taxonomy, fills the [`Slot`](slot::Slot<T>) (C10) on
+//!   success only, and emits the ordered per-transition events plus exactly one
+//!   attempt-outcome record. It adds no async-runtime dependency (the caller's
+//!   runtime drives it; execution-class placement is C13 / T33).
+//! - [`execution::AttemptOutcome`] — the classified single-attempt outcome
+//!   (success / permanent failure / retry-eligible failure / deliberate skip),
+//!   a `#[non_exhaustive]` enum whose rustdoc reserves the timeout (T21) and
+//!   panic (T23) variants those tickets add without reshaping it.
+//! - [`execution::AttemptEventSink`] / [`execution::AttemptEvent`] — the
+//!   abstract C19 event-emission port the runner writes through, so `dagr-core`
+//!   emits events without depending on `dagr-artifact`'s writer (workspace ADR
+//!   T1 / the C24 boundary). The run-loop driver (T24) adapts the concrete
+//!   `EventStreamWriter` to this port.
+//!
+//! Retry (T22), per-attempt timeout (T21), panic containment (T23),
+//! execution-class dispatch (T33), and the run-loop driver (T24) build on this
+//! core rather than reshape it.
+//!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
 //!
@@ -149,6 +174,7 @@ pub mod assembly;
 pub mod binding;
 pub mod context;
 pub mod error;
+pub mod execution;
 pub mod flow;
 pub mod handle;
 pub mod readiness;
@@ -169,6 +195,7 @@ pub use context::{
     RunId, ScratchError, ScratchStore, TerminalState,
 };
 pub use error::{TaskError, TaskErrorClass};
+pub use execution::{run_attempt, AttemptEvent, AttemptEventSink, AttemptOutcome};
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
 pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};

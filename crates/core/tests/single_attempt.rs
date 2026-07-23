@@ -176,10 +176,10 @@ fn futures_lite_block_on<F: std::future::Future>(fut: F) -> F::Output {
     let mut cx = Context::from_waker(&waker);
     let mut fut = pin!(fut);
     loop {
-        match fut.as_mut().poll(&mut cx) {
-            Poll::Ready(out) => return out,
-            // The attempt future resolves on the next poll (no real suspension).
-            Poll::Pending => continue,
+        // The attempt future resolves on the next poll (no real suspension), so
+        // a bare busy-poll loop drives it to completion.
+        if let Poll::Ready(out) = fut.as_mut().poll(&mut cx) {
+            return out;
         }
     }
 }
@@ -209,7 +209,10 @@ fn successful_attempt_fills_the_slot() {
         &mut sink,
     );
 
-    assert!(matches!(outcome, AttemptOutcome::Succeeded), "classifies success");
+    assert!(
+        matches!(outcome, AttemptOutcome::Succeeded),
+        "classifies success"
+    );
     assert!(slot.is_filled(), "slot filled after a successful run");
     assert_eq!(
         *slot.shared_ref().read(),
@@ -226,7 +229,10 @@ fn successful_attempt_fills_the_slot() {
         .iter()
         .position(|e| matches!(e, AttemptEvent::AttemptSucceeded { .. }))
         .expect("attempt-succeeded present");
-    assert!(started < succeeded, "attempt-started precedes attempt-succeeded");
+    assert!(
+        started < succeeded,
+        "attempt-started precedes attempt-succeeded"
+    );
 }
 
 /// Exactly one attempt-outcome record on success, carrying run/node/attempt
@@ -248,7 +254,11 @@ fn exactly_one_attempt_outcome_record_on_success() {
         &mut sink,
     );
 
-    assert_eq!(sink.attempt_outcome_count(), 1, "exactly one outcome record");
+    assert_eq!(
+        sink.attempt_outcome_count(),
+        1,
+        "exactly one outcome record"
+    );
     let outcome_rec = sink
         .events()
         .into_iter()
@@ -289,7 +299,11 @@ fn permanent_failure_does_not_fill_the_slot() {
         .position(|e| matches!(e, AttemptEvent::AttemptFailed { .. }))
         .expect("attempt-failed present");
     assert!(started < failed, "started precedes failed");
-    assert_eq!(sink.attempt_outcome_count(), 1, "exactly one outcome record");
+    assert_eq!(
+        sink.attempt_outcome_count(),
+        1,
+        "exactly one outcome record"
+    );
 }
 
 /// A permanent error is NEVER classified retry-eligible (C14: a permanent error
@@ -329,9 +343,16 @@ fn retry_eligible_failure_is_classified_distinctly() {
         matches!(outcome, AttemptOutcome::RetryEligibleFailure),
         "classifies retry-eligible, distinct from permanent"
     );
-    assert!(outcome.is_retry_eligible(), "retry driver (T22) can act on it");
+    assert!(
+        outcome.is_retry_eligible(),
+        "retry driver (T22) can act on it"
+    );
     assert!(!slot.is_filled(), "slot stays empty");
-    assert_eq!(sink.attempt_outcome_count(), 1, "exactly one outcome record");
+    assert_eq!(
+        sink.attempt_outcome_count(),
+        1,
+        "exactly one outcome record"
+    );
     // Distinct from the permanent classification.
     assert!(!matches!(outcome, AttemptOutcome::PermanentFailure));
 }
@@ -346,12 +367,19 @@ fn deliberate_skip_is_classified_as_originated_skip() {
 
     let outcome = drive(DecidesToSkip, &ctx, &slot, &mut sink);
 
-    assert!(matches!(outcome, AttemptOutcome::Skipped), "classifies skip");
+    assert!(
+        matches!(outcome, AttemptOutcome::Skipped),
+        "classifies skip"
+    );
     assert!(!outcome.is_success(), "distinct from success");
     assert!(!outcome.is_failure(), "distinct from failure");
     assert_eq!(outcome.terminal_state(), TerminalState::Skipped);
     assert!(!slot.is_filled(), "slot stays empty on skip");
-    assert_eq!(sink.attempt_outcome_count(), 1, "exactly one outcome record");
+    assert_eq!(
+        sink.attempt_outcome_count(),
+        1,
+        "exactly one outcome record"
+    );
 }
 
 /// Every reachable outcome yields exactly one attempt-outcome record — never
@@ -575,7 +603,10 @@ fn runnable_in_isolation_with_no_runtime() {
         &mut sink,
     );
     assert!(matches!(outcome, AttemptOutcome::Succeeded));
-    assert!(!sink.events().is_empty(), "events were emitted with no runtime");
+    assert!(
+        !sink.events().is_empty(),
+        "events were emitted with no runtime"
+    );
 }
 
 /// The span opens before the work runs: the work observes the attempt span
