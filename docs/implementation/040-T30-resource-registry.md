@@ -50,7 +50,34 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were carried by the ticket or the T30 entry in `docs/tasks.md`. Resolutions
+of design choices the ticket left to the implementer, recorded here per process:
+
+- **Where the bootstrap-failure artifact lives.** The C24 boundary keeps
+  `dagr-core` dependency-free (it must not depend on `dagr-artifact`), and
+  bootstrap validation runs in core (it validates a registry against
+  `ResourceRequirements`, both core types). The bootstrap-failure "artifact" is
+  therefore produced as a **core-side value type** —
+  `dagr_core::context::BootstrapFailure` with a `BootstrapOutcome::BootstrapFailed`
+  outcome, the missing-resource error list, and `attempts_recorded() == 0` —
+  distinct from the assembly-failure path. The `dagr-artifact` `RunOutcome` wire
+  enum is **not** modified here; rendering this outcome onto the event stream is
+  C20/C22's job (Out of scope), so no cross-crate coupling was added.
+- **How "name every node requiring it" is expressed.** `NodeId` is an opaque
+  identity token (C2) with no route back to a name. The bootstrap error carries
+  the requiring nodes as the **exact set of `NodeId`s** that declared the
+  requirement (deduped, in declaration order); the covering test asserts the set
+  by identity. An operator-facing name-rendering step, if wanted, is a rendering
+  concern (C20), not this validation step's.
+- **Requirement declarations are validated as a supplied collection**, not wired
+  into `Flow`/`PipelineNode` registration. Coupling requirement declaration into
+  the flow builder would exceed "surface declared requirements" and steal T14/T13
+  scope; the bootstrap step (a later ticket) feeds the `(NodeId,
+  ResourceRequirements)` collection this ticket validates and surfaces.
+- **Fake substitution needs no new "fake" type.** Because the registry is
+  type-keyed, a fake is simply a differently-constructed value of the same
+  resource type; a test builds a registry containing it and hands it to the
+  context via `RunContext::builder(..).resources(..)` with no change to task code.
 
 ## Out of scope
 - Rendering the graph artifact or the run/bootstrap-failure artifact itself — this ticket only surfaces declared requirements and asserts the bootstrap-failure artifact is produced; artifact schema and emission are C20/C22 work.

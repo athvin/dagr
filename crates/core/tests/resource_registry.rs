@@ -127,13 +127,13 @@ fn duplicate_same_type_registration_is_rejected_as_ambiguous() {
         })
         .expect_err("a second DbPool of the identical type is ambiguous");
 
-    match err {
-        RegistryError::Duplicate { type_name } => {
-            assert!(
-                type_name.contains("DbPool"),
-                "the ambiguity error names the offending type, got {type_name}"
-            );
-        }
+    if let RegistryError::Duplicate { type_name } = &err {
+        assert!(
+            type_name.contains("DbPool"),
+            "the ambiguity error names the offending type, got {type_name}"
+        );
+    } else {
+        panic!("expected a Duplicate ambiguity error, got {err:?}");
     }
 }
 
@@ -152,7 +152,10 @@ fn a_rejected_duplicate_does_not_replace_the_first() {
     // Attempting the duplicate returns an error and yields no builder — so the
     // only registry the caller can build is the one holding the first value.
     let registry = builder.build();
-    assert_eq!(registry.get::<DbPool>().map(|p| p.dsn.as_str()), Some("first"));
+    assert_eq!(
+        registry.get::<DbPool>().map(|p| p.dsn.as_str()),
+        Some("first")
+    );
 }
 
 // === Newtype disambiguation ================================================
@@ -174,7 +177,9 @@ fn newtype_wrappers_disambiguate_two_same_typed_resources() {
         .expect("AnalyticsClient is a distinct type despite the shared inner type")
         .build();
 
-    let billing = registry.get::<BillingClient>().expect("billing retrievable");
+    let billing = registry
+        .get::<BillingClient>()
+        .expect("billing retrievable");
     let analytics = registry
         .get::<AnalyticsClient>()
         .expect("analytics retrievable");
@@ -204,8 +209,14 @@ fn a_built_registry_is_shared_read_only() {
     // there is no mutation path).
     let a = registry.clone();
     let b = registry.clone();
-    assert_eq!(a.get::<ObjectStore>().map(|s| s.bucket.as_str()), Some("shared"));
-    assert_eq!(b.get::<ObjectStore>().map(|s| s.bucket.as_str()), Some("shared"));
+    assert_eq!(
+        a.get::<ObjectStore>().map(|s| s.bucket.as_str()),
+        Some("shared")
+    );
+    assert_eq!(
+        b.get::<ObjectStore>().map(|s| s.bucket.as_str()),
+        Some("shared")
+    );
 }
 
 // === Backward-compat with T16 ==============================================
