@@ -1,0 +1,58 @@
+# cargo-deny configuration — dagr's supply-chain gate (ticket T7 / 006).
+#
+# arch.md "Stability": Supply chain — "`cargo audit` and `cargo deny` (licenses,
+# sources, advisories) run in CI." This file is `cargo deny`'s target; `cargo
+# audit` reads the advisory DB directly and needs no config here. The license
+# policy is the one recorded in docs/lint-policy.md: dagr is licensed MIT
+# (LICENSE carries `SPDX-License-Identifier: MIT`), and every workspace crate
+# declares `license = "MIT"`, so the allow-list target is exactly MIT.
+#
+# Schema note: written for cargo-deny 0.2 config (the format shipped by
+# cargo-deny 0.16+). `cargo deny check` covers advisories, licenses, bans, and
+# sources by default; each section below is explicit so the gate is legible.
+
+# --- Advisories: RustSec advisory DB (the `cargo deny` half of the advisory
+# gate; `cargo audit` is the other half in CI) --------------------------------
+[advisories]
+# Fail on any security vulnerability or unmaintained/unsound advisory. With an
+# empty dependency tree (the workspace is a skeleton) there is nothing to flag;
+# this posture stays correct as real dependencies land and is reviewed then.
+version = 2
+yanked = "deny"
+ignore = []
+
+# --- Licenses: MIT-only, per docs/lint-policy.md -----------------------------
+[licenses]
+version = 2
+# The single allowed license (docs/lint-policy.md "Supply chain: license
+# metadata"). Every shipped crate resolves to this SPDX identifier. Additions to
+# this allow-list are reviewed as a supply-chain policy decision (arch.md
+# "Stability": additions to the core dependency/lint set are reviewed).
+allow = ["MIT"]
+# A crate whose declared license does not resolve to an SPDX id in `allow`
+# fails; this confidence threshold keeps that resolution strict.
+confidence-threshold = 0.8
+
+# --- Bans: no explicit bans yet; the empty core dependency set is the real
+# control (arch.md "Stability": minimal, review-gated core deps) --------------
+[bans]
+multiple-versions = "warn"
+# Wildcards at WARN, not DENY. The four workspace crates depend on each other by
+# `path` with no version (dagr-cli → core/artifact/render; dagr-render →
+# artifact), which cargo-deny reports as wildcard dependencies. cargo-deny's
+# `allow-wildcard-paths` exemption applies only to crates marked `publish =
+# false`, and the crate manifests are owned by T1 (not this ticket), so rather
+# than reach into them we keep this at WARN: the check stays *live* (a real
+# external `foo = "*"` requirement is surfaced) without failing the build on the
+# expected in-tree path edges. The license gate below — the one the ticket's
+# "check is live" test exercises — remains at full DENY strength.
+wildcards = "warn"
+allow = []
+deny = []
+
+# --- Sources: only crates.io and the project's own git remote ----------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
