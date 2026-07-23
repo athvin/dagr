@@ -58,7 +58,55 @@ Setup: empty environment (scenario 5 conditions). Action: assemble the fixture t
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-- Mechanical proof of no-filesystem/no-network — sandboxing, syscall audit, or review convention? Resolve in this ticket's decision record: pick the mechanism, state why (portability across the CI matrix, signal strength, maintenance cost), and note what it does and does not catch. The graph-artifact tests (T40) and the criteria-matrix CI job (referenced by tasks.md, structural-determinism check) will reuse this convention, so the choice must be reusable, not one-off.
+
+**Resolved — Mechanical proof of no-filesystem/no-network (decision record).**
+
+Question: sandboxing, syscall audit, or review convention?
+
+**Decision: a std-only, in-process *structural* proof — a scrubbed-environment
+child process plus a negative control — not an OS sandbox and not a syscall
+auditor.** The tests live in `crates/core/tests/determinism_and_purity.rs`, whose
+module docstring carries the same record at the point of use.
+
+Mechanism:
+- Assembly's *entire* input is an owned, in-memory `&Pipeline`, and the
+  `AssemblyArtifact` surface exposes no filesystem / network / clock / parameter
+  accessor. Purity is therefore a **structural** fact of the type surface, not a
+  runtime convention. `dagr-core` is a deliberately dependency-free, review-gated
+  crate (arch.md "Stability"), so the boundary is also enforced by review of that
+  crate's (empty) dependency set.
+- We enforce it mechanically with (1) a **child process** launched with a
+  **cleared environment** (`std::process::Command::env_clear`) and an **empty
+  working directory** (a fresh temp dir with no config files present), which
+  assembles the fixture and must still succeed and write nothing; and (2) a
+  **negative control** — a throwaway "assembler" that *does* touch the filesystem
+  — proving the empty-working-directory guard bites (it detects the stray write).
+  The combined empty-environment determinism test runs *both* assemblies inside
+  one scrubbed child and compares bytes, which is the exact CI/PR condition C20
+  relies on.
+
+Why this and not the alternatives:
+- **Not an OS sandbox** (seccomp / landlock / `birdcage` / `extrasafe`): Linux-only
+  (does not cover the macOS CI tier that T70 wires up), and it would pull a
+  dependency into the review-gated, dependency-free `dagr-core` crate. A non-
+  portable, dependency-heavy, one-off mechanism is exactly what this choice must
+  avoid, because T40 (graph artifact) and the criteria-matrix structural-
+  determinism job reuse this convention.
+- **Not a syscall auditor** (strace / dtrace): OS-specific, cannot run in process,
+  and is not available uniformly across the CI matrix.
+
+Portability / signal / maintenance: the chosen mechanism is std-only (runs
+identically on every CI OS), gives a real, non-vacuous signal (the negative
+control demonstrates the guard bites), and has near-zero maintenance cost (no
+external tooling, no per-OS branches). It is reusable by T40 and the criteria-
+matrix CI job as required.
+
+What it catches / does not: it catches assembly gaining any dependency on an
+environment variable, a config file at a conventional path, or a network endpoint
+reachable only outside the scrub. It does **not** intercept an arbitrary raw
+syscall issued mid-assembly (no sandbox does that portably); that residual is
+covered by the structural argument above and by review of the dependency-free
+`dagr-core` crate.
 
 ## Out of scope
 - Any change to assembly validation or precomputation itself — that is T14, already landed; this ticket is tests only.
