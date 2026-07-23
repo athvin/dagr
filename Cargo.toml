@@ -1,0 +1,60 @@
+# dagr — Cargo workspace.
+#
+# Topology decided by the ADR embedded in ticket 003 (T1),
+# docs/implementation/003-T1-crate-layout-and-workspace-skeleton.md: a
+# multi-crate workspace (not a single facade crate) with a separable renderer,
+# because C24 requires that rendering consume artifacts only and need no access
+# to the binary that produced them — a guarantee that is *structural* (a
+# missing crate-graph edge) only when the crates are separate.
+#
+# Dependency direction (enforced by these manifests, checked by
+# scripts/check-workspace-skeleton.sh):
+#   cli      -> core, artifact, render     (the pipeline binary; the one place
+#                                           the live pipeline and rendering meet)
+#   render   -> artifact                    (renderers consume artifacts only; C24)
+#   core     -> (none)                      (the live-pipeline surface; minimal,
+#                                           review-gated dependency set — Stability)
+#   artifact -> (none)                      (the C24 consumption boundary)
+# render has NO edge onto core, so it is structurally incapable of reaching the
+# pipeline binary (C24). See the ADR for the full rationale.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/artifact",
+    "crates/render",
+    "crates/cli",
+]
+
+# Shared package metadata inherited by every member via `package.<field>.workspace
+# = true`. rust-version pins the MSRV at the workspace level (arch.md
+# "Stability": MSRV pinned in the workspace) and MUST match the channel in
+# rust-toolchain.toml and the "MSRV" line in the README verbatim; bumping it is
+# a minor version bump that updates all three together.
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.95.0"
+license = "MIT"
+repository = "https://github.com/athvin/dagr"
+authors = ["dagr contributors"]
+
+# Workspace-wide lint policy. Copied verbatim from lints.toml (authored by
+# T0.0a as the single source of truth); the human-readable rationale and the
+# per-`allow` justification table live in docs/lint-policy.md. Every member
+# opts in with `[lints] workspace = true`, so the policy is applied from one
+# place. T7 enforces it in CI (clippy -D warnings, rustdoc -D warnings).
+[workspace.lints.rust]
+warnings = "deny"
+missing_docs = "warn"
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"

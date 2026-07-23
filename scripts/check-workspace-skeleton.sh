@@ -85,17 +85,17 @@ done
 # on artifact only; no dependency edge onto core exists.)
 render_manifest="crates/render/Cargo.toml"
 if [ -f "$render_manifest" ]; then
-  if grep -qE '^\s*artifact\b' "$render_manifest"; then
-    pass "render: depends on artifact (C24 artifact-only consumption)"
+  if grep -qE '^[[:space:]]*dagr-artifact[[:space:]]*=' "$render_manifest"; then
+    pass "render: depends on dagr-artifact (C24 artifact-only consumption)"
   else
-    bad "render: does not depend on artifact"
+    bad "render: does not depend on dagr-artifact"
   fi
   # No dependency edge onto core: rendering requires no access to the pipeline
   # binary (C24). This is the structural half of the throwaway-edit test.
-  if grep -qE '^\s*core\b' "$render_manifest"; then
-    bad "render: has a dependency edge onto core (violates C24 renderer independence)"
+  if grep -qE '^[[:space:]]*dagr-core[[:space:]]*=' "$render_manifest"; then
+    bad "render: has a dependency edge onto dagr-core (violates C24 renderer independence)"
   else
-    pass "render: has NO dependency edge onto core (C24: no access to pipeline binary)"
+    pass "render: has NO dependency edge onto dagr-core (C24: no access to pipeline binary)"
   fi
 fi
 
@@ -132,11 +132,11 @@ fi
 # name the same version.)
 pinned=""
 if [ -f rust-toolchain.toml ]; then
-  pinned=$(grep -E '^\s*channel\s*=' rust-toolchain.toml \
-           | head -1 | sed -E 's/.*=\s*"?([^"#]+)"?.*/\1/' | tr -d '[:space:]')
+  pinned=$(grep -E '^[[:space:]]*channel[[:space:]]*=' rust-toolchain.toml \
+           | head -1 | sed -E 's/.*=[[:space:]]*"?([^"#]+)"?.*/\1/' | tr -d '[:space:]')
 fi
 # The workspace manifest pins rust-version to the same MSRV (workspace level).
-if [ -n "$pinned" ] && grep -qE "rust-version\s*=\s*\"$pinned\"" "$manifest" 2>/dev/null; then
+if [ -n "$pinned" ] && grep -qE "rust-version[[:space:]]*=[[:space:]]*\"$pinned\"" "$manifest" 2>/dev/null; then
   pass "MSRV: workspace [workspace.package].rust-version matches toolchain '$pinned'"
 else
   bad "MSRV: workspace rust-version does not match pinned toolchain '$pinned'"

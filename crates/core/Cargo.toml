@@ -1,0 +1,28 @@
+# dagr-core — the execution core (the live pipeline surface).
+#
+# Role (per the T1 ADR): holds the authoring surface and execution core — the
+# code that *is* the running pipeline. This is the crate whose dependency set
+# arch.md "Stability" commits to keeping minimal and review-gated; it is empty
+# here (a skeleton) and every future addition is an API decision.
+#
+# Dependency direction: core depends on nothing in the workspace. render must
+# never gain a dependency edge onto core (C24). The domain types, task/handle
+# APIs, assembly, and runtime land in later tickets (T9, T13, T14, T2, …); this
+# crate is a placeholder lib only.
+[package]
+name = "dagr-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_core"
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

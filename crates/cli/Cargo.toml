@@ -1,0 +1,36 @@
+# dagr-cli — the pipeline binary and its command-line contract.
+#
+# Role (per the T1 ADR): hosts the standard verbs every pipeline binary shares
+# (graph, validate, render, run, single-node, resume, fold, prune — arch.md
+# C26) and the typed-parameter plumbing around them. This is the one crate where
+# the live pipeline (core), the artifacts (artifact), and rendering (render)
+# meet: `render` here is invoked as the pipeline binary's `render` *subcommand*,
+# which still consumes artifacts only, so it does not weaken C24.
+#
+# Dependency direction: cli may depend on core, artifact, and render. Nothing
+# depends on cli. The CLI verb logic lands in later tickets (T55, T56); this
+# crate is a placeholder lib plus a placeholder bin only.
+[package]
+name = "dagr-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dagr"
+path = "src/main.rs"
+
+[dependencies]
+dagr-core = { path = "../core" }
+dagr-artifact = { path = "../artifact" }
+dagr-render = { path = "../render" }
+
+[lints]
+workspace = true

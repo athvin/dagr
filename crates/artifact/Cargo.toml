@@ -1,0 +1,30 @@
+# dagr-artifact — the artifact types and the C24 consumption boundary.
+#
+# Role (per the T1 ADR): defines the graph artifact and run artifact — the
+# serializable, self-contained records a run leaves behind (arch.md C20, C22) —
+# and the event-record shapes derived into them (C19). It is the *only* thing a
+# renderer is allowed to see, which is what makes "rendering requires no access
+# to the pipeline binary" (C24) a structural fact rather than a convention.
+#
+# Dependency direction: artifact depends on nothing in the workspace. Both core
+# (which produces artifacts) and render (which consumes them) may depend on
+# artifact; artifact depends on neither, so it stays a clean shared boundary.
+# The serialization format, schemas, and concrete artifact types land in later
+# tickets (T4, T39, T40, T42); this crate is a placeholder lib only.
+[package]
+name = "dagr-artifact"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_artifact"
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints]
+workspace = true

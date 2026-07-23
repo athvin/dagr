@@ -1,0 +1,41 @@
+# dagr-render — the renderer (library + standalone binary).
+#
+# Role (per the T1 ADR): turns a graph artifact (optionally overlaid with a run
+# artifact) into diagram source — Graphviz DOT and Mermaid (arch.md C24). It is
+# a *library* first, so the same rendering can be driven both from the pipeline
+# binary's `render` subcommand (hosted in cli) and from the standalone renderer
+# binary declared here.
+#
+# Renderer independence (C24) — this is the structural half of the ticket:
+#   * render depends on `dagr-artifact` ONLY.
+#   * render has NO dependency edge onto `dagr-core`. It therefore *cannot*
+#     reference a live-pipeline type — the edge does not exist to be used — so
+#     "rendering requires no access to the binary that produced the artifacts"
+#     is enforced by the crate graph, not by discipline.
+# The standalone `bin` target below proves the renderer builds and links with no
+# access to core or cli. DOT/Mermaid emission and golden-file tests are C24's
+# own implementation ticket (T46/T47), out of scope here; this is a placeholder.
+[package]
+name = "dagr-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_render"
+path = "src/lib.rs"
+
+# Standalone renderer binary. Its existence and its ability to build without any
+# edge onto core or cli is the ADR-mandated proof of C24 renderer independence.
+[[bin]]
+name = "dagr-render"
+path = "src/main.rs"
+
+[dependencies]
+dagr-artifact = { path = "../artifact" }
+
+[lints]
+workspace = true
