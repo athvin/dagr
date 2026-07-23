@@ -113,8 +113,10 @@ fn propagated(decisions: &[Decision], name: &str) -> Option<(TerminalState, Node
 fn diamond() -> Pipeline {
     let mut flow = Flow::new();
     let s = flow.register_source("source", &MakeRows);
-    let a: Handle<Report> = flow.register("mid-a", &FromRows, s);
-    let b: Handle<Report> = flow.register("mid-b", &FromRows, s);
+    // `source` fans out to two consumers, so each edge takes shared read access
+    // (an owned multi-consumer demand fails assembly — C1 ownership of inputs).
+    let a: Handle<Report> = flow.register("mid-a", &FromRows, s.shared());
+    let b: Handle<Report> = flow.register("mid-b", &FromRows, s.shared());
     let _j: Handle<Report> = flow.register("sink", &JoinTwo, (a, b));
     flow.finish()
 }
@@ -145,7 +147,7 @@ impl Task for MakeReport {
 // ===========================================================================
 
 /// Countdown seeds from T14's precomputed dependency counts; sources appear in
-/// the initial-ready frontier; nothing else is ready yet. (C11 · DoD line 1, 8.)
+/// the initial-ready frontier; nothing else is ready yet. (C11 · def-of-done line 1, 8.)
 #[test]
 fn countdown_seeds_from_precomputed_dependency_counts() {
     let pipeline = diamond();
@@ -163,7 +165,7 @@ fn countdown_seeds_from_precomputed_dependency_counts() {
 }
 
 /// Source nodes are ready without any notification: two independent sources are
-/// both in the initial frontier and the sink is not. (C11 · DoD line 8.)
+/// both in the initial frontier and the sink is not. (C11 · def-of-done line 8.)
 #[test]
 fn source_nodes_are_ready_without_any_notification() {
     let pipeline = join_of_two();
@@ -182,7 +184,7 @@ fn source_nodes_are_ready_without_any_notification() {
 // ===========================================================================
 
 /// Notifying the source `succeeded` decrements exactly its dependents (both
-/// middles → ready) and nothing else; the source becomes decided. (C11 · DoD 1,3.)
+/// middles → ready) and nothing else; the source becomes decided. (C11 · def-of-done 1,3.)
 #[test]
 fn decrement_on_terminal_unlocks_the_exact_dependents() {
     let pipeline = diamond();
@@ -193,7 +195,10 @@ fn decrement_on_terminal_unlocks_the_exact_dependents() {
 
     assert!(has_ready(&decisions, "mid-a"), "mid-a becomes ready");
     assert!(has_ready(&decisions, "mid-b"), "mid-b becomes ready");
-    assert!(!has_ready(&decisions, "sink"), "sink does not depend on source");
+    assert!(
+        !has_ready(&decisions, "sink"),
+        "sink does not depend on source"
+    );
     // The sink did not decrement (it depends on the middles, not the source).
     assert_eq!(tracker.remaining_dependencies(id("sink")), Some(2));
     assert!(tracker.is_decided(id("source")), "source is now decided");
@@ -205,7 +210,7 @@ fn decrement_on_terminal_unlocks_the_exact_dependents() {
 
 /// A rule is NOT evaluated on a partial result: notifying only the first of a
 /// join's two upstreams drops the countdown to one and neither readies nor
-/// propagates the sink. (C11 · DoD 2 — the all-upstreams-terminal gate.)
+/// propagates the sink. (C11 · def-of-done 2 — the all-upstreams-terminal gate.)
 #[test]
 fn rule_is_not_evaluated_on_a_partial_result() {
     let pipeline = join_of_two();
@@ -216,13 +221,16 @@ fn rule_is_not_evaluated_on_a_partial_result() {
 
     assert_eq!(tracker.remaining_dependencies(id("sink")), Some(1));
     assert!(!has_ready(&decisions, "sink"), "no early fire");
-    assert!(propagated(&decisions, "sink").is_none(), "no early propagation");
+    assert!(
+        propagated(&decisions, "sink").is_none(),
+        "no early propagation"
+    );
     assert!(!tracker.is_decided(id("sink")), "sink is still pending");
 }
 
 /// `all-succeeded` fires when the LAST upstream completes: with one upstream
 /// already succeeded (countdown one), notifying the second `succeeded` drops the
-/// countdown to zero, the rule fires, and the sink is emitted ready. (C11 · DoD 3.)
+/// countdown to zero, the rule fires, and the sink is emitted ready. (C11 · def-of-done 3.)
 #[test]
 fn all_succeeded_fires_when_the_last_upstream_completes() {
     let pipeline = join_of_two();
@@ -246,7 +254,7 @@ fn all_succeeded_fires_when_the_last_upstream_completes() {
 
 /// Can-never-fire → `upstream-failed`, carrying the failed upstream's identity:
 /// a two-upstream `all-succeeded` node with one `failed` and one `succeeded`.
-/// (C11 · DoD 4,5,6; T0.4 §5a "otherwise".)
+/// (C11 · def-of-done 4,5,6; T0.4 §5a "otherwise".)
 #[test]
 fn all_succeeded_can_never_fire_upstream_failed() {
     let pipeline = join_of_two();
@@ -256,10 +264,17 @@ fn all_succeeded_can_never_fire_upstream_failed() {
     let _ = tracker.notify_terminal(id("up-a"), TerminalState::Failed);
     let decisions = tracker.notify_terminal(id("up-b"), TerminalState::Succeeded);
 
-    assert!(!has_ready(&decisions, "sink"), "a failing join is not ready");
+    assert!(
+        !has_ready(&decisions, "sink"),
+        "a failing join is not ready"
+    );
     let (state, origin) = propagated(&decisions, "sink").expect("sink is propagated");
     assert_eq!(state, TerminalState::UpstreamFailed);
-    assert_eq!(origin, id("up-a"), "propagation carries the failed upstream");
+    assert_eq!(
+        origin,
+        id("up-a"),
+        "propagation carries the failed upstream"
+    );
     assert_eq!(
         tracker.terminal_state(id("sink")),
         Some(TerminalState::UpstreamFailed)
@@ -268,7 +283,7 @@ fn all_succeeded_can_never_fire_upstream_failed() {
 
 /// Can-never-fire → `upstream-skipped` when every non-success upstream is
 /// skip-like, carrying the originating skip node. One `skipped` (originated) and
-/// one `succeeded`. (C11 · DoD 4,5,6; T0.4 §5a all-skip-like row.)
+/// one `succeeded`. (C11 · def-of-done 4,5,6; T0.4 §5a all-skip-like row.)
 #[test]
 fn all_succeeded_can_never_fire_upstream_skipped() {
     let pipeline = join_of_two();
@@ -299,7 +314,7 @@ fn propagated_upstream_skipped_counts_skip_like() {
 }
 
 /// Can-never-fire → `cancelled` when every non-success upstream is stop-like:
-/// one `cancelled` and one `succeeded`. (C11 · DoD 4; T0.4 §5a all-stop-like row.)
+/// one `cancelled` and one `succeeded`. (C11 · def-of-done 4; T0.4 §5a all-stop-like row.)
 #[test]
 fn all_succeeded_can_never_fire_cancelled() {
     let pipeline = join_of_two();
@@ -316,7 +331,7 @@ fn all_succeeded_can_never_fire_cancelled() {
 
 /// Mixed non-success classes → `upstream-failed` (the "otherwise" branch): three
 /// upstreams ending `succeeded`, `skipped`, and `failed`. The non-success set is
-/// neither all-skip-like nor all-stop-like. (C11 · DoD 5; T0.4 §5a "otherwise".)
+/// neither all-skip-like nor all-stop-like. (C11 · def-of-done 5; T0.4 §5a "otherwise".)
 #[test]
 fn mixed_non_success_classes_propagate_upstream_failed() {
     let mut flow = Flow::new();
@@ -345,7 +360,7 @@ fn mixed_non_success_classes_propagate_upstream_failed() {
 // ===========================================================================
 
 /// A resumed prior success satisfies a downstream `all-succeeded`: one upstream
-/// `succeeded`, the other `satisfied-from-prior`; the join fires. (C11 · DoD 7.)
+/// `succeeded`, the other `satisfied-from-prior`; the join fires. (C11 · def-of-done 7.)
 #[test]
 fn satisfied_from_prior_counts_success_like() {
     let pipeline = join_of_two();
@@ -369,7 +384,7 @@ fn satisfied_from_prior_counts_success_like() {
 /// A propagated-terminal assignment is itself a terminal notification that
 /// cascades: A→B→C (all `all-succeeded`). Notifying A `failed` propagates
 /// `upstream-failed` to B, and that in turn propagates it to C — no intervening
-/// execution. (C11 · DoD 6.)
+/// execution. (C11 · def-of-done 6.)
 #[test]
 fn propagated_terminal_cascades() {
     let mut flow = Flow::new();
@@ -402,7 +417,7 @@ fn propagated_terminal_cascades() {
 
 /// A diamond with one slow branch does not batch into waves: the fast branch's
 /// independent descendant is emitted ready before the slow branch reaches any
-/// terminal state, and before the join is eligible. (C11 · DoD 9,10 — acceptance.)
+/// terminal state, and before the join is eligible. (C11 · def-of-done 9,10 — acceptance.)
 #[test]
 fn diamond_proves_no_wave_batching() {
     // source S; fast branch F and slow branch W both depend on S; F has an
@@ -410,10 +425,12 @@ fn diamond_proves_no_wave_batching() {
     // and W.
     let mut flow = Flow::new();
     let s = flow.register_source("S", &MakeRows);
-    let f: Handle<Report> = flow.register("F", &FromRows, s);
-    let w: Handle<Report> = flow.register("W", &FromRows, s);
-    let _fd: Handle<Report> = flow.register("Fd", &Chain, f);
-    let _j: Handle<Report> = flow.register("J", &JoinTwo, (f, w));
+    // `S` fans out to F and W; `F` fans out to Fd and J — shared read access on the
+    // multiply-consumed edges (owned multi-consumer would fail assembly).
+    let f: Handle<Report> = flow.register("F", &FromRows, s.shared());
+    let w: Handle<Report> = flow.register("W", &FromRows, s.shared());
+    let _fd: Handle<Report> = flow.register("Fd", &Chain, f.shared());
+    let _j: Handle<Report> = flow.register("J", &JoinTwo, (f.shared(), w));
     let pipeline = flow.finish();
     let artifact = pipeline.assemble().expect("assembles");
     let mut tracker = ReadinessTracker::new(&pipeline, &artifact);
@@ -445,7 +462,7 @@ fn diamond_proves_no_wave_batching() {
 
 /// Every node ends in exactly one terminal state, assigned exactly once: drive
 /// the cascade diamond to completion and confirm no node is decided twice.
-/// (C11 · DoD 12 — Vocabulary "exactly one, exactly once".)
+/// (C11 · def-of-done 12 — Vocabulary "exactly one, exactly once".)
 #[test]
 fn every_node_ends_in_exactly_one_terminal_state() {
     let pipeline = diamond();
@@ -471,7 +488,7 @@ fn every_node_ends_in_exactly_one_terminal_state() {
 }
 
 /// Re-notifying an already-decided node is rejected (no double assignment across
-/// executed-terminal and propagated-terminal paths). (C11 · DoD 12.)
+/// executed-terminal and propagated-terminal paths). (C11 · def-of-done 12.)
 #[test]
 fn a_decided_node_is_not_assigned_a_terminal_state_twice() {
     let pipeline = join_of_two();
@@ -497,14 +514,18 @@ fn a_decided_node_is_not_assigned_a_terminal_state_twice() {
 }
 
 /// Pending accounting reaches zero exactly when the last node becomes terminal,
-/// and is nonzero before that. (C11 · DoD 11 — the "nothing pending" signal.)
+/// and is nonzero before that. (C11 · def-of-done 11 — the "nothing pending" signal.)
 #[test]
 fn pending_accounting_reports_run_completion() {
     let pipeline = diamond();
     let artifact = pipeline.assemble().expect("assembles");
     let mut tracker = ReadinessTracker::new(&pipeline, &artifact);
 
-    assert_eq!(tracker.pending_count(), 4, "four nodes pending at the start");
+    assert_eq!(
+        tracker.pending_count(),
+        4,
+        "four nodes pending at the start"
+    );
 
     let _ = tracker.notify_terminal(id("source"), TerminalState::Succeeded);
     assert_eq!(tracker.pending_count(), 3);
