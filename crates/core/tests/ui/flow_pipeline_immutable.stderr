@@ -1,0 +1,24 @@
+# Compile-failure snapshot for `flow_pipeline_immutable.rs` — ticket T13 (023).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C7; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# The finalized `Pipeline` is immutable: it exposes no registration method, so
+# calling `register_source` on it fails. The stable, toolchain-pinned facets are
+# the error CODE `E0599`, the "no method named" phrase, and the method name
+# `register_source`.
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+E0599
+no method named
+register_source
