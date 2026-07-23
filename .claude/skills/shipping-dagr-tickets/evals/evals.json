@@ -1,0 +1,45 @@
+{
+  "description": "Evaluation scenarios for shipping-dagr-tickets. No built-in runner exists; exercise each scenario with a fresh Claude instance and judge against expected_behavior.",
+  "evaluations": [
+    {
+      "name": "fresh-repo-selects-001",
+      "skills": ["shipping-dagr-tickets"],
+      "query": "Ship the next dagr ticket.",
+      "setup": "Repo at the state where all 80 boxes in docs/implementation/README.md are unchecked, main == origin/main, clean tree, no CI workflows.",
+      "expected_behavior": [
+        "Runs preflight.sh repo mode before anything else and proceeds only on PREFLIGHT=PASS",
+        "Runs next_ticket.py and selects ticket 001 (T0.0a), era pre-workspace, branch chore/t0.0a-repo-init-and-hygiene taken verbatim from the script JSON",
+        "Routes FRESH, cuts the branch, and pushes it with -u before implementation begins",
+        "Delegates implementation to a subagent using the implementer-prompt.md template; the orchestrator itself never reads arch.md or the ticket body",
+        "Runs zero cargo commands anywhere (era pre-workspace has no workspace); the gate is run_gate.sh pre-workspace 001 file/content assertions",
+        "Expects NO_CHECKS from ci_status.sh on the PR and treats it as normal for this era, merging on the local gate"
+      ]
+    },
+    {
+      "name": "resume-open-pr-with-failing-check",
+      "skills": ["shipping-dagr-tickets"],
+      "query": "Continue the dagr ticket loop.",
+      "setup": "A ticket branch exists with an open PR whose CI has one failing check; the session that created it is gone. The PR body ends with a dagr-loop ledger line with attempts_ci=1.",
+      "expected_behavior": [
+        "preflight.sh branch mode returns ROUTE=POLL_CI and the orchestrator goes straight to CI polling — no re-implementation, no new branch, no duplicate PR",
+        "Re-reads the ledger marker from the PR body before acting, so attempt counters continue from 1 rather than resetting",
+        "ci_status.sh reports VERDICT=FAIL with FAILING= and RUN_ID=; the fixer subagent is given those and fetches gh run view --log-failed itself",
+        "After the fix commit is pushed, polling resumes; on an identical failure fingerprint a second time the loop STOPs with the report template instead of thrashing",
+        "The ledger in the PR body is updated (attempts_ci incremented, fingerprint appended) via gh pr edit, not a new comment"
+      ]
+    },
+    {
+      "name": "merged-but-unflipped-box",
+      "skills": ["shipping-dagr-tickets"],
+      "query": "Run the dagr ticket loop.",
+      "setup": "The lowest unchecked ticket's PR is already MERGED (interruption happened between merge and bookkeeping); its box in README.md is still unchecked.",
+      "expected_behavior": [
+        "next_ticket.py still selects that ticket (its box is unchecked); preflight.sh branch mode returns ROUTE=FLIP_BOX",
+        "No branch is cut, no subagent is launched, no PR is created — the loop goes straight to bookkeeping",
+        "flip_box.py flips exactly that NNN line; the commit message is exactly 'docs: mark NNN TID done' and stages only docs/implementation/README.md",
+        "After the push, the loop returns to selection and proceeds to the next ticket in the same session",
+        "If invoked again after that, flip_box.py's ALREADY_CHECKED path proves the flip is idempotent"
+      ]
+    }
+  ]
+}
