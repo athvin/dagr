@@ -59,7 +59,62 @@ Each scenario is independently checkable. Use a pinned/fake clock or short real 
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket file listed **None** and `docs/tasks.md`'s T21 entry carries no `Q:`
+items, but several design decisions the ticket left implicit had to be settled to
+implement it against the T0.3 ADR (009) while keeping `dagr-core`
+dependency-free. They are recorded here (resolved, not left open):
+
+- **How to enforce the timeout without adding a runtime dependency — resolved:
+  runtime-agnostic, race the attempt future against a caller-provided *deadline*
+  future.** T20 kept `dagr-core` dependency-free (no tokio) and the T2 ADR (004)
+  puts the real timer on the *isolated framework runtime* (C13/T33), not inside
+  this core. So `run_attempt_with_timeout` takes a `deadline: impl Future` and
+  *races* the task future against it with a minimal, `unsafe`-free `select`
+  (`RaceFuture`, heap-pinning both futures so polling needs no `unsafe` under the
+  workspace's `unsafe_code`-warn-warnings-deny posture). The production driver
+  (T24/T33) passes a `tokio::time` sleep armed on the isolated runtime; tests pass
+  a controllable pinned-clock future — so the same code path proves the
+  saturated-task-pool-still-fires property without a real timer. **No tokio /
+  `tokio-util` dependency was added to `dagr-core`** (the T0.3 ADR's `select!`/
+  `spawn_blocking` sketch describes the *production driver's* wiring, T24/T33, not
+  a requirement that the core own an async runtime; the runtime-agnostic race is
+  the honest way to express §1's future-drop cancellation here). deny/audit are
+  unaffected.
+
+- **How the two class-shapes are expressed in one dependency-free core —
+  resolved: two entry points, one taxonomy.** Await-bound (the only cancellable
+  shape) is `run_attempt_with_timeout`: on timeout the raced attempt future is
+  dropped (true cancellation) and a permit-shaped guard *moved into it* releases
+  immediately — the T0.3 ADR §1/§2 ownership trick, expressed as Rust's own
+  future-drop. Blocking/compute (synchronous, unkillable) is
+  `TimeoutDecision::mark_blocking_timed_out`: the framework cannot stop the
+  thread, so the runner *marks* `timed-out` immediately (emits the records now),
+  the caller holds the permit inside the still-running closure (released on its
+  actual return, observed by the guard drop off the run loop), a
+  `LateResultBarrier` refuses any post-timeout slot fill / scratch write, and
+  `retry_may_start` (over a `ZombieObserver`) defers the retry until the closure
+  returns. This matches the ADR §1 finding that compute behaves *identically* to
+  blocking (class-shape-driven, not class-name-driven).
+
+- **What the permit is at M1 — resolved: an abstract guard whose `Drop` releases,
+  consumed here, defined by T31.** The concrete admission ledger and pool
+  mechanics are C12 / T31 (this ticket's Out of scope). So the timeout facet
+  *consumes* the release/hold contract through a generic guard (dropped ⇒
+  released) and the narrow `ZombieObserver` port, rather than defining pool
+  sizing or acquisition. The tests supply a minimal ledger stand-in that models
+  exactly the T0.3 §2 accounting (cost counted until the guard drops; a live
+  zombie until then).
+
+- **What the "attempt-outcome record" is for a timeout — resolved: a single
+  `AttemptEvent::AttemptTimedOut` record.** Consistent with T20's resolution that
+  the attempt-outcome record is the closing per-transition event, a timed-out
+  attempt emits exactly one `AttemptTimedOut` (never an `AttemptSucceeded` or
+  `AttemptFailed`), followed by the `NodeTerminal { state: TimedOut }` record.
+  `emit_closing_events` centralises the outcome→record mapping so every path emits
+  exactly one outcome record. The reserved `AttemptOutcome::TimedOut` variant is
+  now populated; `is_retry_eligible()` and `is_failure()` include it, and
+  `terminal_state()` maps it to `TerminalState::TimedOut` (never `Failed`, never
+  `Abandoned`).
 
 ## Out of scope
 - The retry loop itself — max-attempts counting, jittered exponential backoff, and cap — is T22; this ticket only ensures a timeout is classified into the retry path correctly.

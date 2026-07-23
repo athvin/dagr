@@ -151,18 +151,33 @@
 //!   attempt-outcome record. It adds no async-runtime dependency (the caller's
 //!   runtime drives it; execution-class placement is C13 / T33).
 //! - [`execution::AttemptOutcome`] — the classified single-attempt outcome
-//!   (success / permanent failure / retry-eligible failure / deliberate skip),
-//!   a `#[non_exhaustive]` enum whose rustdoc reserves the timeout (T21) and
-//!   panic (T23) variants those tickets add without reshaping it.
+//!   (success / permanent failure / retry-eligible failure / deliberate skip /
+//!   **timed-out**), a `#[non_exhaustive]` enum; T21 (031) added the `TimedOut`
+//!   variant, and the panic (T23) variant is still reserved.
 //! - [`execution::AttemptEventSink`] / [`execution::AttemptEvent`] — the
 //!   abstract C19 event-emission port the runner writes through, so `dagr-core`
 //!   emits events without depending on `dagr-artifact`'s writer (workspace ADR
 //!   T1 / the C24 boundary). The run-loop driver (T24) adapts the concrete
-//!   `EventStreamWriter` to this port.
+//!   `EventStreamWriter` to this port. T21 added the `AttemptTimedOut` outcome
+//!   record.
 //!
-//! Retry (T22), per-attempt timeout (T21), panic containment (T23),
-//! execution-class dispatch (T33), and the run-loop driver (T24) build on this
-//! core rather than reshape it.
+//! The **C14 per-attempt timeout** (ticket T21): a runtime-agnostic per-attempt
+//! timeout with per-class abandonment (arch.md C14; the T0.3 ADR, 009).
+//!
+//! - [`execution::run_attempt_with_timeout`] — the **await-bound** path: races
+//!   the attempt future against a caller-provided deadline future (no tokio
+//!   dependency added — the isolated framework timer drives the real one, C13);
+//!   on timeout the future is dropped (true cancellation) and a permit-shaped
+//!   guard moved into it releases immediately.
+//! - [`execution::TimeoutDecision`] / [`execution::LateResultBarrier`] /
+//!   [`execution::ZombieObserver`] — the **blocking / compute** path: mark
+//!   `timed-out` immediately, hold the permit until the (unkillable) closure
+//!   returns, defer the retry until then (C1 exclusivity), and bar any late
+//!   slot fill or scratch write. The concrete admission ledger the permit guard
+//!   stands in for is C12 / T31.
+//!
+//! Retry (T22), panic containment (T23), execution-class dispatch (T33), and the
+//! run-loop driver (T24) build on this core rather than reshape it.
 //!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
@@ -195,7 +210,10 @@ pub use context::{
     RunId, ScratchError, ScratchStore, TerminalState,
 };
 pub use error::{TaskError, TaskErrorClass};
-pub use execution::{run_attempt, AttemptEvent, AttemptEventSink, AttemptOutcome};
+pub use execution::{
+    run_attempt, run_attempt_with_timeout, AttemptEvent, AttemptEventSink, AttemptOutcome,
+    LateResultBarrier, TimeoutDecision, ZombieObserver,
+};
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
 pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
