@@ -312,20 +312,70 @@ impl ReadinessTracker {
     /// copies what it needs and borrows neither afterward.
     #[must_use]
     pub fn new(pipeline: &Pipeline, artifact: &AssemblyArtifact) -> Self {
+        Self::new_with_ordering(pipeline, artifact, &BTreeMap::new())
+    }
+
+    /// Build a tracker that additionally honours **run-level ordering upstreams**
+    /// (C15 / T34): `ordering` maps a node's name to the names of nodes it must
+    /// run *after* even though it consumes no value from them.
+    ///
+    /// This is the seam by which a **consume-nothing node with a non-default
+    /// trigger rule** (`all-terminal` / `any-failed`) acquires the upstreams its
+    /// rule is evaluated against — the runtime firing of the non-default rules
+    /// (arch.md C15) that T18 left to T34. An ordering upstream counts toward the
+    /// node's countdown and contributes its terminal state to the picture
+    /// [`evaluate_rule`] sees, exactly like a data upstream, but delivers **no
+    /// value** — so it is the only kind of upstream a non-default-rule node may
+    /// have (data upstreams force `all-succeeded`, C3/C4). The graph-authoring
+    /// ordering-edge API, its compile-time attach rules, and its fingerprint /
+    /// render treatment are **T50**; this run-level seam seeds only the tracker's
+    /// dependency structure and touches neither the graph artifact nor the
+    /// fingerprint.
+    ///
+    /// An empty `ordering` map yields exactly the same tracker as
+    /// [`new`](Self::new) — the seam is purely additive, so the M1 `all-succeeded`
+    /// data-edge behaviour is unchanged. An ordering entry naming an unknown
+    /// upstream (not in the pipeline) is ignored, mirroring how [`new`](Self::new)
+    /// ignores a data edge whose upstream is absent.
+    #[must_use]
+    pub fn new_with_ordering(
+        pipeline: &Pipeline,
+        artifact: &AssemblyArtifact,
+        ordering: &BTreeMap<String, Vec<String>>,
+    ) -> Self {
+        // Resolve each node's distinct, in-pipeline ordering upstreams (name-keyed,
+        // deduped) — the extra upstreams the seam contributes beyond data edges.
+        let ordering_upstreams = |name: &str| -> Vec<String> {
+            let mut ups: Vec<String> = ordering
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(|up| pipeline.node(NodeId::from_name(up)).is_some())
+                .cloned()
+                .collect();
+            ups.sort();
+            ups.dedup();
+            ups
+        };
+
         // First pass: build each node's state with its seeded countdown and rule.
+        // The countdown is the precomputed data-dependency count PLUS the count of
+        // distinct ordering upstreams (both must be terminal before the rule fires).
         let mut nodes: BTreeMap<String, NodeState> = BTreeMap::new();
         for node in pipeline.nodes() {
-            let remaining = artifact
+            let data_remaining = artifact
                 .remaining_dependency_count(node.id())
                 // A node always has a precomputed count; fall back to its edge
                 // count if (impossibly) absent, so construction is total.
                 .unwrap_or_else(|| distinct_upstream_count(pipeline, node.data_edges()));
+            let ordering_remaining =
+                u32::try_from(ordering_upstreams(node.name()).len()).unwrap_or(u32::MAX);
             nodes.insert(
                 node.name().to_string(),
                 NodeState {
                     id: node.id(),
                     rule: node.trigger_rule(),
-                    remaining,
+                    remaining: data_remaining.saturating_add(ordering_remaining),
                     upstream_states: Vec::new(),
                     decided: None,
                     dependents: Vec::new(),
@@ -333,13 +383,15 @@ impl ReadinessTracker {
             );
         }
 
-        // Second pass: wire the dependents map (upstream name -> dependent names).
+        // Second pass: wire the dependents map (upstream name -> dependent names),
+        // over both data upstreams and the run-level ordering upstreams.
         for node in pipeline.nodes() {
             let mut upstream_names: Vec<String> = node
                 .data_edges()
                 .iter()
                 .filter_map(|e| pipeline.node(e.upstream()).map(|u| u.name().to_string()))
                 .collect();
+            upstream_names.extend(ordering_upstreams(node.name()));
             upstream_names.sort();
             upstream_names.dedup();
             for up in upstream_names {

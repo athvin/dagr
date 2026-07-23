@@ -89,6 +89,40 @@ use crate::handle::{Handle, NodeId};
 use crate::task::{ExecutionClass, Task};
 use crate::Deps;
 
+/// The run-level **failure mode** — what happens to the *rest* of the run when a
+/// node reaches a failure-like terminal state (arch.md `### C15 · Failure policy
+/// and propagation`; C15 / T34).
+///
+/// It is a **run policy**, not a graph fact: it is excluded from node identity and
+/// from both graph fingerprints (C21), so flipping it re-runs the same graph under
+/// a different failure discipline. It is selected at the builder/assembly seam
+/// ([`Flow::failure_mode`] / [`Pipeline::failure_mode`]); the operator/CLI
+/// override that also sets it is deferred to T55 (C26) and slots into the same
+/// seam without a signature change.
+///
+/// In **both** modes propagation is governed by trigger rules (Vocabulary): a node
+/// is marked `upstream-failed` only when its rule can no longer be satisfied, so an
+/// `all-terminal` cleanup node downstream of a failure still runs regardless of
+/// mode. The mode governs only the *scheduling* of still-eligible work after the
+/// first failure, never the propagated-state table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FailureMode {
+    /// **Continue independent** (the default): a failure cancels nothing; branches
+    /// with no ancestral relationship to the failure run to completion. This is the
+    /// least-surprising default and the behaviour the M1 run loop already had (it
+    /// never cancelled anything), so selecting nothing changes nothing.
+    #[default]
+    ContinueIndependent,
+    /// **Stop on first failure**: on the first terminal failure, admit no further
+    /// default-rule non-teardown work; the in-flight drain completes, then every
+    /// consume-nothing node with a *non-default* trigger rule whose rule fires on
+    /// the resulting terminal picture still executes (a notify/cleanup contingency
+    /// is exactly the work a failure is meant to trigger). Pending default-rule
+    /// nodes unrelated to the failure end `cancelled`. Teardown ordering (C17) is a
+    /// documented, deliberately-unimplemented carve-out left to T52.
+    StopOnFirstFailure,
+}
+
 /// A single node inside the immutable [`Pipeline`] — its identity, its
 /// group-label slot, and the structure downstream tickets read.
 ///
@@ -288,6 +322,10 @@ pub struct Flow {
     /// permitted to capture later (C7 / C22). Empty by default; a pure
     /// *declaration* — assembly captures no values. Recorded in declared order.
     env_allowlist: Vec<String>,
+    /// The run-level [failure mode](FailureMode) (C15 / T34) — the mode-selection
+    /// seam. A run policy, excluded from identity and both fingerprints. Defaults
+    /// to [`ContinueIndependent`](FailureMode::ContinueIndependent).
+    failure_mode: FailureMode,
 }
 
 impl Flow {
@@ -297,6 +335,7 @@ impl Flow {
         Self {
             nodes: BTreeMap::new(),
             env_allowlist: Vec::new(),
+            failure_mode: FailureMode::default(),
         }
     }
 
@@ -311,6 +350,19 @@ impl Flow {
         S: Into<String>,
     {
         self.env_allowlist.extend(names.into_iter().map(Into::into));
+    }
+
+    /// Select the run-level [failure mode](FailureMode) (C15 / T34) — the
+    /// builder/assembly mode-selection seam.
+    ///
+    /// The mode is a **run policy**, not a graph fact: it is excluded from node
+    /// identity and from both graph fingerprints (C21), so the same graph runs
+    /// under either mode without changing its structural fingerprint. Defaults to
+    /// [`ContinueIndependent`](FailureMode::ContinueIndependent); the operator/CLI
+    /// override deferred to T55 (C26) sets this same value through the same seam
+    /// without a signature change.
+    pub fn failure_mode(&mut self, mode: FailureMode) {
+        self.failure_mode = mode;
     }
 
     /// Register a **source** node (one whose task consumes nothing) under an
@@ -689,6 +741,7 @@ impl Flow {
         Pipeline {
             nodes: self.nodes,
             env_allowlist: self.env_allowlist,
+            failure_mode: self.failure_mode,
         }
     }
 }
@@ -726,6 +779,12 @@ pub struct Pipeline {
     /// carried forward from the builder for assembly to freeze into its artifact.
     /// A pure declaration — no value was ever captured.
     env_allowlist: Vec<String>,
+    /// The run-level [failure mode](FailureMode) (C15 / T34), carried from the
+    /// builder. A run policy excluded from identity and both fingerprints — two
+    /// pipelines that differ *only* in mode still have identical graph
+    /// fingerprints (the fingerprint reads node/edge/rule/policy fields, never
+    /// this one).
+    failure_mode: FailureMode,
 }
 
 impl Pipeline {
@@ -751,6 +810,16 @@ impl Pipeline {
     #[must_use]
     pub fn env_allowlist(&self) -> &[String] {
         &self.env_allowlist
+    }
+
+    /// The run-level [failure mode](FailureMode) selected at the builder/assembly
+    /// seam (C15 / T34). A run policy excluded from identity and both graph
+    /// fingerprints — the run-loop driver (T24/T34) reads it to decide how to treat
+    /// still-eligible work after the first failure. Defaults to
+    /// [`ContinueIndependent`](FailureMode::ContinueIndependent).
+    #[must_use]
+    pub fn failure_mode(&self) -> FailureMode {
+        self.failure_mode
     }
 
     /// Iterate the pipeline's nodes in a **deterministic, order-insensitive**
