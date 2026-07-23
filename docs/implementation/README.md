@@ -41,7 +41,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 
 - [x] **019** · [T9 — C1: task abstraction and error classification](019-T9-task-abstraction-and-errors.md) · M · feature — after T1, T2, T3, T0.2
 - [x] **020** · [T10 — C2: typed handles](020-T10-typed-handles.md) · S · feature — after T5, T9
-- [ ] **021** · [T11 — C3: typed data-dependency binding](021-T11-typed-data-dependency-binding.md) · M · feature — after T10, T0.2
+- [x] **021** · [T11 — C3: typed data-dependency binding](021-T11-typed-data-dependency-binding.md) · M · feature — after T10, T0.2
 - [ ] **022** · [T16 — C8: run context](022-T16-run-context.md) · M · feature — after T9
 - [ ] **023** · [T13 — C7: flow builder and node identity](023-T13-flow-builder-and-node-identity.md) · M · feature — after T10, T0.7
 - [ ] **024** · [T12 — Compile-failure suite for wiring](024-T12-compile-failure-suite-for-wiring.md) · S · feature (tests) — after T8, T11, T0.9
