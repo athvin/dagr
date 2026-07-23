@@ -176,8 +176,31 @@
 //!   slot fill or scratch write. The concrete admission ledger the permit guard
 //!   stands in for is C12 / T31.
 //!
-//! Retry (T22), panic containment (T23), execution-class dispatch (T33), and the
-//! run-loop driver (T24) build on this core rather than reshape it.
+//! The **C14 retry with jittered exponential backoff** (ticket T22): the bounded
+//! retry loop that wraps the single-attempt core (arch.md C14; "Backoff is
+//! exponential with jitter and a cap").
+//!
+//! - [`execution::run_with_retries`] — the retry loop: it drives the shared
+//!   single-attempt core up to the configured maximum, emitting one
+//!   attempt-outcome record **per attempt** and exactly one node-terminal record
+//!   at loop end. Only retry-eligible outcomes (retry-eligible failure or
+//!   timeout) consume the budget and trigger a backoff; permanent failure,
+//!   deliberate skip, and success end the loop at once. Between attempts it
+//!   records a distinct [`execution::AttemptEvent::BackoffStarted`] backoff phase
+//!   (feeding C23 phase timings) and awaits a caller-provided timer future — it
+//!   reads no system clock, so the sleeping is the driver's concern (T24 / T33).
+//! - [`execution::RetryConfig`] / [`execution::Backoff`] — the **interim M1**
+//!   per-node retry knob (max attempts + base/factor/cap) whose conservative
+//!   default is **no retries** (a single attempt); its shape migrates into the C5
+//!   node-policy struct in M2 (**T29**, which this ticket blocks).
+//! - [`execution::Jitter`] / [`execution::SeededJitter`] / [`execution::NoJitter`]
+//!   — the **injectable, deterministic** jitter source: a dependency-free seeded
+//!   `splitmix64` PRNG for production (a distinct seed per node spreads a fan-out
+//!   so simultaneous retries do not resynchronize) and a zero source for exact,
+//!   assertable schedules in tests. The loop never reads a thread/global RNG.
+//!
+//! Panic containment (T23), execution-class dispatch (T33), and the run-loop
+//! driver (T24) build on this core rather than reshape it.
 //!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
@@ -211,8 +234,9 @@ pub use context::{
 };
 pub use error::{TaskError, TaskErrorClass};
 pub use execution::{
-    run_attempt, run_attempt_with_timeout, AttemptEvent, AttemptEventSink, AttemptOutcome,
-    LateResultBarrier, TimeoutDecision, ZombieObserver,
+    run_attempt, run_attempt_with_timeout, run_with_retries, AttemptEvent, AttemptEventSink,
+    AttemptOutcome, Backoff, Jitter, LateResultBarrier, NoJitter, RetryConfig, SeededJitter,
+    TimeoutDecision, ZombieObserver,
 };
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};

@@ -60,7 +60,77 @@ Each scenario is independently checkable. Use a test-controlled clock/time sourc
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket file listed **None** and `docs/tasks.md`'s T22 entry carries no `Q:`
+items, but several design decisions the ticket left implicit had to be settled to
+implement the retry loop against the merged T20/T21 core while keeping
+`dagr-core` dependency-free and the backoff tests deterministic. They are
+recorded here (resolved, not left open):
+
+- **How to make jitter deterministic without a global RNG or a new dependency —
+  resolved: an injectable `Jitter` trait with a dependency-free seeded
+  `splitmix64` default.** Jitter needs randomness, but the backoff tests must
+  assert exact sequences, so the retry logic reads jitter **only** through an
+  injected `Jitter` source (`next_unit() -> f64` in `[0, 1)`) — never a
+  thread/global RNG and never the system clock. `dagr-core` has stayed
+  dependency-free, so rather than add `rand`/`fastrand` the default source is a
+  tiny inline `splitmix64` (`SeededJitter`), a well-known small `unsafe`-free
+  integer generator; a given seed replays the identical draw sequence (assertable
+  schedules) while a distinct seed per node spreads a fan-out. `NoJitter` (every
+  draw `0`) yields the exact nominal schedule for the "jitter disabled" test.
+  **No dependency was added**; `cargo deny`/`cargo audit` are unaffected.
+
+- **Where the backoff wait happens (the sleeping seam) — resolved: a
+  caller-provided timer future factory, exactly like T21's deadline future.**
+  The core stays runtime-agnostic (no tokio): `run_with_retries` takes a
+  `FnMut(Duration) -> impl Future<Output = ()>` and only *computes* the delay and
+  *awaits* the caller's future — it reads no clock. The production driver
+  (T24/T33) arms a real `tokio::time` sleep on the isolated framework runtime
+  there; a unit test passes a future that records the requested delay and
+  resolves at once, proving the schedule with no wall-clock flakiness. This is
+  the same runtime-agnostic seam the T21 timeout race used and keeps the "actual
+  sleeping is the driver's concern" boundary intact.
+
+- **The jitter window semantics (so "pinned to zero → nominal" and "within the
+  window, never above the cap" are both true) — resolved: subtractive full jitter
+  anchored at the nominal.** The scheduled delay is `nominal · (1 − draw)` for a
+  draw in `[0, 1)`, where `nominal = base · factor^n` clamped to the cap. A draw
+  of `0` yields **exactly** the nominal (so `NoJitter` reproduces the exact
+  exponential-and-capped sequence the "backoff is exponential and capped" test
+  asserts), and larger draws shorten the delay toward zero — the window is the
+  half-open `(0, nominal]`. Anchoring the window's upper bound at the nominal
+  (rather than scaling *up* from it) guarantees **no scheduled delay ever exceeds
+  the cap**, jitter or not, while still decorrelating a fan-out (distinct seeds
+  give distinct `(1 − draw)` factors, so simultaneous retries do not wake in
+  lockstep).
+
+- **What "maximum attempt count" counts — resolved: total attempts, initial
+  attempt included, clamped to at least one.** `RetryConfig::new(max, backoff)`
+  counts the initial attempt in `max` (so `max == 1` is the no-retry case and
+  `max == 3` allows the initial attempt plus two retries), matching the ticket's
+  test plan ("a maximum of 3 attempts whose work … is invoked exactly 3 times").
+  `max` is clamped to `>= 1` so a node always gets at least one attempt. The
+  conservative `Default` is `max_attempts == 1` — **no retries** — matching C5's
+  stated default.
+
+- **Whether a timeout outcome flows through the loop unchanged — resolved: yes,
+  via the shared classification, no timeout-specific code here.** The loop gates
+  retries on `AttemptOutcome::is_retry_eligible()`, which T21 already defined to
+  include `TimedOut` (retry-eligible by default). So when T21's timeout outcome
+  reaches this loop it is retried like any retry-eligible failure with no code
+  here contradicting that default; the per-class future-drop / zombie-deferral of
+  a timed-out attempt remains T21's and is not re-decided. (The M1 loop composes
+  with the untimed single-attempt core; wiring the timed attempt path into the
+  loop is the driver's, T24.)
+
+- **How exactly-one-attempt-outcome-record coexists with exactly-one-node-terminal
+  across a retried node — resolved: split the closing emission.** The shared
+  single-attempt body (`run_one_attempt`, reused by `run_attempt`) emits the
+  opening events plus the **exactly-one attempt-outcome record** per attempt but
+  **not** the node-terminal record; the loop emits the single node-terminal record
+  itself at loop termination. A retried node therefore has one outcome record per
+  attempt (gapless, increasing) and exactly one node-terminal record.
+  `run_attempt`'s single-attempt behaviour is unchanged (it composes the body
+  with the terminal emission, byte-identical to before).
 
 ## Out of scope
 - Per-attempt timeout and per-class cancellation/abandonment semantics — that is T21 (C14); this ticket only ensures timeout outcomes will flow through the retry loop once they exist.
