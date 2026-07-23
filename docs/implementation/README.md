@@ -30,7 +30,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **010** · [T0.4 — Trigger-rule and terminal-state reference tables](010-T0.4-trigger-rule-and-state-tables.md) · S · decision
 - [x] **011** · [T0.5 — Bootstrap phase interface and cost model](011-T0.5-bootstrap-phase-and-cost-model.md) · S · decision
 - [x] **012** · [T0.6 — ADR: run store contract](012-T0.6-run-store-contract-adr.md) · M · decision
-- [ ] **013** · [T0.7 — ADR: stable-name trait and fingerprint composition](013-T0.7-stable-name-and-fingerprint-adr.md) · S · decision
+- [x] **013** · [T0.7 — ADR: stable-name trait and fingerprint composition](013-T0.7-stable-name-and-fingerprint-adr.md) · S · decision
 - [ ] **014** · [T0.8 — Durable-output contract](014-T0.8-durable-output-contract.md) · S · decision
 - [ ] **015** · [T0.9 — C4 ordering-edge mechanics](015-T0.9-ordering-edge-mechanics.md) · S · decision
 - [ ] **016** · [T3 — ADR: error taxonomy design](016-T3-error-taxonomy-adr.md) · S · decision — after T0.4
