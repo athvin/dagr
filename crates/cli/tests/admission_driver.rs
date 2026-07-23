@@ -284,18 +284,24 @@ fn an_unconstrained_pool_admits_every_ready_node_at_once() {
 /// queue it would strand forever: when nothing else is in flight the run loop
 /// exits, the node never reaches a terminal state, and the run is (wrongly)
 /// reported as complete — a silent violation of "every reachable node reaches a
-/// terminal state". The driver's termination guard (T31) must instead give it a
-/// DEFINED non-success terminal and fold the run to a `Failed` outcome, NOT exit
-/// silently with a stranded node. A normally-fitting node in the same run still
-/// runs to success — the guard rejects only the can-never-fit node.
+/// terminal state". The run must NOT exit silently with a stranded node.
 ///
-/// (The full bootstrap-time rejection of too-big nodes is deferred to T32; this is
-/// only the defensive driver-level guard so T31 never silently strands a node.)
+/// **Superseded by T32 (042).** When T31 shipped, the *full* bootstrap-time
+/// rejection of too-big nodes was deferred, so the driver caught this can-never-fit
+/// node with a defensive admission-time guard, folding it to a `Failed` terminal
+/// *inside* the loop. T32 makes the rejection authoritative and moves it **before**
+/// the loop: a too-big node now fails the run at **bootstrap**, before any node
+/// executes, with the distinct `bootstrap-failed` outcome (arch.md C12: "fails at
+/// bootstrap, not at admission time"). This test therefore asserts the T32
+/// behaviour — the run is rejected at bootstrap and nothing runs. The T31 driver
+/// guard (`can_ever_fit` / `reject_over_demand`) is retained unchanged as a
+/// defensive backstop but is not reached on the default drive path, because the
+/// bootstrap check intercepts first. The T32 owner-tests for this path live in
+/// `crates/cli/tests/container_limits_driver.rs`.
 #[test]
-fn an_over_demand_node_is_failed_terminally_not_silently_stranded() {
+fn an_over_demand_node_is_rejected_at_bootstrap_not_silently_stranded() {
     // Pool holds 1000 bytes total. "toobig" demands 5000 (> total → can never fit);
-    // "fits" demands 400 (admits normally). Without the guard, "toobig" would sit
-    // in `pending` forever and the run would exit reporting success.
+    // "fits" demands 400. T32's bootstrap check rejects the run before the loop.
     let (_pipeline, plan) = over_demand_plan(5_000, 400);
     let sink = MemorySink::default();
     let report = drive(
@@ -307,31 +313,31 @@ fn an_over_demand_node_is_failed_terminally_not_silently_stranded() {
         TickClock::default(),
     );
 
-    // The can-never-fit node reached a DEFINED terminal state (not stranded/absent).
-    assert_eq!(
-        report.terminal_states.get("toobig").copied(),
-        Some(TerminalState::Failed),
-        "the over-demand node must reach a defined non-success terminal, not vanish"
-    );
-    // The run's outcome honestly reflects the failure — it is NOT a silent success.
+    // The run is rejected at bootstrap — distinct from a mid-run Failed outcome and
+    // from a silent success. Nothing executed.
     assert_eq!(
         report.outcome,
-        RunOutcome::Failed,
-        "an over-demand node must fail the run, not exit as a silent success"
+        RunOutcome::BootstrapFailed,
+        "an over-demand node must fail the run at bootstrap (T32), not strand or succeed silently"
     );
-    // The normally-fitting node still ran to success — the guard is surgical.
-    assert_eq!(
-        report.terminal_states.get("fits").copied(),
-        Some(TerminalState::Succeeded)
+    // No node reached a terminal state, because the bootstrap check ran before the
+    // loop — neither the too-big node nor the otherwise-fitting one executed.
+    assert!(
+        report.terminal_states.is_empty(),
+        "no node executes when bootstrap rejects the run; got {:?}",
+        report.terminal_states
     );
 
-    // The failure lands in the event stream as the node's terminal record — the
-    // node is truthfully terminal in the durable record, not silently missing.
+    // The rejection lands in the durable record: run-started then a bootstrap-failed
+    // run-finished, with no attempt records — the failure is not silently missing.
     let events = parse_events(&sink.bytes());
     assert!(
-        events
-            .iter()
-            .any(|(k, n)| k == "node-terminal" && n.as_deref() == Some("toobig")),
-        "the rejected node's terminal must appear in the stream; got {events:?}"
+        !events.iter().any(|(k, _)| k == "attempt-started"),
+        "bootstrap rejection runs before any attempt; got {events:?}"
+    );
+    assert_eq!(
+        events.last().map(|(k, _)| k.as_str()),
+        Some("run-finished"),
+        "the run terminates with a run-finished record; got {events:?}"
     );
 }

@@ -82,6 +82,7 @@ use dagr_core::context::{PipelineId, RunContext, RunId as CoreRunId, TerminalSta
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
 use dagr_core::flow::Pipeline;
 use dagr_core::handle::NodeId;
+use dagr_core::limits::detect_capacities;
 use dagr_core::readiness::{Decision, ReadinessTracker};
 
 /// The default bounded grace period the driver waits for a zombie closure to
@@ -163,8 +164,11 @@ impl RunConfig {
     /// Pin the run's C12 admission-pool capacities (arch.md C12; T31). The default
     /// is **unconstrained** (every ready node admitted at once); pinning a pool
     /// bounds admission against it. Container-limit derivation of these capacities
-    /// is T32 — this is the pinned input, which is also how CI makes capacity
-    /// deterministic.
+    /// is the T32 [`ContainerLimitProbe`](dagr_core::limits::ContainerLimitProbe)
+    /// (cgroup v2 → v1 → host, with the 20% headroom default); pass its
+    /// [`detect`](dagr_core::limits::ContainerLimitProbe::detect) output here to
+    /// size the pools from the machine, or a pinned set (the operator flag, which
+    /// is also how CI makes capacity deterministic).
     #[must_use]
     pub fn capacities(mut self, capacities: PoolCapacities) -> Self {
         self.capacities = capacities;
@@ -417,6 +421,15 @@ impl AttemptEventSink for BufferingSink {
 /// a `run-started` header with no fingerprints and a `run-finished` carrying
 /// [`RunOutcome::AssemblyFailed`], and returns — no node runs.
 ///
+/// # The bootstrap-failure path (C12/T32)
+///
+/// After a successful assembly and the `run-started` header, the driver runs the
+/// C12 too-big-node bootstrap check ([`detect_capacities`]): if any node's declared
+/// cost exceeds a pool's total capacity, it can never be admitted, so the run fails
+/// fast — the driver emits a `run-finished` carrying
+/// [`RunOutcome::BootstrapFailed`] (distinct from `assembly-failed`) and returns
+/// with **no** node executed, rather than wedging at admission time.
+///
 /// # Panics
 ///
 /// Panics only on a framework defect it cannot record (a poisoned internal mutex
@@ -492,10 +505,44 @@ where
     };
     let _ = writer.run_started(header);
 
+    // --- The C12 too-big-node bootstrap check (T32): reject, before any node
+    // executes, any node whose declared cost exceeds a pool's total capacity —
+    // fail fast rather than wedge at admission time. This runs after the header is
+    // recorded (so a bootstrap failure still lands in the stream, like an assembly
+    // failure) and before the loop starts (so nothing runs). It is distinct from
+    // T31's admission-time can-never-fit guard and produces the `bootstrap-failed`
+    // outcome. The capacities are the resolved pool totals (container-limit derived
+    // or operator-pinned via the T32 flag); the declared costs come from C5.
+    let node_costs: Vec<(String, PoolCost)> = pipeline
+        .nodes()
+        .map(|n| {
+            (
+                n.name().to_string(),
+                PoolCost::from_cost_vector(n.policy().cost()),
+            )
+        })
+        .collect();
+    if let Err(failure) = detect_capacities(&config.capacities, &node_costs) {
+        // A too-big node: fail bootstrap. The complete error list names every
+        // offending node, its pool, declared cost, and capacity — surface it so an
+        // operator can fix the run, then record the bootstrap-failed outcome and
+        // return. No node executed (zero attempts), and the run does not hang.
+        eprintln!("{failure}");
+        let _ = writer.run_finished(RunOutcome::BootstrapFailed);
+        let _ = writer.finish();
+        return RunReport {
+            outcome: RunOutcome::BootstrapFailed,
+            terminal_states: BTreeMap::new(),
+            run_id: run_id_str,
+            stream_path,
+        };
+    }
+
     let tracker = ReadinessTracker::new(&pipeline, &artifact);
     // The C12 admission controller for this run (T31). Its pools are pinned from
-    // the run config (unconstrained by default → admits every ready node at once,
-    // preserving the M1 loop's behaviour); container-limit sizing is T32.
+    // the run config (container-limit-derived or operator-pinned — T32). The
+    // too-big-node bootstrap check above already rejected any node that could never
+    // fit, so the loop's admission never strands a can-never-fit node here.
     let admission = AdmissionController::new(config.capacities);
     let (outcome, terminal_states) = run_loop(
         &pipeline,
