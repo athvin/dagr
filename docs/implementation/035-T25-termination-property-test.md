@@ -77,7 +77,64 @@ Derived from C11's acceptance criteria (arch.md §C11 · Readiness tracker) plus
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket recorded "None", and `docs/tasks.md`'s T25 entry carries no `Q:`
+items. The following implementation decisions were genuinely open at the seam
+between what the ticket asked for and what the merged M1 surface can express;
+each is resolved and recorded here per the open-questions duty.
+
+- **Property framework — proptest vs. a hand-rolled seeded generator.** The DoD
+  names "proptest or equivalent". Resolved: a **hand-rolled, dependency-free,
+  deterministic seeded generator** (a `SplitMix64` PRNG + a bounded random-DAG
+  shape + an explicit shrinker), the ticket's own permitted "equivalent". This
+  keeps `dagr-core`'s and `dagr-cli`'s review-gated dependency trees **unchanged**
+  (arch.md "Stability": additions to the core dependency set are a reviewed policy
+  decision) — so `cargo audit`/`cargo deny` are untouched and stay green with no
+  new dev-dependency and no deny.toml license addition. It is trivially
+  deterministic in CI (no wall-clock, no network), captures every case's seed,
+  prints it on failure, replays byte-for-byte from a recorded seed, and shrinks a
+  failing case to a minimal reproducer — i.e. it delivers every capability the DoD
+  requires of "proptest or equivalent" without the transitive tree.
+
+- **System under test — the T24 driver vs. the C11 tracker directly.** The DoD
+  says "drives each case through the real C11 tracker and the T24 run loop against
+  fakes." Resolved: **both**, split by cost. The deep, high-case-count property
+  (thousands of cases) drives the *real* `ReadinessTracker` directly
+  (`crates/core/tests/termination_property.rs`) — it is the pure state machine
+  whose termination is the crux, and the driver's `run_loop` is a thin
+  admit→feed-back→admit shell around exactly its `initial_ready()` /
+  `notify_terminal` API, so stepping it directly is faithful, deterministic, and
+  fast (no per-case tokio runtimes). A companion suite
+  (`crates/cli/tests/termination_property_driver.rs`) drives a small fixed set of
+  the *same* generated DAGs through the *real* `dagr_cli::driver::drive` against
+  fake scripted runners, proving the full two-runtime T24 loop terminates too. The
+  driver never changes behaviour (T24/T18 are untouched).
+
+- **Non-default trigger rules on generated runtime nodes.** The DoD asks the
+  generator to assign per-node random rules from the closed set on consume-nothing
+  nodes. Resolved: the merged M1 surface makes a non-default rule **inexpressible**
+  on any runtime node reachable by the generator — a non-default rule is settable
+  only on a consume-nothing node (C4), such a node's only upstreams are *ordering
+  edges*, and ordering-edge registration is **T50 (not yet landed)**; the typed
+  `Flow` builder pins `all-succeeded` on every data node (C3, compile-time). This
+  is exactly why M1 "ships `all-succeeded` execution against the final rule
+  interface" (this ticket's Out of scope) and why the `all-terminal`/`any-failed`
+  *runtime firing* is T34. The generated runtime nodes therefore carry
+  `all-succeeded` (honouring "never assigning a non-default rule to a
+  data-consuming node" vacuously), and Property 4's `all-terminal`-fires-downstream
+  -of-a-failure assertion is exercised at the pure `evaluate_rule` seam in
+  regression case A, where it *is* reachable in M1 — the same seam T18 unit-tests
+  and T34 will wire onto runtime nodes. No tracker/driver behaviour is changed to
+  accommodate this.
+
+- **Capacity pinning.** The M1 driver admits every ready node with no admission
+  pool (C12 is T31), so admission is capacity-independent by construction; the
+  property therefore never depends on host resources without any explicit pin.
+
+- **Retry-then-succeed outcome.** Retry orchestration (C14/T22) is upstream of the
+  tracker, which only ever sees a node's *decided* terminal. A retry-then-succeed
+  case is modelled as the terminal `succeeded` it resolves to — the tracker sees no
+  intermediate retry, so the outcome space the generator feeds the tracker is the
+  set of decided terminals a node originates (success, failed, skipped, timed-out).
 
 ## Out of scope
 - Per-rule unit coverage of the fires/can-never-fire table and the resulting propagated states (that is T18's readiness-tracker criterion and the runtime evaluation in T34) — this ticket only asserts they hold as emergent properties over random graphs.
