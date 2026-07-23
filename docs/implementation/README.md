@@ -15,7 +15,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 
 ## Phase 0 — Project scaffolding
 
-- [ ] **001** · [T0.0a — Repository initialization and hygiene](001-T0.0a-repo-init-and-hygiene.md) · S · setup
+- [x] **001** · [T0.0a — Repository initialization and hygiene](001-T0.0a-repo-init-and-hygiene.md) · S · setup
 - [ ] **002** · [T0.0b — Contributor guide and branch-per-ticket workflow](002-T0.0b-contributor-and-branch-workflow.md) · S · setup — after T0.0a
 - [ ] **003** · [T1 — Crate layout and workspace skeleton](003-T1-crate-layout-and-workspace-skeleton.md) · S · setup — after T0.0a
 - [ ] **004** · [T2 — Async runtime and concurrency primitives ADR](004-T2-async-runtime-adr.md) · S · decision — after T1
