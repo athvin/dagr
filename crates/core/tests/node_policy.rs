@@ -245,8 +245,16 @@ fn timeout_feeds_the_policy_hash_not_the_structural_fingerprint() {
     );
     let fp_b = b.finish().assemble().expect("assembles").fingerprint();
 
-    assert_eq!(fp_a.structural(), fp_b.structural(), "timeout is not structural");
-    assert_ne!(fp_a.policy(), fp_b.policy(), "timeout moves the policy hash");
+    assert_eq!(
+        fp_a.structural(),
+        fp_b.structural(),
+        "timeout is not structural"
+    );
+    assert_ne!(
+        fp_a.policy(),
+        fp_b.policy(),
+        "timeout moves the policy hash"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -257,11 +265,17 @@ fn timeout_feeds_the_policy_hash_not_the_structural_fingerprint() {
 fn trigger_rule_feeds_the_structural_fingerprint_not_the_policy_hash() {
     // Two consume-nothing nodes differing only in trigger rule.
     let mut a = Flow::new();
-    let _ = a.register_source_with_trigger("n", &MakeRows, NodePolicy::new(), TriggerRule::AllSucceeded);
+    let _ = a.register_source_with_trigger(
+        "n",
+        &MakeRows,
+        NodePolicy::new(),
+        TriggerRule::AllSucceeded,
+    );
     let fp_a = a.finish().assemble().expect("assembles").fingerprint();
 
     let mut b = Flow::new();
-    let _ = b.register_source_with_trigger("n", &MakeRows, NodePolicy::new(), TriggerRule::AllTerminal);
+    let _ =
+        b.register_source_with_trigger("n", &MakeRows, NodePolicy::new(), TriggerRule::AllTerminal);
     let fp_b = b.finish().assemble().expect("assembles").fingerprint();
 
     assert_ne!(
@@ -296,8 +310,16 @@ fn group_is_in_neither_hash() {
 
     assert_eq!(fp_a.structural(), fp_b.structural(), "group not structural");
     assert_eq!(fp_a.policy(), fp_b.policy(), "group not in policy hash");
-    assert_eq!(fp_b.structural(), fp_c.structural(), "group rename not structural");
-    assert_eq!(fp_b.policy(), fp_c.policy(), "group rename not in policy hash");
+    assert_eq!(
+        fp_b.structural(),
+        fp_c.structural(),
+        "group rename not structural"
+    );
+    assert_eq!(
+        fp_b.policy(),
+        fp_c.policy(),
+        "group rename not in policy hash"
+    );
     // But the group is visible in the effective policy (artifact organization).
     let ep = effective(
         |flow| {
@@ -336,7 +358,10 @@ fn valid_execution_class_override_on_synchronous_work_assembles() {
         &BlockingTask,
         NodePolicy::new().execution_class(ExecutionClass::Blocking),
     );
-    assert!(flow.finish().assemble().is_ok(), "synchronous override assembles");
+    assert!(
+        flow.finish().assemble().is_ok(),
+        "synchronous override assembles"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +451,9 @@ fn setting_a_policy_value_requires_no_task_code_change() {
     let _ = flow.register_source_with(
         "b",
         &MakeRows,
-        NodePolicy::new().retries(7).timeout(Duration::from_secs(11)),
+        NodePolicy::new()
+            .retries(7)
+            .timeout(Duration::from_secs(11)),
     );
     let pipeline = flow.finish();
 
@@ -539,7 +566,10 @@ fn durability_flag_arms_the_assembly_contract_check() {
             .is_durable(),
         "durable present in effective policy"
     );
-    assert!(ok_pipeline.assemble().is_ok(), "durable-with-contract assembles");
+    assert!(
+        ok_pipeline.assemble().is_ok(),
+        "durable-with-contract assembles"
+    );
 
     // A durable-marked node whose output does NOT implement the contract fails
     // assembly through the existing check.
@@ -567,8 +597,14 @@ fn policy_owns_retries_and_backoff_and_produces_the_runner_config() {
 
     // The policy carries the full retry + backoff shape.
     assert_eq!(policy.retry_count(), 4);
-    assert_eq!(policy.backoff().nominal_delay(0), Duration::from_millis(50));
-    assert_eq!(policy.backoff().nominal_delay(1), Duration::from_millis(100));
+    assert_eq!(
+        policy.backoff_shape().nominal_delay(0),
+        Duration::from_millis(50)
+    );
+    assert_eq!(
+        policy.backoff_shape().nominal_delay(1),
+        Duration::from_millis(100)
+    );
 
     // Policy produces the RetryConfig the attempt runner consumes — retries live
     // in exactly one home (the policy), and the runner reads it from there.

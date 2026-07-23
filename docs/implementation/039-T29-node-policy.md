@@ -71,7 +71,39 @@ Define the immutable per-node policy value, its conservative defaults, and its a
 
 ## Open questions
 
-None.
+None were stated (this section and the `docs/tasks.md` T29 entry carry no `Q:`
+items). Three design decisions the objective left implicit are recorded here for
+the record:
+
+- **Trigger rule and group live *beside* the policy value, not as settable
+  `NodePolicy` fields.** The objective lists the trigger rule and group among the
+  fields C5 owns, but it also mandates keeping the compile-time constraint that a
+  non-default trigger rule is expressible *only* on a consume-nothing node — a
+  constraint enforced upstream by the binding typestate (`ConsumesNothing` vs.
+  `ConsumesData`). Adding a settable `trigger_rule` to `NodePolicy` (which any node
+  carries) would weaken that guarantee. Resolution: the trigger rule stays sourced
+  from the binding (a new `Flow::register_source_with_trigger` exposes it for
+  sources — themselves consume-nothing — without offering it to data nodes), and
+  the group stays the `register_*_in_group` presentation seam (C6/T51). Both
+  surface on the resolved `EffectivePolicy` (the artifact-facing, defaults-written-out
+  view), which is where "full effective policy in the graph artifact" is satisfied.
+
+- **`RetryConfig` becomes the runner's *derived input*, not a second authoring
+  knob.** "Retry configuration has exactly one home" and "the interim knob is
+  removed from the public surface" are reconciled by making the C5 policy the sole
+  *authoring* home: `NodePolicy` carries the retry count and full `Backoff` shape,
+  and `NodePolicy::retry_config()` derives the `RetryConfig` the attempt runner
+  (`run_with_retries`) reads (`retries(n)` → `n+1` total attempts). `RetryConfig` /
+  `Backoff` remain the runner's *parameter types* (the runner signature and its T20/
+  T21/T22 tests depend on them), but there is no longer an independent registration
+  path that authors retries outside policy.
+
+- **Backoff equality is over the growth factor's bit pattern.** `NodePolicy` must be
+  `Eq`/`Hash` (it lives inside the `Eq`-deriving `PipelineNode`/`AssemblyArtifact`),
+  but `Backoff` holds an `f64` factor. Resolution: `Backoff` gets a manual
+  `PartialEq`/`Eq`/`Hash` comparing the factor by `to_bits()` — total, deterministic,
+  and consistent with the canonical policy-hash encoding (which also hashes the raw
+  bits), so two policies stating the same backoff compare and hash identically.
 
 ## Out of scope
 
