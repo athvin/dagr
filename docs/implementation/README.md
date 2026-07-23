@@ -68,7 +68,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **042** · [T32 — C12: container limit detection](042-T32-container-limit-detection.md) · M · feature — after T31
 - [x] **043** · [T33 — C13: execution class dispatch](043-T33-execution-class-dispatch.md) · M · feature — after T20, T29, T2
 - [x] **044** · [T34 — C15: failure policy, propagation, and trigger-rule runtime](044-T34-failure-policy-and-propagation.md) · M · feature — after T24, T29, T0.4
-- [ ] **045** · [T35 — C16: cancellation core and graceful drain](045-T35-cancellation-core-and-drain.md) · M · feature — after T24, T34
+- [x] **045** · [T35 — C16: cancellation core and graceful drain](045-T35-cancellation-core-and-drain.md) · M · feature — after T24, T34
 - [ ] **046** · [T36 — C16: OS signals, final flush, and temp cleanup](046-T36-os-signals-flush-and-cleanup.md) · M · feature — after T19, T35, T0.6
 - [ ] **047** · [T37 — C12: permit-release outcome matrix tests](047-T37-permit-release-outcome-matrix-tests.md) · M · feature (tests) — after T21, T23, T31, T35
 - [ ] **048** · [T67 — Two-concurrent-runs test](048-T67-two-concurrent-runs-test.md) · S · feature (tests) — after T24, T0.6
