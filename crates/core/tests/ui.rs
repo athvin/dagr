@@ -113,8 +113,31 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// The `target/<profile>` directory holding the built `dagr_core` rlib and the
+/// `deps/` dependency dir. Derived from the running test executable's own path:
+/// an integration-test binary lives at `<target>/<profile>/deps/<name>-<hash>`,
+/// so two levels up is exactly `<target>/<profile>` — profile-agnostic (debug or
+/// release) and independent of the workspace-level `CARGO_TARGET_TMPDIR`. A
+/// real-API sample (one that imports `dagr_core`) is linked against the rlib
+/// there; a self-contained sample needs none of this.
+fn target_profile_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // .../target/<profile>/deps/ui-<hash>  ->  .../target/<profile>
+    exe.parent().and_then(Path::parent).map(Path::to_path_buf)
+}
+
+/// Whether `sample` references the real `dagr_core` crate (so it must be linked
+/// against the built rlib rather than compiled standalone). A self-contained
+/// throwaway sketch (the T5 fixtures) does not, and is compiled bare.
+fn needs_dagr_core(sample: &Path) -> bool {
+    fs::read_to_string(sample).is_ok_and(|src| src.contains("dagr_core"))
+}
+
 /// Compile `sample` with the pinned `rustc`, emitting no artifact. Returns the
-/// combined diagnostic text and whether compilation *succeeded*.
+/// combined diagnostic text and whether compilation *succeeded*. A sample that
+/// imports `dagr_core` is linked against the workspace-built rlib so the real
+/// authoring-API compile-fail cases (T11/T12) resolve their imports and produce
+/// the *intended* diagnostic — never a spurious unresolved-import error.
 fn compile_sample(sample: &Path) -> (String, bool) {
     // A unique throwaway output path under the target dir so parallel/repeat
     // runs never collide and nothing is left behind on disk.
@@ -125,15 +148,36 @@ fn compile_sample(sample: &Path) -> (String, bool) {
         std::process::id()
     ));
 
-    let result = Command::new(pinned_rustc())
-        .arg("--edition")
+    let mut cmd = Command::new(pinned_rustc());
+    cmd.arg("--edition")
         .arg("2021")
         .arg("--crate-type")
         .arg("bin")
         .arg("--color")
         .arg("never")
         .arg("-o")
-        .arg(&out)
+        .arg(&out);
+
+    // Link the real `dagr_core` rlib for samples that use the shipped API.
+    if needs_dagr_core(sample) {
+        let profile_dir = target_profile_dir().expect(
+            "the running test executable resolves to a target/<profile> dir; a real-API \
+             UI sample needs the built dagr_core rlib beside it",
+        );
+        let rlib = profile_dir.join("libdagr_core.rlib");
+        assert!(
+            rlib.exists(),
+            "expected the built dagr_core rlib at {} — run `cargo test` (which builds \
+             the lib first) rather than invoking this harness in isolation",
+            rlib.display(),
+        );
+        cmd.arg("--extern")
+            .arg(format!("dagr_core={}", rlib.display()))
+            .arg("-L")
+            .arg(format!("dependency={}", profile_dir.join("deps").display()));
+    }
+
+    let result = cmd
         .arg(sample)
         .output()
         .expect("failed to invoke the pinned rustc");

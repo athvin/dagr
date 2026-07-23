@@ -93,11 +93,15 @@ impl Task for ConsumeTwo {
 fn single_input_binds_a_bare_handle() {
     let gamma: Handle<Gamma> = source("make-gamma", &MakeGamma);
 
-    // Exactly one handle, bound as the bare value — NOT `(gamma,)`.
+    // Exactly one handle, bound as the bare value — NOT `(gamma,)`. The
+    // downstream registration returns a handle for its OWN output type (`Rows`),
+    // pinned by this annotated binding.
     let (rows, node): (Handle<Rows>, _) = source_and_bind("rows", &ConsumeGamma, gamma);
 
-    // The downstream registration returns a handle for its own output type.
-    let _assert_output_type: Handle<Rows> = rows;
+    // The returned handle identifies the downstream node itself (its own output),
+    // distinct from the upstream it consumed.
+    assert_eq!(rows.id(), node.id());
+    assert_ne!(rows.id(), gamma.id());
 
     // The recorded edge names the upstream as a DATA dependency.
     let edges: &[DataEdge] = node.data_edges();
@@ -114,8 +118,7 @@ fn two_input_tuple_preserves_order() {
     let alpha: Handle<Alpha> = source("make-alpha", &MakeAlpha);
     let beta: Handle<Beta> = source("make-beta", &MakeBeta);
 
-    let (_bytes, node): (Handle<Bytes>, _) =
-        source_and_bind("bytes", &ConsumeTwo, (alpha, beta));
+    let (_bytes, node): (Handle<Bytes>, _) = source_and_bind("bytes", &ConsumeTwo, (alpha, beta));
 
     let edges = node.data_edges();
     assert_eq!(edges.len(), 2);
@@ -163,8 +166,7 @@ fn receive_mode_is_recorded_not_adjudicated() {
     assert_eq!(owned_node.data_edges()[0].mode(), ReceiveMode::Owned);
 
     // Explicit per-edge clone-on-read opt-in.
-    let (_clone_out, clone_node) =
-        source_and_bind("clone", &ConsumeGamma, gamma.clone_on_read());
+    let (_clone_out, clone_node) = source_and_bind("clone", &ConsumeGamma, gamma.clone_on_read());
     assert_eq!(clone_node.data_edges()[0].mode(), ReceiveMode::CloneOnRead);
 
     // Explicit shared-read opt-in.
@@ -222,7 +224,7 @@ fn tuple_arities_up_to_the_ceiling_compile() {
     let a: Handle<Alpha> = source("a3-a", &MakeAlpha);
     let b: Handle<Beta> = source("a3-b", &MakeBeta);
     let g: Handle<Gamma> = source("a3-g", &MakeGamma);
-    let node3 = source_and_bind_three(&a, &b, &g);
+    let node3 = source_and_bind_three(a, b, g);
     assert_eq!(node3.data_edges().len(), 3);
 
     // arity 8
@@ -244,12 +246,11 @@ impl Task for ConsumeThree {
     }
 }
 fn source_and_bind_three(
-    a: &Handle<Alpha>,
-    b: &Handle<Beta>,
-    g: &Handle<Gamma>,
+    a: Handle<Alpha>,
+    b: Handle<Beta>,
+    g: Handle<Gamma>,
 ) -> dagr_core::binding::RegisteredNode {
-    let (_out, node): (Handle<Bytes>, _) =
-        source_and_bind("three", &ConsumeThree, (*a, *b, *g));
+    let (_out, node): (Handle<Bytes>, _) = source_and_bind("three", &ConsumeThree, (a, b, g));
     node
 }
 

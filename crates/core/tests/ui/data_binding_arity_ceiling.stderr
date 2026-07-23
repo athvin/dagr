@@ -1,0 +1,26 @@
+# Compile-failure snapshot for `data_binding_arity_ceiling.rs` — ticket T11
+# (021).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C3; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# Binding MORE than the documented ceiling of 8 handles fires the SINGLE curated
+# `#[diagnostic::on_unimplemented]` message on `Deps` — NOT a wall of trait
+# errors (`grep -c 'error\['` over the diagnostic == 1). The substrings pin the
+# curated text: the ceiling ("the maximum input arity is 8"), the "too many
+# inputs" lead, and the aggregate-into-a-struct remedy the note directs the
+# author to (arch.md §121, §128; T5 ADR §4).
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+too many inputs bound to one task: the maximum input arity is 8
+aggregate the upstream values into a struct produced by an intermediate node

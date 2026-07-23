@@ -1,0 +1,27 @@
+# Compile-failure snapshot for `data_binding_non_default_rule.rs` — ticket T11
+# (021).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C3; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# A non-default trigger rule on a DATA-dependent node is inexpressible: after
+# `.depends_on` the REAL binding builder is `NodeBinding<ConsumesData>`, a
+# typestate that offers no `trigger_rule` method (it is available only on
+# `NodeBinding<ConsumesNothing>`). The substrings are the stable, toolchain-
+# pinned facets: the error CODE `E0599`, the method name `trigger_rule`, and the
+# state `ConsumesData` the method is absent from (arch.md §126, §52).
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+E0599
+trigger_rule
+ConsumesData
