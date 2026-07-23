@@ -61,7 +61,27 @@ Every scenario below is a unit test that constructs a `RunContext` by hand — n
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket; tasks.md pre-resolved the substantive ones (opaque data
+interval, additive registry/scratch seams, resource-requirement plumbing). Two
+implementation judgment calls are recorded here for audit:
+
+- **Context-exposed types are dagr-owned, keeping `dagr-core` dependency-free.**
+  Per the T2 async-runtime ADR (004) — "context-exposed types are dagr-owned
+  wherever practical; the cancellation signal is a dagr-owned wrapper, never a
+  bare tokio/`tokio-util` type" — the cancellation signal (`CancellationSignal`
+  over a shared flag, flipped by a runtime/test-held `CancellationSource`), the
+  `LogSpan`, and the identity newtypes (`RunId`, `PipelineId`) are all
+  dagr-owned. No tokio/tracing dependency is added; the real token/span/tracing
+  backing is wired by the runner and logging tickets (T20/T21/T35, C25) without
+  changing this task-facing surface. Parameters are carried opaquely as
+  `Arc<dyn Any + Send + Sync>` and read back by type (typed parsing is bootstrap,
+  C7/C26).
+- **`NodeId::from_name` made public.** Hand-constructing a teardown context names
+  the covered nodes, and a teardown developer identifies them by author-declared
+  name. `from_name` is a pure name-derived identity token that manufactures no
+  `Handle` and consults no registry, so exposing it does **not** weaken C2's
+  unforgeable-`Handle`/no-lookup contract (documented at the function). It does
+  not re-decide C2; it uses the same identity C2 already mints.
 
 ## Out of scope
 - The concrete resource registry (C9) — construction, type-keyed retrieval, newtype disambiguation, ambiguity failure, secret wrapping, and bootstrap validation of the registry against declared requirements — all land in **T30**. This ticket lands only the accessor seam and the declaration plumbing.
