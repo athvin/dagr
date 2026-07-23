@@ -62,8 +62,28 @@
 //!   teardown-only view of covered nodes' terminal states (C17), from arch.md's
 //!   normative taxonomy; the runtime-side population is C17 / T52.
 //!
-//! The flow builder (C7 / T13), assembly (T14), and the M1+ execution tickets
-//! land later; this crate grows one component at a time.
+//! The **C7 flow builder and node identity** (ticket T13): accumulating node
+//! registrations into an immutable pipeline.
+//!
+//! - [`flow::Flow`] — the builder that accepts node registrations (each carrying
+//!   an explicit caller-supplied name), hands back the typed [`Handle`] from T10,
+//!   and finalizes into an immutable [`flow::Pipeline`]. Node identity is derived
+//!   **solely** from the registration name — never from order — so renaming a
+//!   node changes its identity while reordering registrations changes nothing.
+//! - [`flow::Pipeline`] — the immutable, read-only pipeline finalization yields;
+//!   once produced, no registration or mutation is possible (a compile-time
+//!   fact). Its node set is keyed by identity name, so lookup and content
+//!   comparison are order-insensitive.
+//! - [`flow::PipelineNode`] — a node's preserved record: its identity, its
+//!   handle linkage, its recorded data edges and trigger rule, and the
+//!   group-label slot (C6 / T51) carried alongside identity but **excluded** from
+//!   it.
+//!
+//! Assembly *validation and precomputation* (C7 / T14) — duplicate-name
+//! reporting, the empty-pipeline check, class-override validation, the
+//! zero-consumer warning, consumer/dependency counts, execution order, and the
+//! fingerprint — and the M1+ execution tickets land later; this crate grows one
+//! component at a time.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
@@ -71,6 +91,7 @@
 pub mod binding;
 pub mod context;
 pub mod error;
+pub mod flow;
 pub mod handle;
 pub mod task;
 
@@ -84,5 +105,6 @@ pub use context::{
     RunId, ScratchError, ScratchStore, TerminalState,
 };
 pub use error::{TaskError, TaskErrorClass};
+pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
 pub use task::{ExecutionClass, Task};
