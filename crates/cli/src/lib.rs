@@ -1,0 +1,31 @@
+//! `dagr-cli` — the pipeline binary's command-line contract (placeholder
+//! skeleton).
+//!
+//! This crate will supply the standard verbs every dagr pipeline binary shares
+//! — emit the graph, validate, render, run, run a single node, resume, fold an
+//! event stream into a run artifact, and prune — along with the typed-parameter
+//! plumbing around them (arch.md C26 · Command-line contract).
+//!
+//! It is the one place the three other crates meet: it depends on
+//! [`dagr-core`](../dagr_core/index.html) (the live pipeline),
+//! [`dagr-artifact`](../dagr_artifact/index.html) (the records), and
+//! [`dagr-render`](../dagr_render/index.html) (diagram source). Invoking
+//! rendering here as the pipeline binary's `render` subcommand still consumes
+//! artifacts only, so it does not weaken the C24 renderer-independence
+//! guarantee that the crate graph enforces.
+//!
+//! At this milestone the crate is an empty, compiling placeholder created by
+//! ticket T1. The verb implementations and exit-code contract land in later
+//! tickets (T55, T56).
+//!
+//! Lint posture is inherited from `[workspace.lints]`; this crate adds no
+//! crate-level lint attributes.
+
+#[cfg(test)]
+mod tests {
+    /// Placeholder test proving the crate is compiled and in the workspace
+    /// build graph (T1 Test plan: "every member crate is discoverable and
+    /// testable"). Real tests arrive with the CLI contract in T55/T56.
+    #[test]
+    fn crate_is_in_the_build_graph() {}
+}

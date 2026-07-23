@@ -4,9 +4,10 @@ A Rust framework for pipelines that compile: you write units of work, declare
 how they connect, and build one binary that *is* the pipeline — no server, no
 scheduler, no database, no config file describing the graph, no parsing step.
 
-> **Status:** early scaffolding. This repository currently contains repository
-> hygiene and specifications only; no crate exists yet (the workspace is a later
-> milestone). Nothing below claims a feature the code already has.
+> **Status:** early scaffolding. This repository contains repository hygiene,
+> specifications, and an empty-but-compiling Cargo workspace skeleton (the four
+> member crates below have placeholder targets only). Nothing below claims a
+> feature the code already has.
 
 ## What it is not
 
@@ -21,8 +22,30 @@ specification.
 ## MSRV
 
 **MSRV: Rust 1.95.0.** The supported minimum is pinned in
-[`rust-toolchain.toml`](rust-toolchain.toml) and must match this line with no
-drift. Raising the MSRV is a minor version bump, called out in release notes.
+[`rust-toolchain.toml`](rust-toolchain.toml) and in the workspace manifest
+([`Cargo.toml`](Cargo.toml), `[workspace.package].rust-version`), and must match
+this line with no drift. Raising the MSRV is a minor version bump, called out in
+release notes.
+
+## Workspace layout
+
+dagr is a multi-crate Cargo workspace. Member crates live under `crates/`; the
+topology and rationale are recorded in the ADR embedded in
+[ticket T1](docs/implementation/003-T1-crate-layout-and-workspace-skeleton.md).
+
+| Crate | Role | Depends on |
+|---|---|---|
+| `core` (`dagr-core`) | Authoring surface and execution core — the code that *is* a running pipeline. Kept to a minimal, review-gated dependency set. | *(nothing)* |
+| `artifact` (`dagr-artifact`) | The serializable records a run leaves behind (graph artifact, run artifact, event records) — the boundary a renderer consumes. | *(nothing)* |
+| `render` (`dagr-render`) | Reads an artifact and emits diagram source (DOT / Mermaid). Library plus a standalone renderer binary. | `artifact` **only** |
+| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract. | `core`, `artifact`, `render` |
+
+The only allowed dependency edges are `cli → {core, artifact, render}` and
+`render → artifact`. **`render` has no dependency edge onto `core`**, so a
+renderer is structurally incapable of reaching the live pipeline — it consumes
+artifacts only and needs no access to the binary that produced them
+([`docs/arch.md`](docs/arch.md) C24 · Renderers). The standalone `dagr-render`
+binary builds without `core` or `cli`, which is that guarantee made concrete.
 
 ## Platform support
 
