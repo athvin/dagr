@@ -1,0 +1,21 @@
+# dagr code owners.
+#
+# Assigns review ownership so every pull request requires an owner's review
+# before merge (see CONTRIBUTING.md "Review and merge"). This satisfies the
+# arch.md commitment that the acceptance-criteria matrix and release checklist
+# are "version-controlled and reviewed like code," and that additions to the
+# core crate's dependency set are reviewed as API decisions.
+#
+# The wildcard rule covers the whole repository, so any PR — touching code or
+# docs — reaches an owner. More specific rules may be layered below later
+# (last-matching-pattern wins, per GitHub's CODEOWNERS semantics).
+#
+# NOTE: GitHub honours this file at .github/CODEOWNERS, CODEOWNERS (repo root),
+# or docs/CODEOWNERS. It only *enforces* required review when branch protection
+# with "Require review from Code Owners" is enabled in the repository settings —
+# an operator action outside this repository. The recorded standing exception
+# (the operator runs the ticket loop with autonomous merge) lives in
+# docs/implementation/DEVIATIONS.md.
+
+# Repository-wide owner.
+*       @athvin

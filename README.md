@@ -49,6 +49,18 @@ interact with ordering, when a run needs explaining after the fact, or when a
 long pipeline died partway and had to start over. Below that, plain tokio is the
 honest recommendation.
 
+## Contributing
+
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a change. It is the
+process contract every ticket ships under: one branch and one pull request per
+implementation ticket (branch name copied verbatim from the ticket header),
+tests written first as a hard rule, and a fixed merge gate of CI checks
+(`cargo fmt --check`, `cargo clippy` with warnings denied, the test suite, the
+rustdoc lint, and `cargo audit` / `cargo deny` where configured). Open PRs with
+the [pull request template](.github/pull_request_template.md); review ownership
+is assigned in [`.github/CODEOWNERS`](.github/CODEOWNERS). Tickets live under
+[`docs/implementation/`](docs/implementation/README.md).
+
 ## License
 
 Licensed under the [MIT License](LICENSE) (`SPDX-License-Identifier: MIT`).
