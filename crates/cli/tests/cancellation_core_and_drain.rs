@@ -167,6 +167,67 @@ impl Task for FiresCancel {
     }
 }
 
+/// A cancel trigger that fires the programmatic cancel, then **holds its C12 permit
+/// until the cancellation it fired has provably taken effect in the run loop** — it
+/// cooperatively spins on its own per-attempt cancellation signal (a child of the
+/// run token) and returns only once it observes the flip. The driver flips the
+/// run-scoped token *only* when it processes the cancellation-wake this trigger
+/// fired (`driver::enter_cancellation`), so this trigger returning is an
+/// **observable proof** the loop has entered the drain — the trigger's permit (and
+/// so any pool capacity a serialized sibling is waiting on) is not released one
+/// instant sooner. That closes the initial-frontier race in
+/// `no_new_admission_after_cancellation`: a ready-but-unstarted node serialized
+/// behind this trigger's permit can never be admitted before cancellation is in
+/// effect, so it is deterministically settled `cancelled` rather than racing to run.
+/// No wall clock, no sleep — only the cancellation flag it fired and then observes.
+struct FiresCancelThenAwaitsCancellation {
+    handle: CancelHandle,
+}
+impl Task for FiresCancelThenAwaitsCancellation {
+    type Input = ();
+    type Output = u64;
+    async fn run(&mut self, c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+        self.handle.cancel();
+        // Spin cooperatively until the loop has processed the wake and flipped the
+        // run token (observed through this attempt's child signal). Bounded so a
+        // regression that never propagates cancellation cannot hang the test — the
+        // fallback return then fails the assertion (the gate stays non-vacuous).
+        for _ in 0..100_000 {
+            if c.cancellation().is_cancelled() {
+                return Ok(1);
+            }
+            tokio::task::yield_now().await;
+        }
+        Ok(1)
+    }
+}
+
+/// A memory-hog task that **holds the whole working-memory pool until the run is
+/// cancelled**, then returns. It cooperatively spins on its per-attempt
+/// cancellation signal and returns the moment it observes the flip. Its purpose is
+/// purely structural: by occupying the entire pinned memory pool for the whole
+/// pre-cancellation window it keeps a serialized, ready-but-unstarted sibling
+/// **provably pending** (never admitted) until the cancellation/stop settles that
+/// sibling `cancelled`. This closes the initial-frontier permit-release race in
+/// `stop_on_first_failure_routes_through_cancellation_core_with_failure_origin`,
+/// where the failing node cannot itself hold its permit until the stop it triggers
+/// (its return *is* the trigger). No wall clock, no sleep — only the cancellation
+/// flag it observes. Its own terminal state is not asserted.
+struct HoldsMemoryUntilCancelled;
+impl Task for HoldsMemoryUntilCancelled {
+    type Input = ();
+    type Output = u64;
+    async fn run(&mut self, c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+        for _ in 0..100_000 {
+            if c.cancellation().is_cancelled() {
+                return Ok(0);
+            }
+            tokio::task::yield_now().await;
+        }
+        Ok(0)
+    }
+}
+
 /// A **cooperative** await-bound task: it spins on the cancellation signal and
 /// returns promptly once it observes cancellation. It yields between checks so it
 /// never starves the async runtime. Because it is in flight when the run is
@@ -584,9 +645,12 @@ fn no_new_admission_after_cancellation() {
 
     let costed = || NodePolicy::new().working_memory(10);
     let mut flow = Flow::new();
-    // `a_trigger` fires cancellation the moment it runs; `later` is a costed
-    // default-rule node that has not yet been admitted (pool serialized to one, and
-    // the trigger sorts first so it is admitted before `later`).
+    // `a_trigger` fires cancellation the moment it runs and then **holds its permit
+    // until it observes that cancellation has propagated into the run loop**; `later`
+    // is a costed default-rule node serialized behind that permit (pool pinned to one
+    // node's worth), so it is provably still pending — never admitted — when the
+    // trigger releases. That removes the initial-frontier race in which the trigger's
+    // permit could be released (admitting `later`) before the cancel took effect.
     let _tr = flow.register_source_with("a_trigger", &Succeeds, costed());
     let _later = flow.register_source_with("later", &Succeeds, costed());
     let pipeline = flow.finish();
@@ -602,7 +666,7 @@ fn no_new_admission_after_cancellation() {
         "a_trigger".into(),
         SourceRunner::boxed(
             "a_trigger",
-            FiresCancel {
+            FiresCancelThenAwaitsCancellation {
                 handle: handle.clone(),
             },
             slot_for::<u64>("a_trigger", 0),
@@ -653,7 +717,16 @@ fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() 
 
     let costed = || NodePolicy::new().working_memory(10);
     let mut flow = Flow::new();
-    let _bad = flow.register_source_with("bad", &Fails, costed());
+    // `bad` fails and triggers the stop; it cannot itself hold a pool permit until
+    // the stop takes effect (its *return* is what triggers the stop), so it is made
+    // cost-free and a separate `keeper` node occupies the **entire** pinned memory
+    // pool until the run is cancelled. That keeps the unrelated default-rule `later`
+    // provably pending (never admitted) across the whole pre-stop window — closing
+    // the initial-frontier race where a raced permit release could admit and run
+    // `later` before the stop settles it `cancelled`. `later` consumes nothing from
+    // `bad`/`keeper` (no data edge), so it stays an unrelated default-rule node.
+    let _bad = flow.register_source_with("bad", &Fails, NodePolicy::new());
+    let _keeper = flow.register_source_with("keeper", &Succeeds, costed());
     let _later = flow.register_source_with("later", &Succeeds, costed());
     let _n = flow.register_source_with_trigger(
         "contingency",
@@ -672,6 +745,14 @@ fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() 
     runners.insert(
         "bad".into(),
         SourceRunner::boxed("bad", Fails, slot_for::<u64>("bad", 0)),
+    );
+    runners.insert(
+        "keeper".into(),
+        SourceRunner::boxed(
+            "keeper",
+            HoldsMemoryUntilCancelled,
+            slot_for::<u64>("keeper", 0),
+        ),
     );
     runners.insert(
         "later".into(),
