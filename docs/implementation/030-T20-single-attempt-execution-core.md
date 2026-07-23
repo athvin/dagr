@@ -59,7 +59,56 @@ Each scenario is independently checkable. Use a hand-constructed C8 run context 
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket file listed **None** and `docs/tasks.md`'s T20 entry carries no `Q:`
+items, but four design decisions the ticket left implicit had to be settled to
+implement it. They are recorded here (resolved, not left open):
+
+- **Which crate the core lives in — resolved: `dagr-core`, in a new
+  `execution` module.** The runner composes `Task` / `RunContext` / `Slot` (all
+  in `dagr-core`) with the C19 event stream (in `dagr-artifact`). `dagr-core`
+  must stay dependency-free (workspace ADR T1) and must not gain an edge onto
+  `dagr-artifact`. Rather than move the core into a crate that depends on both,
+  the runner lives in `dagr-core` and emits through an **abstract
+  event-emission port** (`AttemptEventSink`, a trait defined in `dagr-core`)
+  that the caller (T24, in `dagr-cli`, which already depends on both crates)
+  satisfies with an adaptor over the concrete `dagr_artifact::event_stream::EventStreamWriter`.
+  This keeps `dagr-core` dependency-free, keeps the C24 boundary intact, and
+  lets tests use a plain capturing sink with no runtime.
+
+- **Runtime shape — resolved: runtime-agnostic `async fn`, awaited by the
+  caller's runtime.** T20's Out of scope defers execution-class dispatch
+  (C13/T33) and states "the runner receives work that is already on the correct
+  thread/runtime … this runner assumes the work returns." The T2 ADR (004) puts
+  await-bound work on tokio, but placement is T33's, not T20's. So the core
+  awaits the task's `run()` future directly and adds **no `tokio` dependency**;
+  the caller-provided runtime drives it. This is what keeps `dagr-core`
+  dependency-free at T20.
+
+- **What the "attempt-outcome record" is — resolved: the C19
+  `attempt-succeeded` / `attempt-failed` event.** arch.md C14 requires "exactly
+  one *attempt-outcome* record per attempt (alongside its per-transition
+  events)." In C19's closed vocabulary (T19) that record is the single
+  `attempt-succeeded` or `attempt-failed` event carrying node + attempt
+  identity — one per attempt, never zero, never two. `attempt-started` is the
+  opening per-transition marker; the succeeded/failed event is both the closing
+  transition and the exactly-once outcome record; `node-terminal` carries the
+  classified terminal state. No new event kind is minted (the vocabulary is
+  closed).
+
+- **Node name for events — resolved: passed to the runner explicitly.** C19
+  events key nodes by author-declared *name* (a `String`), but `NodeId` (C2) is
+  opaque with no route back to a name. The runner therefore takes the node's
+  name alongside its `RunContext` (the caller has it from assembly). The
+  attempt number and maximum come from the `RunContext` (C8), exactly as the
+  ticket requires.
+
+- **Outcome taxonomy shape — resolved: a stable `AttemptOutcome` enum reserving
+  T21/T23 variants.** The classifier returns success / permanent-failure /
+  retry-eligible-failure / skip (the four T20 owns) as an enum whose rustdoc
+  documents the reserved timeout (T21) and panic (T23) variants those tickets
+  add without reshaping it. T20 adds those variants as documented-but-unreached
+  today would be scope creep, so they are named in prose only; the enum is
+  `#[non_exhaustive]` so adding them later is not a breaking change.
 
 ## Out of scope
 - **Per-attempt timeout and abandonment (T21).** No timer is started or enforced here; no await-bound future is dropped, no blocking/compute attempt is marked timed-out, no abandoned-but-running (zombie) accounting, and no barring of late results from slots or scratch. This runner assumes the work returns.
