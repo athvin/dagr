@@ -68,7 +68,6 @@
 //! end; it triggers no cancellation and handles no signals.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -256,6 +255,11 @@ pub struct RunReport {
     /// The resolved run identity (as it appears in the store path and every
     /// record).
     pub run_id: String,
+    /// The run-store event-stream path this run wrote under —
+    /// `<base>/<pipeline>/<run-id>/events.jsonl` (T0.6 §3). Because the path
+    /// embeds both the pipeline identity and the run-unique id, two concurrent
+    /// runs — even of the same binary and pipeline — write disjoint files.
+    pub stream_path: String,
 }
 
 // ===========================================================================
@@ -353,7 +357,10 @@ struct BufferingSink {
 
 impl BufferingSink {
     fn drain(&self) -> Vec<AttemptEvent> {
-        let mut guard = self.records.lock().expect("event buffer mutex not poisoned");
+        let mut guard = self
+            .records
+            .lock()
+            .expect("event buffer mutex not poisoned");
         std::mem::take(&mut *guard)
     }
 }
@@ -394,63 +401,387 @@ impl AttemptEventSink for BufferingSink {
 ///
 /// # Panics
 ///
-/// Panics only on a framework defect it cannot record (a poisoned internal mutex);
-/// a sink fault is surfaced through the returned report's outcome, never a panic.
+/// Panics only on a framework defect it cannot record (a poisoned internal mutex
+/// or a task runtime that could not be built); a sink fault is absorbed and
+/// surfaced through the returned report's outcome, never a panic.
 #[must_use]
 pub fn drive<S, C>(
-    _config: &RunConfig,
-    _pipeline_name: &str,
-    _assembled: Result<RunPlan, AssemblyError>,
-    _env_allowlist: &[String],
-    _sink: S,
-    _clock: C,
+    config: &RunConfig,
+    pipeline_name: &str,
+    assembled: Result<RunPlan, AssemblyError>,
+    env_allowlist: &[String],
+    sink: S,
+    clock: C,
 ) -> RunReport
 where
     S: EventSink + 'static,
     C: MonotonicClock + 'static,
 {
-    // Implemented in the next commit (TDD: tests are written and failing first).
-    unimplemented!("run-loop driver body lands after the failing tests")
+    // --- Bootstrap: mint identity, open the stream BEFORE assembly is acted on.
+    let run_id = config.resolve_run_id();
+    let run_id_str = run_id.as_str().to_string();
+    let mut writer = EventStreamWriter::new(sink, clock, run_id, pipeline_name.to_string());
+    // The run-store path this run writes under: <base>/<pipeline>/<run-id>/…
+    // (T0.6 §3). Two concurrent runs write disjoint files by construction.
+    let stream_path = writer.stream_path(&config.base);
+
+    // Capture the allowlisted environment values (empty allowlist → nothing).
+    let captured_env = capture_env(env_allowlist);
+
+    // --- The assembly-failure path: the store/stream are already open, so an
+    // assembly failure still records itself (arch.md C19). Emit a fingerprint-less
+    // header and a run-finished carrying the assembly-failed outcome, then return.
+    let plan = match assembled {
+        Ok(plan) => plan,
+        Err(_error) => {
+            let header = RunStartedHeader {
+                pipeline: pipeline_name.to_string(),
+                fingerprint_structural: None,
+                fingerprint_policy: None,
+                parameters: config.parameters.clone(),
+                data_interval: config.data_interval.clone(),
+                captured_env,
+                resumed_from: None,
+            };
+            let _ = writer.run_started(header);
+            let _ = writer.run_finished(RunOutcome::AssemblyFailed);
+            let _ = writer.finish();
+            return RunReport {
+                outcome: RunOutcome::AssemblyFailed,
+                terminal_states: BTreeMap::new(),
+                run_id: run_id_str,
+                stream_path,
+            };
+        }
+    };
+
+    // --- The successful path: assembly produced a valid artifact. Emit the
+    // run-started header carrying every field known at start (both fingerprints
+    // present because assembly succeeded), then drive the execution loop.
+    let RunPlan { pipeline, runners } = plan;
+    let artifact = pipeline
+        .assemble()
+        .expect("the plan carries an already-assembled pipeline");
+    let fp = artifact.fingerprint();
+    let header = RunStartedHeader {
+        pipeline: pipeline_name.to_string(),
+        fingerprint_structural: Some(format!("{:016x}", fp.structural())),
+        fingerprint_policy: Some(format!("{:016x}", fp.policy())),
+        parameters: config.parameters.clone(),
+        data_interval: config.data_interval.clone(),
+        captured_env,
+        resumed_from: None,
+    };
+    let _ = writer.run_started(header);
+
+    let tracker = ReadinessTracker::new(&pipeline, &artifact);
+    let (outcome, terminal_states) = run_loop(
+        &pipeline,
+        &run_id_str,
+        pipeline_name,
+        runners,
+        tracker,
+        config.grace,
+        &mut writer,
+    );
+
+    let _ = writer.run_finished(outcome);
+    let _ = writer.finish();
+
+    RunReport {
+        outcome,
+        terminal_states,
+        run_id: run_id_str,
+        stream_path,
+    }
 }
 
-// Silence unused-item warnings on the skeleton the implementation commit
-// consumes, so the failing-tests commit still compiles under `-D warnings`. The
-// implementation commit deletes this shim.
-#[allow(dead_code)]
-fn _touch_skeleton(config: &RunConfig, plan: &RunPlan) {
-    let _ = config.resolve_run_id();
-    let _ = (&config.base, config.grace, &config.parameters, &config.data_interval);
-    let _ = plan.pipeline.len();
-    let _ = plan.runners.len();
-    let _ = std::any::type_name::<AtomicBool>();
-    let _ = std::any::type_name::<CoreRunId>();
-    let _ = std::any::type_name::<PipelineId>();
-    let _ = std::any::type_name::<NodeId>();
-    let _ = std::any::type_name::<Decision>();
-    let _ = std::any::type_name::<ReadinessTracker>();
-    let _ = std::any::type_name::<RunStartedHeader>();
-    let _ = std::any::type_name::<OverallOutcome>();
-    let _ = Ordering::SeqCst;
-    let _: fn(&BufferingSink) -> Vec<AttemptEvent> = BufferingSink::drain;
-    let _: fn(
-        &mut EventStreamWriter<VoidSink, ZeroClock>,
-        &AttemptEvent,
-    ) -> Result<(), dagr_artifact::event_stream::SinkFault> = write_attempt_event;
+/// Capture the values of the allowlisted environment variable names, in name
+/// order (empty allowlist → empty map). Nothing outside the allowlist is read
+/// into the map — the negative half of the C7/C22 capture contract.
+fn capture_env(allowlist: &[String]) -> BTreeMap<String, String> {
+    let mut captured = BTreeMap::new();
+    for name in allowlist {
+        if let Ok(value) = std::env::var(name) {
+            captured.insert(name.clone(), value);
+        }
+    }
+    captured
 }
 
-// Minimal internal sink/clock stand-ins used only by `_touch_imports` above.
-struct VoidSink;
-impl EventSink for VoidSink {
-    fn append_line(&mut self, _line: &[u8]) -> std::io::Result<()> {
-        Ok(())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+/// The message a finished attempt sends back to the framework loop: the node's
+/// name, its terminal state, and the buffered attempt records it emitted (drained
+/// into the single-owner writer by the loop, in order).
+struct AttemptDone {
+    node: String,
+    state: TerminalState,
+    events: Vec<AttemptEvent>,
 }
-struct ZeroClock;
-impl MonotonicClock for ZeroClock {
-    fn elapsed_ns(&self) -> u64 {
-        0
+
+/// The readiness-driven execution loop (arch.md C11; the driver's half of the
+/// run-end condition).
+///
+/// It runs on the isolated **framework runtime** and admits ready nodes onto a
+/// separate **tasks runtime**, feeding each terminal outcome back into the tracker
+/// so dependents decrement and either become ready (admitted next) or receive
+/// their propagated terminal state (recorded without executing) — never batching a
+/// level into a wave. It terminates precisely when nothing is pending and nothing
+/// is in flight, then waits the bounded grace period for zombie candidates
+/// (blocking timeouts) and emits a `zombie-at-exit` event for each. Returns the
+/// overall outcome and the per-node terminal states.
+fn run_loop<S, C>(
+    pipeline: &Pipeline,
+    run_id: &str,
+    _pipeline_name: &str,
+    runners: BTreeMap<String, Box<dyn NodeRunner>>,
+    mut tracker: ReadinessTracker,
+    grace: Duration,
+    writer: &mut EventStreamWriter<S, C>,
+) -> (RunOutcome, BTreeMap<String, TerminalState>)
+where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    // The tasks runtime — a separate multi-threaded runtime attempts spawn onto,
+    // so a task jamming every task worker cannot stall the framework runtime that
+    // drives this loop, its timers, and the writer (T2 · isolated framework
+    // runtime).
+    let tasks = tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .expect("tasks runtime builds");
+    // The framework runtime — drives this loop, the grace timer, and the drain.
+    let framework = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_time()
+        .build()
+        .expect("framework runtime builds");
+
+    let runners = Arc::new(Mutex::new(runners));
+    let mut terminal_states: BTreeMap<String, TerminalState> = BTreeMap::new();
+    let mut zombie_candidates: Vec<String> = Vec::new();
+
+    framework.block_on(async {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AttemptDone>();
+        // Nodes admitted and not yet reported terminal — the "in flight" count.
+        let mut in_flight: usize = 0;
+
+        // Admit the initial-ready frontier (every zero-dependency source node).
+        for id in tracker.initial_ready().to_vec() {
+            if let Some(name) = node_name(pipeline, id) {
+                admit(run_id, &name, &runners, &tasks, &tx, writer);
+                in_flight += 1;
+            }
+        }
+
+        // Drive until nothing is pending and nothing is in flight. A node whose
+        // attempt reports terminal is fed back into the tracker; each unlocked
+        // decision either admits a ready node or records a propagated terminal
+        // (which cascades, without executing).
+        while in_flight > 0 {
+            let Some(done) = rx.recv().await else { break };
+            in_flight -= 1;
+            // Drain this attempt's buffered records into the single-owner writer.
+            for ev in &done.events {
+                let _ = write_attempt_event(writer, ev);
+            }
+            record_terminal(&done.node, done.state, &mut terminal_states);
+            if is_zombie_candidate(done.state) {
+                zombie_candidates.push(done.node.clone());
+            }
+            // Feed the executed-terminal outcome back into the tracker and act on
+            // every decision it unlocks (ready → admit; propagated → record).
+            let id = NodeId::from_name(&done.node);
+            let decisions = tracker.notify_terminal(id, done.state);
+            in_flight += apply_decisions(
+                pipeline,
+                run_id,
+                &decisions,
+                &runners,
+                &tasks,
+                &tx,
+                writer,
+                &mut terminal_states,
+                &mut zombie_candidates,
+            );
+        }
+
+        // Natural run end: nothing pending, nothing in flight. Give any zombie
+        // candidate (a blocking timeout whose leftover work has not confirmed
+        // return — the M1 ledger that would confirm it is T31) at most the grace
+        // period, then emit a zombie-at-exit event for each. This does not change
+        // any node's terminal state (a timed-out node stays timed-out).
+        if !zombie_candidates.is_empty() {
+            tokio::time::sleep(grace).await;
+            for node in &zombie_candidates {
+                let _ = writer.zombie_at_exit(node);
+            }
+        }
+    });
+
+    // Shut the tasks runtime down **without joining** any abandoned-but-running
+    // (zombie) blocking closure: a leftover thread counts as *decided*, not
+    // in-flight, so it must not hold the run open. `Runtime::drop` would block
+    // forever on an unkillable busy blocking thread; `shutdown_background` returns
+    // immediately, leaving any zombie to be reaped by process exit (the driver
+    // already emitted its `zombie-at-exit` event above). Every well-behaved
+    // attempt has already reported terminal before this point.
+    tasks.shutdown_background();
+
+    let outcome = overall_outcome(&terminal_states);
+    (outcome, terminal_states)
+}
+
+/// Admit `name`: emit its `node-ready` record and spawn its attempt onto the
+/// `tasks` runtime, which reports the terminal state and buffered records back
+/// over `tx` when it finishes.
+fn admit<S, C>(
+    run_id: &str,
+    name: &str,
+    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
+    tasks: &tokio::runtime::Runtime,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    writer: &mut EventStreamWriter<S, C>,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let _ = writer.node_ready(name);
+    // Node identity is name-derived (T0.7), so this is the same id assembly and the
+    // tracker use — no pipeline lookup needed.
+    let node_id = NodeId::from_name(name);
+
+    let Some(mut runner) = runners
+        .lock()
+        .expect("runners mutex not poisoned")
+        .remove(name)
+    else {
+        // A framework defect (no runner for an admitted node): decide it failed
+        // rather than hang the run. Report it as a permanent failure terminal.
+        let _ = tx.send(AttemptDone {
+            node: name.to_string(),
+            state: TerminalState::Failed,
+            events: Vec::new(),
+        });
+        return;
+    };
+
+    let run_id = run_id.to_string();
+    let name_owned = name.to_string();
+    let tx = tx.clone();
+    tasks.spawn(async move {
+        // A per-attempt buffering sink: the attempt emits into it off the
+        // framework runtime; the loop drains it into the writer in order.
+        let mut sink = BufferingSink::default();
+        let ctx = RunContext::builder(CoreRunId::new(run_id), PipelineId::new("pipeline"), node_id)
+            .build();
+        let state = runner.run(&ctx, &mut sink).await;
+        let _ = tx.send(AttemptDone {
+            node: name_owned,
+            state,
+            events: sink.drain(),
+        });
+    });
+}
+
+/// Act on each decision the tracker unlocked. A [`Decision::Ready`] node is
+/// admitted (and counts as one more in-flight); a
+/// [`Decision::PropagatedTerminal`] node is recorded directly — it never executes
+/// — and its cascade is already folded into the tracker, so its own dependents'
+/// decisions are handled recursively here. Returns how many new nodes went in
+/// flight.
+#[allow(clippy::too_many_arguments)]
+fn apply_decisions<S, C>(
+    pipeline: &Pipeline,
+    run_id: &str,
+    decisions: &[Decision],
+    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
+    tasks: &tokio::runtime::Runtime,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    writer: &mut EventStreamWriter<S, C>,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+    zombie_candidates: &mut Vec<String>,
+) -> usize
+where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let mut newly_in_flight = 0;
+    for decision in decisions {
+        match decision {
+            Decision::Ready(id) => {
+                if let Some(name) = node_name(pipeline, *id) {
+                    admit(run_id, &name, runners, tasks, tx, writer);
+                    newly_in_flight += 1;
+                }
+            }
+            Decision::PropagatedTerminal { node, state, .. } => {
+                // A propagated-terminal node never executes: record its state and
+                // its node-terminal record directly (the tracker already cascaded
+                // it, so no further notify_terminal is needed for it here).
+                if let Some(name) = node_name(pipeline, *node) {
+                    let _ = writer.node_terminal(&name, wire_terminal(*state));
+                    record_terminal(&name, *state, terminal_states);
+                    if is_zombie_candidate(*state) {
+                        zombie_candidates.push(name);
+                    }
+                }
+            }
+        }
+    }
+    newly_in_flight
+}
+
+/// Resolve a node id to its author-declared name, or `None` if it is not in the
+/// pipeline.
+fn node_name(pipeline: &Pipeline, id: NodeId) -> Option<String> {
+    pipeline.node(id).map(|n| n.name().to_string())
+}
+
+/// Record a node's terminal state exactly once (a node's terminal state is
+/// decided exactly once — Vocabulary; a repeat is a defensive no-op).
+fn record_terminal(
+    node: &str,
+    state: TerminalState,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+) {
+    terminal_states.entry(node.to_string()).or_insert(state);
+}
+
+/// Whether a terminal state marks a **zombie candidate** at run end: a blocking
+/// timeout (or a left-behind abandoned closure) whose leftover work may still be
+/// running. The M1 driver has no permit ledger to confirm the closure returned
+/// (that is T31), so it treats a `timed-out`/`abandoned` node as a candidate and
+/// emits a `zombie-at-exit` event for it after the bounded grace wait.
+fn is_zombie_candidate(state: TerminalState) -> bool {
+    matches!(state, TerminalState::TimedOut | TerminalState::Abandoned)
+}
+
+/// The overall run outcome from the per-node terminal states (arch.md Vocabulary /
+/// C19): failed if any node ended failure-like, cancelled if any ended stop-like
+/// (and none failure-like), else succeeded. A run containing only skips (or
+/// successes) is a **successful** run.
+fn overall_outcome(terminal_states: &BTreeMap<String, TerminalState>) -> RunOutcome {
+    let mut any_failure = false;
+    let mut any_stop = false;
+    for state in terminal_states.values() {
+        match state {
+            TerminalState::Failed
+            | TerminalState::TimedOut
+            | TerminalState::Abandoned
+            | TerminalState::UpstreamFailed => any_failure = true,
+            TerminalState::Cancelled => any_stop = true,
+            TerminalState::Succeeded
+            | TerminalState::Skipped
+            | TerminalState::UpstreamSkipped
+            | TerminalState::SatisfiedFromPrior => {}
+        }
+    }
+    if any_failure {
+        RunOutcome::Failed
+    } else if any_stop {
+        RunOutcome::Cancelled
+    } else {
+        RunOutcome::Succeeded
     }
 }

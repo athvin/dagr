@@ -139,10 +139,11 @@ fn run_started_body(bytes: &[u8]) -> Option<serde_json::Value> {
 /// The `run_id` field of the first record, or `None`.
 fn run_id_field(bytes: &[u8]) -> Option<String> {
     let stream = dagr_artifact::event_stream::read_records(bytes).expect("stream parses");
-    stream
-        .records
-        .first()
-        .and_then(|rec| rec.get("run_id").and_then(|v| v.as_str()).map(str::to_string))
+    stream.records.first().and_then(|rec| {
+        rec.get("run_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    })
 }
 
 // ===========================================================================
@@ -207,7 +208,7 @@ struct SourceRunner<T: Task<Input = ()>> {
 }
 
 impl<T: Task<Input = ()>> SourceRunner<T> {
-    fn new(name: &str, task: T, slot: Arc<Slot<T::Output>>) -> Box<dyn NodeRunner> {
+    fn boxed(name: &str, task: T, slot: Arc<Slot<T::Output>>) -> Box<dyn NodeRunner> {
         Box::new(Self {
             name: name.to_string(),
             task: Some(task),
@@ -245,7 +246,7 @@ struct MapRunner<U: Send + Sync + 'static, T: Task<Input = U>> {
 }
 
 impl<U: Send + Sync + Clone + 'static, T: Task<Input = U>> MapRunner<U, T> {
-    fn new(
+    fn boxed(
         name: &str,
         task: T,
         upstream: SlotRef<U>,
@@ -336,7 +337,10 @@ fn single_success_plan() -> (Pipeline, RunPlan) {
     let _ = assembled;
     let slot = slot_for::<u64>("only", 0);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("only".into(), SourceRunner::new("only", SucceedsWith(7), slot));
+    runners.insert(
+        "only".into(),
+        SourceRunner::boxed("only", SucceedsWith(7), slot),
+    );
     let plan = RunPlan::new(pipeline.clone(), runners);
     (pipeline, plan)
 }
@@ -384,7 +388,10 @@ fn happy_path_single_node_terminates() {
     for (kind, node) in order {
         let idx = index_of(&events, kind, node)
             .unwrap_or_else(|| panic!("missing {kind} for {node:?} in {events:?}"));
-        assert!(idx >= last, "record {kind}/{node:?} out of order in {events:?}");
+        assert!(
+            idx >= last,
+            "record {kind}/{node:?} out of order in {events:?}"
+        );
         last = idx;
     }
     // run-finished is the final record.
@@ -418,14 +425,17 @@ fn linear_chain_drives_dependents() {
     let c_slot = slot_for::<u64>("c", 0);
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("a".into(), SourceRunner::new("a", SucceedsWith(1), Arc::clone(&a_slot)));
+    runners.insert(
+        "a".into(),
+        SourceRunner::boxed("a", SucceedsWith(1), Arc::clone(&a_slot)),
+    );
     runners.insert(
         "b".into(),
-        MapRunner::new("b", PassThrough, a_slot.shared_ref(), Arc::clone(&b_slot)),
+        MapRunner::boxed("b", PassThrough, a_slot.shared_ref(), Arc::clone(&b_slot)),
     );
     runners.insert(
         "c".into(),
-        MapRunner::new("c", PassThrough, b_slot.shared_ref(), c_slot),
+        MapRunner::boxed("c", PassThrough, b_slot.shared_ref(), c_slot),
     );
 
     let sink = MemorySink::default();
@@ -440,7 +450,11 @@ fn linear_chain_drives_dependents() {
 
     assert_eq!(report.outcome, RunOutcome::Succeeded);
     for n in ["a", "b", "c"] {
-        assert_eq!(terminal_of(&sink.bytes(), n).as_deref(), Some("succeeded"), "{n}");
+        assert_eq!(
+            terminal_of(&sink.bytes(), n).as_deref(),
+            Some("succeeded"),
+            "{n}"
+        );
     }
 
     let events = parse_events(&sink.bytes());
@@ -480,10 +494,18 @@ fn fast_branch_not_gated_on_slow_branch() {
     }
 
     // root -> slow ; root -> fast -> fast_child   (fast_child does NOT depend on slow)
+    // `root` fans out to two consumers, so its edges are received SHARED (an owned
+    // multi-consumer edge is an assembly error — C3/T0.2).
     let mut flow = Flow::new();
     let root = flow.register_source("root", &SucceedsWith(1));
-    let _slow = flow.register::<Slow, _>("slow", &Slow { delay: Duration::from_millis(300) }, root);
-    let fast = flow.register::<Fast, _>("fast", &Fast, root);
+    let _slow = flow.register::<Slow, _>(
+        "slow",
+        &Slow {
+            delay: Duration::from_millis(300),
+        },
+        root.shared(),
+    );
+    let fast = flow.register::<Fast, _>("fast", &Fast, root.shared());
     let _child = flow.register::<Fast, _>("fast_child", &Fast, fast);
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
@@ -494,18 +516,28 @@ fn fast_branch_not_gated_on_slow_branch() {
     let child_slot = slot_for::<u64>("fast_child", 0);
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("root".into(), SourceRunner::new("root", SucceedsWith(1), Arc::clone(&root_slot)));
+    runners.insert(
+        "root".into(),
+        SourceRunner::boxed("root", SucceedsWith(1), Arc::clone(&root_slot)),
+    );
     runners.insert(
         "slow".into(),
-        MapRunner::new("slow", Slow { delay: Duration::from_millis(300) }, root_slot.shared_ref(), slow_slot),
+        MapRunner::boxed(
+            "slow",
+            Slow {
+                delay: Duration::from_millis(300),
+            },
+            root_slot.shared_ref(),
+            slow_slot,
+        ),
     );
     runners.insert(
         "fast".into(),
-        MapRunner::new("fast", Fast, root_slot.shared_ref(), Arc::clone(&fast_slot)),
+        MapRunner::boxed("fast", Fast, root_slot.shared_ref(), Arc::clone(&fast_slot)),
     );
     runners.insert(
         "fast_child".into(),
-        MapRunner::new("fast_child", Fast, fast_slot.shared_ref(), child_slot),
+        MapRunner::boxed("fast_child", Fast, fast_slot.shared_ref(), child_slot),
     );
 
     let sink = MemorySink::default();
@@ -528,7 +560,7 @@ fn fast_branch_not_gated_on_slow_branch() {
     );
 }
 
-/// Identity is a UUIDv7 minted at bootstrap with no override; every record carries
+/// Identity is a `UUIDv7` minted at bootstrap with no override; every record carries
 /// it and the report exposes it.
 #[test]
 fn identity_is_a_uuidv7_minted_at_bootstrap() {
@@ -544,12 +576,15 @@ fn identity_is_a_uuidv7_minted_at_bootstrap() {
     );
     let id = run_id_field(&sink.bytes()).expect("a run id on the first record");
     let parsed = uuid_parse(&id);
-    assert_eq!(parsed, Some(7), "run id is a well-formed UUIDv7");
+    assert_eq!(parsed, Some(7), "run id is a well-formed `UUIDv7`");
     assert_eq!(report.run_id, id, "report exposes the same identity");
     // Every record carries that identity.
     let stream = dagr_artifact::event_stream::read_records(&sink.bytes()).unwrap();
     for rec in &stream.records {
-        assert_eq!(rec.get("run_id").and_then(|v| v.as_str()), Some(id.as_str()));
+        assert_eq!(
+            rec.get("run_id").and_then(|v| v.as_str()),
+            Some(id.as_str())
+        );
     }
 }
 
@@ -587,10 +622,13 @@ fn assembly_failure_still_records() {
     let _a = flow.register_source("dup", &SucceedsWith(1));
     let _b = flow.register_source("dup", &SucceedsWith(2));
     let pipeline = flow.finish();
-    let assembled: Result<RunPlan, _> = pipeline.assemble().map(|_| {
-        RunPlan::new(pipeline.clone(), BTreeMap::new())
-    });
-    assert!(assembled.is_err(), "the fixture must actually fail assembly");
+    let assembled: Result<RunPlan, _> = pipeline
+        .assemble()
+        .map(|_| RunPlan::new(pipeline.clone(), BTreeMap::new()));
+    assert!(
+        assembled.is_err(),
+        "the fixture must actually fail assembly"
+    );
 
     let sink = MemorySink::default();
     let report = drive(
@@ -643,8 +681,14 @@ fn allowlisted_env_captured_others_not() {
     // The secret appears nowhere in the whole stream.
     let raw = sink.bytes();
     let all = String::from_utf8_lossy(&raw);
-    assert!(!all.contains("super-secret"), "non-allowlisted secret must not appear");
-    assert!(!all.contains("DAGR_TEST_SECRET"), "non-allowlisted name must not appear");
+    assert!(
+        !all.contains("super-secret"),
+        "non-allowlisted secret must not appear"
+    );
+    assert!(
+        !all.contains("DAGR_TEST_SECRET"),
+        "non-allowlisted name must not appear"
+    );
 
     // Empty allowlist → no environment value captured.
     let (_p2, plan2) = single_success_plan();
@@ -659,7 +703,11 @@ fn allowlisted_env_captured_others_not() {
     );
     let body2 = run_started_body(&sink2.bytes()).expect("header");
     let captured2 = body2.get("captured_env").expect("captured_env present");
-    assert_eq!(captured2.as_object().map(serde_json::Map::len), Some(0), "empty allowlist captures nothing");
+    assert_eq!(
+        captured2.as_object().map(serde_json::Map::len),
+        Some(0),
+        "empty allowlist captures nothing"
+    );
 
     std::env::remove_var("DAGR_TEST_ALLOWED");
     std::env::remove_var("DAGR_TEST_SECRET");
@@ -675,7 +723,10 @@ fn run_started_header_carries_start_fields() {
     pipeline.assemble().expect("assembles");
     let slot = slot_for::<u64>("only", 0);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("only".into(), SourceRunner::new("only", SucceedsWith(7), slot));
+    runners.insert(
+        "only".into(),
+        SourceRunner::boxed("only", SucceedsWith(7), slot),
+    );
 
     let mut params = BTreeMap::new();
     params.insert("threshold".to_string(), "5".to_string());
@@ -692,11 +743,22 @@ fn run_started_header_carries_start_fields() {
         TickClock::default(),
     );
     let body = run_started_body(&sink.bytes()).expect("header");
-    assert_eq!(body.get("pipeline").and_then(|v| v.as_str()), Some("demo-pipeline"));
-    assert!(body.get("fingerprint_structural").is_some(), "structural fingerprint present");
-    assert!(body.get("fingerprint_policy").is_some(), "policy hash present");
     assert_eq!(
-        body.get("parameters").and_then(|p| p.get("threshold")).and_then(|v| v.as_str()),
+        body.get("pipeline").and_then(|v| v.as_str()),
+        Some("demo-pipeline")
+    );
+    assert!(
+        body.get("fingerprint_structural").is_some(),
+        "structural fingerprint present"
+    );
+    assert!(
+        body.get("fingerprint_policy").is_some(),
+        "policy hash present"
+    );
+    assert_eq!(
+        body.get("parameters")
+            .and_then(|p| p.get("threshold"))
+            .and_then(|v| v.as_str()),
         Some("5")
     );
     assert!(body.get("data_interval").is_some(), "data interval present");
@@ -727,10 +789,13 @@ fn every_outcome_is_fed_back() {
     let up_slot = slot_for::<u64>("up", 1);
     let down_slot = slot_for::<u64>("down", 0);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("up".into(), SourceRunner::new("up", SucceedsWith(3), Arc::clone(&up_slot)));
+    runners.insert(
+        "up".into(),
+        SourceRunner::boxed("up", SucceedsWith(3), Arc::clone(&up_slot)),
+    );
     runners.insert(
         "down".into(),
-        MapRunner::new("down", PassThrough, up_slot.shared_ref(), down_slot),
+        MapRunner::boxed("down", PassThrough, up_slot.shared_ref(), down_slot),
     );
 
     let sink = MemorySink::default();
@@ -780,10 +845,13 @@ fn failing_upstream_propagates_and_run_fails() {
     let up_slot = slot_for::<u64>("up", 1);
     let down_slot = slot_for::<u64>("down", 0);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("up".into(), SourceRunner::new("up", AlwaysFails, Arc::clone(&up_slot)));
+    runners.insert(
+        "up".into(),
+        SourceRunner::boxed("up", AlwaysFails, Arc::clone(&up_slot)),
+    );
     runners.insert(
         "down".into(),
-        MapRunner::new("down", PassThrough, up_slot.shared_ref(), down_slot),
+        MapRunner::boxed("down", PassThrough, up_slot.shared_ref(), down_slot),
     );
 
     let sink = MemorySink::default();
@@ -820,7 +888,10 @@ fn skip_only_run_reports_success() {
     pipeline.assemble().expect("assembles");
     let slot = slot_for::<u64>("skipper", 0);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("skipper".into(), SourceRunner::new("skipper", AlwaysSkips, slot));
+    runners.insert(
+        "skipper".into(),
+        SourceRunner::boxed("skipper", AlwaysSkips, slot),
+    );
 
     let sink = MemorySink::default();
     let report = drive(
@@ -831,7 +902,10 @@ fn skip_only_run_reports_success() {
         sink.clone(),
         TickClock::default(),
     );
-    assert_eq!(terminal_of(&sink.bytes(), "skipper").as_deref(), Some("skipped"));
+    assert_eq!(
+        terminal_of(&sink.bytes(), "skipper").as_deref(),
+        Some("skipped")
+    );
     assert_eq!(
         report.outcome,
         RunOutcome::Succeeded,
@@ -856,11 +930,18 @@ fn run_ends_when_nothing_pending_or_in_flight() {
     let events = parse_events(&sink.bytes());
     let finished = index_of(&events, "run-finished", None).unwrap();
     // Nothing appears after run-finished.
-    assert_eq!(finished, events.len() - 1, "run-finished is the last record");
+    assert_eq!(
+        finished,
+        events.len() - 1,
+        "run-finished is the last record"
+    );
     // No node-admitted after the terminal of the only node.
     let terminal = index_of(&events, "node-terminal", Some("only")).unwrap();
     assert!(
-        events.iter().skip(terminal + 1).all(|(k, _)| k != "node-admitted"),
+        events
+            .iter()
+            .skip(terminal + 1)
+            .all(|(k, _)| k != "node-admitted"),
         "no admissions after the last node terminated"
     );
 }
@@ -881,7 +962,7 @@ fn framework_survives_a_misbehaving_task() {
     // timeout on the framework runtime so it fires even though the body jams.
     runners.insert(
         "blocker".into(),
-        BlockingTimeoutRunner::new("blocker", BlocksForever, slot),
+        BlockingTimeoutRunner::boxed("blocker", BlocksForever, slot),
     );
 
     let sink = MemorySink::default();
@@ -895,7 +976,13 @@ fn framework_survives_a_misbehaving_task() {
     );
     // The run still finished, and the node's fate was decided as timed-out.
     let events = parse_events(&sink.bytes());
-    for anchor in ["run-started", "node-ready", "node-admitted", "attempt-started", "run-finished"] {
+    for anchor in [
+        "run-started",
+        "node-ready",
+        "node-admitted",
+        "attempt-started",
+        "run-finished",
+    ] {
         let node = if anchor == "run-started" || anchor == "run-finished" {
             None
         } else {
@@ -912,7 +999,10 @@ fn framework_survives_a_misbehaving_task() {
         "the blocking timeout fires despite the jammed worker"
     );
     // The node's terminal state stays timed-out (never a second terminal state).
-    assert_eq!(report.terminal_states.get("blocker").copied(), Some(TerminalState::TimedOut));
+    assert_eq!(
+        report.terminal_states.get("blocker").copied(),
+        Some(TerminalState::TimedOut)
+    );
 }
 
 /// Zombie at natural run end: the sole node is a blocking task already marked
@@ -930,7 +1020,7 @@ fn zombie_at_natural_run_end() {
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "zombie".into(),
-        BlockingTimeoutRunner::new("zombie", BlocksForever, slot),
+        BlockingTimeoutRunner::boxed("zombie", BlocksForever, slot),
     );
 
     let sink = MemorySink::default();
@@ -954,17 +1044,32 @@ fn zombie_at_natural_run_end() {
     );
     let events = parse_events(&sink.bytes());
     let zombie = index_of(&events, "zombie-at-exit", Some("zombie"));
-    assert!(zombie.is_some(), "a zombie-at-exit event for the leftover thread: {events:?}");
+    assert!(
+        zombie.is_some(),
+        "a zombie-at-exit event for the leftover thread: {events:?}"
+    );
     let finished = index_of(&events, "run-finished", None).unwrap();
-    assert!(zombie.unwrap() < finished, "zombie-at-exit precedes run-finished");
+    assert!(
+        zombie.unwrap() < finished,
+        "zombie-at-exit precedes run-finished"
+    );
     // The terminal state stays timed-out — never a second terminal state.
-    assert_eq!(terminal_of(&sink.bytes(), "zombie").as_deref(), Some("timed-out"));
+    assert_eq!(
+        terminal_of(&sink.bytes(), "zombie").as_deref(),
+        Some("timed-out")
+    );
     let terminal_count = events
         .iter()
         .filter(|(k, n)| k == "node-terminal" && n.as_deref() == Some("zombie"))
         .count();
-    assert_eq!(terminal_count, 1, "exactly one terminal state for the zombie node");
-    assert_eq!(report.terminal_states.get("zombie").copied(), Some(TerminalState::TimedOut));
+    assert_eq!(
+        terminal_count, 1,
+        "exactly one terminal state for the zombie node"
+    );
+    assert_eq!(
+        report.terminal_states.get("zombie").copied(),
+        Some(TerminalState::TimedOut)
+    );
 }
 
 /// Two simultaneous runs of the same binary do not interfere: two runs against
@@ -1032,7 +1137,7 @@ struct BlockingTimeoutRunner<T: Task<Input = ()>> {
 }
 
 impl<T: Task<Input = ()>> BlockingTimeoutRunner<T> {
-    fn new(name: &str, task: T, slot: Arc<Slot<T::Output>>) -> Box<dyn NodeRunner> {
+    fn boxed(name: &str, task: T, slot: Arc<Slot<T::Output>>) -> Box<dyn NodeRunner> {
         Box::new(Self {
             name: name.to_string(),
             task: Some(task),
@@ -1098,7 +1203,9 @@ where
             // Drive the inner future to completion synchronously on this blocking
             // thread. It never completes (BlocksForever), so the thread is the
             // leftover zombie.
-            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
             rt.block_on(async move { inner.run(&ctx, ()).await })
         })
         .await
@@ -1111,7 +1218,7 @@ where
 // ===========================================================================
 
 /// Parse the version nibble of a canonical UUID string, returning the version
-/// number (7 for UUIDv7) if the shape is well-formed.
+/// number (7 for `UUIDv7`) if the shape is well-formed.
 fn uuid_parse(s: &str) -> Option<u8> {
     // Canonical form: 8-4-4-4-12 hex with dashes; the version is the first nibble
     // of the third group.
@@ -1130,5 +1237,9 @@ fn uuid_parse(s: &str) -> Option<u8> {
     if !s.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return None;
     }
-    groups[2].chars().next().and_then(|c| c.to_digit(16)).map(|v| v as u8)
+    groups[2]
+        .chars()
+        .next()
+        .and_then(|c| c.to_digit(16))
+        .and_then(|v| u8::try_from(v).ok())
 }

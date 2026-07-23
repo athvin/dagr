@@ -43,11 +43,15 @@ dagr-render = { path = "../render" }
 #   * time — the per-attempt timeout deadline future and the bounded zombie grace
 #     wait at natural run end (C16) are `tokio::time` sleeps armed on the isolated
 #     runtime, so they fire even when task workers are saturated.
-# `macros`, `net`, `fs`, `process`, `signal`, and `sync` are deliberately omitted:
-# the driver builds its runtimes by hand (no `#[tokio::main]`), does no I/O of its
-# own (the sink is injected — T0.6), and triggers no cancellation/signals (T34/T36
-# own those). Outcome hand-off between the runtimes uses std channels, not tokio's.
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
+#   * sync — the framework loop receives each finished attempt's terminal state
+#     and buffered event records over a `tokio::sync::mpsc` channel (the hand-off
+#     from a spawned attempt back to the single-owner event writer), and awaits it
+#     without blocking the framework runtime.
+# `macros`, `net`, `fs`, `process`, and `signal` are deliberately omitted: the
+# driver builds its runtimes by hand (no `#[tokio::main]`), does no I/O of its own
+# (the sink is injected — T0.6), and triggers no cancellation/signals (T34/T36 own
+# those).
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync"] }
 
 [dev-dependencies]
 # The driver tests parse the event stream the driver wrote (the T24 test-plan
