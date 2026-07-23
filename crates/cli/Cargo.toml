@@ -32,5 +32,31 @@ dagr-core = { path = "../core" }
 dagr-artifact = { path = "../artifact" }
 dagr-render = { path = "../render" }
 
+# tokio — the async runtime the T2 ADR (004) commits to. The M1 run-loop driver
+# (T24) needs exactly two capabilities beyond bare futures, so the feature set is
+# kept minimal (NOT `full`, per the ticket's supply-chain constraint):
+#   * rt-multi-thread — the driver builds TWO multi-threaded runtimes: an isolated
+#     `framework` runtime (the loop, per-attempt timers, event writer — T2's
+#     isolated framework runtime) and a separate `tasks` runtime attempts spawn
+#     onto, so a task jamming every task worker cannot stall the framework runtime
+#     (the all-workers-blocked scenario). `rt` is implied by `rt-multi-thread`.
+#   * time — the per-attempt timeout deadline future and the bounded zombie grace
+#     wait at natural run end (C16) are `tokio::time` sleeps armed on the isolated
+#     runtime, so they fire even when task workers are saturated.
+# `macros`, `net`, `fs`, `process`, `signal`, and `sync` are deliberately omitted:
+# the driver builds its runtimes by hand (no `#[tokio::main]`), does no I/O of its
+# own (the sink is injected — T0.6), and triggers no cancellation/signals (T34/T36
+# own those). Outcome hand-off between the runtimes uses std channels, not tokio's.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
+
+[dev-dependencies]
+# The driver tests parse the event stream the driver wrote (the T24 test-plan
+# requirement: assert against the actual sink output, not internal state). The
+# stream is JSONL, so the tests read records as `serde_json::Value`s via the
+# writer's tolerant reader. serde_json is already the T4-sanctioned runtime
+# serialization stack (MIT, already on the allow-list via dagr-artifact); it is a
+# dev-dependency only — the driver itself pulls in no new serialization crate.
+serde_json = "1"
+
 [lints]
 workspace = true
