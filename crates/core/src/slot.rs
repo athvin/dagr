@@ -155,7 +155,14 @@ impl ResidencyLedger {
     }
 
     /// Charge `bytes` of residency (a slot was filled). Updates the peak.
-    fn charge(&self, bytes: u64) {
+    ///
+    /// `pub(crate)` so the C12 admission controller ([`crate::admission`]) can
+    /// mint an output-residency **slot lease** against the same shared ledger a
+    /// slot fills through (the working-vs-residency split, C12/C10): the transfer
+    /// of residency from the producing attempt to the output slot charges this
+    /// ledger, and the pool's counted memory folds it in. Slots charge it from
+    /// `Slot::fill`; the admission controller charges it at the residency transfer.
+    pub(crate) fn charge(&self, bytes: u64) {
         let new = self.current.fetch_add(bytes, Ordering::SeqCst) + bytes;
         // Raise the peak to at least the new current (monotone, race-safe).
         self.peak.fetch_max(new, Ordering::SeqCst);
@@ -163,7 +170,12 @@ impl ResidencyLedger {
 
     /// Release `bytes` of residency (a slot actually released). Idempotence is the
     /// caller's (a slot releases its residency exactly once).
-    fn release(&self, bytes: u64) {
+    ///
+    /// `pub(crate)` for the same reason as [`charge`](Self::charge): the admission
+    /// controller's slot lease drops when the slot actually releases (per C10,
+    /// after every consumer — including a zombie consumer — has returned), which
+    /// returns those bytes to the memory pool.
+    pub(crate) fn release(&self, bytes: u64) {
         self.current.fetch_sub(bytes, Ordering::SeqCst);
     }
 }

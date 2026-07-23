@@ -168,7 +168,9 @@ fn two_contending_multi_pool_nodes_make_progress_without_deadlock() {
     );
     // a runs and releases atomically — every pool it drew from returns together.
     drop(a);
-    let b = ctrl.try_admit("b", &cost).expect("b is admitted after a releases");
+    let b = ctrl
+        .try_admit("b", &cost)
+        .expect("b is admitted after a releases");
     drop(b);
     assert!(ctrl.all_pools_full());
 }
@@ -190,7 +192,11 @@ fn combined_counted_cost_never_exceeds_capacity_including_a_live_zombie() {
     let cost = mem_cost(1_000); // pinned to admit exactly one
     let zombie = ctrl.try_admit("z", &cost).expect("first fits");
     ctrl.mark_zombie(&zombie); // timed out → abandoned-but-running
-    assert_eq!(ctrl.remaining(Pool::Memory), 0, "zombie still pins its cost");
+    assert_eq!(
+        ctrl.remaining(Pool::Memory),
+        0,
+        "zombie still pins its cost"
+    );
 
     // The zombie's closure has not returned: a second same-cost node is refused.
     assert!(
@@ -382,7 +388,10 @@ fn permit_for_a_timed_out_blocking_attempt_is_held_until_the_closure_returns() {
     assert_eq!(ctrl.zombie_report().live_zombie_count, 1);
 
     // A live zombie is observable through the ZombieObserver seam (defers retry).
-    assert!(ctrl.has_live_zombie(), "zombie is live before the closure returns");
+    assert!(
+        ctrl.has_live_zombie(),
+        "zombie is live before the closure returns"
+    );
 
     // The closure finally returns → the permit drops → the cost releases and the
     // zombie count drops to zero.
@@ -463,7 +472,9 @@ fn slot_lease_is_held_until_the_slot_actually_releases() {
     // A zombie consumer of the value: its work has not returned, so the slot
     // cannot release. The residency stays counted the whole time.
     let consumer_cost = mem_cost(1_000);
-    let zombie_consumer = ctrl.try_admit("zombie_consumer", &consumer_cost).expect("fits");
+    let zombie_consumer = ctrl
+        .try_admit("zombie_consumer", &consumer_cost)
+        .expect("fits");
     ctrl.mark_zombie(&zombie_consumer);
     assert_eq!(
         ctrl.counted(Pool::Memory),
@@ -497,7 +508,9 @@ fn a_retained_output_is_charged_until_run_end() {
     // Consumers come and go (admitted and released), but the retained residency
     // is never reclaimed while the run is live.
     for i in 0..3 {
-        let c = ctrl.try_admit(&format!("consumer-{i}"), &mem_cost(500)).expect("fits");
+        let c = ctrl
+            .try_admit(&format!("consumer-{i}"), &mem_cost(500))
+            .expect("fits");
         drop(c);
         assert_eq!(ctrl.counted(Pool::Memory), 2_500, "retained stays charged");
     }
@@ -547,20 +560,25 @@ fn an_undeclared_cost_node_warns_in_a_memory_constrained_run() {
     // A memory-constrained pool (a real, finite constraint).
     let constrained = AdmissionController::new(PoolCapacities::new().memory(1_000));
     let no_cost = PoolCost::new(); // no declared memory cost
-    let warning: Option<UndeclaredCostWarning> = constrained.warn_if_undeclared("free_rider", &no_cost);
+    let warning: Option<UndeclaredCostWarning> =
+        constrained.warn_if_undeclared("free_rider", &no_cost);
     let warning = warning.expect("a constrained run warns about an undeclared-cost node");
     assert_eq!(warning.node(), "free_rider");
 
     // An unconstrained run (no memory constraint) does NOT warn.
     let unconstrained = AdmissionController::new(PoolCapacities::new());
     assert!(
-        unconstrained.warn_if_undeclared("free_rider", &no_cost).is_none(),
+        unconstrained
+            .warn_if_undeclared("free_rider", &no_cost)
+            .is_none(),
         "no warning fires for an unconstrained run"
     );
 
     // A node that DID declare a memory cost never warns, constrained or not.
     assert!(
-        constrained.warn_if_undeclared("declared", &mem_cost(100)).is_none(),
+        constrained
+            .warn_if_undeclared("declared", &mem_cost(100))
+            .is_none(),
         "a node with a declared cost does not warn"
     );
 }
@@ -583,9 +601,7 @@ fn declared_cost_is_exposed_for_the_artifact_juxtaposition() {
     );
 
     // Admit a node with a known per-pool declared cost, then time it out.
-    let cost = PoolCost::new()
-        .working_memory(300)
-        .blocking_threads(1);
+    let cost = PoolCost::new().working_memory(300).blocking_threads(1);
     let zombie = ctrl.try_admit("alpha", &cost).expect("fits");
     ctrl.mark_zombie(&zombie);
 
@@ -603,12 +619,10 @@ fn declared_cost_is_exposed_for_the_artifact_juxtaposition() {
 
     // The declared-cost of a node is derivable from its C5 policy cost vector
     // without duplicating the definition (the controller reads NodePolicy::cost).
-    let policy = NodePolicy::new()
-        .working_memory(300)
-        .blocking_threads(1);
+    let policy = NodePolicy::new().working_memory(300).blocking_threads(1);
     let declared = PoolCost::from_cost_vector(policy.cost());
-    assert_eq!(declared.working_memory(), 300);
-    assert_eq!(declared.blocking_threads(), 1);
+    assert_eq!(declared.working_memory_bytes(), 300);
+    assert_eq!(declared.blocking_thread_count(), 1);
 
     drop(zombie);
     assert_eq!(ctrl.zombie_report().live_zombie_count, 0);

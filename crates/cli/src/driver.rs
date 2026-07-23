@@ -76,6 +76,7 @@ use dagr_artifact::event_stream::{
     TerminalState as WireTerminalState,
 };
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
+use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
 use dagr_core::assembly::AssemblyError;
 use dagr_core::context::{PipelineId, RunContext, RunId as CoreRunId, TerminalState};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
@@ -108,6 +109,7 @@ pub struct RunConfig {
     grace: Duration,
     parameters: BTreeMap<String, String>,
     data_interval: Option<[String; 2]>,
+    capacities: PoolCapacities,
 }
 
 impl RunConfig {
@@ -121,6 +123,11 @@ impl RunConfig {
             grace: DEFAULT_GRACE,
             parameters: BTreeMap::new(),
             data_interval: None,
+            // Admission pools default to **unconstrained** (T31 takes capacities as
+            // an input; deriving them from container limits is T32). An
+            // unconstrained controller admits every ready node immediately, so the
+            // M1 run loop's behaviour is unchanged unless a capacity is pinned.
+            capacities: PoolCapacities::new(),
         }
     }
 
@@ -150,6 +157,17 @@ impl RunConfig {
     #[must_use]
     pub fn data_interval(mut self, interval: [String; 2]) -> Self {
         self.data_interval = Some(interval);
+        self
+    }
+
+    /// Pin the run's C12 admission-pool capacities (arch.md C12; T31). The default
+    /// is **unconstrained** (every ready node admitted at once); pinning a pool
+    /// bounds admission against it. Container-limit derivation of these capacities
+    /// is T32 — this is the pinned input, which is also how CI makes capacity
+    /// deterministic.
+    #[must_use]
+    pub fn capacities(mut self, capacities: PoolCapacities) -> Self {
+        self.capacities = capacities;
         self
     }
 
@@ -475,6 +493,10 @@ where
     let _ = writer.run_started(header);
 
     let tracker = ReadinessTracker::new(&pipeline, &artifact);
+    // The C12 admission controller for this run (T31). Its pools are pinned from
+    // the run config (unconstrained by default → admits every ready node at once,
+    // preserving the M1 loop's behaviour); container-limit sizing is T32.
+    let admission = AdmissionController::new(config.capacities);
     let (outcome, terminal_states) = run_loop(
         &pipeline,
         &run_id_str,
@@ -482,6 +504,7 @@ where
         runners,
         tracker,
         config.grace,
+        &admission,
         &mut writer,
     );
 
@@ -529,6 +552,7 @@ struct AttemptDone {
 /// is in flight, then waits the bounded grace period for zombie candidates
 /// (blocking timeouts) and emits a `zombie-at-exit` event for each. Returns the
 /// overall outcome and the per-node terminal states.
+#[allow(clippy::too_many_arguments)]
 fn run_loop<S, C>(
     pipeline: &Pipeline,
     run_id: &str,
@@ -536,6 +560,7 @@ fn run_loop<S, C>(
     runners: BTreeMap<String, Box<dyn NodeRunner>>,
     mut tracker: ReadinessTracker,
     grace: Duration,
+    admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
 ) -> (RunOutcome, BTreeMap<String, TerminalState>)
 where
@@ -565,19 +590,39 @@ where
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AttemptDone>();
         // Nodes admitted and not yet reported terminal — the "in flight" count.
         let mut in_flight: usize = 0;
+        // Ready nodes that could not yet acquire their C12 permit (a pool at
+        // capacity), oldest-ready-first (T31). Each is re-offered when a permit is
+        // released — a terminal outcome frees capacity, which is what unblocks the
+        // next waiter. Under the default unconstrained pools this stays empty and
+        // every ready node is admitted at once (the M1 behaviour).
+        let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
-        // Admit the initial-ready frontier (every zero-dependency source node).
+        // Offer the initial-ready frontier (every zero-dependency source node) to
+        // admission. A node that fits its pools is admitted (in flight); one that
+        // does not waits in `pending` for a release.
         for id in tracker.initial_ready().to_vec() {
             if let Some(name) = node_name(pipeline, id) {
-                admit(run_id, &name, &runners, &tasks, &tx, writer);
-                in_flight += 1;
+                offer_or_pend(
+                    pipeline,
+                    run_id,
+                    &name,
+                    &runners,
+                    &tasks,
+                    &tx,
+                    admission,
+                    writer,
+                    &mut pending,
+                    &mut in_flight,
+                );
             }
         }
 
-        // Drive until nothing is pending and nothing is in flight. A node whose
-        // attempt reports terminal is fed back into the tracker; each unlocked
-        // decision either admits a ready node or records a propagated terminal
-        // (which cascades, without executing).
+        // Drive until nothing is pending, nothing is in flight, and no ready node
+        // is waiting for capacity. A node whose attempt reports terminal is fed
+        // back into the tracker; each unlocked decision either offers a ready node
+        // to admission or records a propagated terminal (which cascades, without
+        // executing). A terminal outcome also releases that attempt's permit, so
+        // the pending waiters are re-offered against the freed capacity.
         while in_flight > 0 {
             let Some(done) = rx.recv().await else { break };
             in_flight -= 1;
@@ -590,19 +635,37 @@ where
                 zombie_candidates.push(done.node.clone());
             }
             // Feed the executed-terminal outcome back into the tracker and act on
-            // every decision it unlocks (ready → admit; propagated → record).
+            // every decision it unlocks (ready → offer to admission; propagated →
+            // record).
             let id = NodeId::from_name(&done.node);
             let decisions = tracker.notify_terminal(id, done.state);
-            in_flight += apply_decisions(
+            apply_decisions(
                 pipeline,
                 run_id,
                 &decisions,
                 &runners,
                 &tasks,
                 &tx,
+                admission,
                 writer,
                 &mut terminal_states,
                 &mut zombie_candidates,
+                &mut pending,
+                &mut in_flight,
+            );
+            // The finished attempt released its permit (dropped in its closure
+            // before it reported done), so freed capacity may now admit a waiter.
+            // Re-offer the pending queue oldest-first, admitting whatever now fits.
+            drain_pending(
+                pipeline,
+                run_id,
+                &runners,
+                &tasks,
+                &tx,
+                admission,
+                writer,
+                &mut pending,
+                &mut in_flight,
             );
         }
 
@@ -632,9 +695,103 @@ where
     (outcome, terminal_states)
 }
 
+/// The C12 declared cost of `name`, read from its C5 node policy (T29) — the
+/// per-pool demand the admission controller acquires against (arch.md C12). Reads
+/// the node's `NodePolicy::cost` without duplicating the definition; an unknown
+/// node (a framework defect handled downstream) demands nothing.
+fn declared_cost(pipeline: &Pipeline, name: &str) -> PoolCost {
+    pipeline
+        .node(NodeId::from_name(name))
+        .map_or_else(PoolCost::new, |n| {
+            PoolCost::from_cost_vector(n.policy().cost())
+        })
+}
+
+/// Offer `name` to the C12 admission controller (T31). If its declared cost fits
+/// every pool it is **admitted** immediately (spawned, one more in flight); if a
+/// pool is at capacity it is **held** in `pending` (oldest-ready-first) to be
+/// re-offered when a release frees capacity. Under the default unconstrained pools
+/// every ready node fits, so this admits at once (the M1 behaviour).
+#[allow(clippy::too_many_arguments)]
+fn offer_or_pend<S, C>(
+    pipeline: &Pipeline,
+    run_id: &str,
+    name: &str,
+    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
+    tasks: &tokio::runtime::Runtime,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    admission: &AdmissionController,
+    writer: &mut EventStreamWriter<S, C>,
+    pending: &mut std::collections::VecDeque<String>,
+    in_flight: &mut usize,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    let cost = declared_cost(pipeline, name);
+    match admission.try_admit(name, &cost) {
+        Some(permit) => {
+            admit(run_id, name, runners, tasks, tx, writer, permit);
+            *in_flight += 1;
+        }
+        None => pending.push_back(name.to_string()),
+    }
+}
+
+/// Re-offer the pending waiters oldest-first after a release freed capacity (T31).
+/// Walks `pending` front to back; each waiter that now fits its pools is admitted
+/// and removed, and a waiter that still does not fit stays queued behind its place
+/// — the oldest waiter is never bypassed by a younger one that would delay it.
+#[allow(clippy::too_many_arguments)]
+fn drain_pending<S, C>(
+    pipeline: &Pipeline,
+    run_id: &str,
+    runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
+    tasks: &tokio::runtime::Runtime,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    admission: &AdmissionController,
+    writer: &mut EventStreamWriter<S, C>,
+    pending: &mut std::collections::VecDeque<String>,
+    in_flight: &mut usize,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    // The oldest waiter is admitted whenever it fits; a younger one bypasses only
+    // when the oldest still does not fit (so admitting the younger cannot delay
+    // it). This is the bounded-bypass discipline C12 mandates against starvation.
+    let mut index = 0;
+    while index < pending.len() {
+        let name = pending[index].clone();
+        let cost = declared_cost(pipeline, &name);
+        if let Some(permit) = admission.try_admit(&name, &cost) {
+            pending.remove(index);
+            admit(run_id, &name, runners, tasks, tx, writer, permit);
+            *in_flight += 1;
+            // Restart from the front: admitting one may have consumed the capacity
+            // a still-waiting older node needs, so re-check oldest-first.
+            index = 0;
+        } else if index == 0 {
+            // The oldest waiter does not fit: do not bypass it (that could delay
+            // it). Stop — nothing is admissible without risking the oldest.
+            break;
+        } else {
+            index += 1;
+        }
+    }
+}
+
 /// Admit `name`: emit its `node-ready` record and spawn its attempt onto the
 /// `tasks` runtime, which reports the terminal state and buffered records back
 /// over `tx` when it finishes.
+///
+/// `permit` is the C12 admission permit acquired for this attempt (T31). It is
+/// **moved into the spawned closure** — the T0.3 ownership trick — so it is
+/// dropped (and its cost released to every pool) exactly when the attempt returns,
+/// *before* the loop is told the attempt is done. That is what keeps the permit
+/// held for the whole attempt and released on its terminal outcome; a
+/// blocking-timeout zombie that runs on past its mark keeps holding it until its
+/// closure actually returns (this driver does not fabricate an early release).
 fn admit<S, C>(
     run_id: &str,
     name: &str,
@@ -642,6 +799,7 @@ fn admit<S, C>(
     tasks: &tokio::runtime::Runtime,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     writer: &mut EventStreamWriter<S, C>,
+    permit: Permit,
 ) where
     S: EventSink,
     C: MonotonicClock,
@@ -657,7 +815,9 @@ fn admit<S, C>(
         .remove(name)
     else {
         // A framework defect (no runner for an admitted node): decide it failed
-        // rather than hang the run. Report it as a permanent failure terminal.
+        // rather than hang the run. Report it as a permanent failure terminal. The
+        // permit drops here, releasing its cost (the attempt never ran).
+        drop(permit);
         let _ = tx.send(AttemptDone {
             node: name.to_string(),
             state: TerminalState::Failed,
@@ -676,6 +836,12 @@ fn admit<S, C>(
         let ctx = RunContext::builder(CoreRunId::new(run_id), PipelineId::new("pipeline"), node_id)
             .build();
         let state = runner.run(&ctx, &mut sink).await;
+        // Release the C12 permit at the attempt's terminal state (its working
+        // memory + thread cost returns to the pools) BEFORE reporting done, so the
+        // loop sees freed capacity when it re-offers the pending waiters. An
+        // await-bound cancellation would drop the permit with the future instead;
+        // a blocking-timeout zombie keeps it until its closure returns (T0.3 ADR).
+        drop(permit);
         let _ = tx.send(AttemptDone {
             node: name_owned,
             state,
@@ -685,11 +851,11 @@ fn admit<S, C>(
 }
 
 /// Act on each decision the tracker unlocked. A [`Decision::Ready`] node is
-/// admitted (and counts as one more in-flight); a
+/// **offered to admission** (admitted if its pools fit, else held in `pending`); a
 /// [`Decision::PropagatedTerminal`] node is recorded directly — it never executes
 /// — and its cascade is already folded into the tracker, so its own dependents'
-/// decisions are handled recursively here. Returns how many new nodes went in
-/// flight.
+/// decisions are handled recursively here. Admitted nodes are counted into
+/// `in_flight` by [`offer_or_pend`].
 #[allow(clippy::too_many_arguments)]
 fn apply_decisions<S, C>(
     pipeline: &Pipeline,
@@ -698,21 +864,24 @@ fn apply_decisions<S, C>(
     runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
     tasks: &tokio::runtime::Runtime,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
     terminal_states: &mut BTreeMap<String, TerminalState>,
     zombie_candidates: &mut Vec<String>,
-) -> usize
-where
+    pending: &mut std::collections::VecDeque<String>,
+    in_flight: &mut usize,
+) where
     S: EventSink,
     C: MonotonicClock,
 {
-    let mut newly_in_flight = 0;
     for decision in decisions {
         match decision {
             Decision::Ready(id) => {
                 if let Some(name) = node_name(pipeline, *id) {
-                    admit(run_id, &name, runners, tasks, tx, writer);
-                    newly_in_flight += 1;
+                    offer_or_pend(
+                        pipeline, run_id, &name, runners, tasks, tx, admission, writer, pending,
+                        in_flight,
+                    );
                 }
             }
             Decision::PropagatedTerminal { node, state, .. } => {
@@ -729,7 +898,6 @@ where
             }
         }
     }
-    newly_in_flight
 }
 
 /// Resolve a node id to its author-declared name, or `None` if it is not in the

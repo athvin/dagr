@@ -256,6 +256,7 @@
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+pub mod admission;
 pub mod assembly;
 pub mod binding;
 pub mod context;
