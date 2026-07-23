@@ -21,7 +21,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **004** · [T2 — Async runtime and concurrency primitives ADR](004-T2-async-runtime-adr.md) · S · decision — after T1
 - [x] **005** · [T0.10 — Stability policy and criteria partition](005-T0.10-stability-policy-and-criteria-partition.md) · S · decision
 - [x] **006** · [T7 — CI pipeline and acceptance-criteria coverage matrix](006-T7-ci-pipeline-and-criteria-matrix.md) · M · setup — after T1, T0.10, T0.0b
-- [ ] **007** · [T8 — Compile-failure test harness](007-T8-compile-failure-test-harness.md) · S · setup — after T1, T7
+- [x] **007** · [T8 — Compile-failure test harness](007-T8-compile-failure-test-harness.md) · S · setup — after T1, T7
 
 ## Phase 1 — Foundational decisions (M0)
 
