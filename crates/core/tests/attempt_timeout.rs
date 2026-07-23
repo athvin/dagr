@@ -30,7 +30,7 @@ use std::sync::Arc;
 use dagr_core::context::{PipelineId, RunContext, RunId};
 use dagr_core::execution::{
     run_attempt, run_attempt_with_timeout, AttemptEvent, AttemptEventSink, AttemptOutcome,
-    TimeoutDecision,
+    TimeoutDecision, ZombieObserver,
 };
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
@@ -180,6 +180,15 @@ impl Drop for Permit {
         if self.zombie {
             self.ledger.live_zombies.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+}
+
+/// The ledger observes live zombies — the signal that defers a timed-out
+/// blocking/compute node's retry until its previous closure has returned
+/// (T0.3 ADR §5). The real ledger (T31) implements the same port.
+impl ZombieObserver for Ledger {
+    fn has_live_zombie(&self) -> bool {
+        self.live_zombies() > 0
     }
 }
 
@@ -342,7 +351,10 @@ fn await_bound_timeout_cancels_immediately_and_releases_permit() {
         "permit released immediately at timeout — no residual counted"
     );
     assert_eq!(ledger.live_zombies(), 0, "await-bound records no zombie");
-    assert!(!slot.is_filled(), "a timed-out attempt never fills the slot");
+    assert!(
+        !slot.is_filled(),
+        "a timed-out attempt never fills the slot"
+    );
     assert!(
         sink.has_timed_out_record(),
         "the timed-out attempt-outcome record was emitted"
@@ -383,7 +395,10 @@ fn blocking_timeout_marks_immediately_and_holds_permit_until_return() {
         "permit still counted at the timeout mark (abandoned-but-running)"
     );
     assert_eq!(ledger.live_zombies(), 1, "one live zombie at the mark");
-    assert!(sink.has_timed_out_record(), "timed-out event emitted immediately");
+    assert!(
+        sink.has_timed_out_record(),
+        "timed-out event emitted immediately"
+    );
     assert_eq!(sink.terminal_states(), vec![TerminalState::TimedOut]);
     assert!(!slot.is_filled(), "never fills the slot");
 
@@ -441,7 +456,10 @@ fn late_result_never_fills_the_slot() {
         !filled,
         "the late fill was refused — a timed-out attempt never fills its slot"
     );
-    assert!(!slot.is_filled(), "slot stays empty; the value was discarded");
+    assert!(
+        !slot.is_filled(),
+        "slot stays empty; the value was discarded"
+    );
 }
 
 /// **Late result of a timed-out attempt never writes scratch.** After the
@@ -483,7 +501,7 @@ fn retry_of_a_timed_out_blocking_node_is_deferred_past_zombie_return() {
     );
     // ...but not while the first closure's zombie is live.
     assert!(
-        decision.retry_may_start(&ledger) == false,
+        !decision.retry_may_start(&*ledger),
         "a retry must not begin while the first closure is still running"
     );
     assert_eq!(ledger.live_zombies(), 1);
@@ -492,7 +510,7 @@ fn retry_of_a_timed_out_blocking_node_is_deferred_past_zombie_return() {
     drop(permit);
 
     assert!(
-        decision.retry_may_start(&ledger),
+        decision.retry_may_start(&*ledger),
         "the retry may begin only after the first closure has returned"
     );
     assert_eq!(ledger.live_zombies(), 0);
@@ -509,7 +527,9 @@ fn terminal_state_is_decided_exactly_once() {
     let mut sink = CapturingSink::default();
 
     let mut permit = ledger.admit(10);
-    let decision = TimeoutDecision::mark_blocking_timed_out(NODE, &ctx_for(1, 1), &mut sink);
+    // The mark decides the terminal state and emits the records (side effect);
+    // the decision handle itself is not needed further in this test.
+    let _decision = TimeoutDecision::mark_blocking_timed_out(NODE, &ctx_for(1, 1), &mut sink);
     permit.mark_zombie();
 
     // Exactly one node-terminal record, and it is timed-out.
@@ -527,9 +547,7 @@ fn terminal_state_is_decided_exactly_once() {
         "still exactly one terminal state after the thread returned; never abandoned"
     );
     assert!(
-        !sink
-            .terminal_states()
-            .contains(&TerminalState::Abandoned),
+        !sink.terminal_states().contains(&TerminalState::Abandoned),
         "a timed-out attempt never becomes abandoned (that is the C16 path)"
     );
 }
@@ -545,7 +563,10 @@ fn timeout_is_retry_eligible_by_default() {
         AttemptOutcome::TimedOut.is_retry_eligible(),
         "timeout enters the retry path"
     );
-    assert!(AttemptOutcome::TimedOut.is_failure(), "timeout is a failure");
+    assert!(
+        AttemptOutcome::TimedOut.is_failure(),
+        "timeout is a failure"
+    );
     assert!(!AttemptOutcome::TimedOut.is_success());
     assert_eq!(
         AttemptOutcome::TimedOut.terminal_state(),
