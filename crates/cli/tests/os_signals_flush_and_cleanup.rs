@@ -303,14 +303,31 @@ fn slot_for<T: Send + Sync + 'static>(name: &str, consumers: u32) -> Arc<Slot<T>
 
 const SHORT_GRACE: Duration = Duration::from_millis(150);
 
+/// A per-test **collision-proof** run-store base under the OS temp dir.
+///
+/// Determinism (CI fs race): several tests in this binary create and later
+/// `remove_dir_all` their own base concurrently under `--test-threads>1`. A base
+/// keyed only on `process::id()` + a wall-clock timestamp is **not** unique — the
+/// system clock's effective resolution is coarse (observed: ~95% of back-to-back
+/// `SystemTime::now()` reads on CI return the *same* nanosecond value), so two tests
+/// entering here at nearly the same instant get the **same** base path; one test's
+/// terminal `remove_dir_all(base)` (or `reclaim_leftover_temp_dirs`) then wipes the
+/// other's freshly-created temp dir mid-test, flaking `cleanup_removes_temp_dir`'s
+/// `assert!(temp.exists())` (and its siblings). The fix is causal, not a sleep: a
+/// process-monotonic `AtomicU64` counter makes every base provably disjoint, so no
+/// two tests ever share — or delete — the same subtree. No production change.
 fn temp_base() -> PathBuf {
+    use std::sync::atomic::AtomicU64;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
     std::env::temp_dir().join(format!(
-        "dagr-t36-{}-{}",
+        "dagr-t36-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        unique
     ))
 }
 
