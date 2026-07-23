@@ -48,7 +48,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **025** · [T14 — C7: assembly validation and precomputation](025-T14-assembly-validation-and-precomputation.md) · M · feature — after T11, T13, T0.5, T0.8
 - [x] **026** · [T15 — C7: determinism and purity tests](026-T15-determinism-and-purity-tests.md) · S · feature (tests) — after T14
 - [x] **027** · [T17 — C10: output slots](027-T17-output-slots.md) · M · feature — after T14, T0.2
-- [ ] **028** · [T18 — C11: readiness tracker](028-T18-readiness-tracker.md) · M · feature — after T14, T0.4
+- [x] **028** · [T18 — C11: readiness tracker](028-T18-readiness-tracker.md) · M · feature — after T14, T0.4
 - [ ] **029** · [T19 — C19: event stream writer](029-T19-event-stream-writer.md) · M · feature — after T4, T13, T0.6
 - [ ] **030** · [T20 — C14: single-attempt execution core](030-T20-single-attempt-execution-core.md) · M · feature — after T16, T17, T19
 - [ ] **031** · [T21 — C14: per-attempt timeout](031-T21-per-attempt-timeout.md) · S · feature — after T20, T0.3
