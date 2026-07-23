@@ -83,9 +83,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, NodePolicy};
 use crate::binding::{DataEdge, NodeBinding, TriggerRule};
 use crate::handle::{Handle, NodeId};
-use crate::task::Task;
+use crate::task::{ExecutionClass, Task};
 use crate::Deps;
 
 /// A single node inside the immutable [`Pipeline`] — its identity, its
@@ -115,6 +116,26 @@ pub struct PipelineNode {
     /// The node's trigger rule (T0.4 / T11). `AllSucceeded` for a data-dependent
     /// node (the typestate makes any other rule inexpressible on it).
     trigger_rule: TriggerRule,
+    /// The minimal assembly-validation policy seam (C5 / T14) — the fields
+    /// assembly reads to validate this registration, with conservative defaults.
+    /// The full C5 policy struct is T29's; this is what T14 must read.
+    policy: NodePolicy,
+    /// The execution class the task *declared* (its work shape, C1) — the
+    /// baseline the class-override validity check (C5) is judged against.
+    declared_class: ExecutionClass,
+    /// The [durable-contract witness](DurableWitness) captured at registration —
+    /// whether the node's statically-known output type is proven to implement the
+    /// [`DurableOutput`] contract (T0.8 §5). A node whose policy marks it durable
+    /// but whose witness is [`Absent`](DurableWitness::Absent) fails assembly.
+    durable_witness: DurableWitness,
+    /// Whether the node's output type is `()` — captured at registration so the
+    /// zero-consumer warning (C7) never fires on a legitimate effect-only node.
+    output_is_unit: bool,
+    /// How many registrations collided under this node's name — 1 normally, >1
+    /// when a duplicate name was registered. The pipeline's name-keyed map
+    /// collapses duplicates to one node, so this count is where assembly reads
+    /// that both declarations existed (C7).
+    registration_count: usize,
 }
 
 impl PipelineNode {
@@ -162,6 +183,53 @@ impl PipelineNode {
     pub fn trigger_rule(&self) -> TriggerRule {
         self.trigger_rule
     }
+
+    /// This node's [policy](NodePolicy) — the minimal assembly-validation seam
+    /// (C5 / T14) carrying exactly the fields assembly reads (durability,
+    /// retention, retries, teardown, cost, class override), with conservative
+    /// defaults. The full C5 policy struct is T29's.
+    #[must_use]
+    pub fn policy(&self) -> NodePolicy {
+        self.policy
+    }
+
+    /// The execution class the task **declared** (its work shape, C1) — before any
+    /// C5 override. The class-override validity check (C5) is judged against this.
+    #[must_use]
+    pub fn declared_class(&self) -> ExecutionClass {
+        self.declared_class
+    }
+
+    /// The node's **effective** execution class: its policy override if one is
+    /// set, else the class the task declared (C5). This is the class the policy
+    /// hash (C21 / T0.7) covers.
+    #[must_use]
+    pub fn effective_class(&self) -> ExecutionClass {
+        self.policy.class_override().unwrap_or(self.declared_class)
+    }
+
+    /// Whether the node's statically-known output type is proven to implement the
+    /// [`DurableOutput`] contract (T0.8 §5) — the witness captured at
+    /// registration. A node marked durable whose output type does not satisfy
+    /// this fails assembly.
+    #[must_use]
+    pub fn output_is_durable(&self) -> bool {
+        matches!(self.durable_witness, DurableWitness::Present)
+    }
+
+    /// Whether the node's output type is `()` (an effect-only node). The
+    /// zero-consumer warning (C7) never fires on such a node.
+    #[must_use]
+    pub fn output_is_unit(&self) -> bool {
+        self.output_is_unit
+    }
+
+    /// How many registrations collided under this node's name — >1 signals a
+    /// duplicate name that assembly rejects, naming both declarations (C7).
+    #[must_use]
+    pub fn registration_count(&self) -> usize {
+        self.registration_count
+    }
 }
 
 /// The flow builder — it accumulates node registrations and produces an
@@ -193,8 +261,13 @@ pub struct Flow {
     /// Nodes keyed by identity name, so accumulation is order-insensitive:
     /// iteration and lookup are by name (unique across the pipeline, C7), never
     /// by the order registrations arrived. Assembly (T14) diagnoses a duplicate
-    /// name; this map simply records the last write under a name.
+    /// name; this map records the last write under a name and counts collisions
+    /// (see [`PipelineNode::registration_count`]) so assembly can name both.
     nodes: BTreeMap<String, PipelineNode>,
+    /// The declared **environment-capture allowlist** — the names bootstrap is
+    /// permitted to capture later (C7 / C22). Empty by default; a pure
+    /// *declaration* — assembly captures no values. Recorded in declared order.
+    env_allowlist: Vec<String>,
 }
 
 impl Flow {
@@ -203,7 +276,21 @@ impl Flow {
     pub fn new() -> Self {
         Self {
             nodes: BTreeMap::new(),
+            env_allowlist: Vec::new(),
         }
+    }
+
+    /// Declare that bootstrap may later capture the given **environment variable
+    /// names** into the run artifact (arch.md C7 / C22). This is a **pure
+    /// declaration**: assembly stores the names and captures **no** value itself
+    /// (the actual capture is bootstrap's, T24/T29). The allowlist is empty by
+    /// default; each call appends the given names, recording exactly them.
+    pub fn allow_env_capture<I, S>(&mut self, names: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.env_allowlist.extend(names.into_iter().map(Into::into));
     }
 
     /// Register a **source** node (one whose task consumes nothing) under an
@@ -212,13 +299,81 @@ impl Flow {
     /// The name is the node's identity (T0.7 / C2), recorded verbatim. The task
     /// value pins the output type `T::Output`; it is not consumed here (execution
     /// is a later ticket). The returned handle is the **only** way to refer to
-    /// this node's output downstream.
+    /// this node's output downstream. The node carries the **default**
+    /// [`NodePolicy`] — use [`register_source_with`](Flow::register_source_with)
+    /// to state a policy.
     #[must_use]
     pub fn register_source<T>(&mut self, name: impl Into<String>, task: &T) -> Handle<T::Output>
     where
         T: Task<Input = ()>,
     {
         self.register_source_in_group::<T>(name, task, None::<String>)
+    }
+
+    /// Register a **source** node under `name` with an explicit [`NodePolicy`],
+    /// returning its output [`Handle`].
+    ///
+    /// The policy is the minimal assembly-validation seam (C5 / T14): assembly
+    /// reads its durability, retention, retries, teardown, cost, and
+    /// class-override fields to validate the registration (an invalid override, a
+    /// durable node lacking the contract, a nonzero teardown cost, …). The full
+    /// C5 policy struct is T29's.
+    ///
+    /// This path records the durable-contract witness as
+    /// [`Absent`](DurableWitness::Absent): to mark a node durable **and** prove
+    /// its output type implements the contract, register it through
+    /// [`register_source_durable`](Flow::register_source_durable), whose bound
+    /// captures a [`Present`](DurableWitness::Present) witness. Marking a node
+    /// durable here (without the bound) is precisely the durable-without-contract
+    /// case assembly rejects (T0.8 §5).
+    #[must_use]
+    pub fn register_source_with<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy,
+            DurableWitness::Absent,
+        )
+    }
+
+    /// Register a **durable** source node under `name`, returning its output
+    /// [`Handle`].
+    ///
+    /// The `T::Output: DurableOutput` bound is what **captures the durable
+    /// witness** (T0.8 §5): only a node whose output type proves the durable
+    /// contract can be registered here, so assembly sees a
+    /// [`Present`](DurableWitness::Present) witness and the durability flag is
+    /// honored. `policy` is applied with its durability flag forced on. (A node
+    /// marked durable whose output type does **not** implement the contract is
+    /// registered through [`register_source_with`](Flow::register_source_with)
+    /// instead, and fails assembly.)
+    #[must_use]
+    pub fn register_source_durable<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+        T::Output: DurableOutput,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy.durable(true),
+            DurableWitness::Present,
+        )
     }
 
     /// Register a **source** node under `name` **in a group**, returning its
@@ -233,8 +388,35 @@ impl Flow {
     pub fn register_source_in_group<T>(
         &mut self,
         name: impl Into<String>,
+        task: &T,
+        group: Option<impl Into<String>>,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            group,
+            NodePolicy::new(),
+            DurableWitness::Absent,
+        )
+    }
+
+    /// Register a **source** node under `name`, in an optional group, with an
+    /// explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness) —
+    /// the full source-registration surface the other source registrars delegate
+    /// to. The witness is [`Present`](DurableWitness::Present) only when the
+    /// caller proved `T::Output: DurableOutput`
+    /// ([`register_source_durable`](Flow::register_source_durable)).
+    #[must_use]
+    fn register_source_in_group_with<T>(
+        &mut self,
+        name: impl Into<String>,
         _task: &T,
         group: Option<impl Into<String>>,
+        policy: NodePolicy,
+        durable_witness: DurableWitness,
     ) -> Handle<T::Output>
     where
         T: Task<Input = ()>,
@@ -250,8 +432,13 @@ impl Flow {
             group: group.map(Into::into),
             edges: Vec::new(),
             trigger_rule: TriggerRule::AllSucceeded,
+            policy,
+            declared_class: T::EXECUTION_CLASS,
+            durable_witness,
+            output_is_unit: output_is_unit::<T::Output>(),
+            registration_count: 1,
         };
-        self.nodes.insert(name, node);
+        self.insert_node(name, node);
         handle
     }
 
@@ -264,7 +451,8 @@ impl Flow {
     /// forward-referencing binding is a **compile error**, not something this
     /// builder validates at run time. Each bound upstream is recorded as one
     /// [`DataEdge`] in input order; the receive mode is recorded verbatim and
-    /// adjudicated at assembly (T14), never here.
+    /// adjudicated at assembly (T14), never here. The node carries the **default**
+    /// [`NodePolicy`] — use [`register_with`](Flow::register_with) to state one.
     #[must_use]
     pub fn register<T, D>(
         &mut self,
@@ -277,6 +465,67 @@ impl Flow {
         D: Deps<Inputs = T::Input>,
     {
         self.register_in_group::<T, D>(name, task, deps, None::<String>)
+    }
+
+    /// Register a **data-dependent** node under `name`, binding `deps`, with an
+    /// explicit [`NodePolicy`], returning its output [`Handle`].
+    ///
+    /// As [`register`](Flow::register), plus the assembly-validation policy seam
+    /// (C5 / T14). A retrying node taking an owned input edge with no
+    /// clone-on-read opt-in, for example, fails assembly (arch.md C1 "Ownership of
+    /// inputs"). Records an [`Absent`](DurableWitness::Absent) durable witness;
+    /// use [`register_durable`](Flow::register_durable) for a durable node.
+    #[must_use]
+    pub fn register_with<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task,
+        D: Deps<Inputs = T::Input>,
+    {
+        self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            None::<String>,
+            policy,
+            DurableWitness::Absent,
+        )
+    }
+
+    /// Register a **durable** data-dependent node under `name`, binding `deps`,
+    /// returning its output [`Handle`].
+    ///
+    /// The `T::Output: DurableOutput` bound captures a
+    /// [`Present`](DurableWitness::Present) durable witness (T0.8 §5); `policy` is
+    /// applied with its durability flag forced on. A node marked durable whose
+    /// output type does **not** implement the contract is registered through
+    /// [`register_with`](Flow::register_with) and fails assembly.
+    #[must_use]
+    pub fn register_durable<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task,
+        T::Output: DurableOutput,
+        D: Deps<Inputs = T::Input>,
+    {
+        self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            None::<String>,
+            policy.durable(true),
+            DurableWitness::Present,
+        )
     }
 
     /// Register a **data-dependent** node under `name` **in a group**, binding
@@ -296,11 +545,40 @@ impl Flow {
         T: Task,
         D: Deps<Inputs = T::Input>,
     {
+        self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            group,
+            NodePolicy::new(),
+            DurableWitness::Absent,
+        )
+    }
+
+    /// Register a **data-dependent** node under `name`, in an optional group, with
+    /// an explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness)
+    /// — the full data-node-registration surface the other data registrars
+    /// delegate to.
+    #[must_use]
+    fn register_in_group_with<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+        durable_witness: DurableWitness,
+    ) -> Handle<T::Output>
+    where
+        T: Task,
+        D: Deps<Inputs = T::Input>,
+    {
         let name = name.into();
         // Drive the T11 binding seam: it records the edges (in input order) and
         // the trigger rule, and mints the output handle. We copy the recorded
-        // structure into the pipeline node, adding the identity name and the
-        // group-label slot this ticket owns.
+        // structure into the pipeline node, adding the identity name, the
+        // group-label slot, and the assembly-validation policy seam this ticket
+        // owns.
         let (handle, node) = NodeBinding::consuming_nothing(&name)
             .depends_on::<T, D>(task, deps)
             .finish::<T::Output>();
@@ -310,9 +588,29 @@ impl Flow {
             group: group.map(Into::into),
             edges: node.data_edges().to_vec(),
             trigger_rule: node.trigger_rule(),
+            policy,
+            declared_class: T::EXECUTION_CLASS,
+            durable_witness,
+            output_is_unit: output_is_unit::<T::Output>(),
+            registration_count: 1,
         };
-        self.nodes.insert(name, pipeline_node);
+        self.insert_node(name, pipeline_node);
         handle
+    }
+
+    /// Insert a node under its name, **counting** a name collision.
+    ///
+    /// The node set is keyed by name (order-insensitive, C7), so a duplicate name
+    /// would silently overwrite. Instead we carry the collision count on the
+    /// surviving node ([`PipelineNode::registration_count`]) so **assembly** can
+    /// diagnose the duplicate and name that both declarations existed (C7) — the
+    /// builder still records only the identity/edges/policy, it does not itself
+    /// diagnose (that is T14's).
+    fn insert_node(&mut self, name: String, mut node: PipelineNode) {
+        if let Some(existing) = self.nodes.get(&name) {
+            node.registration_count = existing.registration_count + 1;
+        }
+        self.nodes.insert(name, node);
     }
 
     /// **Finalize** the flow: consume the builder and yield the immutable
@@ -325,7 +623,10 @@ impl Flow {
     /// **no** precomputation (T14); it simply freezes the accumulated node set.
     #[must_use]
     pub fn finish(self) -> Pipeline {
-        Pipeline { nodes: self.nodes }
+        Pipeline {
+            nodes: self.nodes,
+            env_allowlist: self.env_allowlist,
+        }
     }
 }
 
@@ -358,6 +659,10 @@ pub struct Pipeline {
     /// ordering independent of registration order (the canonical sort key of
     /// T0.7 §6). Read-only from outside this module.
     nodes: BTreeMap<String, PipelineNode>,
+    /// The declared environment-capture allowlist (names only, C7 / C22),
+    /// carried forward from the builder for assembly to freeze into its artifact.
+    /// A pure declaration — no value was ever captured.
+    env_allowlist: Vec<String>,
 }
 
 impl Pipeline {
@@ -368,10 +673,21 @@ impl Pipeline {
     }
 
     /// Whether the pipeline has no nodes. (The empty-pipeline *check* — treating
-    /// an empty pipeline as an assembly error — is T14's, not here.)
+    /// an empty pipeline as an assembly error — is [`assemble`](Pipeline::assemble)'s,
+    /// which reports it as an [`EmptyPipeline`](crate::assembly::ProblemKind::EmptyPipeline)
+    /// problem.)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    /// The declared **environment-capture allowlist** — the names bootstrap may
+    /// later capture (C7 / C22), carried verbatim from the builder. Empty by
+    /// default; a pure declaration, no value captured. Assembly freezes this into
+    /// its [artifact](crate::assembly::AssemblyArtifact::env_allowlist).
+    #[must_use]
+    pub fn env_allowlist(&self) -> &[String] {
+        &self.env_allowlist
     }
 
     /// Iterate the pipeline's nodes in a **deterministic, order-insensitive**

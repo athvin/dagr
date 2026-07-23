@@ -232,7 +232,9 @@ fn durable_node_without_the_contract_fails() {
 #[test]
 fn durable_node_with_the_contract_assembles() {
     let mut flow = Flow::new();
-    let _ = flow.register_source_with("snapshot", &MakeDurable, NodePolicy::new().durable(true));
+    // `register_source_durable`'s `T::Output: DurableOutput` bound captures the
+    // Present witness; `DurableBlob` implements the contract.
+    let _ = flow.register_source_durable("snapshot", &MakeDurable, NodePolicy::new());
     let artifact = flow
         .finish()
         .assemble()
@@ -412,11 +414,14 @@ fn retained_or_durable_zero_consumer_produces_no_warning() {
     let mut a = Flow::new();
     let _ = a.register_source_with("kept", &MakeRows, NodePolicy::new().retained(true));
     let art_a = a.finish().assemble().expect("retained assembles");
-    assert!(art_a.warnings().is_empty(), "no warning for a retained node");
+    assert!(
+        art_a.warnings().is_empty(),
+        "no warning for a retained node"
+    );
 
     // Durable.
     let mut b = Flow::new();
-    let _ = b.register_source_with("durable", &MakeDurable, NodePolicy::new().durable(true));
+    let _ = b.register_source_durable("durable", &MakeDurable, NodePolicy::new());
     let art_b = b.finish().assemble().expect("durable assembles");
     assert!(art_b.warnings().is_empty(), "no warning for a durable node");
 }
@@ -443,7 +448,11 @@ fn all_problems_are_reported_not_just_the_first() {
     let err = flow.finish().assemble().expect_err("multiple defects fail");
 
     // Every defect present carries its own report.
-    let kinds: Vec<ProblemKind> = err.problems().iter().map(|p| p.kind()).collect();
+    let kinds: Vec<ProblemKind> = err
+        .problems()
+        .iter()
+        .map(dagr_core::Problem::kind)
+        .collect();
     assert!(kinds.contains(&ProblemKind::DuplicateNodeName));
     assert!(kinds.contains(&ProblemKind::NonzeroTeardownCost));
     assert!(kinds.contains(&ProblemKind::DurableWithoutContract));
@@ -467,7 +476,11 @@ fn fixing_one_defect_still_surfaces_the_rest() {
         NodePolicy::new().teardown(true).working_memory(4096),
     );
     let err = flow.finish().assemble().expect_err("two defects remain");
-    let kinds: Vec<ProblemKind> = err.problems().iter().map(|p| p.kind()).collect();
+    let kinds: Vec<ProblemKind> = err
+        .problems()
+        .iter()
+        .map(dagr_core::Problem::kind)
+        .collect();
     assert!(kinds.contains(&ProblemKind::DuplicateNodeName));
     assert!(kinds.contains(&ProblemKind::NonzeroTeardownCost));
     assert!(!kinds.contains(&ProblemKind::DurableWithoutContract));
@@ -491,12 +504,13 @@ fn consumer_counts_are_exact_before_execution() {
 
     // `rows` feeds three consumers; `schema` feeds none.
     assert_eq!(artifact.consumer_count(NodeId::from_name("rows")), Some(3));
-    assert_eq!(artifact.consumer_count(NodeId::from_name("schema")), Some(0));
+    assert_eq!(
+        artifact.consumer_count(NodeId::from_name("schema")),
+        Some(0)
+    );
     // Every node has a count present before any execution.
     for name in ["rows", "schema", "a", "b", "c"] {
-        assert!(artifact
-            .consumer_count(NodeId::from_name(name))
-            .is_some());
+        assert!(artifact.consumer_count(NodeId::from_name(name)).is_some());
     }
 }
 
@@ -609,8 +623,8 @@ fn assembly_is_pure_runs_in_an_empty_environment() {
     // this test process supplies none of them, and assembly touches none.
     let mut flow = Flow::new();
     let rows = flow.register_source("rows", &MakeRows);
-    let _schema = flow.register_source("schema", &MakeSchema);
-    let _report = flow.register("report", &BuildReport, (rows.shared(), _schema.shared()));
+    let schema = flow.register_source("schema", &MakeSchema);
+    let _report = flow.register("report", &BuildReport, (rows.shared(), schema.shared()));
     let artifact: AssemblyArtifact = flow
         .finish()
         .assemble()
@@ -630,7 +644,9 @@ fn build_reference_pipeline() -> AssemblyArtifact {
     let mid2 = flow.register("mid2", &CountRows, root.shared());
     let _join = flow.register("join", &SumTwo, (mid1, mid2));
     flow.allow_env_capture(["DAGR_REGION"]);
-    flow.finish().assemble().expect("reference pipeline assembles")
+    flow.finish()
+        .assemble()
+        .expect("reference pipeline assembles")
 }
 
 #[test]
