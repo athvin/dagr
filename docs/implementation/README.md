@@ -26,7 +26,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 ## Phase 1 — Foundational decisions (M0)
 
 - [x] **008** · [T0.2 — ADR + spike: output ownership and sharing model](008-T0.2-output-ownership-adr-spike.md) · M · decision (spike)
-- [ ] **009** · [T0.3 — ADR + spike: timeout abandonment and permit accounting](009-T0.3-timeout-and-permit-accounting-spike.md) · M · decision (spike)
+- [x] **009** · [T0.3 — ADR + spike: timeout abandonment and permit accounting](009-T0.3-timeout-and-permit-accounting-spike.md) · M · decision (spike)
 - [ ] **010** · [T0.4 — Trigger-rule and terminal-state reference tables](010-T0.4-trigger-rule-and-state-tables.md) · S · decision
 - [ ] **011** · [T0.5 — Bootstrap phase interface and cost model](011-T0.5-bootstrap-phase-and-cost-model.md) · S · decision
 - [ ] **012** · [T0.6 — ADR: run store contract](012-T0.6-run-store-contract-adr.md) · M · decision
