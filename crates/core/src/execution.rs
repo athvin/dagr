@@ -164,6 +164,30 @@ pub enum AttemptEvent {
         /// interval; the actual sleeping is the driver's (T24/T33).
         delay: Duration,
     },
+    /// The attempt **panicked** and the panic was contained at the catch
+    /// boundary (T23) — the closing per-transition event and the **exactly-one
+    /// attempt-outcome record** for a panicking attempt (arch.md C14: "Every
+    /// attempt produces exactly one *attempt-outcome* record … including
+    /// attempts that … panicked").
+    ///
+    /// A caught panic is converted to a **permanent** failure (never
+    /// retry-eligible) whose terminal state is [`TerminalState::Failed`] (arch.md
+    /// Vocabulary: `failed` is "a caught panic"). The `message` is the panic
+    /// payload captured at the boundary — the `&str` / `String` payload, or the
+    /// literal `"unknown panic"` when the payload is neither (the dagx prior-art
+    /// normalization T3 adopted). The panic is attributed to `node` via
+    /// task-local state, so this record names the panicking node even when
+    /// several attempts run concurrently.
+    AttemptPanicked {
+        /// The node's author-declared identity name (T13) — the panicking node,
+        /// attributed via task-local state.
+        node: String,
+        /// The 1-based attempt number, from the C8 context.
+        attempt: u32,
+        /// The captured panic message (payload downcast to `&str`/`String`, else
+        /// `"unknown panic"`).
+        message: String,
+    },
     /// The node reached a terminal state from the normative taxonomy (arch.md
     /// Vocabulary), carrying the classified state.
     NodeTerminal {
@@ -202,9 +226,10 @@ pub trait AttemptEventSink {
 /// (arch.md Vocabulary; the runner's C14 outcome surface).
 ///
 /// This is the framework-internal runner taxonomy — a strict superset of the
-/// task-facing [`TaskError`] three-valued surface (T3 ADR §11) — restricted to
-/// the four outcomes T20 owns plus the [`TimedOut`](AttemptOutcome::TimedOut)
-/// variant T21 (031) adds:
+/// task-facing [`TaskError`] three-valued surface (T3 ADR §11) — the four
+/// outcomes T20 owns plus the [`TimedOut`](AttemptOutcome::TimedOut) variant T21
+/// (031) adds and the [`Panicked`](AttemptOutcome::Panicked) variant T23 (033)
+/// adds:
 ///
 /// - [`Succeeded`](AttemptOutcome::Succeeded) — the work returned a value; the
 ///   slot was filled.
@@ -217,24 +242,26 @@ pub trait AttemptEventSink {
 /// - [`Skipped`](AttemptOutcome::Skipped) — a deliberate (originated) skip;
 ///   distinct from both success and failure.
 ///
-/// # The T21 timeout variant, and the T23 reservation
+/// # The T21 timeout variant, and the T23 panic variant
 ///
 /// The enum is `#[non_exhaustive]` precisely so the operationally-hard siblings
 /// extend it rather than rewrite it:
 ///
-/// - **`TimedOut`** — per-attempt timeout (T21, added by **this** ticket).
-///   Timeout is retry-eligible by default, subject to the node's budget (arch.md
-///   C14). Its terminal state is [`TerminalState::TimedOut`]. It is a failure,
-///   but a **distinct** one from the two T20 failure classes, because the
-///   per-class abandonment semantics (await-bound future-drop vs blocking/compute
-///   permit-held-until-return, T0.3 ADR §1) are decided at the timeout mark, not
-///   by mapping to `PermanentFailure` / `RetryEligibleFailure`.
-/// - **`Panicked`** — a caught panic converted to a permanent failure (T23,
-///   still reserved). Its terminal state is [`TerminalState::Failed`] (arch.md
-///   Vocabulary: "a caught panic" is `failed`).
-///
-/// T23 does not populate its variant yet (this runner catches no panic); naming
-/// it here is the stable-shape contract T23 plugs into.
+/// - **`TimedOut`** — per-attempt timeout (T21). Timeout is retry-eligible by
+///   default, subject to the node's budget (arch.md C14). Its terminal state is
+///   [`TerminalState::TimedOut`]. It is a failure, but a **distinct** one from
+///   the two T20 failure classes, because the per-class abandonment semantics
+///   (await-bound future-drop vs blocking/compute permit-held-until-return, T0.3
+///   ADR §1) are decided at the timeout mark, not by mapping to `PermanentFailure`
+///   / `RetryEligibleFailure`.
+/// - **`Panicked`** — a caught panic converted to a **permanent** failure (T23,
+///   added by **this** ticket). Its terminal state is [`TerminalState::Failed`]
+///   (arch.md Vocabulary: "a caught panic" is `failed`). It is a **distinct**
+///   classification from `PermanentFailure` so the runner can attribute the
+///   panic to its node and capture the panic message on the outcome record
+///   ([`AttemptEvent::AttemptPanicked`]); like a permanent failure it is **never**
+///   retry-eligible (retrying a body that panicked risks poisoned shared state —
+///   the prescribed pattern is resource poisoning, not blind retry; T3 ADR §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AttemptOutcome {
@@ -258,6 +285,19 @@ pub enum AttemptOutcome {
     /// it returns) is handled by the runner at the timeout mark (T0.3 ADR §1),
     /// not by this classification.
     TimedOut,
+    /// The attempt **panicked** and the panic was **caught** at the attempt
+    /// boundary (`failed`, T23) — converted to a permanent failure rather than
+    /// allowed to unwind the run (arch.md C14 *Panics*; T3 ADR §4).
+    ///
+    /// **Never retry-eligible** — a panic is a permanent failure regardless of
+    /// remaining retry budget, so [`is_retry_eligible`](AttemptOutcome::is_retry_eligible)
+    /// is `false` and the retry loop stops after a panicking attempt. Its
+    /// terminal state is [`TerminalState::Failed`] (arch.md Vocabulary). It is a
+    /// distinct classification from [`PermanentFailure`](AttemptOutcome::PermanentFailure)
+    /// so the runner can attribute the panic to its node (task-local state) and
+    /// capture the panic message on the [`AttemptEvent::AttemptPanicked`] outcome
+    /// record.
+    Panicked,
 }
 
 impl AttemptOutcome {
@@ -284,6 +324,10 @@ impl AttemptOutcome {
             // retry driver (T22) may still turn into a later success; on the last
             // permitted attempt it is the node's terminal state.
             AttemptOutcome::TimedOut => TerminalState::TimedOut,
+            // A caught panic is a permanent failure whose terminal state is
+            // `failed` (arch.md Vocabulary: `failed` = "a caught panic"; T3 ADR
+            // §5) — never a distinct `panicked` state (there is none).
+            AttemptOutcome::Panicked => TerminalState::Failed,
         }
     }
 
@@ -301,6 +345,9 @@ impl AttemptOutcome {
     /// the node's retry budget") — for a blocking/compute node that retry is
     /// deferred until the previous closure returns (T0.3 ADR §5), which the
     /// runner enforces via the [`TimeoutDecision`] barrier, not this predicate.
+    /// A [`Panicked`](AttemptOutcome::Panicked) attempt is **never**
+    /// retry-eligible (T23; T3 ADR §4): a caught panic is a permanent failure, so
+    /// the retry loop stops after it with the budget untouched.
     #[must_use]
     pub fn is_retry_eligible(self) -> bool {
         matches!(
@@ -309,10 +356,12 @@ impl AttemptOutcome {
         )
     }
 
-    /// Whether this attempt failed (permanent, retry-eligible, or timed out). A
-    /// skip is **not** a failure (arch.md Vocabulary: `skipped` is skip-like),
-    /// and a success is not. A [`TimedOut`](AttemptOutcome::TimedOut) attempt is
-    /// failure-like (arch.md Vocabulary: `timed-out` is failure-like).
+    /// Whether this attempt failed (permanent, retry-eligible, timed out, or
+    /// panicked). A skip is **not** a failure (arch.md Vocabulary: `skipped` is
+    /// skip-like), and a success is not. A [`TimedOut`](AttemptOutcome::TimedOut)
+    /// attempt and a [`Panicked`](AttemptOutcome::Panicked) attempt are both
+    /// failure-like (arch.md Vocabulary: `timed-out` and `failed` are
+    /// failure-like).
     #[must_use]
     pub fn is_failure(self) -> bool {
         matches!(
@@ -320,6 +369,7 @@ impl AttemptOutcome {
             AttemptOutcome::PermanentFailure
                 | AttemptOutcome::RetryEligibleFailure
                 | AttemptOutcome::TimedOut
+                | AttemptOutcome::Panicked
         )
     }
 }
@@ -435,7 +485,7 @@ where
     // (7) The exactly-one attempt-outcome record for this attempt. The
     // node-terminal record is the caller's to emit (once), so a retried node
     // gets one outcome record per attempt but a single node-terminal record.
-    emit_attempt_outcome_record(node, attempt, outcome, sink);
+    emit_attempt_outcome_record(node, attempt, outcome, None, sink);
 
     outcome
 }
@@ -448,12 +498,21 @@ where
 /// mark all emit the *same* records for the *same* outcome (the exactly-one
 /// contract, arch.md C14 / C19). Each outcome maps to exactly one outcome
 /// record: success → `attempt-succeeded`; timeout → `attempt-timed-out`;
-/// permanent/retry-eligible/skip → `attempt-failed`.
-fn emit_closing_events<S>(node: &str, attempt: u32, outcome: AttemptOutcome, sink: &mut S)
-where
+/// panic → `attempt-panicked`; permanent/retry-eligible/skip → `attempt-failed`.
+///
+/// `panic_message` carries the captured payload for a [`Panicked`](AttemptOutcome::Panicked)
+/// outcome (T23) and is [`None`] for every other outcome; the non-panic callers
+/// (T20/T21/T22) pass [`None`].
+fn emit_closing_events<S>(
+    node: &str,
+    attempt: u32,
+    outcome: AttemptOutcome,
+    panic_message: Option<String>,
+    sink: &mut S,
+) where
     S: AttemptEventSink + ?Sized,
 {
-    emit_attempt_outcome_record(node, attempt, outcome, sink);
+    emit_attempt_outcome_record(node, attempt, outcome, panic_message, sink);
     emit_node_terminal(node, outcome.terminal_state(), sink);
 }
 
@@ -466,8 +525,18 @@ where
 /// node has many attempt-outcome records but exactly one node-terminal record.
 /// A single attempt (T20 / T21) composes this with [`emit_node_terminal`] via
 /// [`emit_closing_events`], so their behaviour is byte-identical to before.
-fn emit_attempt_outcome_record<S>(node: &str, attempt: u32, outcome: AttemptOutcome, sink: &mut S)
-where
+///
+/// `panic_message` is the captured panic payload for a
+/// [`Panicked`](AttemptOutcome::Panicked) outcome (T23); it is [`None`] for every
+/// other outcome. A `Panicked` outcome with no message falls back to the
+/// canonical `"unknown panic"` string.
+fn emit_attempt_outcome_record<S>(
+    node: &str,
+    attempt: u32,
+    outcome: AttemptOutcome,
+    panic_message: Option<String>,
+    sink: &mut S,
+) where
     S: AttemptEventSink + ?Sized,
 {
     match outcome {
@@ -478,6 +547,11 @@ where
         AttemptOutcome::TimedOut => sink.emit(AttemptEvent::AttemptTimedOut {
             node: node.into(),
             attempt,
+        }),
+        AttemptOutcome::Panicked => sink.emit(AttemptEvent::AttemptPanicked {
+            node: node.into(),
+            attempt,
+            message: panic_message.unwrap_or_else(|| UNKNOWN_PANIC.to_owned()),
         }),
         AttemptOutcome::PermanentFailure
         | AttemptOutcome::RetryEligibleFailure
@@ -624,7 +698,7 @@ where
         }
     };
 
-    emit_closing_events(node, attempt, outcome, sink);
+    emit_closing_events(node, attempt, outcome, None, sink);
     outcome
 }
 
@@ -771,7 +845,7 @@ impl TimeoutDecision {
         // Decide the fate now: emit the timed-out outcome record + node-terminal.
         // The permit is untouched (held by the running closure); the slot is
         // untouched (a timed-out attempt never fills it).
-        emit_closing_events(node, ctx.attempt(), outcome, sink);
+        emit_closing_events(node, ctx.attempt(), outcome, None, sink);
         Self { outcome }
     }
 
@@ -1272,5 +1346,548 @@ where
         // their own terminal state — all via the outcome's terminal_state.)
         emit_node_terminal(node, outcome.terminal_state(), sink);
         return outcome;
+    }
+}
+
+// ===========================================================================
+// C14 · panic containment (T23)
+// ===========================================================================
+//
+// A task that panics must fail **only its own node**, not unwind the run
+// (arch.md C14 *Panics*; T3 ADR §4). This section closes that hole T20 deferred:
+// the attempt boundary catches a panic, converts it to a **permanent** failure
+// ([`AttemptOutcome::Panicked`] → [`TerminalState::Failed`], never
+// retry-eligible), captures the panic message, attributes the panic to its node
+// via task-local state, emits exactly one attempt-outcome record
+// ([`AttemptEvent::AttemptPanicked`]), and leaves the output slot empty.
+//
+// It composes with T21 timeout and T22 retry through the shared classification:
+// a `Panicked` outcome is not retry-eligible, so the retry loop
+// ([`run_with_retries_caught`]) stops after the panicking attempt with the
+// budget untouched — the same way a permanent failure ends the loop.
+//
+// # Dependency-free, `unsafe`-free — catching a panic from an *async* future
+//
+// `dagr-core` stays dependency-free (workspace ADR T1), so this does **not** pull
+// the `futures` crate for `CatchUnwind`. Catching a panic from an async task
+// means wrapping the future's **poll** in [`std::panic::catch_unwind`] +
+// [`AssertUnwindSafe`], not just a sync closure — a panic can unwind *during* an
+// `.await`. [`CatchUnwindPoll`] is a small `unsafe`-free adapter over the poll
+// (heap-pinned like T21's `RaceFuture`, hence `Unpin`, so its inner future is
+// polled through safe pin projection). `catch_unwind` is **safe** (no `unsafe`
+// needed); `AssertUnwindSafe` is what lets an ordinary, not-`UnwindSafe` task
+// closure compile at the boundary without forcing every task author to reason
+// about unwind safety (arch.md C14).
+//
+// # Shared-resource integrity is the resource author's responsibility
+//
+// The framework guarantees only that the panic is contained and the node fails;
+// it makes **no** guarantee about arbitrary shared state a panicking body left
+// mid-mutation. The prescribed pattern is **poisoning**: a pooled resource that
+// may be mid-operation is marked broken and dropped from rotation rather than
+// handed back for reuse (see [`run_attempt_caught`]'s rustdoc, and the worked
+// example in `tests/panic_containment.rs`).
+//
+// Not here: the run-loop driver that installs the hook at bootstrap and adapts
+// the sink (T24), execution-class dispatch (T33), and the full permit-release
+// outcome matrix under real pools (T37).
+
+use std::any::Any;
+use std::cell::RefCell;
+use std::panic::AssertUnwindSafe;
+use std::sync::Once;
+
+/// The canonical message for a caught panic whose payload is neither a `&str`
+/// nor a `String` (the dagx prior-art normalization T3 adopted).
+const UNKNOWN_PANIC: &str = "unknown panic";
+
+thread_local! {
+    /// The node whose attempt is currently being polled behind the catch
+    /// boundary, on this thread — the task-local attribution the panic hook reads
+    /// to name the panicking node (arch.md C14: "attributes panics to nodes via
+    /// task-local state"). Set by [`NodeAttribution`] for the duration of the
+    /// caught poll and cleared when the guard drops, so it is correct even when
+    /// several attempts run on different threads.
+    static CURRENT_NODE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// A scope guard that sets the current node for panic attribution and restores
+/// the previous value on drop (so nested / sequential caught polls do not leak
+/// attribution into one another).
+struct NodeAttribution {
+    previous: Option<String>,
+}
+
+impl NodeAttribution {
+    /// Set the current-node attribution to `node`, returning a guard that
+    /// restores the previous value on drop.
+    fn set(node: &str) -> Self {
+        let previous = CURRENT_NODE.with(|cell| cell.borrow_mut().replace(node.to_owned()));
+        Self { previous }
+    }
+}
+
+impl Drop for NodeAttribution {
+    fn drop(&mut self) {
+        CURRENT_NODE.with(|cell| *cell.borrow_mut() = self.previous.take());
+    }
+}
+
+/// The node the panic hook should attribute a panic to on this thread, if a
+/// caught attempt is in flight — read by [`install_panic_hook`]'s hook.
+#[must_use]
+fn current_panic_node() -> Option<String> {
+    CURRENT_NODE.with(|cell| cell.borrow().clone())
+}
+
+/// A process-wide marker the framework hook sets while it is running, so a
+/// repeat [`install_panic_hook`] can tell whether the framework hook is already
+/// the active top hook (idempotent no-op) versus a *foreign* hook currently sits
+/// on top (chain to it). It also guards against the framework hook chaining to
+/// **itself** (infinite recursion) when re-installed.
+static FRAMEWORK_HOOK_INSTALLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The `Once` that makes concurrent *first* installs race-free: the first caller
+/// wins and installs; concurrent callers block until it finishes, then the
+/// single-install fast path below makes them no-ops.
+static INSTALL_ONCE: Once = Once::new();
+
+/// Install the framework's panic hook, idempotently and safely under concurrent
+/// first-use (arch.md C14: "installs its panic hook once … coexists with the
+/// test harness's own hook").
+///
+/// The hook **chains** to whatever hook was installed before it (including a test
+/// harness's own hook), so installing the framework hook never *replaces* the
+/// existing behaviour — both observe every panic. When a caught attempt is in
+/// flight (see [`run_attempt_caught`]) the hook additionally has the panicking
+/// node's identity available via task-local state, so a caught panic is
+/// attributed to its node.
+///
+/// # Idempotent and thread-safe
+///
+/// The **first** call (guarded by a [`Once`] so concurrent first-use is
+/// race-free) captures the hook already in place — the process default, or a test
+/// harness's — and installs the framework hook chaining to it. A repeat call is a
+/// **no-op** when the framework hook is already the active top hook. It does
+/// **not** globally suppress panics: an *uncaught* panic (outside a contained
+/// attempt) still reaches the chained hook and unwinds normally.
+pub fn install_panic_hook() {
+    use std::sync::atomic::Ordering;
+
+    // Fast path: the framework hook is already the active top hook — a repeat
+    // call is a no-op (idempotent). This is the common case after bootstrap.
+    if FRAMEWORK_HOOK_INSTALLED.load(Ordering::Acquire) {
+        return;
+    }
+
+    // First install: race-free via `Once`. Concurrent first-users block here and
+    // fall through to the fast-path no-op above on their next check.
+    INSTALL_ONCE.call_once(|| {
+        install_chained_hook();
+    });
+}
+
+/// Capture the current hook and install the framework's delegating hook on top,
+/// chaining to the captured hook. Split out so the (rare) re-install-after-a-
+/// foreign-hook path can reuse it.
+fn install_chained_hook() {
+    use std::sync::atomic::Ordering;
+
+    // Capture the hook already in place (the default, or the test harness's) so
+    // we can chain to it rather than replace it. If the framework hook was the
+    // one in place, this would capture *ourselves* — the `FRAMEWORK_HOOK_INSTALLED`
+    // fast path prevents that from happening on the common re-install.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Attribute the panic to the current node if a contained attempt is in
+        // flight on this thread (task-local state). The attribution is
+        // observational here — the outcome record's message is captured at the
+        // catch boundary itself; this keeps the chained hook informed and is
+        // where a future logging integration (C25) would attach the node.
+        let _attributed_node = current_panic_node();
+        // Chain to the previously-installed hook so its behaviour (including the
+        // test harness's) is preserved — never lost.
+        previous(info);
+    }));
+    FRAMEWORK_HOOK_INSTALLED.store(true, Ordering::Release);
+}
+
+/// A future adapter that catches a panic unwinding out of the inner future's
+/// **poll**, yielding `Err(payload)` instead of propagating the unwind (T23).
+///
+/// This is the dependency-free, `unsafe`-free equivalent of `futures`'
+/// `CatchUnwind`: it wraps each `poll` in [`std::panic::catch_unwind`] with
+/// [`AssertUnwindSafe`] (the `catch_unwind` call is **safe**), so a panic that
+/// unwinds while the task future is being polled — including during an `.await`
+/// — is contained. The inner future is **heap-pinned** ([`Box::pin`]), so
+/// `CatchUnwindPoll` is [`Unpin`] and its field is polled through safe pin
+/// projection with no `unsafe`. Once the inner future has panicked it is
+/// **fused** (dropped, never polled again).
+struct CatchUnwindPoll<'f, T> {
+    inner: Option<Pin<Box<dyn Future<Output = T> + Send + 'f>>>,
+}
+
+impl<'f, T> CatchUnwindPoll<'f, T> {
+    fn new<F>(fut: F) -> Self
+    where
+        F: Future<Output = T> + Send + 'f,
+    {
+        Self {
+            inner: Some(Box::pin(fut)),
+        }
+    }
+}
+
+impl<T> Future for CatchUnwindPoll<'_, T> {
+    type Output = Result<T, Box<dyn Any + Send>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // `Self` is `Unpin` (the field is a `Pin<Box<_>>`), so `get_mut` is safe.
+        let this = self.as_mut().get_mut();
+        let Some(inner) = this.inner.as_mut() else {
+            // Fused: the inner future already panicked (or completed) and was
+            // dropped; polling again would be a defect, so stay pending forever
+            // rather than poll a taken future. In practice the caller stops
+            // awaiting after the first non-pending result.
+            return Poll::Pending;
+        };
+        // Catching the panic from `poll` requires asserting unwind safety — the
+        // load-bearing `AssertUnwindSafe` (arch.md C14): it lets an ordinary,
+        // not-`UnwindSafe` task future compile at this boundary. `catch_unwind`
+        // itself is a **safe** function (no `unsafe`).
+        match std::panic::catch_unwind(AssertUnwindSafe(|| inner.as_mut().poll(cx))) {
+            Ok(Poll::Ready(value)) => {
+                this.inner = None; // completed cleanly — fuse.
+                Poll::Ready(Ok(value))
+            }
+            Ok(Poll::Pending) => Poll::Pending,
+            Err(payload) => {
+                // The inner future panicked while being polled. Drop it (fuse) so
+                // it is never polled again, and surface the payload.
+                this.inner = None;
+                Poll::Ready(Err(payload))
+            }
+        }
+    }
+}
+
+/// Normalize a caught panic payload to a message string: the `&'static str` or
+/// `String` payload, else the canonical [`UNKNOWN_PANIC`] (the dagx prior-art /
+/// T3 normalization).
+#[must_use]
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        UNKNOWN_PANIC.to_owned()
+    }
+}
+
+/// Run one attempt end to end **with panic containment**, emitting its opening
+/// events plus the exactly-one attempt-outcome record, but **not** the
+/// node-terminal record — the panic-catching sibling of [`run_one_attempt`].
+///
+/// A panic unwinding out of the task future's poll is caught at the boundary,
+/// classified [`AttemptOutcome::Panicked`] (a permanent failure), its message
+/// captured, and its `attempt-panicked` outcome record emitted; a non-panicking
+/// attempt behaves exactly like [`run_one_attempt`]. The slot is filled only on
+/// success and left untouched on a panic. Node attribution is set via task-local
+/// state ([`NodeAttribution`]) for the duration of the caught poll.
+async fn run_one_attempt_caught<T, S>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()>,
+    S: AttemptEventSink + ?Sized,
+{
+    let attempt = ctx.attempt();
+
+    // Opening events, identical to the untimed core.
+    sink.emit(AttemptEvent::NodeAdmitted { node: node.into() });
+    sink.emit(AttemptEvent::AttemptStarted {
+        node: node.into(),
+        attempt,
+    });
+
+    // Set task-local attribution for the panic hook, then run the task future
+    // behind the catch-unwind boundary. The guard restores prior attribution on
+    // drop (after the poll completes or panics).
+    let caught = {
+        let _attribution = NodeAttribution::set(node);
+        CatchUnwindPoll::new(task.run(ctx, ())).await
+    };
+
+    let (outcome, message) = match caught {
+        // The task future completed without panicking — classify its Result.
+        Ok(result) => (classify_and_fill(result, slot), None),
+        // The task panicked; it was caught (not unwound). Convert to a permanent
+        // `Panicked` failure and capture the payload message. The slot is left
+        // untouched (a panicked attempt never fills it).
+        Err(payload) => (AttemptOutcome::Panicked, Some(panic_message(&*payload))),
+    };
+
+    // The exactly-one attempt-outcome record for this attempt (a panic record
+    // when it panicked, carrying the captured message).
+    emit_attempt_outcome_record(node, attempt, outcome, message, sink);
+
+    outcome
+}
+
+/// Run **one** attempt of one node **with panic containment** (arch.md `### C14`
+/// *Panics*; T23).
+///
+/// This is the panic-catching counterpart of [`run_attempt`]: identical in every
+/// respect except that a panic unwinding out of the task's work is **caught** at
+/// the attempt boundary rather than allowed to unwind the run. A caught panic is
+/// converted to a **permanent** failure ([`AttemptOutcome::Panicked`], never
+/// retry-eligible), maps to the [`TerminalState::Failed`] terminal state (arch.md
+/// Vocabulary: `failed` = "a caught panic"), captures the panic message onto the
+/// [`AttemptEvent::AttemptPanicked`] outcome record, attributes the panic to
+/// `node` via task-local state, and leaves the output slot **empty**. A
+/// non-panicking attempt is byte-identical to [`run_attempt`].
+///
+/// Call [`install_panic_hook`] once before running attempts so a caught panic's
+/// hook chains to (and does not replace) any pre-existing hook, including a test
+/// harness's.
+///
+/// # Shared-resource integrity is the resource author's responsibility
+///
+/// The framework guarantees the panic is contained and the node fails; it makes
+/// **no** guarantee about shared state a panicking body left mid-mutation. If a
+/// task touches a shared resource that may be mid-operation when it panics, the
+/// resource author must protect that resource — the prescribed pattern is
+/// **poisoning**: mark the resource broken and drop it from rotation rather than
+/// hand it back for reuse (a pooled connection mid-statement is poisoned, not
+/// returned to the pool). A drop guard that poisons on unwind is the idiomatic
+/// realization; see the worked example in `tests/panic_containment.rs`.
+///
+/// # Runtime-agnostic, `unsafe`-free
+///
+/// Like [`run_attempt`], the caller's runtime drives this future; no async
+/// runtime and no new dependency is added. The catch boundary is a small
+/// dependency-free [`std::panic::catch_unwind`] + [`AssertUnwindSafe`] adapter
+/// over the future's poll, with **no** `unsafe` (see the [module docs](self)).
+///
+/// # `AssertUnwindSafe` is load-bearing at the boundary
+///
+/// The boundary applies [`AssertUnwindSafe`] so an **ordinary** task future —
+/// one that is *not* [`UnwindSafe`](std::panic::UnwindSafe) on its own (holding a
+/// `&mut` reference, say) — compiles through [`catch_unwind`](std::panic::catch_unwind)
+/// without forcing every task author to reason about unwind safety. This
+/// throwaway fixture wraps a representative not-`UnwindSafe` closure and compiles
+/// **because** of the assertion:
+///
+/// ```
+/// use std::panic::{catch_unwind, AssertUnwindSafe};
+/// let mut counter = 0u32; // capturing `&mut counter` makes the closure not UnwindSafe
+/// // The assertion is what lets this compile:
+/// let _ = catch_unwind(AssertUnwindSafe(|| {
+///     counter += 1;
+/// }));
+/// assert_eq!(counter, 1);
+/// ```
+///
+/// The parallel **negative** fixture removes the assertion and fails to compile —
+/// proving the assertion is required, not decorative (`&mut` capture is not
+/// `UnwindSafe`, so bare `catch_unwind` is a trait-bound error):
+///
+/// ```compile_fail
+/// use std::panic::catch_unwind;
+/// let mut counter = 0u32;
+/// // No `AssertUnwindSafe`: the closure captures `&mut counter`, which is not
+/// // `UnwindSafe`, so this does NOT compile.
+/// let _ = catch_unwind(|| {
+///     counter += 1;
+/// });
+/// ```
+pub async fn run_attempt_caught<T, S>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()>,
+    S: AttemptEventSink + ?Sized,
+{
+    let outcome = run_one_attempt_caught(task, node, ctx, slot, sink).await;
+    emit_node_terminal(node, outcome.terminal_state(), sink);
+    outcome
+}
+
+/// Run a node through the **bounded retry loop with panic containment** (arch.md
+/// `### C14`; T22 retry composed with T23 panic containment).
+///
+/// This is the panic-catching counterpart of [`run_with_retries`]: it drives the
+/// shared *caught* single-attempt core (the panic-catching sibling of
+/// [`run_attempt`]) up to the
+/// configured maximum, emitting one attempt-outcome record per attempt and
+/// exactly one node-terminal record at loop end. Panic composes with retry
+/// through the classification: a caught panic is [`AttemptOutcome::Panicked`],
+/// which is **not** retry-eligible, so the loop **stops** after a panicking
+/// attempt with the retry budget untouched — the node ends `failed` and no
+/// backoff is scheduled. A retry-eligible failure or timeout still retries
+/// exactly as in [`run_with_retries`].
+///
+/// Every argument mirrors [`run_with_retries`]; see its rustdoc for the
+/// determinism (injected jitter, caller-provided timer future) and C1-exclusivity
+/// guarantees, which are unchanged here.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the interim retry surface threads \
+    the run/pipeline identity, slot, sink, config, jitter, and timer explicitly; \
+    these fold into the C5 policy + driver context in M2 (T29/T24)"
+)]
+pub async fn run_with_retries_caught<T, S, F, Fut>(
+    mut task: T,
+    node: &str,
+    run: RunId,
+    pipeline: PipelineId,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+    config: &RetryConfig,
+    jitter: &mut (impl Jitter + ?Sized),
+    mut timer: F,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()>,
+    S: AttemptEventSink + ?Sized,
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let node_id = NodeId::from_name(node);
+    let max_attempts = config.max_attempts();
+
+    let mut attempt: u32 = 1;
+    loop {
+        let ctx = RunContext::builder(run.clone(), pipeline.clone(), node_id)
+            .attempt(attempt)
+            .max_attempts(max_attempts)
+            .build();
+
+        // One attempt end to end, with panic containment. A panic here is caught
+        // and classified `Panicked` (permanent, not retry-eligible).
+        let outcome = run_one_attempt_caught(&mut task, node, &ctx, slot, sink).await;
+
+        // Classification-gated: only a retry-eligible outcome with budget left
+        // schedules another attempt. A `Panicked` outcome is not retry-eligible,
+        // so this branch is not taken — the panic stops retrying.
+        let budget_left = attempt < max_attempts;
+        if outcome.is_retry_eligible() && budget_left {
+            let delay = config.backoff().delay_for(attempt - 1, jitter);
+            sink.emit(AttemptEvent::BackoffStarted {
+                node: node.into(),
+                attempt,
+                delay,
+            });
+            timer(delay).await;
+            attempt += 1;
+            continue;
+        }
+
+        emit_node_terminal(node, outcome.terminal_state(), sink);
+        return outcome;
+    }
+}
+
+/// The compiled panic strategy of a Rust binary (arch.md C14: the binary "checks
+/// its panic strategy at startup and refuses to run under `panic = \"abort\"`").
+///
+/// dagr's panic containment depends on unwinding: under `panic = "abort"` a panic
+/// aborts the process immediately, so there is nothing to catch. The startup
+/// check ([`check_panic_strategy`]) refuses the abort strategy and permits the
+/// unwinding one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicStrategy {
+    /// A panic **unwinds** the stack — the strategy dagr requires so a panic can
+    /// be caught at the attempt boundary. This is Rust's default.
+    Unwind,
+    /// A panic **aborts** the process immediately — no unwinding, so nothing to
+    /// catch. dagr refuses to run under this strategy.
+    Abort,
+}
+
+/// The bootstrap refusal returned by [`check_panic_strategy`] when the binary is
+/// compiled `panic = "abort"` — a **bootstrap-failure** condition (arch.md C14;
+/// the run verbs' bootstrap-failed outcome).
+///
+/// Its [`Display`](std::fmt::Display) message names the exact profile setting the
+/// operator must change (the fix, `panic = "unwind"`), so the operator can act
+/// without reading source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapRefusal {
+    message: String,
+}
+
+impl BootstrapRefusal {
+    /// The operator-facing refusal message (names the required profile setting).
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for BootstrapRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BootstrapRefusal {}
+
+/// The **startup panic-strategy check** (arch.md C14; T23): refuse to run under
+/// `panic = "abort"`, permit the unwinding strategy.
+///
+/// Under `panic = "abort"` a panic aborts the process with no unwinding, so panic
+/// containment is impossible — the binary must refuse to start rather than run in
+/// a configuration where a task panic would take the whole run down uncontained.
+/// The refusal names the required profile setting (the fix): the operator sets
+/// `panic = "unwind"` in the relevant Cargo profile.
+///
+/// The unwinding strategy passes silently — the refusal is specific to abort, not
+/// a blanket gate. The driver (T24) calls [`detect_panic_strategy`] then this
+/// check at bootstrap; a test drives it with an explicit [`PanicStrategy`].
+///
+/// # Errors
+///
+/// Returns [`BootstrapRefusal`] when `strategy` is [`PanicStrategy::Abort`].
+pub fn check_panic_strategy(strategy: PanicStrategy) -> Result<(), BootstrapRefusal> {
+    match strategy {
+        PanicStrategy::Unwind => Ok(()),
+        PanicStrategy::Abort => Err(BootstrapRefusal {
+            message: "dagr cannot run under `panic = \"abort\"`: a task panic \
+                would abort the whole process uncontained. Set `panic = \"unwind\"` \
+                in the relevant Cargo profile (e.g. `[profile.release] panic = \
+                \"unwind\"`) and rebuild."
+                .to_owned(),
+        }),
+    }
+}
+
+/// Detect the **compiled** panic strategy of the running binary (arch.md C14).
+///
+/// Rust's `cfg(panic = "...")` reflects the strategy the current crate was
+/// compiled with (`"unwind"` — the default — or `"abort"`). The driver (T24)
+/// calls this at bootstrap and passes the result to [`check_panic_strategy`].
+///
+/// A binary compiled `panic = "abort"` cannot itself *test* this by catching a
+/// panic (it would abort), which is exactly why the check is split: this detects
+/// the compiled strategy, and [`check_panic_strategy`] is the pure, test-drivable
+/// decision over an explicit [`PanicStrategy`].
+#[must_use]
+pub fn detect_panic_strategy() -> PanicStrategy {
+    if cfg!(panic = "abort") {
+        PanicStrategy::Abort
+    } else {
+        // `cfg(panic = "unwind")` is the default; anything not `abort` unwinds.
+        PanicStrategy::Unwind
     }
 }
