@@ -16,13 +16,16 @@
 //!    parameters/data interval, captured environment);
 //! 3. drives the execution loop: it admits the ready nodes the C11
 //!    [`ReadinessTracker`] reports,
-//!    spawns each admitted node's attempt through the C14 attempt runner on the
-//!    **task-execution runtime**, and feeds every terminal outcome back into the
-//!    tracker so dependents decrement and either become ready or receive their
-//!    propagated terminal state — **never batching a whole level into a wave**;
+//!    **dispatches** each admitted node's attempt through the C14 attempt runner
+//!    onto the execution surface named by its **effective execution class** (C13 /
+//!    T33 — await-bound on the async task runtime, blocking on the dedicated
+//!    blocking pool, compute on the fixed rayon pool), and feeds every terminal
+//!    outcome back into the tracker so dependents decrement and either become ready
+//!    or receive their propagated terminal state — **never batching a whole level
+//!    into a wave**;
 //! 4. runs its own machinery (the loop, timers, cancellation fan-out, the
 //!    event-stream writer) on the **isolated framework runtime** per the T2 ADR,
-//!    kept off the task-execution runtime so a misbehaving task cannot disable the
+//!    kept off every task-execution surface so a misbehaving task cannot disable the
 //!    loop, the timeout, or the event stream;
 //! 5. terminates **exactly** when nothing is pending and nothing is in flight —
 //!    where an abandoned-but-running closure counts as *decided*, not in-flight:
@@ -33,16 +36,24 @@
 //!    verb) can select the exit code — the driver reports the outcome, it does
 //!    **not** own the C26 code table.
 //!
-//! # The two runtimes (T2 · isolated framework runtime)
+//! # Execution-class dispatch + the isolated framework runtime (T2 · C13 / T33)
 //!
 //! Per the T2 async-runtime ADR the framework machinery runs on an **isolated**
-//! runtime, separate from the runtime task attempts execute on. The driver builds
-//! **two** multi-threaded tokio runtimes: a `framework` runtime that drives the
-//! loop, the per-attempt timers, and the event writer, and a `tasks` runtime that
-//! attempts are spawned onto. A task that jams every `tasks` worker (a blocking
-//! busy-loop) therefore cannot stall the framework runtime — the per-attempt
-//! timeout still fires and the event stream is still written (the
-//! all-workers-blocked scenario, C13-adjacent; the full dispatch story is T33).
+//! runtime, separate from every surface task attempts execute on. The driver builds
+//! an execution-class `Dispatcher` owning the **three task surfaces** the ADR
+//! fixed — the async tokio task runtime (await-bound work), tokio's dedicated
+//! blocking pool via `spawn_blocking` (blocking work), and a dedicated fixed-size
+//! `rayon` compute pool (compute work) — plus a separate one-worker `framework`
+//! runtime that drives the loop, the per-attempt timers, and the event writer.
+//! Each admitted node's attempt is **dispatched by its effective execution class**
+//! (the C5 policy override if set — validated legal at assembly by T29 — else the
+//! task's declared execution class `Task::EXECUTION_CLASS`), so blocking work never
+//! starves the async workers and compute concurrency is bounded structurally by the
+//! rayon pool's fixed size (C13 acceptance). A task that jams every
+//! task/blocking/compute worker (a synchronous busy-loop) still cannot stall the
+//! framework runtime — the
+//! per-attempt timeout still fires and the event stream is still written (the
+//! all-workers-blocked scenario, C13's third acceptance criterion).
 //!
 //! # The termination condition
 //!
@@ -58,14 +69,14 @@
 //! # Scope (M1 only)
 //!
 //! This is the minimal readiness-driven loop, nothing more. It is **not** a
-//! scheduler; it admits the nodes the tracker/runner hand it against whatever
-//! admission surface the runner already exposes. Advanced concurrency dispatch
-//! (T33), deadlock property tests (T25), the hundred-node scale authority (T26),
-//! fault injection (T27), the permit/semaphore matrix (T31), runtime firing of
-//! non-default trigger rules and cancellation triggering (T34/T35), the run
-//! artifact fold (T42), and resume (C27) all belong to later tickets. This loop
-//! only consumes the C16 grace period as the bounded zombie wait at *natural* run
-//! end; it triggers no cancellation and handles no signals.
+//! scheduler; it admits the nodes the tracker/runner hand it against the C12
+//! admission surface (T31) and dispatches each by its execution class (C13 / T33).
+//! Deadlock property tests (T25), the hundred-node scale authority (T26), fault
+//! injection (T27), runtime firing of non-default trigger rules and cancellation
+//! triggering (T34/T35), the run artifact fold (T42), and resume (C27) all belong
+//! to later tickets. This loop only consumes the C16 grace period as the bounded
+//! zombie wait at *natural* run end; it triggers no cancellation and handles no
+//! signals.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -84,6 +95,44 @@ use dagr_core::flow::Pipeline;
 use dagr_core::handle::NodeId;
 use dagr_core::limits::detect_capacities;
 use dagr_core::readiness::{Decision, ReadinessTracker};
+use dagr_core::task::ExecutionClass;
+
+use crate::dispatch::{Dispatcher, Surface};
+
+/// The thread execution **surface** a unit of work ran on — the observable half of
+/// C13's class→surface routing (arch.md `### C13`; T33). Await-bound work runs on
+/// [`Async`](ExecutionSurface::Async) (the tokio runtime), blocking work on
+/// [`Blocking`](ExecutionSurface::Blocking) (the dedicated blocking pool), and
+/// compute-bound work on [`Compute`](ExecutionSurface::Compute) (the fixed rayon
+/// pool). [`current_execution_surface`] reports the surface the calling code runs
+/// on, which is how a task can honestly attribute itself to its class's surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionSurface {
+    /// The async (tokio) task runtime — where [`ExecutionClass::AwaitBound`] work
+    /// runs.
+    Async,
+    /// The dedicated blocking pool — where [`ExecutionClass::Blocking`] work runs.
+    Blocking,
+    /// The fixed compute (rayon) pool — where [`ExecutionClass::Compute`] work runs.
+    Compute,
+    /// Not one of the three task surfaces (the isolated framework runtime, or a
+    /// plain thread).
+    Other,
+}
+
+/// The execution [surface](ExecutionSurface) the **calling** code is running on
+/// (arch.md `### C13`; T33). A task's work can call this to observe which surface
+/// its class routed it onto — the honest, deterministic way to prove dispatch
+/// placed the work correctly, with no wall-clock or ambient state.
+#[must_use]
+pub fn current_execution_surface() -> ExecutionSurface {
+    match crate::dispatch::current_surface() {
+        Surface::Async => ExecutionSurface::Async,
+        Surface::Blocking => ExecutionSurface::Blocking,
+        Surface::Compute => ExecutionSurface::Compute,
+        Surface::Unknown => ExecutionSurface::Other,
+    }
+}
 
 /// The default bounded grace period the driver waits for a zombie closure to
 /// return at natural run end (arch.md C16; T35 makes it a flag). A blocking
@@ -552,6 +601,7 @@ where
         tracker,
         config.grace,
         &admission,
+        &config.capacities,
         &mut writer,
     );
 
@@ -591,12 +641,14 @@ struct AttemptDone {
 /// The readiness-driven execution loop (arch.md C11; the driver's half of the
 /// run-end condition).
 ///
-/// It runs on the isolated **framework runtime** and admits ready nodes onto a
-/// separate **tasks runtime**, feeding each terminal outcome back into the tracker
-/// so dependents decrement and either become ready (admitted next) or receive
-/// their propagated terminal state (recorded without executing) — never batching a
-/// level into a wave. It terminates precisely when nothing is pending and nothing
-/// is in flight, then waits the bounded grace period for zombie candidates
+/// It runs on the isolated **framework runtime** and admits ready nodes onto the
+/// [`Dispatcher`]'s three execution surfaces **by execution class** (C13 / T33) —
+/// await-bound onto the tokio task runtime, blocking onto the dedicated blocking
+/// pool, compute onto the fixed rayon pool — feeding each terminal outcome back
+/// into the tracker so dependents decrement and either become ready (admitted next)
+/// or receive their propagated terminal state (recorded without executing) — never
+/// batching a level into a wave. It terminates precisely when nothing is pending and
+/// nothing is in flight, then waits the bounded grace period for zombie candidates
 /// (blocking timeouts) and emits a `zombie-at-exit` event for each. Returns the
 /// overall outcome and the per-node terminal states.
 #[allow(clippy::too_many_arguments)]
@@ -608,21 +660,25 @@ fn run_loop<S, C>(
     mut tracker: ReadinessTracker,
     grace: Duration,
     admission: &AdmissionController,
+    capacities: &PoolCapacities,
     writer: &mut EventStreamWriter<S, C>,
 ) -> (RunOutcome, BTreeMap<String, TerminalState>)
 where
     S: EventSink,
     C: MonotonicClock,
 {
-    // The tasks runtime — a separate multi-threaded runtime attempts spawn onto,
-    // so a task jamming every task worker cannot stall the framework runtime that
-    // drives this loop, its timers, and the writer (T2 · isolated framework
-    // runtime).
-    let tasks = tokio::runtime::Builder::new_multi_thread()
-        .enable_time()
-        .build()
-        .expect("tasks runtime builds");
-    // The framework runtime — drives this loop, the grace timer, and the drain.
+    // The execution-class dispatcher (C13 / T33): it owns the three task surfaces —
+    // the async task runtime (await-bound), the dedicated blocking pool (blocking,
+    // via `spawn_blocking`), and the fixed rayon compute pool (compute) — built from
+    // the run's pinned pool capacities (the compute pool sized to the pinned
+    // `compute_threads`, floor of one; T2 §3, consuming T31/T32 sizing). Each is a
+    // *task* surface, separate from the framework runtime below, so a task that jams
+    // every task/blocking/compute worker cannot stall the loop, its timers, or the
+    // writer (T2 · isolated framework runtime).
+    let dispatcher = Dispatcher::new(capacities);
+    // The framework runtime — drives this loop, the grace timer, and the drain. It
+    // is NOT one of the dispatcher's task surfaces, which is the isolation the C13
+    // acceptance (all-workers-blocked timeout still fires) depends on.
     let framework = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_time()
@@ -654,7 +710,7 @@ where
                     run_id,
                     &name,
                     &runners,
-                    &tasks,
+                    &dispatcher,
                     &tx,
                     admission,
                     writer,
@@ -691,7 +747,7 @@ where
                 run_id,
                 &decisions,
                 &runners,
-                &tasks,
+                &dispatcher,
                 &tx,
                 admission,
                 writer,
@@ -707,7 +763,7 @@ where
                 pipeline,
                 run_id,
                 &runners,
-                &tasks,
+                &dispatcher,
                 &tx,
                 admission,
                 writer,
@@ -729,14 +785,15 @@ where
         }
     });
 
-    // Shut the tasks runtime down **without joining** any abandoned-but-running
-    // (zombie) blocking closure: a leftover thread counts as *decided*, not
-    // in-flight, so it must not hold the run open. `Runtime::drop` would block
-    // forever on an unkillable busy blocking thread; `shutdown_background` returns
-    // immediately, leaving any zombie to be reaped by process exit (the driver
-    // already emitted its `zombie-at-exit` event above). Every well-behaved
-    // attempt has already reported terminal before this point.
-    tasks.shutdown_background();
+    // Shut the dispatcher's task surfaces down **without joining** any
+    // abandoned-but-running (zombie) blocking/compute closure: a leftover thread
+    // counts as *decided*, not in-flight, so it must not hold the run open.
+    // `Runtime::drop` (and rayon's pool `Drop`) would block forever on an unkillable
+    // busy closure; `shutdown_background` returns immediately, leaving any zombie to
+    // be reaped by process exit (the driver already emitted its `zombie-at-exit`
+    // event above). Every well-behaved attempt has already reported terminal before
+    // this point.
+    dispatcher.shutdown_background();
 
     let outcome = overall_outcome(&terminal_states);
     (outcome, terminal_states)
@@ -765,7 +822,7 @@ fn offer_or_pend<S, C>(
     run_id: &str,
     name: &str,
     runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    tasks: &tokio::runtime::Runtime,
+    dispatcher: &Dispatcher,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
@@ -778,7 +835,9 @@ fn offer_or_pend<S, C>(
     let cost = declared_cost(pipeline, name);
     match admission.try_admit(name, &cost) {
         Some(permit) => {
-            admit(run_id, name, runners, tasks, tx, writer, permit);
+            admit(
+                pipeline, run_id, name, runners, dispatcher, tx, writer, permit,
+            );
             *in_flight += 1;
         }
         // The node did not fit the pool's *current* remaining capacity. It either
@@ -841,7 +900,7 @@ fn drain_pending<S, C>(
     pipeline: &Pipeline,
     run_id: &str,
     runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    tasks: &tokio::runtime::Runtime,
+    dispatcher: &Dispatcher,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
@@ -860,7 +919,9 @@ fn drain_pending<S, C>(
         let cost = declared_cost(pipeline, &name);
         if let Some(permit) = admission.try_admit(&name, &cost) {
             pending.remove(index);
-            admit(run_id, &name, runners, tasks, tx, writer, permit);
+            admit(
+                pipeline, run_id, &name, runners, dispatcher, tx, writer, permit,
+            );
             *in_flight += 1;
             // Restart from the front: admitting one may have consumed the capacity
             // a still-waiting older node needs, so re-check oldest-first.
@@ -875,22 +936,34 @@ fn drain_pending<S, C>(
     }
 }
 
-/// Admit `name`: emit its `node-ready` record and spawn its attempt onto the
-/// `tasks` runtime, which reports the terminal state and buffered records back
-/// over `tx` when it finishes.
+/// Admit `name`: emit its `node-ready` record and **dispatch** its attempt onto the
+/// execution surface named by its **effective execution class** (C13 / T33) — the
+/// async task runtime for [await-bound](ExecutionClass::AwaitBound), the dedicated
+/// blocking pool for [blocking](ExecutionClass::Blocking), the fixed compute pool
+/// for [compute](ExecutionClass::Compute) — which reports the terminal state and
+/// buffered records back over `tx` when it finishes.
+///
+/// The effective class is [`PipelineNode::effective_class`], which is the C5
+/// policy override if one is set (validated legal at assembly by T29 — an illegal
+/// override never assembles, so it never reaches here) else the class the task
+/// declared ([`Task::EXECUTION_CLASS`]). Resolving it here, at dispatch time, is the
+/// whole of T33's class routing.
 ///
 /// `permit` is the C12 admission permit acquired for this attempt (T31). It is
-/// **moved into the spawned closure** — the T0.3 ownership trick — so it is
+/// **moved into the dispatched closure** — the T0.3 ownership trick — so it is
 /// dropped (and its cost released to every pool) exactly when the attempt returns,
-/// *before* the loop is told the attempt is done. That is what keeps the permit
-/// held for the whole attempt and released on its terminal outcome; a
-/// blocking-timeout zombie that runs on past its mark keeps holding it until its
-/// closure actually returns (this driver does not fabricate an early release).
+/// *before* the loop is told the attempt is done, on whichever surface ran it. That
+/// is what keeps the permit held for the whole attempt and released on its terminal
+/// outcome; a blocking/compute timeout zombie that runs on past its mark keeps
+/// holding it until its closure actually returns (this driver does not fabricate an
+/// early release, and dispatch does not change permit mechanics).
+#[allow(clippy::too_many_arguments)]
 fn admit<S, C>(
+    pipeline: &Pipeline,
     run_id: &str,
     name: &str,
     runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    tasks: &tokio::runtime::Runtime,
+    dispatcher: &Dispatcher,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     writer: &mut EventStreamWriter<S, C>,
     permit: Permit,
@@ -902,6 +975,15 @@ fn admit<S, C>(
     // Node identity is name-derived (T0.7), so this is the same id assembly and the
     // tracker use — no pipeline lookup needed.
     let node_id = NodeId::from_name(name);
+
+    // Resolve the effective execution class at dispatch (C13 / T33): the C5 policy
+    // override if set (assembly already rejected any illegal override — T29), else
+    // the task's declared class. An unknown node (a framework defect handled below)
+    // defaults to await-bound.
+    let class = pipeline.node(node_id).map_or(
+        ExecutionClass::AwaitBound,
+        dagr_core::flow::PipelineNode::effective_class,
+    );
 
     let Some(mut runner) = runners
         .lock()
@@ -923,7 +1005,10 @@ fn admit<S, C>(
     let run_id = run_id.to_string();
     let name_owned = name.to_string();
     let tx = tx.clone();
-    tasks.spawn(async move {
+    // The attempt future — driven on the surface `class` names. It owns the runner,
+    // the buffering sink, and the permit; producing the `(state, events)` the loop
+    // records once the attempt returns.
+    let attempt = async move {
         // A per-attempt buffering sink: the attempt emits into it off the
         // framework runtime; the loop drains it into the writer in order.
         let mut sink = BufferingSink::default();
@@ -934,12 +1019,19 @@ fn admit<S, C>(
         // memory + thread cost returns to the pools) BEFORE reporting done, so the
         // loop sees freed capacity when it re-offers the pending waiters. An
         // await-bound cancellation would drop the permit with the future instead;
-        // a blocking-timeout zombie keeps it until its closure returns (T0.3 ADR).
+        // a blocking/compute-timeout zombie keeps it until its closure returns
+        // (T0.3 ADR). The permit drops on whichever surface ran the attempt.
         drop(permit);
+        (name_owned, state, sink.drain())
+    };
+    // Route by class (C13 / T33). `on_done` sends the finished attempt back to the
+    // framework loop over `tx`; it runs on the surface the attempt ran on, off the
+    // framework runtime, so a jammed task surface never touches the writer.
+    dispatcher.dispatch(class, attempt, move |(node, state, events)| {
         let _ = tx.send(AttemptDone {
-            node: name_owned,
+            node,
             state,
-            events: sink.drain(),
+            events,
         });
     });
 }
@@ -956,7 +1048,7 @@ fn apply_decisions<S, C>(
     run_id: &str,
     decisions: &[Decision],
     runners: &Arc<Mutex<BTreeMap<String, Box<dyn NodeRunner>>>>,
-    tasks: &tokio::runtime::Runtime,
+    dispatcher: &Dispatcher,
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
@@ -973,8 +1065,8 @@ fn apply_decisions<S, C>(
             Decision::Ready(id) => {
                 if let Some(name) = node_name(pipeline, *id) {
                     offer_or_pend(
-                        pipeline, run_id, &name, runners, tasks, tx, admission, writer, pending,
-                        in_flight,
+                        pipeline, run_id, &name, runners, dispatcher, tx, admission, writer,
+                        pending, in_flight,
                     );
                 }
             }
