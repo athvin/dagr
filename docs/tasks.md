@@ -71,7 +71,7 @@ trybuild/ui-test harness wired into CI with one passing sample and a snapshot-up
 
 **T9 — C1: task abstraction and error classification** (M, after T1, T2, T3, T0.2)
 Task abstraction with declared input/output types, execution class as fourth declared element (default await-bound), constructor-captured configuration, no-input support, `&mut self` work signature, bounds per spec (`Send + 'static`; outputs `Send + Sync + 'static`), errors classified retryable/permanent/skip.
-- Q: Trait impl vs generic struct vs closure wrapper — and how "types readable from the declaration" is judged for closures.
+- Q: ~~Trait impl vs generic struct vs closure wrapper — and how "types readable from the declaration" is judged for closures.~~ **Resolved (ticket 019 design note):** a `Task` **trait** implemented on an author-owned config `struct`; the readable-types rule is defined over the impl's associated types `Input`/`Output`; **closures are not permitted** (no associated-type surface — matches dagx's bad-ergonomics finding), which answers the closure sub-question.
 
 **T10 — C2: typed handles** (S, after T5, T9)
 Cheap, copyable `Handle<T>` obtainable only by registering a node (with an explicit node name), no public constructor, no by-name/index/string lookup.

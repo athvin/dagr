@@ -1,0 +1,16 @@
+# Compile-failure snapshot for `task_output_missing_static.rs` — ticket T9 (019).
+#
+# CONTRACT (T8 harness; C28 "assert only that the names appear"): each
+# non-comment, non-blank line below is a substring that MUST appear in the
+# sample's real compiler diagnostic. The harness asserts ONLY that — never exact
+# prose, wording, note count, or span layout — so compiler-message churn does
+# not break the suite. Keep this file to the identifying substrings alone.
+#
+# REGENERATION (blessing), from the repo root:
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+# Blessing is opt-in and kept out of the default test path; a plain
+# `cargo test` never overwrites it. Regenerate on a pinned-toolchain bump
+# (rust-toolchain.toml) and review the diff — see `tests/ui.rs`.
+
+BorrowedOutput
+assert_output_bound
