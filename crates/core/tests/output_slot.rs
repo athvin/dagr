@@ -13,11 +13,10 @@
 //! authoritative hundred-node bounded-memory assertion is T26 — only a smaller
 //! smoke test lives here.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dagr_core::handle::NodeId;
-use dagr_core::slot::{RedeemError, ResidencyLedger, Slot};
+use dagr_core::slot::{RedeemError, ResidencyLedger, Slot, SlotRef};
 
 // --- A deliberately non-`Clone` output type -------------------------------
 // The T0.2 model must carry a non-`Clone` output through both the owned and the
@@ -29,7 +28,9 @@ struct Payload {
 
 impl Payload {
     fn of_len(n: usize) -> Self {
-        Self { bytes: vec![7u8; n] }
+        Self {
+            bytes: vec![7u8; n],
+        }
     }
 }
 
@@ -48,7 +49,14 @@ fn slot_for<T: Send + Sync + 'static>(
     residency: u64,
     ledger: &Arc<ResidencyLedger>,
 ) -> Slot<T> {
-    Slot::new(NodeId::from_name(name), name, consumers, retained, residency, Arc::clone(ledger))
+    Slot::new(
+        NodeId::from_name(name),
+        name,
+        consumers,
+        retained,
+        residency,
+        Arc::clone(ledger),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +196,7 @@ fn release_waits_on_closure_return_not_terminal_decision() {
 
     // The consumer enters (closure running) and its fate is decided terminal,
     // but its closure has NOT yet returned (the lease is still held).
-    let lease = c.enter();
+    let mut lease = c.enter();
     lease.mark_terminal();
 
     // In the window between the terminal decision and the closure return the
@@ -215,7 +223,7 @@ fn zombie_consumer_pins_value_and_residency() {
 
     // The consumer is marked timed-out/abandoned — a terminal decision — but
     // its closure has NOT returned (abandoned-but-running: the lease is held).
-    let lease = c.enter();
+    let mut lease = c.enter();
     lease.mark_terminal();
 
     // While the closure runs, the value is reachable and its residency stays
@@ -282,7 +290,9 @@ fn released_value_is_not_redeemable() {
 
     // Post-run redemption reports no value available — distinct from a
     // read-before-fill defect (that panics loudly; this returns an error).
-    let err = handle.redeem().expect_err("a released value is not redeemable");
+    let err = handle
+        .redeem()
+        .expect_err("a released value is not redeemable");
     assert_eq!(err, RedeemError::Released);
 }
 
@@ -292,7 +302,9 @@ fn redeeming_an_unfilled_slot_reports_never_filled_not_released() {
     let slot: Slot<Payload> = slot_for("neverfilled", 0, true, 0, &ledger);
     let handle = slot.redemption_handle();
     // Never filled: redemption distinguishes "never produced" from "released".
-    let err = handle.redeem().expect_err("an unfilled retained slot has no value");
+    let err = handle
+        .redeem()
+        .expect_err("an unfilled retained slot has no value");
     assert_eq!(err, RedeemError::NeverFilled);
 }
 
@@ -363,10 +375,11 @@ fn owned_delivery_moves_the_value_out() {
     slot.fill(Payload::of_len(64)).expect("fill");
 
     // The sole owner takes the value by move — the framework has no copy left.
+    // `take` consumes the lease: taking the value IS the consumer's terminal-and-
+    // returned point (a value can be moved out exactly once).
     let lease = consumer.enter();
     let owned: Payload = lease.take();
     assert_eq!(owned.bytes.len(), 64);
-    drop(lease);
 
     // After the sole consumer returned, the value is released.
     assert!(!slot.is_filled());
@@ -386,6 +399,7 @@ fn clone_on_read_gives_each_attempt_a_fresh_value() {
     // Attempt 1 gets a fresh clone and mutates it.
     let mut a1 = consumer.clone_value();
     a1.n = 100;
+    assert_eq!(a1.n, 100);
 
     // Attempt 2 gets an independent fresh clone; the mutation did not leak.
     let a2 = consumer.clone_value();
@@ -430,65 +444,57 @@ fn no_lookup_no_type_check_on_the_read_path() {
 // Chain peak does not grow with chain length (bounded-memory smoke). Each
 // node's value is consumed by exactly one downstream node; nothing retained.
 // ---------------------------------------------------------------------------
-#[test]
-fn chain_peak_does_not_grow_with_chain_length() {
-    // A synthetic long linear chain: node i produces a value consumed by node
-    // i+1. Each node carries the same declared residency. Because each value is
-    // released once its single consumer returns, peak counted residency stays
-    // bounded to at most two live values at a time regardless of chain length.
-    let per_node: u64 = 1024;
+/// Run a synthetic linear chain of `len` nodes, each carrying `per_node` bytes of
+/// declared residency and consumed by exactly one downstream node (the last has
+/// zero consumers). Returns the **peak** counted residency observed. Because each
+/// value is released the instant its single consumer's read returns, at most two
+/// node values are ever concurrently live, so the peak is independent of `len`.
+fn run_chain(len: usize, per_node: u64) -> u64 {
+    let ledger = ResidencyLedger::new();
 
-    fn run_chain(len: usize, per_node: u64) -> u64 {
-        let ledger = ResidencyLedger::new();
-        let live = Arc::new(AtomicUsize::new(0));
-        let max_live = Arc::new(AtomicUsize::new(0));
+    // The "previous" slot + its downstream consumer, carried forward: node i
+    // reads node i-1's value, which releases i-1 once node i's read returns.
+    let mut prev_consumer: Option<SlotRef<Vec<u8>>> = None;
+    let mut prev_slot: Option<Slot<Vec<u8>>> = None;
 
-        // The "previous" slot's consumer lease, carried forward: node i reads
-        // node i-1's value, which releases i-1 once node i's read returns.
-        let mut prev_consumer: Option<dagr_core::slot::SlotRef<Vec<u8>>> = None;
-        let mut prev_slot: Option<Slot<Vec<u8>>> = None;
+    for i in 0..len {
+        let name = format!("node-{i}");
+        let slot: Slot<Vec<u8>> = slot_for(&name, u32::from(i + 1 < len), false, per_node, &ledger);
 
-        for i in 0..len {
-            let name = format!("node-{i}");
-            let slot: Slot<Vec<u8>> =
-                slot_for(&name, if i + 1 < len { 1 } else { 0 }, false, per_node, &ledger);
+        // Node i's downstream consumer reference (consumed by node i+1).
+        let downstream = slot.shared_ref();
 
-            // Node i's downstream consumer reference (consumed by node i+1).
-            let downstream = slot.shared_ref();
-
-            // Node i "runs": it reads its upstream (node i-1), producing its own
-            // value. Consuming the upstream releases node i-1's slot.
-            if let (Some(pc), Some(_ps)) = (prev_consumer.take(), prev_slot.take()) {
-                let lease = pc.enter();
-                let _ = lease.read();
-                // lease drops here: node i-1's sole consumer returned → released.
-            }
-
-            slot.fill(vec![0u8; 8]).expect("fill");
-            live.fetch_add(1, Ordering::SeqCst);
-            max_live.fetch_max(live.load(Ordering::SeqCst), Ordering::SeqCst);
-
-            // Track counted residency as the honest measure.
-            prev_consumer = Some(downstream);
-            prev_slot = Some(slot);
-        }
-
-        // Drain the final node.
+        // Node i "runs": it reads its upstream (node i-1), producing its own
+        // value. Consuming the upstream releases node i-1's slot.
         if let (Some(pc), Some(_ps)) = (prev_consumer.take(), prev_slot.take()) {
             let lease = pc.enter();
             let _ = lease.read();
+            // lease drops here: node i-1's sole consumer returned → released.
         }
 
-        ledger.peak()
+        slot.fill(vec![0u8; 8]).expect("fill");
+        prev_consumer = Some(downstream);
+        prev_slot = Some(slot);
     }
 
+    // Drain the final node.
+    if let (Some(pc), Some(_ps)) = (prev_consumer.take(), prev_slot.take()) {
+        let lease = pc.enter();
+        let _ = lease.read();
+    }
+
+    ledger.peak()
+}
+
+#[test]
+fn chain_peak_does_not_grow_with_chain_length() {
+    let per_node: u64 = 1024;
     let short = run_chain(4, per_node);
     let long = run_chain(64, per_node);
 
     // Peak counted residency is bounded and does NOT scale with chain length.
-    // At most two node values are ever concurrently live (the one being read
-    // and the one just produced), so the peak is the same for a short and a
-    // long chain.
+    // At most two node values are ever concurrently live (the one being read and
+    // the one just produced), so the peak matches for a short and a long chain.
     assert_eq!(short, long);
     assert!(
         long <= per_node * 2,

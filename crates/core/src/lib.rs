@@ -98,6 +98,27 @@
 //! - [`assembly::DurableOutput`] — the durable-output contract marker (C27 /
 //!   T0.8) whose presence assembly checks for a durable-marked node.
 //!
+//! The **C10 output slot** (ticket T17): where a node's produced value lives
+//! between its production and its last consumption.
+//!
+//! - [`slot::Slot<T>`] — the typed, once-writable slot a node owns; empty until
+//!   the node succeeds, refusing a second [`fill`](slot::Slot::fill). Consumers
+//!   are wired at assembly time by minting a typed [`slot::SlotRef<T>`]
+//!   ([`shared_ref`](slot::Slot::shared_ref) / [`owned_ref`](slot::Slot::owned_ref)
+//!   / [`clone_on_read_ref`](slot::Slot::clone_on_read_ref)), so a read is a
+//!   direct access with no lookup and no runtime type check (the single erasure
+//!   boundary downcasts infallibly by construction — see the module rustdoc).
+//! - [`slot::ConsumerLease<T>`] — the per-attempt lease that gates release on the
+//!   **closure actually returning** (not the terminal decision), so an
+//!   abandoned-but-running (zombie) consumer pins the value and its residency
+//!   until it returns (T0.2 ADR §7).
+//! - [`slot::ResidencyLedger`] — the single-count residency accounting hook the
+//!   memory pool (C12) and run artifact (C23) consume, including peak measured
+//!   residency.
+//! - [`slot::RedemptionHandle<T>`] — the post-run redemption API: a `retained`
+//!   node's value is exchanged for its handle once the run has ended; a released
+//!   value is not redeemable ([`slot::RedeemError`]).
+//!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
 //!
@@ -110,6 +131,7 @@ pub mod context;
 pub mod error;
 pub mod flow;
 pub mod handle;
+pub mod slot;
 pub mod task;
 
 pub use assembly::{
@@ -128,4 +150,8 @@ pub use context::{
 pub use error::{TaskError, TaskErrorClass};
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
+pub use slot::{
+    ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,
+    SlotRef,
+};
 pub use task::{ExecutionClass, Task};
