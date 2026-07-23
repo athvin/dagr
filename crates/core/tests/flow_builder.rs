@@ -62,17 +62,20 @@ impl Task for BuildReport {
 /// node under an explicit name, returns a handle of the node's output type that
 /// can be copied and passed around. There is no separate API to fabricate a
 /// handle: obtaining one requires registering.
+/// The handle is Copy and freely passable during construction: taking a copy
+/// leaves the original usable, and every copy names the same node.
+fn passthrough<T>(h: Handle<T>) -> Handle<T> {
+    let taken = h; // a Copy, not a move
+    let reused = h; // original still usable after a copy was taken
+    let _ = reused;
+    taken
+}
+
 #[test]
 fn registration_returns_a_usable_handle() {
     let mut flow = Flow::new();
     let rows: Handle<Rows> = flow.register_source("rows", &MakeRows);
 
-    // The handle is Copy and freely passable during construction.
-    fn passthrough<T>(h: Handle<T>) -> Handle<T> {
-        let taken = h; // a Copy, not a move
-        let _reused = h; // original still usable
-        taken
-    }
     let copy = rows;
     let out = passthrough(rows);
     let still = rows;
@@ -93,7 +96,9 @@ fn identity_is_the_registration_name() {
     let _rows: Handle<Rows> = flow.register_source("rows", &MakeRows);
     let pipeline: Pipeline = flow.finish();
 
-    let node: &PipelineNode = pipeline.node(NodeId::from_name("rows")).expect("node present");
+    let node: &PipelineNode = pipeline
+        .node(NodeId::from_name("rows"))
+        .expect("node present");
     assert_eq!(node.name(), "rows");
     assert_eq!(node.id(), NodeId::from_name("rows"));
     // Found under exactly that name; no other node exists.
@@ -110,16 +115,14 @@ fn reordering_registrations_changes_nothing() {
     let mut a = Flow::new();
     let rows_a: Handle<Rows> = a.register_source("rows", &MakeRows);
     let schema_a: Handle<Schema> = a.register_source("schema", &MakeSchema);
-    let _report_a: Handle<Report> =
-        a.register("report", &BuildReport, (rows_a, schema_a));
+    let _report_a: Handle<Report> = a.register("report", &BuildReport, (rows_a, schema_a));
     let pa = a.finish();
 
     // Order two: report last but sources reversed — schema, rows, report.
     let mut b = Flow::new();
     let schema_b: Handle<Schema> = b.register_source("schema", &MakeSchema);
     let rows_b: Handle<Rows> = b.register_source("rows", &MakeRows);
-    let _report_b: Handle<Report> =
-        b.register("report", &BuildReport, (rows_b, schema_b));
+    let _report_b: Handle<Report> = b.register("report", &BuildReport, (rows_b, schema_b));
     let pb = b.finish();
 
     // Same identities present.
@@ -152,10 +155,7 @@ fn renaming_changes_identity() {
     assert!(pa.node(NodeId::from_name("rows")).is_some());
     assert!(pa.node(NodeId::from_name("input-rows")).is_none());
     assert!(pb.node(NodeId::from_name("input-rows")).is_some());
-    assert_ne!(
-        NodeId::from_name("rows"),
-        NodeId::from_name("input-rows")
-    );
+    assert_ne!(NodeId::from_name("rows"), NodeId::from_name("input-rows"));
     assert_ne!(pa, pb);
 }
 
