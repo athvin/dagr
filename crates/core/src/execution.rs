@@ -970,14 +970,17 @@ impl LateResultBarrier {
 //   once. This keeps `dagr-core` runtime-agnostic and dependency-free, exactly as
 //   the T21 timeout race did.
 //
-// # Interim M1 surface → migrates into C5 policy in M2 (T29)
+// # Retry config now lives in C5 policy; `RetryConfig` is the runner's input (T29)
 //
-// [`RetryConfig`] is a **deliberately small, self-contained interim knob**. Its
-// conservative default is **no retries** (a single attempt), matching C5's
-// stated default. In M2 this shape folds into the full C5 node-policy struct —
-// that migration is T29's concern (which this ticket blocks); nothing here
-// implements the policy surface, the defaults hash, or the graph-artifact
-// disclosure of the effective policy.
+// Retry/backoff configuration has exactly **one authoring home** — the C5
+// [`NodePolicy`](crate::assembly::NodePolicy) (T29). [`RetryConfig`] is no longer
+// an independently-authored knob: it is the **derived runner input**
+// [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config) produces
+// from the policy's retry count and [`Backoff`] shape, and the attempt runner
+// ([`run_with_retries`]) reads it. Its conservative default is still **no retries**
+// (a single attempt), matching C5's stated default. The defaults hash and the
+// graph-artifact disclosure of the effective policy are the policy's (T29); the
+// concrete artifact schema and BLAKE3 hash are T40/T41.
 
 use std::time::Duration;
 
@@ -1079,13 +1082,37 @@ impl Jitter for SeededJitter {
 /// Full jitter (`[0, nominal]`) maximises decorrelation of simultaneous retries
 /// — the property the C14 acceptance criterion "a fan-out of simultaneous
 /// retries does not resynchronize" demands — and keeps the delay bounded above
-/// by the nominal (hence by the cap). The window is documented here as part of
-/// the interim surface that migrates into C5 policy (T29).
+/// by the nominal (hence by the cap). The [`Backoff`] shape is carried by the C5
+/// [`NodePolicy`](crate::assembly::NodePolicy) (T29) and read by the runner.
 #[derive(Debug, Clone, Copy)]
 pub struct Backoff {
     base: Duration,
     factor: f64,
     cap: Duration,
+}
+
+// A backoff schedule is a **configuration value** that must sit inside the
+// `Eq`-and-`Hash` [`NodePolicy`] (T29) — but `f64` is not `Eq`/`Hash`. The growth
+// `factor` is an author-declared constant (never NaN in practice, and a NaN would
+// be a defect either way), so total, deterministic equality over its **bit
+// pattern** is exactly the right choice: it is reflexive, agrees with the
+// deterministic fingerprint encoding (which also hashes the raw bits), and makes
+// two policies stating the same backoff compare and hash identically. This is the
+// same treatment the fingerprint's canonical byte form gives the factor.
+impl PartialEq for Backoff {
+    fn eq(&self, other: &Self) -> bool {
+        self.base == other.base
+            && self.cap == other.cap
+            && self.factor.to_bits() == other.factor.to_bits()
+    }
+}
+impl Eq for Backoff {}
+impl std::hash::Hash for Backoff {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.base.hash(state);
+        self.cap.hash(state);
+        self.factor.to_bits().hash(state);
+    }
 }
 
 impl Backoff {
@@ -1095,6 +1122,26 @@ impl Backoff {
     #[must_use]
     pub fn new(base: Duration, factor: f64, cap: Duration) -> Self {
         Self { base, factor, cap }
+    }
+
+    /// The schedule's **base** delay (the wait before the first retry, at 0-based
+    /// attempt index 0 with no jitter). Read by the policy hash's canonical
+    /// encoding (T0.7) so a backoff change moves the policy hash.
+    #[must_use]
+    pub fn base(&self) -> Duration {
+        self.base
+    }
+
+    /// The schedule's exponential growth **factor** per attempt.
+    #[must_use]
+    pub fn factor(&self) -> f64 {
+        self.factor
+    }
+
+    /// The schedule's **cap** — the ceiling no scheduled delay ever exceeds.
+    #[must_use]
+    pub fn cap(&self) -> Duration {
+        self.cap
     }
 
     /// The **nominal** (pre-jitter) delay for 0-based attempt index `n`:
@@ -1146,8 +1193,17 @@ impl Backoff {
     }
 }
 
-/// The **interim per-node retry configuration** (T22): maximum attempt count plus
-/// the [`Backoff`] schedule, with a conservative default of **no retries**.
+/// The **per-node retry configuration** the attempt runner reads (T22): maximum
+/// attempt count plus the [`Backoff`] schedule, with a conservative default of
+/// **no retries**.
+///
+/// # Derived from C5 policy — one authoring home (T29)
+///
+/// Since T29 this is the **runner's input**, not an independently-authored knob:
+/// [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config) derives
+/// it from the node's policy (retry count → `max_attempts = retries + 1`, plus the
+/// policy's [`Backoff`] shape), so retry configuration lives in exactly one home
+/// (the C5 policy) and the runner reads it from there.
 ///
 /// # Classification-gated retry
 ///
@@ -1164,14 +1220,15 @@ impl Backoff {
 /// attempt and then fails on a retry-eligible error, proving the default is
 /// honestly non-retrying.
 ///
-/// # Interim M1 surface → C5 policy in M2 (T29)
+/// # One authoring home in C5 policy (T29)
 ///
-/// This is a deliberately small, self-contained knob introduced as an interim M1
-/// surface. In M2 it **migrates into the C5 node-policy struct** (retries +
-/// backoff shape live there alongside timeout, cost, trigger rule, …) — that
-/// migration is **T29**'s concern (which this ticket blocks). Nothing here
-/// implements the policy struct, its defaults hash, or the graph-artifact
-/// disclosure of the effective policy.
+/// Retry + backoff configuration lives in exactly one home — the C5
+/// [`NodePolicy`](crate::assembly::NodePolicy). This `RetryConfig` is the
+/// runner's **derived input**: [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config)
+/// produces it from the policy's retry count (`max_attempts = retries + 1`) and
+/// [`Backoff`] shape, and the attempt runner reads it. The policy owns the
+/// defaults hash and the graph-artifact disclosure of the effective policy (T29);
+/// the concrete artifact schema and BLAKE3 hash are T40/T41.
 #[derive(Debug, Clone, Copy)]
 pub struct RetryConfig {
     max_attempts: u32,

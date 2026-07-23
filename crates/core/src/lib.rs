@@ -92,9 +92,12 @@
 //!   them into the immutable artifact. Assembly is **pure** (no network,
 //!   filesystem, clock, credentials, or parameter values) and performs **no**
 //!   capacity/cost-fit check (that is bootstrap's, T0.5).
-//! - [`assembly::NodePolicy`] — the minimal C5 policy seam assembly reads
-//!   (durability, retention, retries, teardown, cost, class override); the full
-//!   C5 policy struct is T29's.
+//! - [`assembly::NodePolicy`] — the full C5 node-policy value (T29): durability,
+//!   retention, retries + backoff shape, per-attempt timeout, teardown, declared
+//!   cost, and the constrained class override. Its resolved
+//!   [`assembly::EffectivePolicy`] — the defaults-written-out view including the
+//!   binding trigger rule and the group label — is what reaches the graph
+//!   artifact (arch.md C5) and the two hashes (C21).
 //! - [`assembly::DurableOutput`] — the durable-output contract marker (C27 /
 //!   T0.8) whose presence assembly checks for a durable-marked node.
 //!
@@ -189,10 +192,11 @@
 //!   records a distinct [`execution::AttemptEvent::BackoffStarted`] backoff phase
 //!   (feeding C23 phase timings) and awaits a caller-provided timer future — it
 //!   reads no system clock, so the sleeping is the driver's concern (T24 / T33).
-//! - [`execution::RetryConfig`] / [`execution::Backoff`] — the **interim M1**
-//!   per-node retry knob (max attempts + base/factor/cap) whose conservative
-//!   default is **no retries** (a single attempt); its shape migrates into the C5
-//!   node-policy struct in M2 (**T29**, which this ticket blocks).
+//! - [`execution::RetryConfig`] / [`execution::Backoff`] — the retry knob the
+//!   runner reads (max attempts + base/factor/cap) whose conservative default is
+//!   **no retries** (a single attempt). Since **T29** retry/backoff configuration
+//!   has one authoring home — the C5 [`assembly::NodePolicy`] — and `RetryConfig`
+//!   is the derived runner input [`assembly::NodePolicy::retry_config`] produces.
 //! - [`execution::Jitter`] / [`execution::SeededJitter`] / [`execution::NoJitter`]
 //!   — the **injectable, deterministic** jitter source: a dependency-free seeded
 //!   `splitmix64` PRNG for production (a distinct seed per node spreads a fan-out
@@ -242,8 +246,8 @@ pub mod slot;
 pub mod task;
 
 pub use assembly::{
-    AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, FingerprintSlot,
-    NodePolicy, Problem, ProblemKind, Warning,
+    AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, EffectivePolicy,
+    FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning,
 };
 pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, ReceiveMode, RegisteredNode,

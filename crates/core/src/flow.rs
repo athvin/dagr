@@ -83,7 +83,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, NodePolicy};
+use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, EffectivePolicy, NodePolicy};
 use crate::binding::{DataEdge, NodeBinding, TriggerRule};
 use crate::handle::{Handle, NodeId};
 use crate::task::{ExecutionClass, Task};
@@ -184,13 +184,33 @@ impl PipelineNode {
         self.trigger_rule
     }
 
-    /// This node's [policy](NodePolicy) — the minimal assembly-validation seam
-    /// (C5 / T14) carrying exactly the fields assembly reads (durability,
-    /// retention, retries, teardown, cost, class override), with conservative
-    /// defaults. The full C5 policy struct is T29's.
+    /// This node's [policy](NodePolicy) — the full C5 node-policy value (T29)
+    /// carrying every author-settable field (durability, retention, retries,
+    /// backoff, per-attempt timeout, teardown, cost, class override), each with
+    /// its conservative default. The trigger rule and group label are carried on
+    /// the node (not this value) and appear on the resolved
+    /// [`effective_policy`](PipelineNode::effective_policy).
     #[must_use]
     pub fn policy(&self) -> NodePolicy {
         self.policy
+    }
+
+    /// This node's **full effective policy** (C5) — every policy field resolved to
+    /// its concrete value with defaults written out, plus the effective
+    /// [execution class](PipelineNode::effective_class) (override applied), the
+    /// binding [trigger rule](PipelineNode::trigger_rule), and the
+    /// [group](PipelineNode::group) label. This is the complete effective policy
+    /// that reaches the graph artifact (arch.md C5) and that the two hashes (C21)
+    /// run over; a no-policy node and an all-defaults node produce field-for-field
+    /// equal effective policies.
+    #[must_use]
+    pub fn effective_policy(&self) -> EffectivePolicy {
+        EffectivePolicy::resolve(
+            self.policy,
+            self.effective_class(),
+            self.trigger_rule,
+            self.group.as_deref(),
+        )
     }
 
     /// The execution class the task **declared** (its work shape, C1) — before any
@@ -342,6 +362,7 @@ impl Flow {
             None::<String>,
             policy,
             DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
         )
     }
 
@@ -373,6 +394,7 @@ impl Flow {
             None::<String>,
             policy.durable(true),
             DurableWitness::Present,
+            TriggerRule::AllSucceeded,
         )
     }
 
@@ -400,15 +422,51 @@ impl Flow {
             group,
             NodePolicy::new(),
             DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
+        )
+    }
+
+    /// Register a **source** (consume-nothing) node under `name` with an explicit
+    /// [`NodePolicy`] **and a non-default trigger rule** (T0.4 / C5), returning its
+    /// output [`Handle`].
+    ///
+    /// A non-default trigger rule (`all-terminal`, `any-failed`) is expressible
+    /// **only** on a node that consumes nothing (arch.md Vocabulary; C4) — a source
+    /// is exactly such a node, so this registrar exposes the rule for sources
+    /// without weakening the compile-time constraint: the data-dependent
+    /// registrars ([`register`](Flow::register) / [`register_with`](Flow::register_with))
+    /// offer **no** trigger-rule parameter, so a data node is still forced to
+    /// `all-succeeded` at compile time. The trigger rule feeds the **structural
+    /// fingerprint** (C21), not the policy hash.
+    #[must_use]
+    pub fn register_source_with_trigger<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        policy: NodePolicy,
+        trigger_rule: TriggerRule,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy,
+            DurableWitness::Absent,
+            trigger_rule,
         )
     }
 
     /// Register a **source** node under `name`, in an optional group, with an
-    /// explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness) —
-    /// the full source-registration surface the other source registrars delegate
-    /// to. The witness is [`Present`](DurableWitness::Present) only when the
-    /// caller proved `T::Output: DurableOutput`
-    /// ([`register_source_durable`](Flow::register_source_durable)).
+    /// explicit [`NodePolicy`], durable-contract [`witness`](DurableWitness), and
+    /// [trigger rule](TriggerRule) — the full source-registration surface the other
+    /// source registrars delegate to. The witness is
+    /// [`Present`](DurableWitness::Present) only when the caller proved
+    /// `T::Output: DurableOutput` ([`register_source_durable`](Flow::register_source_durable));
+    /// the trigger rule is `all-succeeded` for every registrar except
+    /// [`register_source_with_trigger`](Flow::register_source_with_trigger).
     #[must_use]
     fn register_source_in_group_with<T>(
         &mut self,
@@ -417,21 +475,26 @@ impl Flow {
         group: Option<impl Into<String>>,
         policy: NodePolicy,
         durable_witness: DurableWitness,
+        trigger_rule: TriggerRule,
     ) -> Handle<T::Output>
     where
         T: Task<Input = ()>,
     {
         let name = name.into();
         // Route through the T11 binding seam so a handle is obtained only by
-        // registration (C2), and the source node's trigger rule defaults
-        // correctly (AllSucceeded).
-        let handle: Handle<T::Output> = NodeBinding::consuming_nothing(&name).finish::<T::Output>();
+        // registration (C2). A source consumes nothing, so the binding's
+        // consume-nothing typestate is where a non-default trigger rule is
+        // legitimately expressible (C4 / Vocabulary); a default source keeps
+        // `AllSucceeded`.
+        let handle: Handle<T::Output> = NodeBinding::consuming_nothing(&name)
+            .trigger_rule(trigger_rule)
+            .finish::<T::Output>();
         let node = PipelineNode {
             id: handle.id(),
             name: name.clone(),
             group: group.map(Into::into),
             edges: Vec::new(),
-            trigger_rule: TriggerRule::AllSucceeded,
+            trigger_rule,
             policy,
             declared_class: T::EXECUTION_CLASS,
             durable_witness,

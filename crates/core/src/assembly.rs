@@ -68,21 +68,26 @@
 //! same FNV-1a family the name-derived [`NodeId`] already uses), which T41
 //! replaces with the versioned BLAKE3-v1 algorithm.
 //!
-//! # The node-policy seam vs the full policy struct (T29)
+//! # The full C5 node-policy value (T29)
 //!
-//! [`NodePolicy`] here is the **minimal assembly-validation seam**: it carries
-//! exactly the fields assembly *reads* to validate — the durability flag,
-//! retention flag, retry count, teardown flag, declared cost vector, and
-//! execution-class override — with the conservative C5 defaults. The **full C5
-//! node-policy struct** (backoff shape, per-attempt timeout, trigger rule, group,
-//! its defaults and emission, and its policy-hash participation) is **T29's**,
-//! which comes *after* T14 and expands this seam. This module defines only what
-//! it must read (T14 Out of scope: *"reads policy fields … but does not define
-//! them"*, read against the dependency order T29-after-T14).
+//! [`NodePolicy`] is the **full C5 node-policy value** (T29 expanded the minimal
+//! T14 seam): the durability flag, retention flag, retry count and
+//! [backoff](Backoff) shape (the shape migrated from T22's interim knob),
+//! per-attempt timeout, teardown flag, declared [cost vector](CostVector), and
+//! constrained execution-class override — each with its single conservative C5
+//! default. The trigger rule (set through the binding typestate, T0.4) and the
+//! group label (C6) are policy-adjacent knobs carried on the node rather than in
+//! this value; the resolved [`EffectivePolicy`] — the complete, defaults-written-out
+//! view — surfaces them alongside the policy fields and is what reaches the graph
+//! artifact (arch.md C5). The concrete artifact *schema* / renderers (T40) and the
+//! BLAKE3-v1 hash *algorithm* (T41) remain downstream; this module resolves the
+//! effective policy and feeds the right inputs into the fingerprint slot.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use crate::binding::{DataEdge, ReceiveMode};
+use crate::binding::{DataEdge, ReceiveMode, TriggerRule};
+use crate::execution::{Backoff, RetryConfig};
 use crate::flow::{Pipeline, PipelineNode};
 use crate::handle::NodeId;
 use crate::task::ExecutionClass;
@@ -175,21 +180,81 @@ impl CostVector {
             && self.blocking_threads == 0
             && self.compute_threads == 0
     }
+
+    /// The declared **working-memory** cost in bytes — held for the attempt,
+    /// released at its terminal state (T0.5 §4). Zero by default.
+    #[must_use]
+    pub fn working_memory(&self) -> u64 {
+        self.working_memory
+    }
+
+    /// The declared **output-residency** cost in bytes — transferred to the
+    /// output slot on production, released when the last consumer is terminal
+    /// (C10; T0.5 §4). Zero by default; distinct from working memory (the memory
+    /// pool's two-way split).
+    #[must_use]
+    pub fn output_residency(&self) -> u64 {
+        self.output_residency
+    }
+
+    /// The declared **blocking-pool** thread count (T0.5 §4 / T2). Zero by
+    /// default.
+    #[must_use]
+    pub fn blocking_threads(&self) -> u32 {
+        self.blocking_threads
+    }
+
+    /// The declared **compute-pool** thread count (T0.5 §4 / T2). Zero by
+    /// default.
+    #[must_use]
+    pub fn compute_threads(&self) -> u32 {
+        self.compute_threads
+    }
 }
 
-/// The **minimal assembly-validation policy seam** — exactly the C5 node-policy
-/// fields assembly *reads* to validate a registration (arch.md C5; T14).
+/// The **full C5 node-policy value** — the immutable per-node operational knobs,
+/// attached at registration and kept out of the task's logic (arch.md `### C5 ·
+/// Node policy`; T29 expands the minimal T14 seam).
 ///
-/// It carries the durability flag, the retention flag, the retry count, the
-/// teardown flag, the declared [cost vector](CostVector), and the
-/// execution-class override — each with its conservative C5 default (not durable,
-/// not retained, no retries, not a teardown, zero cost, class as declared). The
-/// **full** C5 policy struct (backoff, timeout, trigger rule, group, its defaults
-/// and its policy-hash participation) is **T29's**, which expands this seam; this
-/// type defines only what T14 must read.
+/// It carries every author-settable policy field, each with its single
+/// documented conservative default applied uniformly (arch.md C5): **no retries**
+/// ([`retries`](NodePolicy::retries)), the retry [backoff](NodePolicy::backoff)
+/// shape (the shape migrated from T22's interim knob, consulted only when retries
+/// are granted), **no** per-attempt [timeout](NodePolicy::timeout), **zero**
+/// declared [cost](CostVector) on every pool (working memory / output residency /
+/// blocking / compute), the constrained execution-class
+/// [override](NodePolicy::execution_class) (default: the class the task
+/// declared), **not** [retained](NodePolicy::retained) (release the output once
+/// consumed), and **not** [durable](NodePolicy::durable). The teardown flag
+/// ([`teardown`](NodePolicy::teardown)) is carried alongside for the C17
+/// nonzero-cost check.
+///
+/// # The trigger rule and the group label live *beside* the policy value
+///
+/// Two C5-adjacent knobs are **not** fields of this struct, and deliberately so:
+///
+/// - The **trigger rule** (T0.4) is set through the binding typestate
+///   ([`NodeBinding`](crate::binding::NodeBinding)) so that a non-default rule is
+///   *inexpressible* on a data-dependent node (a compile error, not a runtime
+///   check — arch.md §126). Putting a settable `trigger_rule` on `NodePolicy`
+///   would weaken that constraint, which T29 must not do. The **effective**
+///   trigger rule is exposed on the resolved [`EffectivePolicy`], sourced from the
+///   node's binding.
+/// - The **group label** (C6) is presentation metadata attached at registration
+///   (`register_*_in_group`) and excluded from node identity and both hashes; it
+///   too surfaces on [`EffectivePolicy`], sourced from the node.
+///
+/// # Which hash each field feeds (C21 / T0.7)
+///
+/// The policy values (retries, backoff, timeout, costs, effective class,
+/// retention, durability) feed the **policy hash**; the trigger rule feeds the
+/// **structural fingerprint**; the group label feeds **neither**. A node with no
+/// stated policy hashes **identically** to one with every default written out
+/// (arch.md C5), because both resolve to the same effective values.
 ///
 /// Set it fluently at registration with [`Flow::register_source_with`] /
-/// [`Flow::register_with`](crate::flow::Flow::register_with).
+/// [`Flow::register_with`](crate::flow::Flow::register_with); the value is
+/// immutable once assembled.
 ///
 /// [`Flow::register_source_with`]: crate::flow::Flow::register_source_with
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +262,8 @@ pub struct NodePolicy {
     durable: bool,
     retained: bool,
     retries: u32,
+    backoff: Backoff,
+    timeout: Option<Duration>,
     teardown: bool,
     cost: CostVector,
     class_override: Option<ExecutionClass>,
@@ -204,19 +271,32 @@ pub struct NodePolicy {
 
 impl Default for NodePolicy {
     /// The conservative C5 defaults, applied uniformly (arch.md C5: *"no retries,
-    /// … zero declared cost, … no group, release the output once consumed, not
-    /// durable"*): not durable, not retained, no retries, not a teardown, zero
-    /// cost, no class override (the class the task declared stands).
+    /// no timeout, zero declared cost, … release the output once consumed, not
+    /// durable"*): not durable, not retained, no retries, the default backoff
+    /// shape (never consulted under no retries), no per-attempt timeout, not a
+    /// teardown, zero cost, no class override (the class the task declared
+    /// stands).
     fn default() -> Self {
         Self {
             durable: false,
             retained: false,
             retries: 0,
+            backoff: default_backoff(),
+            timeout: None,
             teardown: false,
             cost: CostVector::default(),
             class_override: None,
         }
     }
+}
+
+/// The default retry [`Backoff`] shape carried by a policy with no retries — a
+/// small base with exponential growth and an effectively-uncapped ceiling,
+/// matching T22's interim `RetryConfig::default` backoff. It is never consulted
+/// under the no-retry default (the single attempt schedules no wait); it is the
+/// starting point an author refines with [`NodePolicy::backoff`].
+fn default_backoff() -> Backoff {
+    Backoff::new(Duration::from_millis(100), 2.0, Duration::MAX)
 }
 
 impl NodePolicy {
@@ -244,13 +324,51 @@ impl NodePolicy {
         self
     }
 
-    /// Set the node's **retry count** (C5 / C14). An owned input edge into a node
+    /// Set the node's **retry count** (C5 / C14): the number of retries *beyond*
+    /// the first attempt, so `retries(0)` is a single attempt (the default) and
+    /// `retries(2)` allows three attempts total. An owned input edge into a node
     /// with a nonzero retry count fails assembly unless that edge opts into
     /// clone-on-read (arch.md C1 "Ownership of inputs"). The default is **no
-    /// retries**.
+    /// retries**. Retry configuration lives in exactly this one home — the attempt
+    /// runner reads it via [`retry_config`](NodePolicy::retry_config).
     #[must_use]
     pub fn retries(mut self, retries: u32) -> Self {
         self.retries = retries;
+        self
+    }
+
+    /// Set the retry **backoff shape** (C5 / C14): the base delay, exponential
+    /// growth factor, and cap the retry loop waits between attempts (arch.md C14:
+    /// *"Backoff is exponential with jitter and a cap"*). This is the shape
+    /// migrated from T22's interim knob into the one policy home; it is consulted
+    /// only when [`retries`](NodePolicy::retries) grants a retry (a single attempt
+    /// waits nothing). The default is a small base, exponential growth, and an
+    /// effectively-uncapped ceiling (matching T22's interim `RetryConfig` backoff).
+    #[must_use]
+    pub fn backoff(mut self, backoff: Backoff) -> Self {
+        self.backoff = backoff;
+        self
+    }
+
+    /// Set the node's **per-attempt timeout** (C5 / T21): the wall-clock budget
+    /// each attempt has before it is [`timed-out`](crate::TerminalState::TimedOut).
+    /// The default is **no timeout** ([`None`]); use [`timeout_off`](NodePolicy::timeout_off)
+    /// to write the default out explicitly. The timeout is a policy value (it
+    /// feeds the policy hash); *arming* the real timer is the driver's (T24/T33),
+    /// which reads this budget.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Write out the **no-timeout** default explicitly (C5): the node has no
+    /// per-attempt timeout. Equivalent to leaving [`timeout`](NodePolicy::timeout)
+    /// unset — a node with the default and one with the default written out here
+    /// behave identically, including under the policy hash.
+    #[must_use]
+    pub fn timeout_off(mut self) -> Self {
+        self.timeout = None;
         self
     }
 
@@ -313,10 +431,46 @@ impl NodePolicy {
         self.retained
     }
 
-    /// The node's retry count.
+    /// The node's retry count — retries *beyond* the first attempt (`0` is a
+    /// single attempt, the default).
     #[must_use]
     pub fn retry_count(&self) -> u32 {
         self.retries
+    }
+
+    /// The node's retry [backoff](Backoff) shape — the base/factor/cap the retry
+    /// loop waits between attempts (consulted only when retries are granted). Named
+    /// distinctly from the [`backoff`](NodePolicy::backoff) builder (which shares
+    /// the fluent-setter convention with [`retries`](NodePolicy::retries)).
+    #[must_use]
+    pub fn backoff_shape(&self) -> Backoff {
+        self.backoff
+    }
+
+    /// The node's **per-attempt timeout** budget, or [`None`] for the no-timeout
+    /// default (C5 / T21). Named distinctly from the
+    /// [`timeout`](NodePolicy::timeout) builder.
+    #[must_use]
+    pub fn timeout_budget(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    /// The [`RetryConfig`] the attempt runner (T22 [`run_with_retries`]) reads —
+    /// **derived** from this policy's [`retries`](NodePolicy::retries) and
+    /// [`backoff`](NodePolicy::backoff), so retry configuration has exactly one
+    /// authoring home (the policy) and the runner never carries a second,
+    /// independently-authored knob (C5; T29 migrates the interim T22 surface).
+    ///
+    /// `retries(n)` maps to `n + 1` total attempts (the initial attempt plus `n`
+    /// retries), so the no-retry default yields a single-attempt config.
+    ///
+    /// [`run_with_retries`]: crate::execution::run_with_retries
+    #[must_use]
+    pub fn retry_config(&self) -> RetryConfig {
+        // `retries` counts retries beyond the first attempt; `RetryConfig` counts
+        // total attempts. `saturating_add(1)` keeps a `u32::MAX` retry count from
+        // wrapping (it is clamped to at least one by `RetryConfig::new` anyway).
+        RetryConfig::new(self.retries.saturating_add(1), self.backoff)
     }
 
     /// Whether the node is a teardown node.
@@ -336,6 +490,144 @@ impl NodePolicy {
     #[must_use]
     pub fn class_override(&self) -> Option<ExecutionClass> {
         self.class_override
+    }
+}
+
+/// The **full effective policy** of a node — every C5 policy field resolved to
+/// its concrete value, defaulted fields **written out**, plus the two
+/// policy-adjacent knobs the [`NodePolicy`] value does not itself carry: the
+/// effective [trigger rule](EffectivePolicy::trigger_rule) (from the node's
+/// binding) and the [group label](EffectivePolicy::group) (C6).
+///
+/// This is what reaches the **graph artifact** (arch.md C5: *"Every node's full
+/// effective policy appears in the graph artifact, including defaulted values"*):
+/// a no-policy node and an all-defaults node produce field-for-field equal
+/// effective policies. The concrete artifact *schema* and its renderers are T40's
+/// (Out of scope here); this is the resolved value T40 serializes and the two
+/// hashes (C21) run over.
+///
+/// # Which hash each field feeds (C21 / T0.7)
+///
+/// The policy values — [retries](EffectivePolicy::retry_count),
+/// [backoff](EffectivePolicy::backoff), [timeout](EffectivePolicy::timeout),
+/// [cost](EffectivePolicy::cost), effective
+/// [class](EffectivePolicy::execution_class),
+/// [retention](EffectivePolicy::is_retained),
+/// [durability](EffectivePolicy::is_durable) — feed the **policy hash**; the
+/// [trigger rule](EffectivePolicy::trigger_rule) feeds the **structural
+/// fingerprint**; the [group](EffectivePolicy::group) feeds **neither**.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectivePolicy {
+    policy: NodePolicy,
+    effective_class: ExecutionClass,
+    trigger_rule: TriggerRule,
+    group: Option<String>,
+}
+
+impl EffectivePolicy {
+    /// Resolve a node's full effective policy from its [`NodePolicy`] value, its
+    /// effective execution class (override applied, C5), its binding trigger rule
+    /// (T0.4), and its group label (C6). Crate-internal — produced by
+    /// [`PipelineNode::effective_policy`](crate::flow::PipelineNode::effective_policy).
+    pub(crate) fn resolve(
+        policy: NodePolicy,
+        effective_class: ExecutionClass,
+        trigger_rule: TriggerRule,
+        group: Option<&str>,
+    ) -> Self {
+        Self {
+            policy,
+            effective_class,
+            trigger_rule,
+            group: group.map(str::to_owned),
+        }
+    }
+
+    /// The node's retry count — retries beyond the first attempt; `0` (a single
+    /// attempt) by default. Feeds the policy hash.
+    #[must_use]
+    pub fn retry_count(&self) -> u32 {
+        self.policy.retry_count()
+    }
+
+    /// The retry [backoff](Backoff) shape (base/factor/cap), consulted only when
+    /// retries are granted. Feeds the policy hash.
+    #[must_use]
+    pub fn backoff(&self) -> Backoff {
+        self.policy.backoff_shape()
+    }
+
+    /// The [`RetryConfig`] the attempt runner reads — derived from the effective
+    /// [retry count](EffectivePolicy::retry_count) and
+    /// [backoff](EffectivePolicy::backoff), so retries have one home (C5 / T22).
+    #[must_use]
+    pub fn retry_config(&self) -> RetryConfig {
+        self.policy.retry_config()
+    }
+
+    /// The per-attempt timeout budget, or [`None`] for the no-timeout default.
+    /// Feeds the policy hash.
+    #[must_use]
+    pub fn timeout(&self) -> Option<Duration> {
+        self.policy.timeout_budget()
+    }
+
+    /// The declared per-pool [cost vector](CostVector) — one entry per admission
+    /// pool in its native unit, memory split into working / output residency
+    /// (T0.5 §4). Zero on every pool by default. Feeds the policy hash.
+    #[must_use]
+    pub fn cost(&self) -> CostVector {
+        self.policy.cost()
+    }
+
+    /// The node's **effective** execution class — the C5 override if one was set,
+    /// else the class the task declared (await-bound by default). Feeds the policy
+    /// hash.
+    #[must_use]
+    pub fn execution_class(&self) -> ExecutionClass {
+        self.effective_class
+    }
+
+    /// The node's **effective trigger rule** (T0.4), sourced from the node's
+    /// binding — [`AllSucceeded`](TriggerRule::AllSucceeded) by default and the
+    /// only rule a data-dependent node can carry (arch.md §126). Feeds the
+    /// **structural fingerprint**, not the policy hash.
+    #[must_use]
+    pub fn trigger_rule(&self) -> TriggerRule {
+        self.trigger_rule
+    }
+
+    /// The node's **group label** (C6), or [`None`] for the no-group default.
+    /// Presentation metadata only — it feeds **neither** hash and is visible only
+    /// as artifact/diagram organization.
+    #[must_use]
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    /// Whether the node's output is **retained** after its consumers finish (C10):
+    /// kept until run end and redeemable by the embedding program. `false`
+    /// (release once consumed) by default. Feeds the policy hash.
+    #[must_use]
+    pub fn is_retained(&self) -> bool {
+        self.policy.is_retained()
+    }
+
+    /// Whether the node's output is **durable** (C27): its output type implements
+    /// the durable-reference contract and its reference survives the run. `false`
+    /// by default. Feeds the policy hash; arms the assembly durable-without-contract
+    /// check.
+    #[must_use]
+    pub fn is_durable(&self) -> bool {
+        self.policy.is_durable()
+    }
+
+    /// Whether the node is a **teardown** node (C17). Carried on the effective
+    /// policy for completeness; its declared cost must be zero (assembly rejects a
+    /// nonzero-cost teardown).
+    #[must_use]
+    pub fn is_teardown(&self) -> bool {
+        self.policy.is_teardown()
     }
 }
 
@@ -1035,15 +1327,37 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
 }
 
 /// The policy encoding (T0.7 §4): the residual effective-policy values per node —
-/// retries, cost, effective class, retention, durability — ordered by node name.
-/// Group labels are excluded (C6). Defaulted policy encodes identically to a
-/// written-out default because both resolve to the same effective values.
+/// retries, backoff shape, per-attempt timeout, cost, effective class, retention,
+/// durability — ordered by node name. Group labels are excluded (C6), as is the
+/// trigger rule (it lives in the structural half). Defaulted policy encodes
+/// identically to a written-out default because both resolve to the same
+/// effective values (arch.md C5).
 fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     for node in pipeline.nodes() {
         push_framed(&mut out, b'n', node.name().as_bytes());
         let policy = node.policy();
         out.extend_from_slice(&policy.retry_count().to_le_bytes());
+        // Backoff shape: base + cap as nanos, factor as its raw bits — the same
+        // deterministic, total treatment `Backoff`'s own equality/hash uses (a
+        // config `f64` is compared by bits, never by IEEE value).
+        let backoff = policy.backoff_shape();
+        out.extend_from_slice(&duration_nanos(backoff.base()).to_le_bytes());
+        out.extend_from_slice(&duration_nanos(backoff.cap()).to_le_bytes());
+        out.extend_from_slice(&backoff.factor().to_bits().to_le_bytes());
+        // Per-attempt timeout: a present/absent tag then the budget in nanos. The
+        // no-timeout default (absent) encodes as tag 0 with a zero budget, so a
+        // node with the default and one with the default written out coincide.
+        match policy.timeout_budget() {
+            None => {
+                out.push(0);
+                out.extend_from_slice(&0u128.to_le_bytes());
+            }
+            Some(d) => {
+                out.push(1);
+                out.extend_from_slice(&duration_nanos(d).to_le_bytes());
+            }
+        }
         let cost = policy.cost();
         out.extend_from_slice(&cost.working_memory.to_le_bytes());
         out.extend_from_slice(&cost.output_residency.to_le_bytes());
@@ -1057,6 +1371,14 @@ fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
         out.push(u8::from(policy.is_teardown()));
     }
     out
+}
+
+/// A [`Duration`] as total nanoseconds — a total, deterministic scalar for the
+/// canonical encoding (T0.7 §6). `Duration::MAX` (the effectively-uncapped
+/// backoff cap) saturates to `u128::MAX`, which is fine: it is a fixed sentinel,
+/// so every uncapped schedule encodes identically.
+fn duration_nanos(d: Duration) -> u128 {
+    d.as_nanos()
 }
 
 /// The env-allowlist encoding — names only, in declared order. It is neither in
