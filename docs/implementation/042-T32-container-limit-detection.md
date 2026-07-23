@@ -48,7 +48,39 @@ Detection logic is tested against injected/faked probe sources (fixture files or
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were carried in the ticket or the T32 `docs/tasks.md` entry. The
+implementation resolved these design points and records them here:
+
+- **Where the OS-reading code lives.** `dagr-core` has stayed dependency-free,
+  and the natural first instinct was to put the cgroup/proc reading in `dagr-cli`.
+  But the whole probe is made **injectable** — it reads cgroup/proc values from a
+  supplied root `Path` via `std::fs` and takes the host core count as an injected
+  value — so it needs no OS-specific dependency and only one `std`-only live-host
+  read (`std::thread::available_parallelism`, in the production `from_host`
+  constructor). Since `PoolCapacities` already lives in `dagr_core::admission`,
+  the probe lives beside it in a new `dagr_core::limits` module. Core stays
+  dependency-free; no crate gained a dependency; `cargo deny`/`audit` are
+  unchanged.
+- **CPU dimension → which thread pool(s).** The detected CPU allocation sizes
+  **both** the blocking and compute thread pools identically. Routing a node onto
+  one pool versus the other is T33's class dispatch, not this sizing pass, so
+  sizing both from the same CPU figure is the honest default (an over-count is
+  impossible because a node draws from only the pool its class selects).
+- **Pinning-flag namespace.** The operator flag lives in the library-reserved
+  `dagr.` namespace (arch.md line 498), concretely `dagr.pool.memory`,
+  `dagr.pool.blocking-threads`, `dagr.pool.compute-threads`; `PinnedPools::set_flag`
+  rejects any key outside `dagr.pool.` so a task cannot smuggle a capacity
+  override. The typed builder (`PinnedPools::new().memory(..)`) is the programmatic
+  equivalent; the CLI flag surface itself is T55/T56.
+- **Headroom rounding + the at-least-one floor.** Headroom is applied as
+  `floor(raw * (1 - headroom))` then `max(1)`, so every pool gets at least one unit
+  and the compute pool at least one thread even under a sub-one-core quota. A
+  fractional CFS quota rounds toward the floor before the floor-at-one lift.
+- **The bootstrap-failure artifact shape.** The too-big-node rejection produces a
+  `CapacityBootstrapFailure` mirroring T30's resource-check `BootstrapFailure`
+  (same `BootstrapOutcome::BootstrapFailed`, complete error list, zero attempts),
+  and the driver emits the new `RunOutcome::BootstrapFailed` wire outcome
+  (`bootstrap-failed`), distinct from `assembly-failed`.
 
 ## Out of scope
 - The admission pools, permit acquisition/release, oldest-ready-first ordering, bounded bypass, and zombie cost accounting — all owned by T31 (C12); this ticket only sizes the pools T31 built and feeds them to it.

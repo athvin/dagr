@@ -298,8 +298,12 @@ impl PoolCost {
     /// The demand this cost makes on `pool` (as a `u64`). **Working memory** is
     /// what a permit charges the memory pool on admission (output residency is
     /// charged separately, as the slot lease, at production — not on admission).
+    ///
+    /// `pub(crate)` so the T32 [`limits`](crate::limits) bootstrap check can read a
+    /// node's per-pool demand against the derived pool totals without duplicating
+    /// the mapping.
     #[must_use]
-    fn demand_on(&self, pool: Pool) -> u64 {
+    pub(crate) fn demand_on(&self, pool: Pool) -> u64 {
         match pool {
             Pool::Memory => self.working_memory,
             Pool::BlockingThreads => u64::from(self.blocking_threads),

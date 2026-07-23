@@ -264,6 +264,7 @@ pub mod error;
 pub mod execution;
 pub mod flow;
 pub mod handle;
+pub mod limits;
 pub mod readiness;
 pub mod slot;
 pub mod task;
@@ -293,6 +294,10 @@ pub use execution::{
 };
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
+pub use limits::{
+    detect_capacities, CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, PinnedPools,
+    HEADROOM_DEFAULT,
+};
 pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
 pub use slot::{
     ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,

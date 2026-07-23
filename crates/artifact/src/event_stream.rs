@@ -235,7 +235,9 @@ impl TerminalState {
 /// This is the *outcome*, not the summary (metrics/critical path are C22/C23 and
 /// fold-time — T42/T43). The `assembly-failed` variant is how an assembly
 /// failure records itself in a two-record stream (C19: even an assembly failure
-/// has a place to record itself).
+/// has a place to record itself); the `bootstrap-failed` variant is the parallel
+/// fail-fast startup outcome (a missing resource — C9/T30 — or a too-big node —
+/// C12/T32), **distinct** from an assembly failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
     /// The run completed; no node ended failure-like.
@@ -246,6 +248,10 @@ pub enum RunOutcome {
     Cancelled,
     /// Assembly failed before execution; the stream has no fingerprints.
     AssemblyFailed,
+    /// Bootstrap failed a fail-fast startup check (a missing declared resource —
+    /// C9/T30 — or a node whose declared cost exceeds a pool's total capacity —
+    /// C12/T32) before any node executed. **Distinct** from an assembly failure.
+    BootstrapFailed,
 }
 
 impl RunOutcome {
@@ -257,6 +263,7 @@ impl RunOutcome {
             RunOutcome::Failed => "failed",
             RunOutcome::Cancelled => "cancelled",
             RunOutcome::AssemblyFailed => "assembly-failed",
+            RunOutcome::BootstrapFailed => "bootstrap-failed",
         }
     }
 }
@@ -905,5 +912,11 @@ mod tests {
             "satisfied-from-prior"
         );
         assert_eq!(RunOutcome::AssemblyFailed.as_str(), "assembly-failed");
+        // The bootstrap-failed outcome is distinct from assembly-failed (C12/T32).
+        assert_eq!(RunOutcome::BootstrapFailed.as_str(), "bootstrap-failed");
+        assert_ne!(
+            RunOutcome::BootstrapFailed.as_str(),
+            RunOutcome::AssemblyFailed.as_str()
+        );
     }
 }

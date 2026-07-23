@@ -18,11 +18,11 @@
 //! and the too-big-node bootstrap rejection with its `bootstrap-failed` artifact.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use dagr_core::admission::{Pool, PoolCost};
 use dagr_core::limits::{
-    detect_capacities, CapacityBootstrapFailure, ContainerLimitProbe, PinnedPools, HEADROOM_DEFAULT,
+    detect_capacities, CapacityError, ContainerLimitProbe, PinnedPools, HEADROOM_DEFAULT,
 };
 use dagr_core::BootstrapOutcome;
 
@@ -43,10 +43,6 @@ impl FixtureRoot {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create probe root");
         Self { root }
-    }
-
-    fn path(&self) -> &Path {
-        &self.root
     }
 
     /// Write `contents` to `rel` under the probe root, creating parent dirs.
@@ -72,7 +68,7 @@ impl FixtureRoot {
         self.write("sys/fs/cgroup/cpu/cpu.cfs_period_us", cfs_period_us);
     }
 
-    /// Seed host resources: `proc/meminfo` MemTotal (kibibytes) and a host core
+    /// Seed host resources: `proc/meminfo` `MemTotal` (kibibytes) and a host core
     /// count the probe uses when no cgroup source constrains a dimension.
     fn host(&self, mem_total_kib: u64, host_cores: u32) {
         self.write(
@@ -98,6 +94,11 @@ impl FixtureRoot {
 
 /// Apply the default 20% headroom to a raw limit the way the probe does (floor,
 /// then floor at 1), so the tests state the expected total in one place.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn with_headroom(raw: u64) -> u64 {
     let kept = (raw as f64 * (1.0 - HEADROOM_DEFAULT)).floor() as u64;
     kept.max(1)
@@ -178,7 +179,10 @@ fn an_unlimited_sentinel_falls_back_to_host_per_dimension() {
     let caps = fx.probe().detect().expect("mixed limits fit");
 
     // Memory from host (sentinel → host), threads from the cgroup CPU quota.
-    assert_eq!(caps.total(Pool::Memory), with_headroom(4 * 1_048_576 * 1024));
+    assert_eq!(
+        caps.total(Pool::Memory),
+        with_headroom(4 * 1_048_576 * 1024)
+    );
     assert_eq!(caps.total(Pool::ComputeThreads), with_headroom(2));
     assert_eq!(caps.total(Pool::BlockingThreads), with_headroom(2));
 }
@@ -241,14 +245,8 @@ fn the_pinning_flag_overrides_cgroup_detection() {
     fx.cgroup_v2("8589934592", "800000 100000"); // 8 GiB, 8 cores
     fx.host(1, 1);
 
-    let pins = PinnedPools::new()
-        .memory(1_000)
-        .compute_threads(2);
-    let caps = fx
-        .probe()
-        .with_pins(pins)
-        .detect()
-        .expect("pinned fits");
+    let pins = PinnedPools::new().memory(1_000).compute_threads(2);
+    let caps = fx.probe().with_pins(pins).detect().expect("pinned fits");
 
     // Pinned pools are exactly the flag values, ignoring detection + headroom.
     assert_eq!(caps.total(Pool::Memory), 1_000);
@@ -266,11 +264,7 @@ fn the_pinning_flag_overrides_host_fallback() {
     fx.host(4 * 1_048_576, 8); // no cgroup — host only
 
     let pins = PinnedPools::new().memory(2_048);
-    let caps = fx
-        .probe()
-        .with_pins(pins)
-        .detect()
-        .expect("pinned fits");
+    let caps = fx.probe().with_pins(pins).detect().expect("pinned fits");
 
     // Pinned to the flag, not the host-derived value.
     assert_eq!(caps.total(Pool::Memory), 2_048);
@@ -317,10 +311,7 @@ fn a_too_big_node_is_rejected_at_bootstrap_not_at_admission() {
     // A node demanding 5000 bytes against a 1000-byte pool: can NEVER fit.
     let nodes = vec![
         ("small".to_string(), PoolCost::new().working_memory(500)),
-        (
-            "hog".to_string(),
-            PoolCost::new().working_memory(5_000),
-        ),
+        ("hog".to_string(), PoolCost::new().working_memory(5_000)),
     ];
 
     let failure = detect_capacities(&caps, &nodes)
@@ -348,10 +339,7 @@ fn a_too_big_node_is_rejected_at_bootstrap_not_at_admission() {
 #[test]
 fn the_too_big_rejection_produces_the_bootstrap_failure_artifact() {
     let caps = dagr_core::admission::PoolCapacities::new().compute_threads(2);
-    let nodes = vec![(
-        "needs-four".to_string(),
-        PoolCost::new().compute_threads(4),
-    )];
+    let nodes = vec![("needs-four".to_string(), PoolCost::new().compute_threads(4))];
 
     let failure =
         detect_capacities(&caps, &nodes).expect_err("bootstrap fails on the too-big node");
@@ -405,8 +393,6 @@ fn bootstrap_reports_every_too_big_node() {
     assert!(!named.contains(&"ok"));
 }
 
-use dagr_core::limits::CapacityError;
-
 // ===========================================================================
 // Malformed cgroup values fall back rather than panicking
 // ===========================================================================
@@ -425,13 +411,9 @@ fn malformed_cgroup_values_fall_back_to_host() {
     let caps = fx.probe().detect().expect("falls back cleanly");
 
     // Both dimensions fell back to host (malformed → host).
-    assert_eq!(caps.total(Pool::Memory), with_headroom(2 * 1_048_576 * 1024));
+    assert_eq!(
+        caps.total(Pool::Memory),
+        with_headroom(2 * 1_048_576 * 1024)
+    );
     assert_eq!(caps.total(Pool::ComputeThreads), with_headroom(4));
-}
-
-// Silence an unused-import lint when the CapacityBootstrapFailure type alias is
-// referenced only through `detect_capacities`' return type in some builds.
-#[allow(dead_code)]
-fn _assert_failure_type(f: CapacityBootstrapFailure) -> BootstrapOutcome {
-    f.outcome()
 }
