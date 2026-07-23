@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use crate::handle::NodeId;
 
-/// A run's identity (arch.md `### C8`; C19 mints a UUIDv7 at bootstrap,
+/// A run's identity (arch.md `### C8`; C19 mints a `UUIDv7` at bootstrap,
 /// operator-overridable). A dagr-owned, opaque newtype so task authors program
 /// against a dagr type; the framework does not interpret its contents here.
 ///
@@ -333,7 +333,10 @@ impl std::fmt::Display for ScratchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotYetAvailable => {
-                write!(f, "durable scratch store is not yet available (lands with T53 / C18)")
+                write!(
+                    f,
+                    "durable scratch store is not yet available (lands with T53 / C18)"
+                )
             }
         }
     }

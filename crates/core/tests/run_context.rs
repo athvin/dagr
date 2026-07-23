@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use dagr_core::context::{
-    CancellationSource, CoveredNodeStates, DataInterval, PipelineId, ResourceRequirements, RunId,
-    RunContext, TerminalState,
+    CancellationSource, CoveredNodeStates, DataInterval, PipelineId, ResourceRequirement,
+    ResourceRequirements, RunContext, RunId, TerminalState,
 };
 use dagr_core::handle::NodeId;
 
@@ -201,6 +201,7 @@ fn for_test_yields_a_populated_context() {
 fn resource_requirements_are_carried_to_a_queryable_form() {
     struct ObjectStore;
     struct DbPool;
+    struct NotRequired;
 
     let declared = ResourceRequirements::new()
         .require::<ObjectStore>()
@@ -209,8 +210,6 @@ fn resource_requirements_are_carried_to_a_queryable_form() {
     assert_eq!(declared.len(), 2);
     assert!(declared.requires::<ObjectStore>());
     assert!(declared.requires::<DbPool>());
-
-    struct NotRequired;
     assert!(!declared.requires::<NotRequired>());
 
     // A node declaring nothing reports an empty requirement set.
@@ -220,7 +219,10 @@ fn resource_requirements_are_carried_to_a_queryable_form() {
 
     // The declared types are enumerable in a stable, renderable form (feeds the
     // graph artifact later, C20): each carries a type name.
-    let names: Vec<&str> = declared.iter().map(|r| r.type_name()).collect();
+    let names: Vec<&str> = declared
+        .iter()
+        .map(ResourceRequirement::type_name)
+        .collect();
     assert!(names.iter().any(|n| n.contains("ObjectStore")));
     assert!(names.iter().any(|n| n.contains("DbPool")));
 }
@@ -231,10 +233,11 @@ fn resource_requirements_are_carried_to_a_queryable_form() {
 /// resource.
 #[test]
 fn registry_accessor_seam_is_present_and_honestly_unimplemented() {
+    struct SomeClient;
+
     let (ctx, _source) = full_context();
     let registry = ctx.resources();
 
-    struct SomeClient;
     // The seam exists and is honestly empty: no resource is fabricated. When T30
     // lands, this test is updated to assert real type-keyed retrieval.
     assert!(registry.get::<SomeClient>().is_none());
@@ -253,7 +256,10 @@ fn scratch_accessor_seam_is_present_and_honestly_unimplemented() {
     // A read returns "not yet available", not a silent success or a fabricated
     // value. When T53 lands, this becomes a read-after-write-across-attempts test.
     let read = scratch.get(b"cursor");
-    assert!(read.is_err(), "scratch is honestly unimplemented, not silently empty");
+    assert!(
+        read.is_err(),
+        "scratch is honestly unimplemented, not silently empty"
+    );
     let write = scratch.put(b"cursor", b"42");
     assert!(write.is_err(), "scratch does not pretend to persist");
 }
@@ -320,6 +326,8 @@ fn cancellation_signal_is_observable_but_read_only() {
 /// exists.
 #[test]
 fn context_exposes_no_mutation_or_scheduling_authority() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
     let (ctx, _source) = full_context();
     let shared: &RunContext = &ctx;
 
@@ -341,6 +349,5 @@ fn context_exposes_no_mutation_or_scheduling_authority() {
 
     // The context is `Send + Sync` so it can be shared across the worker driving
     // the attempt, and holds no mutable shared state reachable by the task.
-    fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<RunContext>();
 }
