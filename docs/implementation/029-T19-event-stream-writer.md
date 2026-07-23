@@ -54,7 +54,55 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were stated in this ticket or in the `docs/tasks.md` T19 entry, and none
+were discovered. The interface-presentation choices the governing decisions left
+open (T4 fixed the encoding/schema-version, T0.6 fixed the sink/header/identity)
+were resolved during implementation and are recorded here for the record:
+
+- **Where the writer lives.** The `dagr-artifact` crate — its manifest already
+  names it the home of "the event-record shapes derived into them (C19)", and it
+  depends on no other workspace crate, so it stays the clean C24 boundary while
+  gaining the writer. `dagr-core` stays dependency-free per its own manifest.
+- **Dependencies added (to `dagr-artifact` only).** `serde_json` (the T4-named
+  runtime JSON stack) and `uuid` (`v7` feature, for the UUIDv7 run identity of
+  T0.6 §4). `serde` is not a direct dependency — the writer builds
+  `serde_json::Value`s directly and applies the T4 §6 canonicalization itself
+  (serde_json does not sort keys), so no derive is needed. `deny.toml` gains
+  `Unicode-3.0` (required unconditionally by the `unicode-ident` build tool under
+  `serde_derive`/`proc-macro2`); the license gate stays MIT-first, not weakened.
+  `cargo deny check` and `cargo audit` both pass.
+- **Record envelope shape.** `{schema_version, run_id, seq, wall, offset_ns,
+  event, body}` — the five T0.6 §7 header fields, a kebab-case `event` kind name,
+  and a per-kind `body` object. Emitted canonical per T4 §6 (keys sorted
+  lexicographically, compact, integers only, minimal UTF-8 escaping), so two
+  emissions of the same record are byte-identical.
+- **Node identity in records.** The author-declared registration name string,
+  verbatim (T13): node identity *is* the name, and `NodeId` is opaque with no
+  route back to a name, so records carry the name a consumer can read.
+- **Sequence start.** Gapless, strictly increasing, **starting at 0** on
+  `run-started` (the "documented start value" the Test plan allows). A record is
+  only counted after its append succeeds, so a faulted record leaves no gap.
+- **Clock injection.** The authoritative monotonic offset comes from an injected
+  `MonotonicClock` (its zero is the run-start instant); the informational wall
+  stamp is an overridable `fn() -> u64` (default Unix ms). The wall stamp is a
+  record's analog of an artifact's excluded generation-time field (T4 §6): held
+  fixed, two emissions are byte-identical; it never feeds a duration.
+- **Sink and per-directory contract.** The two-operation `EventSink` trait
+  (append a line, flush) is defined here (T0.6 §1 named T19 as its owner); the
+  default local-file sink is **injected**, not built here (owned by T0.6/C18).
+  `stream_path(base)` yields `<base>/<pipeline>/<run-id>/events.jsonl`, disjoint
+  by run id, so concurrent runs never share a file.
+- **Sink-failure surface.** A sink append/flush error becomes a `SinkFault`
+  carrying reason `"event stream unwritable"` (verbatim, arch.md C19 / T0.6 §5);
+  the run loop (T24) reacts by cancelling and exiting with the sink-failure code.
+  Driving the process exit and the store-open-failure path (no stream) are T24's
+  and the run store's; this writer surfaces the fault and never opens a stream
+  itself, so "store-open failure → no stream" holds by construction.
+- **Tolerant reader.** `read_records(bytes)` parses each physical line; a
+  terminated non-final line that fails to parse is a corruption (`ReadError`),
+  and a single unterminated final line is the one tolerated trailing partial —
+  the crash-safety (T27) and fold (C22/T42) reader contract, self-contained (it
+  needs only the bytes).
 
 ## Out of scope
 - The abrupt-process-kill crash-safety and I/O fault-injection test suite is **T27** — this ticket delivers only the unit-level reader/writer parseability and induced-sink-failure contracts those tests build on.

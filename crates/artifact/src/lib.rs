@@ -11,13 +11,14 @@
 //! the live-pipeline surface, and rendering stays "no access to the binary that
 //! produced the artifacts."
 //!
-//! At this milestone the crate is an empty, compiling placeholder created by
-//! ticket T1 (crate layout and workspace skeleton). The concrete artifact
-//! types, serialization format, and schemas land in later tickets (T4, T39,
-//! T40, T42).
+//! The first concrete artifact code lands with ticket T19 (029): the C19
+//! **event-stream writer** in [`event_stream`]. The graph artifact (C20 / T40),
+//! run artifact (C22 / T42), and versioned schemas (T39) still land later.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
+
+pub mod event_stream;
 
 #[cfg(test)]
 mod tests {

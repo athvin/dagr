@@ -24,11 +24,24 @@ ignore = []
 # --- Licenses: MIT-only, per docs/lint-policy.md -----------------------------
 [licenses]
 version = 2
-# The single allowed license (docs/lint-policy.md "Supply chain: license
-# metadata"). Every shipped crate resolves to this SPDX identifier. Additions to
-# this allow-list are reviewed as a supply-chain policy decision (arch.md
-# "Stability": additions to the core dependency/lint set are reviewed).
-allow = ["MIT"]
+# The allowed licenses (docs/lint-policy.md "Supply chain: license metadata").
+# Every first-party crate is MIT and every third-party crate we pull resolves to
+# MIT. Additions to this allow-list are reviewed as a supply-chain policy
+# decision (arch.md "Stability": additions to the core dependency/lint set are
+# reviewed).
+#
+#   * MIT — the project license and the license every runtime dependency of the
+#     event-stream writer (serde, serde_json, uuid, and their transitive tree —
+#     all dual-licensed MIT OR Apache-2.0, resolved to MIT here) satisfies.
+#   * Unicode-3.0 — required, and ONLY, by `unicode-ident`, a build-time
+#     proc-macro dependency of `serde_derive` (via proc-macro2/syn). Its license
+#     is `(MIT OR Apache-2.0) AND Unicode-3.0`: the MIT clause satisfies the OR,
+#     but the `AND Unicode-3.0` covering its bundled Unicode character-class data
+#     tables is unconditional, so `Unicode-3.0` must be explicitly allowed. This
+#     does not weaken the gate — it names exactly one additional OSI-approved
+#     license required by one build tool, added by review (T19) as the writer's
+#     serde stack lands, rather than loosening MIT-only to a permissive wildcard.
+allow = ["MIT", "Unicode-3.0"]
 # A crate whose declared license does not resolve to an SPDX id in `allow`
 # fails; this confidence threshold keeps that resolution strict.
 confidence-threshold = 0.8
