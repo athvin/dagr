@@ -1,0 +1,13 @@
+# Formatting policy for dagr. Kept to stable rustfmt options only, so
+# `cargo fmt --check` is meaningful under the pinned stable toolchain
+# (rust-toolchain.toml) with no unknown-option errors and no nightly gate.
+#
+# These values are the shared contract that `.editorconfig` mirrors for editors
+# that do not run rustfmt (indent = 4 spaces, LF line endings, final newline,
+# UTF-8). Keep the two files in agreement — the hygiene check (Test 6) fails on
+# any contradiction.
+edition = "2021"
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+max_width = 100

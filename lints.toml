@@ -1,0 +1,44 @@
+# dagr workspace lint policy — machine-readable form.
+#
+# WARNINGS-DENIED POSTURE. dagr's pitch is compile-time confidence
+# (arch.md "What this is", "Stability"): "clippy with warnings denied" is a
+# shared contract, not a per-developer habit. This file is the single source of
+# truth for that contract; the human-readable rationale, including a one-line
+# justification for every `allow` exception, lives in docs/lint-policy.md.
+#
+# HOW THIS IS APPLIED (do not wire here — that is T1/T7):
+#   * T1 copies these tables into the workspace manifest under
+#     `[workspace.lints]` and each crate opts in with `[lints] workspace = true`,
+#     so the policy is inherited workspace-wide from one place.
+#   * T7 enforces it in CI via `cargo clippy --workspace --all-targets
+#     -- -D warnings` and `cargo doc` with `-D warnings` (rustdoc lint).
+# This ticket authors the POLICY only; it introduces no Cargo.toml (workspace
+# is T1).
+#
+# The table layout below is exactly the shape a `[workspace.lints]` table takes
+# (`rust`, `clippy`, `rustdoc` sub-tables), so T1's inheritance is a copy, not a
+# translation.
+
+[rust]
+# Compiler warnings are hard errors in CI; nothing ships with a warning.
+warnings = "deny"
+# rustdoc lint (arch.md "Documentation": rustdoc on every public item,
+# enforced by lint in CI).
+missing_docs = "warn"
+unsafe_code = "warn"       # dagr targets safe Rust; each use is reviewed (see rationale).
+
+[clippy]
+# Deny the standard clippy lint groups. `all` = correctness + suspicious +
+# style + complexity + perf; `pedantic` catches API and clarity issues that
+# matter for a library whose types must read from the declaration (arch.md C1).
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# Allowed exceptions — every one carries a one-line rationale in
+# docs/lint-processing.md's exception table. Priority 0 lets these override the
+# group-level deny above.
+module_name_repetitions = "allow"   # dagr's C-numbered modules read fine repeated.
+missing_errors_doc = "warn"         # encouraged, not blocking, until the error taxonomy (T3) lands.
+
+[rustdoc]
+# Broken intra-doc links fail the docs job (arch.md "Documentation").
+broken_intra_doc_links = "deny"

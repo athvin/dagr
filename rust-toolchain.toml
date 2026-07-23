@@ -1,0 +1,14 @@
+# Pinned toolchain — single source of truth for dagr's MSRV and for the
+# components CI (fmt, clippy) and the UI-snapshot harness (T8) depend on.
+#
+# The channel is a *specific* version, never a floating "stable": builds,
+# clippy verdicts, and trybuild/UI snapshots must be byte-reproducible across
+# machines (arch.md "Stability": MSRV pinned in the workspace; arch.md
+# "Documentation": snapshots toolchain-deterministic). This version is the
+# workspace MSRV and MUST match the "MSRV" line in the README verbatim; bumping
+# it is a minor version bump per arch.md "Stability" and updates both files
+# together.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

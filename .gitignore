@@ -19,3 +19,35 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# --- dagr local run output (never committed) --------------------------------
+# Local run store — the default base for the event stream and artifacts
+# (arch.md C19/C22: <base>/<pipeline>/<run-id>/). Later milestones write here.
+.dagr/
+# Durable scratch store output (arch.md C18) written under a local base.
+.scratch/
+scratch/
+# Emitted graph/run artifacts and rendered diagrams (arch.md C20/C24) when a
+# run writes them into the tree rather than the run store.
+/artifacts/
+*.dagr-artifact.json
+
+# --- Editor / OS noise ------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Linux
+*~
+.directory
+.Trash-*
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+# Editors
+.vscode/
+*.swp
+*.swo
+*.tmp
+.*.swp
