@@ -65,8 +65,8 @@ acceptance gate. Human and disclaimer rows never carry a test.
 | Criterion | Class | Platform | Test | Covered-by | Notes |
 |---|---|---|---|---|---|
 | C1 | human | — | release-checklist | — | "types readable from the declaration" is a judgment (criterion 8). C1's mechanical sub-criteria are machine-tested under T9/T29/T14 but the criterion's governing class is human. |
-| C2 | machine | — | unmapped | T8 | Handle copy/pass, no-lookup API, compile-fail cycle test, rename-changes-identity, reorder-changes-nothing (T8/T12/T10/T13). |
-| C3 | machine | — | unmapped | T8 | Wrong-type/arity compile errors via UI tests on the pinned toolchain; `all-succeeded` typestate; arity-cliff message (T8/T12/T11). |
+| C2 | machine | — | unmapped | T12 | Handle copy/pass, no-lookup API, compile-fail cycle test, rename-changes-identity, reorder-changes-nothing (T10/T12/T13). T8 shipped the compile-fail UI harness (`crates/core/tests/ui.rs`, test `ui`) and a wrong-type seed sample; the cycle-inexpressibility compile-failure case that covers this criterion is authored by T12 against the real authoring API, so this stays `unmapped`/deferred to T12. |
+| C3 | machine | — | unmapped | T12 | Wrong-type/arity compile errors via UI tests on the pinned toolchain; `all-succeeded` typestate; arity-cliff message (T11/T12). T8 shipped the UI harness and proved the both-type-names substring assertion against a seed sample; the real wrong-type/wrong-arity *binding* cases (via the T11 API) that cover this criterion land in T12, so this stays `unmapped`/deferred to T12. |
 | C4 | machine | — | unmapped | T50 | Registration-time backward-reference edge; both edge kinds recorded; effect-only node has no value; propagation across ordering edges (T50). |
 | C5 | machine | — | unmapped | T29 | Every field defaulted; full effective policy in artifact; default-equivalence under the policy hash; invalid execution-class override fails assembly (T29). |
 | C6 | machine | — | unmapped | T46 | Unique names across grouping; diagram clusters by group; group rename changes no execution behaviour and no fingerprint (T46/T51). |
@@ -98,7 +98,7 @@ acceptance gate. Human and disclaimer rows never carry a test.
 | Criterion | Class | Platform | Test | Covered-by | Notes |
 |---|---|---|---|---|---|
 | SL1 | machine | — | unmapped | T64 | **machine** — README quickstart compiles and runs verbatim in CI, empty directory to an artifact-inspected two-node pipeline (T7/T64). The "under thirty minutes" walkthrough is the **human** facet, audited on the release checklist (recorded under SL8human), not a CI timer. |
-| SL2 | machine | — | unmapped | T8 | Mis-wiring two tasks is a compile error whose message contains both type names; UI tests on the pinned toolchain (T8/T12). |
+| SL2 | machine | — | unmapped | T12 | Mis-wiring two tasks is a compile error whose message contains both type names; UI tests on the pinned toolchain. T8 shipped the pinned-toolchain UI harness (`crates/core/tests/ui.rs`) and the both-type-names assertion; the mis-wiring case against the real authoring API lands in T12, so this stays `unmapped`/deferred to T12. |
 | SL3 | machine | — | unmapped | T27 | Every run produces artifacts — normal, crashed (fold verb), cancelled, assembly/bootstrap-failed (T27/T42/T68). |
 | SL4a | machine | — | unmapped | T41 | *Structural* determinism — two builds of the same source produce identical fingerprints and byte-identical graph artifacts (generation time aside), on different toolchains (T15/T41/T65). |
 | SL4b | machine | — | unmapped | T62 | *Interpretive* determinism — the same recorded outcomes yield the same terminal states, propagation decisions, and artifact, replayed through the C28 harness (T62/T65). |
