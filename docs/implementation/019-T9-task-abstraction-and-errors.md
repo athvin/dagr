@@ -53,7 +53,61 @@ Every scenario is independently checkable; several are compile-fail cases that b
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-- Trait impl vs generic struct vs closure wrapper as the task expression form — and, if closures are permitted, how "types readable from the declaration" is judged for a closure. Resolve and record the decision as part of this ticket.
+- ~~Trait impl vs generic struct vs closure wrapper as the task expression form — and, if closures are permitted, how "types readable from the declaration" is judged for a closure.~~ **Resolved** — see the design note below.
+
+## Design note — the expression form (resolves the open question)
+
+**Decision: a `Task` trait, implemented on an author-owned configuration
+`struct`. Not a generic struct wrapper, and not a closure wrapper.** Recorded
+here as the ticket's design note (the DoD permits "an ADR or the ticket's design
+note"). Implemented in
+[`crates/core/src/task.rs`](../../crates/core/src/task.rs).
+
+The trait declares C1's four elements as trait members: `type Input` and `type
+Output` (the consumed and produced types), `const EXECUTION_CLASS:
+ExecutionClass` (defaulting to `AwaitBound`), and `fn run(&mut self, ctx:
+&RunContext, input: Self::Input) -> impl Future<Output = Result<Self::Output,
+TaskError>> + Send`. The type-level bounds are supertrait / associated-type
+bounds: `Self: Send + 'static` and `Output: Send + Sync + 'static`.
+
+**Rule for judging "types readable from the declaration."** A task's input and
+output types are readable iff they are the trait implementation's associated
+types — `<T as Task>::Input` and `<T as Task>::Output` — which are stated in the
+`impl Task for T { type Input = …; type Output = …; }` block, recoverable by name
+without reading the `run` body. The positive test
+`input_and_output_types_are_readable_from_the_declaration`
+(`crates/core/tests/task_abstraction.rs`) names both via the associated types
+alone, and its compilation is the assertion. This is the mechanical form of the
+human-judged C1 criterion (coverage matrix: C1 is `human`/release-checklist).
+
+**Why not a generic struct wrapper.** A `struct Task<In, Out, F>` holding a
+closure `F` would push the input/output types into type parameters of a
+framework type rather than an author-declared `impl`; the readable-types rule
+would then depend on how the author spelled the turbofish at the construction
+site, which is exactly the ambiguity the criterion warns against. It also cannot
+hold arbitrary constructor-captured configuration as first-class named fields the
+way an author `struct` does.
+
+**Why not a closure wrapper (and the closure-readability sub-question).** A bare
+`FnMut(&RunContext, In) -> impl Future<…>` has **no** associated-type surface: a
+closure's input and output types are inferred from its body and appear nowhere in
+a declaration a reviewer can read without the body, so "types readable from the
+declaration" cannot be satisfied for a closure without re-introducing explicit
+type annotations that a trait `impl` states more naturally. The dagx prior art
+(`§2`, routed to this ticket) reached the same conclusion empirically: its
+internal closure-task adapter was kept **out** of the public API because "the
+ergonomics are bad," and it steers authors to the trait/macro form. dagr
+therefore does not offer a closure form; the readable-types rule is defined only
+over the trait's associated types, so the closure sub-question is answered by
+**not permitting closures**.
+
+**Why `&mut self`, not `self` by value (dagx caution).** dagx's `Task` consumes
+`self` (`run(self)`), which encodes run-exactly-once — but arch.md C1 and the
+T0.2 ADR require `&mut self` so the runner can drive **sequential attempts**
+(retries, C14) against the same task value without the author writing any
+synchronization. Consuming `self` is incompatible with retry; `&mut self` is the
+spec-mandated shape and is what the exclusive-access compile-fail UI sample
+(`task_mut_self_through_shared_ref`) guards.
 
 ## Out of scope
 - Typed handles and registration returning a handle (C2 / T10) — this ticket produces the task value; wiring it into a flow comes next.
