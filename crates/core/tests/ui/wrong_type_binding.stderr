@@ -1,11 +1,24 @@
-# PLACEHOLDER snapshot (tests-first / RED commit) — ticket T8 (007).
+# Compile-failure snapshot for `wrong_type_binding.rs` — ticket T8 (007).
 #
-# The harness (tests/ui.rs) and the sample (wrong_type_binding.rs) exist; this
-# snapshot is intentionally WRONG so the harness fails RED before the real
-# snapshot is blessed in. It names a second type substring the diagnostic does
-# NOT contain, so the both-type-names assertion fails — proving the harness
-# genuinely requires both names. The green commit replaces this with the blessed
-# snapshot naming `ExpectedWidget` and `SuppliedGadget`.
+# CONTRACT (C3 message-quality clause; C28 "assert only that both type names
+# appear"): each non-comment, non-blank line below is a substring that MUST
+# appear somewhere in the sample's real compiler diagnostic. The harness asserts
+# ONLY that — it never checks exact prose, wording, note count, or span layout,
+# so ordinary compiler-message churn does not break the suite. Keep this file to
+# the type-name substrings alone.
+#
+# This snapshot is canonical, human-readable, and a reviewable diff: an
+# unintended change to what the sample asserts surfaces here in review, never in
+# production.
+#
+# REGENERATION (blessing): this file is rewritten deliberately, never silently.
+# Run the single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# Blessing is opt-in and kept out of the default test path; a plain
+# `cargo test` never overwrites it. Regenerate on a T7 pinned-toolchain bump
+# (rust-toolchain.toml) and review the resulting diff — see `tests/ui.rs`.
 
 ExpectedWidget
-NotYetBlessedSecondTypeName
+SuppliedGadget
