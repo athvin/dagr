@@ -199,8 +199,30 @@
 //!   so simultaneous retries do not resynchronize) and a zero source for exact,
 //!   assertable schedules in tests. The loop never reads a thread/global RNG.
 //!
-//! Panic containment (T23), execution-class dispatch (T33), and the run-loop
-//! driver (T24) build on this core rather than reshape it.
+//! The **C14 panic containment** (ticket T23): a task that panics fails **only
+//! its own node** rather than unwinding the run (arch.md C14 *Panics*; the T3
+//! error-taxonomy ADR, 016).
+//!
+//! - [`execution::run_attempt_caught`] / [`execution::run_with_retries_caught`] —
+//!   the panic-catching counterparts of [`execution::run_attempt`] /
+//!   [`execution::run_with_retries`]: a panic unwinding out of the task future's
+//!   poll is **caught** at the attempt boundary (a dependency-free,
+//!   `unsafe`-free `catch_unwind` + `AssertUnwindSafe` adapter over the poll — no
+//!   `futures` crate), converted to a **permanent** failure
+//!   ([`execution::AttemptOutcome::Panicked`] → `failed`, never retry-eligible so
+//!   it stops the retry loop), its message captured on the
+//!   [`execution::AttemptEvent::AttemptPanicked`] outcome record, attributed to
+//!   its node via task-local state, and the output slot left empty.
+//! - [`execution::install_panic_hook`] — installs the framework's panic hook
+//!   idempotently (safe under concurrent first-use) and **chains** to any
+//!   pre-existing hook, including the test harness's, without replacing it.
+//! - [`execution::check_panic_strategy`] / [`execution::detect_panic_strategy`] /
+//!   [`execution::PanicStrategy`] / [`execution::BootstrapRefusal`] — the startup
+//!   check that refuses to run under `panic = "abort"` (nothing to catch), with a
+//!   refusal message naming the required profile setting (`panic = "unwind"`).
+//!
+//! Execution-class dispatch (T33) and the run-loop driver (T24) build on this
+//! core rather than reshape it.
 //!
 //! The M1+ execution tickets land later; this crate grows one component at a
 //! time.
@@ -234,9 +256,11 @@ pub use context::{
 };
 pub use error::{TaskError, TaskErrorClass};
 pub use execution::{
-    run_attempt, run_attempt_with_timeout, run_with_retries, AttemptEvent, AttemptEventSink,
-    AttemptOutcome, Backoff, Jitter, LateResultBarrier, NoJitter, RetryConfig, SeededJitter,
-    TimeoutDecision, ZombieObserver,
+    check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt,
+    run_attempt_caught, run_attempt_with_timeout, run_with_retries, run_with_retries_caught,
+    AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, BootstrapRefusal, Jitter,
+    LateResultBarrier, NoJitter, PanicStrategy, RetryConfig, SeededJitter, TimeoutDecision,
+    ZombieObserver,
 };
 pub use flow::{Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};

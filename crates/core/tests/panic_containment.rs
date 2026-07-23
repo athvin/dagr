@@ -218,7 +218,9 @@ fn panic_message_is_captured() {
         &mut sink,
     ));
 
-    let msg = sink.panic_message_for(node).expect("panic message captured");
+    let msg = sink
+        .panic_message_for(node)
+        .expect("panic message captured");
     assert!(
         msg.contains("recognizable panic detail"),
         "captured message carries the panic payload, got {msg:?}"
@@ -428,8 +430,8 @@ fn exactly_one_attempt_outcome_record_for_a_panic() {
 #[test]
 fn startup_check_refuses_abort_and_permits_unwind() {
     // Refuse abort.
-    let refused = check_panic_strategy(PanicStrategy::Abort)
-        .expect_err("the abort strategy must be refused");
+    let refused =
+        check_panic_strategy(PanicStrategy::Abort).expect_err("the abort strategy must be refused");
     let msg = refused.to_string();
     assert!(
         msg.contains("panic") && msg.contains("unwind"),
@@ -492,24 +494,34 @@ fn hook_installation_is_idempotent_and_thread_safe() {
 
 // --- 10. The framework hook coexists with a pre-existing hook ---------------
 
-/// A hook installed **before** the framework's still observes caught panics
-/// (chaining): after installing the framework hook and triggering a caught panic
-/// inside an attempt, the previously-installed hook fired.
-#[test]
-fn framework_hook_chains_to_a_pre_existing_hook() {
-    // A pre-existing hook that records that it observed a panic (standing in for
-    // the test harness's own hook).
+/// Sentinel env var telling a spawned child to run the chaining routine. The
+/// chaining check runs in a **child process** so it controls the install order
+/// deterministically (a pre-existing hook installed BEFORE the *first-ever*
+/// framework install) and is isolated from the process-wide hook state the other
+/// tests in this binary share. This mirrors the T15 determinism suite's child
+/// pattern.
+const CHILD_CHAIN_VAR: &str = "DAGR_T23_CHAIN_CHILD";
+
+/// If this process is the spawned chaining child, run the routine and exit. The
+/// child: installs a foreign "pre-existing" hook that flips a flag, installs the
+/// framework hook on top (its first-ever install, so it chains to the foreign
+/// hook), triggers a caught panic through the runner, and exits 0 iff the
+/// foreign hook observed the panic (chaining held) and the panic was contained.
+fn run_chain_child_if_spawned() {
+    if std::env::var(CHILD_CHAIN_VAR).is_err() {
+        return;
+    }
+
     let observed = Arc::new(AtomicU32::new(0));
     let observed_in_hook = Arc::clone(&observed);
-    let prior = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    // A pre-existing hook (standing in for the test harness's own hook),
+    // installed BEFORE the framework hook.
+    std::panic::set_hook(Box::new(move |_info| {
         observed_in_hook.fetch_add(1, Ordering::SeqCst);
-        // Chain to whatever was there before us (keeps default behaviour off in
-        // tests quiet — the framework hook installed next will chain to us).
-        let _ = info;
     }));
 
-    // Install the framework hook AFTER the pre-existing one — it must chain to it.
+    // Install the framework hook on top — first-ever install in this process, so
+    // it captures and chains to the foreign hook above.
     install_panic_hook();
 
     let node = "chained";
@@ -526,15 +538,33 @@ fn framework_hook_chains_to_a_pre_existing_hook() {
         &mut sink,
     ));
 
-    // Restore the harness's hook before asserting (so a failing assert unwinds
-    // cleanly without our test hook counting it).
-    let _framework = std::panic::take_hook();
-    std::panic::set_hook(prior);
+    let contained = matches!(outcome, AttemptOutcome::Panicked);
+    let chained = observed.load(Ordering::SeqCst) >= 1;
+    // Exit 0 iff both held; any failure is a nonzero exit the parent detects.
+    std::process::exit(i32::from(!(contained && chained)));
+}
 
-    assert!(matches!(outcome, AttemptOutcome::Panicked));
+/// A hook installed **before** the framework's still observes caught panics
+/// (chaining), and the framework hook attributes/contains the panic without
+/// suppressing the other hook. Driven in an isolated child process so the install
+/// order is deterministic and the process-wide hook state stays clean for the
+/// rest of the suite.
+#[test]
+fn framework_hook_chains_to_a_pre_existing_hook() {
+    run_chain_child_if_spawned(); // no-op in the parent; runs+exits in the child.
+
+    let exe = std::env::current_exe().expect("current test executable path");
+    let status = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("framework_hook_chains_to_a_pre_existing_hook")
+        .env(CHILD_CHAIN_VAR, "1")
+        .status()
+        .expect("spawn chaining child");
+
     assert!(
-        observed.load(Ordering::SeqCst) >= 1,
-        "the pre-existing hook still observed the caught panic (chaining)"
+        status.success(),
+        "the pre-existing hook still observed the caught panic (chaining), and the \
+         panic was contained — the child asserts both and exits 0 on success"
     );
 }
 
@@ -547,8 +577,6 @@ fn framework_hook_chains_to_a_pre_existing_hook() {
 /// documents-by-example the resource author's responsibility.
 #[test]
 fn resource_poisoning_keeps_a_broken_resource_out_of_rotation() {
-    install_panic_hook();
-
     /// A tiny pool of connections that poisons a connection whose operation
     /// panicked rather than returning it to rotation.
     #[derive(Default)]
@@ -568,11 +596,6 @@ fn resource_poisoning_keeps_a_broken_resource_out_of_rotation() {
         }
     }
 
-    let pool = Arc::new(Mutex::new(Pool {
-        available: vec![1],
-        poisoned: vec![],
-        }));
-
     // A task that acquires the pooled connection, then panics mid-operation; the
     // poisoning is done in the task's own guard (an author pattern), which runs
     // as the panic unwinds through the caught poll.
@@ -583,8 +606,8 @@ fn resource_poisoning_keeps_a_broken_resource_out_of_rotation() {
         type Input = ();
         type Output = Report;
         async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Report, TaskError> {
-            let id = self.pool.lock().unwrap().acquire().expect("a conn is available");
-            // A guard that poisons on drop-during-unwind, releases on clean drop.
+            // A guard that poisons on drop-during-unwind, releases on clean drop
+            // (declared before any statement to satisfy `items_after_statements`).
             struct Guard {
                 pool: Arc<Mutex<Pool>>,
                 id: u32,
@@ -600,6 +623,12 @@ fn resource_poisoning_keeps_a_broken_resource_out_of_rotation() {
                     }
                 }
             }
+            let id = self
+                .pool
+                .lock()
+                .unwrap()
+                .acquire()
+                .expect("a conn is available");
             let _guard = Guard {
                 pool: Arc::clone(&self.pool),
                 id,
@@ -608,6 +637,13 @@ fn resource_poisoning_keeps_a_broken_resource_out_of_rotation() {
             panic!("connection blew up mid-statement");
         }
     }
+
+    install_panic_hook();
+
+    let pool = Arc::new(Mutex::new(Pool {
+        available: vec![1],
+        poisoned: vec![],
+    }));
 
     let node = "uses-pool";
     let slot = fresh_slot(node);
