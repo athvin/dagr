@@ -240,12 +240,14 @@ else
 fi
 
 # --- Rejected alternatives + reopen condition (DoD line 11) ------------------
-if has 'always.arc' || has 'arc.wrap.everything' || has 'always wrap.*arc'; then
+# House style backticks type names ("Always `Arc`-wrap"), so tolerate any
+# non-word characters between "always" and the type name.
+if has 'always[^[:alnum:]]*arc' || has 'arc.wrap.everything' || has 'wrap everything'; then
   pass "rejected: the always-Arc-wrap-everything alternative is named"
 else
   bad "rejected: the always-Arc alternative is missing"
 fi
-if has 'always.clone' || has 'clone.per.consumer'; then
+if has 'always[^[:alnum:]]*clone' || has 'clone.per.consumer'; then
   pass "rejected: the always-Clone-per-consumer alternative is named"
 else
   bad "rejected: the always-Clone-per-consumer alternative is missing"
