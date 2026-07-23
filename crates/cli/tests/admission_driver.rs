@@ -167,6 +167,38 @@ fn two_source_plan(mem: u64) -> (Pipeline, RunPlan) {
     (pipeline, plan)
 }
 
+/// One zero-dependency source node declaring `over` bytes of working memory, plus
+/// one declaring `ok` bytes — for the can-never-fit guard: with a pool pinned
+/// below `over` but at/above `ok`, the first node can NEVER be admitted (its demand
+/// exceeds the pool's total capacity) while the second admits normally.
+fn over_demand_plan(over: u64, ok: u64) -> (Pipeline, RunPlan) {
+    let mut flow = Flow::new();
+    let _big = flow.register_source_with(
+        "toobig",
+        &SucceedsWith(1),
+        NodePolicy::new().working_memory(over),
+    );
+    let _small = flow.register_source_with(
+        "fits",
+        &SucceedsWith(2),
+        NodePolicy::new().working_memory(ok),
+    );
+    let pipeline = flow.finish();
+    pipeline.assemble().expect("assembles");
+
+    let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+    runners.insert(
+        "toobig".into(),
+        SourceRunner::boxed("toobig", 1, slot_for("toobig")),
+    );
+    runners.insert(
+        "fits".into(),
+        SourceRunner::boxed("fits", 2, slot_for("fits")),
+    );
+    let plan = RunPlan::new(pipeline.clone(), runners);
+    (pipeline, plan)
+}
+
 // ===========================================================================
 // The tests
 // ===========================================================================
@@ -244,5 +276,62 @@ fn an_unconstrained_pool_admits_every_ready_node_at_once() {
     assert_eq!(
         report.terminal_states.get("beta").copied(),
         Some(TerminalState::Succeeded)
+    );
+}
+
+/// A node whose declared cost EXCEEDS a pool's **total** capacity can never be
+/// admitted — no release could ever free enough capacity. Left in the pending
+/// queue it would strand forever: when nothing else is in flight the run loop
+/// exits, the node never reaches a terminal state, and the run is (wrongly)
+/// reported as complete — a silent violation of "every reachable node reaches a
+/// terminal state". The driver's termination guard (T31) must instead give it a
+/// DEFINED non-success terminal and fold the run to a `Failed` outcome, NOT exit
+/// silently with a stranded node. A normally-fitting node in the same run still
+/// runs to success — the guard rejects only the can-never-fit node.
+///
+/// (The full bootstrap-time rejection of too-big nodes is deferred to T32; this is
+/// only the defensive driver-level guard so T31 never silently strands a node.)
+#[test]
+fn an_over_demand_node_is_failed_terminally_not_silently_stranded() {
+    // Pool holds 1000 bytes total. "toobig" demands 5000 (> total → can never fit);
+    // "fits" demands 400 (admits normally). Without the guard, "toobig" would sit
+    // in `pending` forever and the run would exit reporting success.
+    let (_pipeline, plan) = over_demand_plan(5_000, 400);
+    let sink = MemorySink::default();
+    let report = drive(
+        &RunConfig::new("/tmp/dagr-admission").capacities(PoolCapacities::new().memory(1_000)),
+        "admission-overdemand",
+        Ok(plan),
+        &[],
+        sink.clone(),
+        TickClock::default(),
+    );
+
+    // The can-never-fit node reached a DEFINED terminal state (not stranded/absent).
+    assert_eq!(
+        report.terminal_states.get("toobig").copied(),
+        Some(TerminalState::Failed),
+        "the over-demand node must reach a defined non-success terminal, not vanish"
+    );
+    // The run's outcome honestly reflects the failure — it is NOT a silent success.
+    assert_eq!(
+        report.outcome,
+        RunOutcome::Failed,
+        "an over-demand node must fail the run, not exit as a silent success"
+    );
+    // The normally-fitting node still ran to success — the guard is surgical.
+    assert_eq!(
+        report.terminal_states.get("fits").copied(),
+        Some(TerminalState::Succeeded)
+    );
+
+    // The failure lands in the event stream as the node's terminal record — the
+    // node is truthfully terminal in the durable record, not silently missing.
+    let events = parse_events(&sink.bytes());
+    assert!(
+        events
+            .iter()
+            .any(|(k, n)| k == "node-terminal" && n.as_deref() == Some("toobig")),
+        "the rejected node's terminal must appear in the stream; got {events:?}"
     );
 }

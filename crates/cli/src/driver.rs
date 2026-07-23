@@ -734,8 +734,55 @@ fn offer_or_pend<S, C>(
             admit(run_id, name, runners, tasks, tx, writer, permit);
             *in_flight += 1;
         }
+        // The node did not fit the pool's *current* remaining capacity. It either
+        // waits for a release (a fit is possible once capacity frees) or can *never*
+        // fit — its declared demand exceeds a pool's TOTAL capacity, so no release
+        // could ever admit it. A can-never-fit node pushed onto `pending` would sit
+        // there forever: when `in_flight` reached 0 the run loop would exit, leaving
+        // the node with no terminal state and reporting the run as complete — a
+        // silent violation of "every reachable node reaches a terminal state". So we
+        // reject it here with a defined FAILED terminal carrying the honest reason,
+        // fed back through the normal terminal path (counted in flight, cascaded to
+        // dependents, and folded into the run's Failed outcome) exactly as the
+        // no-runner defect below. This is only the defensive driver-level guard; the
+        // full bootstrap-time rejection of too-big nodes is deferred to T32.
+        None if !admission.can_ever_fit(&cost) => {
+            reject_over_demand(name, admission, &cost, tx);
+            *in_flight += 1;
+        }
         None => pending.push_back(name.to_string()),
     }
+}
+
+/// Fail a **can-never-fit** node terminally instead of stranding it (T31
+/// termination guard). Its declared cost exceeds a pool's total capacity, so no
+/// release could ever admit it; leaving it in `pending` would strand it past run
+/// end with no terminal state. We give it a `Failed` terminal carrying the honest
+/// over-demand reason and feed it back through the loop's normal terminal path
+/// (via `tx`), so it is recorded, cascaded to dependents, and folds the run to a
+/// `Failed` outcome — the same shape the no-runner framework-defect path uses. The
+/// caller counts it into `in_flight`. Full bootstrap-time rejection is T32.
+fn reject_over_demand(
+    name: &str,
+    admission: &AdmissionController,
+    cost: &PoolCost,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+) {
+    let reason = admission
+        .over_demand_reason(cost)
+        .unwrap_or_else(|| "declared cost exceeds pool capacity".to_string());
+    eprintln!("node '{name}' can never be admitted: {reason}; failing it");
+    // Carry a `NodeTerminal` record so the failure lands in the event stream (the
+    // node never ran, so no attempt records exist otherwise). The loop drains this
+    // into the writer, then feeds the Failed state into the tracker to cascade.
+    let _ = tx.send(AttemptDone {
+        node: name.to_string(),
+        state: TerminalState::Failed,
+        events: vec![AttemptEvent::NodeTerminal {
+            node: name.to_string(),
+            state: TerminalState::Failed,
+        }],
+    });
 }
 
 /// Re-offer the pending waiters oldest-first after a release freed capacity (T31).

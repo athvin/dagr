@@ -459,6 +459,18 @@ impl Inner {
             .all(|&pool| cost.demand_on(pool) <= self.remaining(pool))
     }
 
+    /// Whether `cost` could **ever** fit — i.e. its demand does not exceed any
+    /// pool's **total** capacity, so an empty pool would admit it. A cost that
+    /// exceeds a pool's total in some dimension can never be admitted, no matter how
+    /// much capacity is released; distinguishing that from a merely-full pool is what
+    /// lets the driver reject a can-never-fit node rather than strand it forever
+    /// (arch.md C12 termination guard; the full bootstrap rejection is T32).
+    fn fits_total(&self, cost: &PoolCost) -> bool {
+        Pool::ALL
+            .iter()
+            .all(|&pool| cost.demand_on(pool) <= self.caps.total(pool))
+    }
+
     /// Charge `cost` against every pool — all-or-nothing, so the caller has already
     /// checked [`fits`](Self::fits). Only working memory and threads are charged
     /// here; residency is charged separately at production.
@@ -585,6 +597,47 @@ impl AdmissionController {
             node: node.to_string(),
             cost: *cost,
             released: false,
+        })
+    }
+
+    /// Whether `cost` **could ever be admitted** — its declared demand does not
+    /// exceed any pool's **total** capacity, so a completely empty pool would admit
+    /// it (arch.md C12). A cost that exceeds a pool's total in some dimension can
+    /// **never** fit no matter how many permits release, so a node with such a cost
+    /// waiting in the driver's pending queue would be stranded forever and never
+    /// reach a terminal state — breaking the "every reachable node reaches a terminal
+    /// state" invariant. The driver calls this to detect that condition and give the
+    /// node a defined non-success terminal instead of silently stranding it.
+    ///
+    /// This is only the **defensive driver-level guard**: the full bootstrap-time
+    /// rejection of too-big nodes (with the resolved container-limit capacities) is
+    /// deferred to **T32**. `false` means "reject — this can never fit".
+    #[must_use]
+    pub fn can_ever_fit(&self, cost: &PoolCost) -> bool {
+        self.lock().fits_total(cost)
+    }
+
+    /// A human-readable reason a `cost` can never be admitted — the first pool whose
+    /// **total** capacity `cost` exceeds, with the demanded and total figures
+    /// (arch.md C12). Returns [`None`] when `cost` could fit an empty pool (so there
+    /// is nothing to explain). This is the honest message the driver records on the
+    /// node's non-success terminal so the run's outcome reflects *why* the node could
+    /// never run — not a silent strand.
+    #[must_use]
+    pub fn over_demand_reason(&self, cost: &PoolCost) -> Option<String> {
+        let inner = self.lock();
+        Pool::ALL.iter().find_map(|&pool| {
+            let demand = cost.demand_on(pool);
+            let total = inner.caps.total(pool);
+            (demand > total).then(|| {
+                let unit = match pool {
+                    Pool::Memory => "bytes",
+                    Pool::BlockingThreads | Pool::ComputeThreads => "threads",
+                };
+                format!(
+                    "declared cost {demand} {unit} exceeds {pool:?} pool capacity {total} {unit}"
+                )
+            })
         })
     }
 
