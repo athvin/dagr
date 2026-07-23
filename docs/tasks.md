@@ -90,7 +90,7 @@ Assembly reporting all problems (duplicate names naming both declarations, empty
 
 **T15 — C7: determinism and purity tests** (S, after T14)
 Byte-identical graph output across two in-process assemblies; assembly succeeds in an empty environment.
-- Q: Mechanical proof of no-filesystem/no-network — sandboxing, syscall audit, or review convention?
+- Q: Mechanical proof of no-filesystem/no-network — sandboxing, syscall audit, or review convention? **Resolved (ticket 026 decision record):** a std-only, in-process *structural* proof — a scrubbed-environment child process (`Command::env_clear` + empty working directory) plus a negative control that proves the guard bites — not an OS sandbox (Linux-only, pulls a dep into the dependency-free review-gated `dagr-core` crate) and not a syscall auditor (OS-specific, not in-process). Portable across the CI matrix and reusable by T40 and the criteria-matrix structural-determinism job.
 
 **T16 — C8: run context** (M, after T9)
 RunContext with all spec fields, hand-constructable in unit tests. Resolved: data interval is a caller-supplied opaque pair; registry/scratch access are additive APIs landing with C9/C18; includes resource-requirement declaration plumbing (feeds T30).
