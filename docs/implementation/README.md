@@ -35,7 +35,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **015** · [T0.9 — C4 ordering-edge mechanics](015-T0.9-ordering-edge-mechanics.md) · S · decision
 - [x] **016** · [T3 — ADR: error taxonomy design](016-T3-error-taxonomy-adr.md) · S · decision — after T0.4
 - [x] **017** · [T4 — ADR: artifact serialization format and schema versioning](017-T4-artifact-serialization-format-adr.md) · S · decision — after T0.6, T0.10
-- [ ] **018** · [T5 — Design spike: typed handle and dependency encoding](018-T5-typed-handle-encoding-spike.md) · M · decision (spike) — after T1, T0.2
+- [x] **018** · [T5 — Design spike: typed handle and dependency encoding](018-T5-typed-handle-encoding-spike.md) · M · decision (spike) — after T1, T0.2
 
 ## M1 — It runs
 
