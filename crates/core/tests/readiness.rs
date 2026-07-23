@@ -18,6 +18,8 @@
 //! enable the other two without reshaping the tracker (see the pure-seam tests at
 //! the bottom).
 
+use std::collections::BTreeMap;
+
 use dagr_core::binding::TriggerRule;
 use dagr_core::context::TerminalState;
 use dagr_core::flow::{Flow, Pipeline};
@@ -627,5 +629,180 @@ fn evaluate_rule_any_failed_matches_the_table() {
         ),
         RuleOutcome::Propagate(TerminalState::Skipped),
         "no failure-like upstream → the contingency never arose → skipped"
+    );
+}
+
+// ===========================================================================
+// C15 · runtime firing of NON-DEFAULT rules over ordering-only upstreams (T34).
+//
+// A consume-nothing contingency node carries a non-default rule (`all-terminal`
+// / `any-failed`) and is ordered after other nodes. Ordering edges (T50) do not
+// exist yet, so the run-level ordering seam `ReadinessTracker::new_with_ordering`
+// seeds the countdown from ordering-only upstreams; the tracker then evaluates
+// the node's OWN rule (read from the pipeline) against that terminal picture,
+// exactly per T0.4's fires / can-never-fire table. These prove the tracker fires
+// the non-default rules at runtime — the facet T18 left to T34.
+// ===========================================================================
+
+/// A run-level ordering map "node name -> ordering-upstream names".
+fn order(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+    pairs
+        .iter()
+        .map(|(node, ups)| {
+            (
+                (*node).to_string(),
+                ups.iter().map(|s| (*s).to_string()).collect(),
+            )
+        })
+        .collect()
+}
+
+/// Two independent sources plus a consume-nothing `any-failed` contingency node
+/// `notify`, ordered after both sources by the run-level ordering seam.
+fn any_failed_after_two(rule: TriggerRule) -> Pipeline {
+    let mut flow = Flow::new();
+    let _a: Handle<Report> = flow.register_source("up-a", &MakeReport);
+    let _b: Handle<Report> = flow.register_source("up-b", &MakeReport);
+    let _n: Handle<Report> = flow.register_source_with_trigger(
+        "notify",
+        &MakeReport,
+        dagr_core::assembly::NodePolicy::new(),
+        rule,
+    );
+    flow.finish()
+}
+
+/// `any-failed` FIRES at runtime when an ordering upstream is failure-like: the
+/// contingency `notify` is ordered after `up-a` (failed) and `up-b` (succeeded);
+/// once both are terminal its `any-failed` rule fires and it becomes ready.
+/// (C15 · T0.4 §5c fires row — runtime.)
+#[test]
+fn any_failed_contingency_fires_on_a_failed_ordering_upstream() {
+    let pipeline = any_failed_after_two(TriggerRule::AnyFailed);
+    let artifact = pipeline.assemble().expect("assembles");
+    let mut tracker = ReadinessTracker::new_with_ordering(
+        &pipeline,
+        &artifact,
+        &order(&[("notify", &["up-a", "up-b"])]),
+    );
+
+    // `notify` is NOT in the initial frontier — it waits on its ordering upstreams.
+    assert!(!tracker.initial_ready().contains(&id("notify")));
+    assert_eq!(tracker.remaining_dependencies(id("notify")), Some(2));
+
+    let _ = tracker.notify_terminal(id("up-a"), TerminalState::Failed);
+    let decisions = tracker.notify_terminal(id("up-b"), TerminalState::Succeeded);
+
+    assert!(
+        has_ready(&decisions, "notify"),
+        "any-failed fires on a failure-like ordering upstream"
+    );
+    assert!(propagated(&decisions, "notify").is_none());
+}
+
+/// `any-failed` contingency that NEVER AROSE → `skipped` at runtime: all ordering
+/// upstreams succeed, so the guarded contingency never arose and `notify` is
+/// marked `skipped` without executing. (C15 · T0.4 §5c never-arose row — runtime.)
+#[test]
+fn any_failed_contingency_never_arose_is_skipped() {
+    let pipeline = any_failed_after_two(TriggerRule::AnyFailed);
+    let artifact = pipeline.assemble().expect("assembles");
+    let mut tracker = ReadinessTracker::new_with_ordering(
+        &pipeline,
+        &artifact,
+        &order(&[("notify", &["up-a", "up-b"])]),
+    );
+
+    let _ = tracker.notify_terminal(id("up-a"), TerminalState::Succeeded);
+    let decisions = tracker.notify_terminal(id("up-b"), TerminalState::Succeeded);
+
+    assert!(!has_ready(&decisions, "notify"), "no contingency arose");
+    let (state, _origin) = propagated(&decisions, "notify").expect("notify propagated");
+    assert_eq!(
+        state,
+        TerminalState::Skipped,
+        "an any-failed contingency that never arose is skipped, not upstream-skipped"
+    );
+}
+
+/// `all-terminal` FIRES after an upstream failure — the cleanup node un-deadened:
+/// `cleanup` is ordered after `up-a` (failed) and `up-b` (succeeded); its
+/// `all-terminal` rule fires regardless of class and it is never `upstream-failed`.
+/// This is the entire reason non-default rules exist. (C15 · T0.4 §5b — runtime.)
+#[test]
+fn all_terminal_cleanup_fires_after_an_upstream_failure() {
+    let pipeline = any_failed_after_two(TriggerRule::AllTerminal);
+    let artifact = pipeline.assemble().expect("assembles");
+    let mut tracker = ReadinessTracker::new_with_ordering(
+        &pipeline,
+        &artifact,
+        &order(&[("notify", &["up-a", "up-b"])]),
+    );
+
+    let _ = tracker.notify_terminal(id("up-a"), TerminalState::Failed);
+    let decisions = tracker.notify_terminal(id("up-b"), TerminalState::Succeeded);
+
+    assert!(
+        has_ready(&decisions, "notify"),
+        "all-terminal fires regardless of an upstream's failure"
+    );
+    assert!(
+        propagated(&decisions, "notify").is_none(),
+        "all-terminal never propagates failure"
+    );
+}
+
+/// `any-failed` fires on a TRANSITIVELY `upstream-failed` ordering upstream: the
+/// ordering upstream `mid` itself never ran (its own data upstream `root` failed,
+/// so `mid` ends `upstream-failed`), and the `any-failed` contingency counts that
+/// as failure-like and fires. (C15 · T0.4 §5c transitive row — runtime.)
+#[test]
+fn any_failed_fires_on_a_transitive_upstream_failed() {
+    let mut flow = Flow::new();
+    let root: Handle<Report> = flow.register_source("root", &MakeReport);
+    let _mid: Handle<Report> = flow.register("mid", &Chain, root);
+    let _n: Handle<Report> = flow.register_source_with_trigger(
+        "notify",
+        &MakeReport,
+        dagr_core::assembly::NodePolicy::new(),
+        TriggerRule::AnyFailed,
+    );
+    let pipeline = flow.finish();
+    let artifact = pipeline.assemble().expect("assembles");
+    let mut tracker =
+        ReadinessTracker::new_with_ordering(&pipeline, &artifact, &order(&[("notify", &["mid"])]));
+
+    // root fails → mid propagates upstream-failed → notify's any-failed fires on it.
+    let decisions = tracker.notify_terminal(id("root"), TerminalState::Failed);
+    assert_eq!(
+        tracker.terminal_state(id("mid")),
+        Some(TerminalState::UpstreamFailed),
+        "mid never ran; it is transitively failure-like"
+    );
+    assert!(
+        has_ready(&decisions, "notify"),
+        "any-failed fires on a transitively upstream-failed ordering upstream"
+    );
+}
+
+/// The default `new` and `new_with_ordering` with an empty ordering map are
+/// identical — the seam is purely additive and does not change M1 behaviour.
+#[test]
+fn empty_ordering_map_matches_the_default_constructor() {
+    let pipeline = diamond();
+    let artifact = pipeline.assemble().expect("assembles");
+    let plain = ReadinessTracker::new(&pipeline, &artifact);
+    let seamed = ReadinessTracker::new_with_ordering(&pipeline, &artifact, &BTreeMap::new());
+
+    for name in ["source", "mid-a", "mid-b", "sink"] {
+        assert_eq!(
+            plain.remaining_dependencies(id(name)),
+            seamed.remaining_dependencies(id(name)),
+            "{name} countdown identical with an empty ordering map"
+        );
+    }
+    assert_eq!(
+        plain.initial_ready().to_vec(),
+        seamed.initial_ready().to_vec()
     );
 }

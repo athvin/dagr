@@ -91,7 +91,7 @@ use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost
 use dagr_core::assembly::AssemblyError;
 use dagr_core::context::{PipelineId, RunContext, RunId as CoreRunId, TerminalState};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
-use dagr_core::flow::Pipeline;
+use dagr_core::flow::{FailureMode, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::limits::detect_capacities;
 use dagr_core::readiness::{Decision, ReadinessTracker};
@@ -160,6 +160,7 @@ pub struct RunConfig {
     parameters: BTreeMap<String, String>,
     data_interval: Option<[String; 2]>,
     capacities: PoolCapacities,
+    failure_mode: FailureMode,
 }
 
 impl RunConfig {
@@ -178,6 +179,10 @@ impl RunConfig {
             // unconstrained controller admits every ready node immediately, so the
             // M1 run loop's behaviour is unchanged unless a capacity is pinned.
             capacities: PoolCapacities::new(),
+            // The failure mode defaults to continue-independent (C15 / T34): a
+            // failure cancels nothing, so an unset mode leaves the M1 loop's
+            // behaviour unchanged. Stop-on-first-failure is opt-in.
+            failure_mode: FailureMode::default(),
         }
     }
 
@@ -221,6 +226,19 @@ impl RunConfig {
     #[must_use]
     pub fn capacities(mut self, capacities: PoolCapacities) -> Self {
         self.capacities = capacities;
+        self
+    }
+
+    /// Select the run-level [failure mode](FailureMode) (arch.md C15; T34). This
+    /// is the driver-side override seam the builder/assembly mode
+    /// ([`Flow::failure_mode`](dagr_core::flow::Flow::failure_mode)) feeds and the
+    /// operator/CLI override (T55) will feed too, without a signature change. The
+    /// default is [`ContinueIndependent`](FailureMode::ContinueIndependent) — a
+    /// failure cancels nothing — so leaving it unset preserves the M1 run loop's
+    /// behaviour exactly.
+    #[must_use]
+    pub fn failure_mode(mut self, mode: FailureMode) -> Self {
+        self.failure_mode = mode;
         self
     }
 
@@ -296,15 +314,54 @@ pub trait NodeRunner: Send {
 pub struct RunPlan {
     pipeline: Pipeline,
     runners: BTreeMap<String, Box<dyn NodeRunner>>,
+    /// Run-level **ordering upstreams** (C15 / T34): a node name → the names of
+    /// nodes it must run *after* even though it consumes no value from them. This
+    /// is how a consume-nothing node with a non-default trigger rule
+    /// (`all-terminal` / `any-failed`) acquires the upstreams its rule is evaluated
+    /// against — the runtime firing of the non-default rules. Empty for a plan
+    /// built with [`new`](RunPlan::new). The graph-authoring ordering-edge API and
+    /// its fingerprint/render treatment are T50; this seam seeds only the readiness
+    /// tracker's dependency structure.
+    ordering: BTreeMap<String, Vec<String>>,
 }
 
 impl RunPlan {
     /// Build a run plan over an assembled `pipeline` and its node `runners` (keyed
     /// by node name). Every node in the pipeline should have a runner; a node with
-    /// no runner is treated as an immediate framework defect at drive time.
+    /// no runner is treated as an immediate framework defect at drive time. No
+    /// run-level ordering upstreams — every node's upstreams are its data edges.
     #[must_use]
     pub fn new(pipeline: Pipeline, runners: BTreeMap<String, Box<dyn NodeRunner>>) -> Self {
-        Self { pipeline, runners }
+        Self {
+            pipeline,
+            runners,
+            ordering: BTreeMap::new(),
+        }
+    }
+
+    /// Build a run plan that additionally declares run-level **ordering
+    /// upstreams** (C15 / T34): `ordering` maps a node's name to the names of nodes
+    /// it must run *after* without consuming their value.
+    ///
+    /// This is the run-level seam a consume-nothing node with a non-default trigger
+    /// rule uses to be ordered after the nodes its rule watches (a notify-on-failure
+    /// or cleanup contingency ordered after the work it guards) — the runtime firing
+    /// of `all-terminal` / `any-failed` that this ticket lands. It seeds the
+    /// readiness tracker via
+    /// [`ReadinessTracker::new_with_ordering`](dagr_core::readiness::ReadinessTracker::new_with_ordering)
+    /// and touches neither the graph artifact nor the fingerprint (that is T50's
+    /// graph ordering-edge API).
+    #[must_use]
+    pub fn with_ordering(
+        pipeline: Pipeline,
+        runners: BTreeMap<String, Box<dyn NodeRunner>>,
+        ordering: BTreeMap<String, Vec<String>>,
+    ) -> Self {
+        Self {
+            pipeline,
+            runners,
+            ordering,
+        }
     }
 }
 
@@ -538,7 +595,11 @@ where
     // --- The successful path: assembly produced a valid artifact. Emit the
     // run-started header carrying every field known at start (both fingerprints
     // present because assembly succeeded), then drive the execution loop.
-    let RunPlan { pipeline, runners } = plan;
+    let RunPlan {
+        pipeline,
+        runners,
+        ordering,
+    } = plan;
     let artifact = pipeline
         .assemble()
         .expect("the plan carries an already-assembled pipeline");
@@ -587,7 +648,11 @@ where
         };
     }
 
-    let tracker = ReadinessTracker::new(&pipeline, &artifact);
+    // Seed the readiness tracker with the run-level ordering upstreams (C15 / T34):
+    // this is how a consume-nothing node with a non-default trigger rule acquires
+    // the upstreams its rule fires against. An empty ordering map yields exactly the
+    // M1 data-edge-only tracker.
+    let tracker = ReadinessTracker::new_with_ordering(&pipeline, &artifact, &ordering);
     // The C12 admission controller for this run (T31). Its pools are pinned from
     // the run config (container-limit-derived or operator-pinned — T32). The
     // too-big-node bootstrap check above already rejected any node that could never
@@ -600,6 +665,7 @@ where
         runners,
         tracker,
         config.grace,
+        config.failure_mode,
         &admission,
         &config.capacities,
         &mut writer,
@@ -659,6 +725,7 @@ fn run_loop<S, C>(
     runners: BTreeMap<String, Box<dyn NodeRunner>>,
     mut tracker: ReadinessTracker,
     grace: Duration,
+    failure_mode: FailureMode,
     admission: &AdmissionController,
     capacities: &PoolCapacities,
     writer: &mut EventStreamWriter<S, C>,
@@ -699,6 +766,13 @@ where
         // next waiter. Under the default unconstrained pools this stays empty and
         // every ready node is admitted at once (the M1 behaviour).
         let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        // C15 / T34: whether stop-on-first-failure has been triggered — set the
+        // first time a failure-like terminal is observed under stop mode. Once set,
+        // no further default-rule non-teardown node is admitted; a firing
+        // consume-nothing non-default-rule contingency still runs. In
+        // continue-independent mode this stays false and the loop admits exactly as
+        // the M1 driver did.
+        let mut stopping = false;
 
         // Offer the initial-ready frontier (every zero-dependency source node) to
         // admission. A node that fits its pools is admitted (in flight); one that
@@ -737,9 +811,33 @@ where
             if is_zombie_candidate(done.state) {
                 zombie_candidates.push(done.node.clone());
             }
+
+            // C15 / T34 · stop-on-first-failure. The instant the first failure-like
+            // terminal is observed under stop mode, stop admitting default-rule
+            // non-teardown work and cancel every default-rule node still waiting for
+            // capacity (pending, unrelated to the failure). The in-flight drain
+            // completes on its own; consume-nothing non-default-rule contingencies
+            // whose rule fires on the resulting picture are admitted as they become
+            // ready (below). Teardown-node ordering after the contingencies (C17) is
+            // a documented, deliberately-unimplemented carve-out left to T52.
+            if failure_mode == FailureMode::StopOnFirstFailure
+                && !stopping
+                && is_failure_like(done.state)
+            {
+                stopping = true;
+                cancel_pending_default_nodes(
+                    pipeline,
+                    &tx,
+                    admission,
+                    &mut pending,
+                    &mut in_flight,
+                );
+            }
+
             // Feed the executed-terminal outcome back into the tracker and act on
-            // every decision it unlocks (ready → offer to admission; propagated →
-            // record).
+            // every decision it unlocks (ready → offer to admission or, under an
+            // active stop, cancel a default-rule node / admit a firing contingency;
+            // propagated → record).
             let id = NodeId::from_name(&done.node);
             let decisions = tracker.notify_terminal(id, done.state);
             apply_decisions(
@@ -751,6 +849,7 @@ where
                 &tx,
                 admission,
                 writer,
+                stopping,
                 &mut terminal_states,
                 &mut zombie_candidates,
                 &mut pending,
@@ -759,6 +858,9 @@ where
             // The finished attempt released its permit (dropped in its closure
             // before it reported done), so freed capacity may now admit a waiter.
             // Re-offer the pending queue oldest-first, admitting whatever now fits.
+            // Under an active stop only non-default-rule contingencies remain in
+            // `pending` (the default ones were cancelled at the stop transition), so
+            // this admits only firing contingencies.
             drain_pending(
                 pipeline,
                 run_id,
@@ -889,6 +991,79 @@ fn reject_over_demand(
             state: TerminalState::Failed,
         }],
     });
+}
+
+/// Whether a terminal state is **failure-like** (arch.md Vocabulary state classes;
+/// T0.4 §3) — the trigger for stop-on-first-failure (C15 / T34). `cancelled`
+/// (stop-like) and the skip classes never trigger a stop; only a genuine failure
+/// does.
+fn is_failure_like(state: TerminalState) -> bool {
+    matches!(
+        state,
+        TerminalState::Failed
+            | TerminalState::TimedOut
+            | TerminalState::Abandoned
+            | TerminalState::UpstreamFailed
+    )
+}
+
+/// Whether `name` runs under the **default** `all-succeeded` trigger rule (C15 /
+/// T34). A default-rule node is ordinary work; a **non-default**-rule node
+/// (`all-terminal` / `any-failed`) is a consume-nothing contingency — the work a
+/// failure is meant to trigger — which stop mode must still run. An unknown node
+/// (a framework defect handled elsewhere) is treated as default-rule.
+fn is_default_rule_node(pipeline: &Pipeline, name: &str) -> bool {
+    pipeline
+        .node(NodeId::from_name(name))
+        .is_none_or(|n| n.trigger_rule() == dagr_core::binding::TriggerRule::AllSucceeded)
+}
+
+/// Mark `name` **`cancelled`** without executing it (C15 / T34 stop mode): it was
+/// a pending default-rule node unrelated to the failure, or a newly-ready
+/// default-rule node the stop refuses to admit. It never acquired a C12 permit
+/// (never admitted), so there is nothing to release. A `NodeTerminal(cancelled)`
+/// record is carried through the normal terminal path (via `tx`) so the state
+/// lands in the event stream, is counted in flight, cascades to dependents, and
+/// folds into the run's `cancelled`/`failed` outcome exactly like any other
+/// terminal. The caller counts it into `in_flight`.
+fn cancel_node(
+    name: &str,
+    _admission: &AdmissionController,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    in_flight: &mut usize,
+) {
+    let _ = tx.send(AttemptDone {
+        node: name.to_string(),
+        state: TerminalState::Cancelled,
+        events: vec![AttemptEvent::NodeTerminal {
+            node: name.to_string(),
+            state: TerminalState::Cancelled,
+        }],
+    });
+    *in_flight += 1;
+}
+
+/// At the stop-on-first-failure transition, **cancel every default-rule node still
+/// waiting for capacity** (C15 / T34): these are pending nodes unrelated to the
+/// failure that stop mode declines to admit. A **non-default-rule** contingency in
+/// `pending` (waiting only for capacity) is kept — it is the work a failure is
+/// meant to trigger and is re-offered by `drain_pending` when capacity frees.
+/// Each cancelled node is fed through the normal terminal path (counted in flight,
+/// cascaded), so its dependents propagate correctly.
+fn cancel_pending_default_nodes(
+    pipeline: &Pipeline,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    admission: &AdmissionController,
+    pending: &mut std::collections::VecDeque<String>,
+    in_flight: &mut usize,
+) {
+    let (to_cancel, kept): (Vec<String>, Vec<String>) = pending
+        .drain(..)
+        .partition(|name| is_default_rule_node(pipeline, name));
+    *pending = kept.into();
+    for name in to_cancel {
+        cancel_node(&name, admission, tx, in_flight);
+    }
 }
 
 /// Re-offer the pending waiters oldest-first after a release freed capacity (T31).
@@ -1052,6 +1227,7 @@ fn apply_decisions<S, C>(
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     admission: &AdmissionController,
     writer: &mut EventStreamWriter<S, C>,
+    stopping: bool,
     terminal_states: &mut BTreeMap<String, TerminalState>,
     zombie_candidates: &mut Vec<String>,
     pending: &mut std::collections::VecDeque<String>,
@@ -1064,10 +1240,19 @@ fn apply_decisions<S, C>(
         match decision {
             Decision::Ready(id) => {
                 if let Some(name) = node_name(pipeline, *id) {
-                    offer_or_pend(
-                        pipeline, run_id, &name, runners, dispatcher, tx, admission, writer,
-                        pending, in_flight,
-                    );
+                    // C15 / T34: under an active stop, a newly-ready **default-rule**
+                    // node is cancelled rather than admitted (no further default work
+                    // after the first failure); a **non-default-rule** contingency
+                    // whose rule fired on the failure picture is the work a failure is
+                    // meant to trigger, so it is still admitted.
+                    if stopping && is_default_rule_node(pipeline, &name) {
+                        cancel_node(&name, admission, tx, in_flight);
+                    } else {
+                        offer_or_pend(
+                            pipeline, run_id, &name, runners, dispatcher, tx, admission, writer,
+                            pending, in_flight,
+                        );
+                    }
                 }
             }
             Decision::PropagatedTerminal { node, state, .. } => {

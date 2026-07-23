@@ -292,7 +292,7 @@ pub use execution::{
     LateResultBarrier, NoJitter, PanicStrategy, RetryConfig, SeededJitter, TimeoutDecision,
     ZombieObserver,
 };
-pub use flow::{Flow, Pipeline, PipelineNode};
+pub use flow::{FailureMode, Flow, Pipeline, PipelineNode};
 pub use handle::{Handle, NodeId};
 pub use limits::{
     detect_capacities, CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, PinnedPools,
