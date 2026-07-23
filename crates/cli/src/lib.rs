@@ -24,6 +24,8 @@
 
 pub(crate) mod dispatch;
 pub mod driver;
+pub mod signals;
+pub mod temp;
 
 #[cfg(test)]
 mod tests {

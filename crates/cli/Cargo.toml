@@ -47,11 +47,16 @@ dagr-render = { path = "../render" }
 #     and buffered event records over a `tokio::sync::mpsc` channel (the hand-off
 #     from a spawned attempt back to the single-owner event writer), and awaits it
 #     without blocking the framework runtime.
-# `macros`, `net`, `fs`, `process`, and `signal` are deliberately omitted: the
-# driver builds its runtimes by hand (no `#[tokio::main]`), does no I/O of its own
-# (the sink is injected — T0.6), and triggers no cancellation/signals (T34/T36 own
-# those).
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync"] }
+# `signal` is added by T36 (046): the C16 OS-signal handlers wiring SIGTERM/SIGINT
+# to the T35 `CancelHandle` seam use `tokio::signal::unix::{signal, SignalKind}`,
+# which reuses the runtimes and channels already built rather than adding a new
+# crate like `ctrlc`/`signal-hook`. On unix, tokio's `signal` feature transitively
+# pulls `mio` (for the async signal-driver notify pipe) and `signal-hook-registry`
+# (the safe async-signal-safe handler registry) plus `libc` — all MIT OR Apache-2.0
+# (resolved to MIT; no deny.toml change needed). `macros`, `net`, `fs`, and
+# `process` remain omitted: the driver builds its runtimes by hand (no
+# `#[tokio::main]`) and does no I/O of its own (the sink is injected — T0.6).
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "signal"] }
 
 # rayon — the dedicated compute pool the T2 ADR (004 §3) chose over a capped
 # semaphore over `spawn_blocking`: a `rayon::ThreadPool` built with `num_threads(N)`
@@ -73,6 +78,17 @@ rayon = "1"
 # serialization stack (MIT, already on the allow-list via dagr-artifact); it is a
 # dev-dependency only — the driver itself pulls in no new serialization crate.
 serde_json = "1"
+
+# libc — T36 (046) only. The C16 signal test proves the *end-to-end* OS-signal
+# path without killing the test-runner by `fork`ing a controlled child that
+# `raise`s SIGTERM/SIGINT at ITSELF and asserting the child took the cancellation
+# exit path. That needs raw `fork`/`raise`/`waitpid` and the `WIF*` macros, which
+# only `libc` exposes; it is a dev-dependency (test-only), already in the tree via
+# tokio's `signal` feature and rayon, and MIT OR Apache-2.0. The child harness is
+# `#[cfg(unix)]`; on non-unix the end-to-end path is documented as a no-op and the
+# wiring is covered through the programmatic seam + routing unit tests instead.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true
