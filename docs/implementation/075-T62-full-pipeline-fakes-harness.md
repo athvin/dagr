@@ -1,0 +1,55 @@
+# 075 · T62 — C28: full-pipeline fakes harness
+
+> **Milestone:** M4 · **Size:** M · **Type:** feature · **Components:** C28
+> **Branch:** `feat/t62-full-pipeline-fakes-harness` · **Depends on:** T24, T60 · **Blocks:** T63, T65
+
+## Why / context
+C28's third testing level — the whole-pipeline harness — is what lets a developer run an entire flow end to end against fakes and a tiny fixture, exercising the *real* scheduler, without any live network, database, or hand-rolled test harness (arch.md `C28 · Testing surface`). This ticket builds on the run-loop driver from T24 (which owns admission, attempt dispatch, outcome feedback, and run-started/run-finished events) and the single-task test kit from T60 (hand-built context, fake resources, provided test runtime). Beyond the C28 acceptance criterion "a full-pipeline test against fakes completes in seconds," the harness carries a second, load-bearing job: its scripted-task-outcome capability is the vehicle for system-acceptance criterion 4(b) — interpretive determinism — which T65 replays through this exact harness to prove identical recorded outcomes yield identical terminal states, propagation decisions, and artifact. That downstream contract shapes the harness's determinism guarantees here.
+
+## Objective
+Ship, as library-provided machinery (not per-pipeline code), a harness that assembles a real flow, injects fake resources, drives it through the genuine T24 run loop against a tiny fixture, and lets the test author script each node's outcome deterministically — with a CI-enforced completes-in-seconds budget.
+
+Concrete pieces of work:
+- A harness entry point that takes an assembled flow plus a registry of fakes and runs it to completion on the real scheduler/run loop (C28, C8, C9), returning the observable results a test asserts on: per-node terminal states, the event stream, and the run/graph artifacts.
+- A scripted-outcome mechanism: the author supplies, per node (keyed by node identity), the result each attempt should yield — success with a value, permanent failure, retry-then-succeed sequences, and deliberate skips — driven through the real attempt runner so propagation and trigger-rule evaluation (C15) are the framework's, not the test's.
+- Fake-resource wiring that satisfies each node's declared resource requirements (C9) so bootstrap validation passes, with no live clients.
+- A completes-in-seconds time budget enforced by an automated test in CI (a fixture flow that runs well under the budget, and a guard that fails if it regresses past the budget).
+- Determinism guarantees strong enough for T65: given the same scripted outcomes, the same parameters, and the same data interval, the harness produces the same terminal states, the same propagation decisions, and byte-stable interpretive artifacts across repeated runs.
+- At least one example test demonstrating a multi-node flow (a fork/join or a chain with a failure branch) exercised entirely through the harness, doubling as documentation that no pipeline needs its own harness.
+
+## Test plan (write these first — TDD)
+- **Runs the real scheduler, not a stub.** Setup: a small assembled flow (three-to-five nodes with at least one data dependency and one fan-in) whose declared resources are all satisfied by fakes; script every node to succeed. Action: run it through the harness entry point. Expected: every node reaches `succeeded`, the emitted event stream contains run-started and run-finished plus the per-node transitions the real driver produces, and the produced run artifact reports exactly one terminal state per node — confirming the genuine T24 run loop drove the run.
+- **No infrastructure required.** Setup: the same flow, resources supplied only as fakes. Action: run the harness with no network available and no database configured. Expected: the run completes successfully; no code path attempts a live connection, and bootstrap resource validation (C9) passes against the fakes.
+- **Fake substitution needs no task edits.** Setup: a node whose task retrieves a resource by type. Action: register a fake of that type in the harness and run. Expected: the task receives the fake, the run completes, and the task source is unchanged from its production form — the fake is injected purely through the registry.
+- **Scripted permanent failure propagates through the real policy.** Setup: a flow where node B depends on node A, plus a consume-nothing contingency node with a non-default trigger rule that fires on A's failure; script A to fail permanently. Action: run under stop-on-first-failure. Expected: A is `failed`, B is `upstream-failed` without executing, the contingency node whose rule fires still executes, and unrelated default-rule pending nodes end `cancelled` — the propagation decisions are the framework's (C15), reproduced verbatim by the harness, not computed by the test.
+- **Scripted retry-then-succeed.** Setup: a node scripted to fail its first attempt and succeed on the second, within its retry budget. Action: run the flow. Expected: the attempt number increments across the two attempts (visible in the stream and artifact per C8), the node ends `succeeded`, and downstream data consumers run.
+- **Scripted deliberate skip.** Setup: a node scripted to skip. Action: run a flow where a downstream node's trigger rule is satisfiable despite the skip and another's is not. Expected: the skip propagates as `upstream-skipped` carrying the originating node's identity, the satisfiable downstream runs, the unsatisfiable one is marked without executing, and a run whose only non-success outcomes are skips reports overall success (C15).
+- **Completes in seconds — budget enforced.** Setup: the harness's own CI fixture flow. Action: run it under a wall-clock assertion in CI. Expected: it completes well within the completes-in-seconds budget; the test fails if the elapsed time crosses the configured budget threshold, so a future regression is caught rather than silently tolerated.
+- **Interpretive determinism (the T65 contract).** Setup: one flow, one set of scripted outcomes, fixed parameters and a fixed data interval. Action: run it through the harness twice. Expected: both runs yield identical per-node terminal states, identical propagation decisions, and byte-identical interpretive artifact content (generation-time and other volatile header fields excluded), demonstrating the harness is the deterministic replay surface T65 will drive.
+- **Await-bound tasks use only the provided test runtime.** Setup: a flow containing an await-bound task. Action: run it through the harness with no externally started async runtime. Expected: the task executes on the runtime the surface provides (per T60/C28), the run completes, and the test needed no async setup of its own.
+- **No pipeline writes its own harness.** Setup: the example multi-node test. Action: read it as the documentation deliverable. Expected: the test drives assembly, fake injection, scripting, execution, and assertions entirely through the shipped library machinery, with no bespoke driver code in the test — evidence for the C28 "no pipeline needs to write its own test harness" criterion.
+
+## Definition of done
+- [ ] A whole assembled pipeline can be executed end to end against fakes and a tiny fixture, exercising the real scheduler/run loop, through library-provided machinery (C28).
+- [ ] A full-pipeline test against fakes completes in seconds, and that budget is asserted by an automated CI test that fails on regression (C28).
+- [ ] The harness supports scripted per-node outcomes — success-with-value, permanent failure, retry-then-succeed sequences, and deliberate skip — driven through the real attempt runner and failure/propagation logic (C28, C15).
+- [ ] Propagation, trigger-rule evaluation, and terminal-state assignment observed by tests are produced by the framework (C15), not by test code: stop-on-first-failure cancels default-rule work while a firing non-default contingency still runs, `upstream-failed`/`upstream-skipped` marks carry originating identity, and every node has exactly one terminal state including nodes that never ran.
+- [ ] Any resource can be replaced with a fake in the harness without modifying task code, and a flow whose declared resources are all faked passes bootstrap resource validation (C9).
+- [ ] Await-bound tasks in a harness run execute on the provided test runtime with no externally started async runtime; the harness requires no live network and no database (C28, C8, C9).
+- [ ] Every C8 run-context field is populated on every invocation under the harness, the attempt number increments across scripted retries, and the data interval appears in artifacts exactly as supplied (C8).
+- [ ] Given identical scripted outcomes, parameters, and data interval, repeated harness runs produce identical terminal states, identical propagation decisions, and byte-identical interpretive artifact content (volatile header fields excluded) — the interpretive-determinism replay surface T65 consumes (system criterion 4(b)).
+- [ ] The harness surfaces the observable results a test asserts on: per-node terminal states, the emitted event stream, and the run/graph artifacts.
+- [ ] At least one example test demonstrates a multi-node flow (with a failure branch or fork/join) exercised entirely through the harness, showing no pipeline needs to write its own harness (C28).
+- [ ] Public harness items carry rustdoc; the harness lives in the testing-surface crate/module alongside the T60 single-task kit rather than being duplicated per pipeline.
+- [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
+
+## Open questions
+None.
+
+## Out of scope
+- The single-task test kit (hand-built context, fake resources, sync/await-bound single-task invocation) — that is T60, on which this depends; this ticket reuses it and does not reimplement it.
+- Structure snapshot testing — semantic node/edge/policy comparison, structural-diff output, and blessed fixture regeneration are T61 (the second C28 level) and are not built here.
+- The framework's own fault-injection suite — kill-points around event writes, disk-full, and slow/failing sinks — is T27's territory; this harness runs the happy and scripted-outcome paths, not fault injection.
+- The M4 kill/resume/review demo (T63) and the system acceptance gate / criteria matrix (T65): this ticket delivers the harness and its determinism guarantee; wiring it into the acceptance gate and the interpretive-determinism CI check is T65's job.
+- Compile-fail and error-message tests pinned to the workspace toolchain (part of C28) — separate library-internal fixtures, not this harness.
+- Real concurrency coordination, multi-process runs, or any scheduling behavior beyond the single real run loop: the harness must not become a second scheduler, must not vary graph shape at runtime, and must not reach across processes — scripted outcomes replay recorded results through the one real driver, nothing more.
