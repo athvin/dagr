@@ -37,9 +37,8 @@ fn block_on<F: Future>(future: F) -> F::Output {
     let mut cx = Context::from_waker(waker);
     let mut fut = pin!(future);
     loop {
-        match fut.as_mut().poll(&mut cx) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => continue,
+        if let Poll::Ready(value) = fut.as_mut().poll(&mut cx) {
+            return value;
         }
     }
 }
@@ -47,7 +46,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// A representative constructor-captured task: it holds a `threshold` set when it
 /// was constructed and compares its input against it. Business logic only — no
 /// scheduling, retry, permit, timeout, or logging code lives in the body
-/// (ticket DoD: task bodies are business logic only).
+/// (the ticket's definition of done: task bodies are business logic only).
 struct ThresholdGate {
     threshold: u32,
 }
@@ -273,9 +272,15 @@ fn error_preserves_underlying_cause() {
 fn work_returns_a_classified_error() {
     let ctx = RunContext::for_test();
 
-    let mut retry = AlwaysFails { mode: FailMode::Retryable };
-    let mut perm = AlwaysFails { mode: FailMode::Permanent };
-    let mut skip = AlwaysFails { mode: FailMode::Skip };
+    let mut retry = AlwaysFails {
+        mode: FailMode::Retryable,
+    };
+    let mut perm = AlwaysFails {
+        mode: FailMode::Permanent,
+    };
+    let mut skip = AlwaysFails {
+        mode: FailMode::Skip,
+    };
 
     let re = block_on(retry.run(&ctx, ())).expect_err("arranged to fail");
     let pe = block_on(perm.run(&ctx, ())).expect_err("arranged to fail");
@@ -327,8 +332,6 @@ fn well_formed_task_and_output_satisfy_the_bounds() {
 /// capturing a non-`Send` value (which is the compile-fail UI case).
 #[test]
 fn task_may_capture_a_send_sync_shared_resource() {
-    let shared = Arc::new(AtomicUsize::new(0));
-
     struct BumpShared {
         shared: Arc<AtomicUsize>,
     }
@@ -343,9 +346,12 @@ fn task_may_capture_a_send_sync_shared_resource() {
             Ok(self.shared.fetch_add(1, Ordering::SeqCst) + 1)
         }
     }
-
     fn assert_send<T: Send + 'static>(_: &T) {}
-    let mut task = BumpShared { shared: shared.clone() };
+
+    let shared = Arc::new(AtomicUsize::new(0));
+    let mut task = BumpShared {
+        shared: shared.clone(),
+    };
     assert_send(&task);
 
     let ctx = RunContext::for_test();
