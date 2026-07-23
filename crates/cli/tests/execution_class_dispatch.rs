@@ -506,7 +506,9 @@ fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
     );
     let pipeline = flow.finish();
     // Confirm assembly accepts the legal move (the boundary check is T29's).
-    pipeline.assemble().expect("legal sync->sync override assembles");
+    pipeline
+        .assemble()
+        .expect("legal sync->sync override assembles");
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(

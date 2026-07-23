@@ -53,7 +53,25 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None were open in the ticket, and none surfaced in `docs/tasks.md`'s T33 entry
+(the `Q:` there belongs to T34). Two implementation decisions the ticket left
+implicit were settled during implementation and are recorded here as prose:
+
+- **Surface attribution for the routing tests.** tokio names its blocking-pool
+  threads with the *same* `thread_name` function as its async workers, so a
+  blocking thread cannot be told from an async worker by thread name alone. The
+  dispatcher therefore attributes the blocking surface with a thread-local marker
+  set inside the dispatched blocking closure, and exposes a public
+  `driver::current_execution_surface()` (returning `ExecutionSurface`) that a
+  task's own work calls to observe its surface honestly. This keeps the routing
+  observation deterministic without depending on tokio's private naming.
+- **Consuming, not re-deriving, the compute-pool size.** The rayon compute pool is
+  built to the pinned `PoolCapacities::compute_threads` with the T2 §3
+  floor-of-one rule (`max(1, pinned)`); the unconstrained default (`u32::MAX`,
+  i.e. "not pinned") is clamped to host parallelism so an unpinned run gets a
+  CPU-sized pool rather than `u32::MAX` threads. The cgroup→host sizing that
+  computes the pinned value stays T32's; T33 only consumes it and applies the
+  floor.
 
 ## Out of scope
 - Pool sizing derivation from cgroup limits, headroom, unlimited-sentinel fallback, and the capacity-pinning flag — that is C12 (T31/T32); this ticket only consumes the resulting pools.

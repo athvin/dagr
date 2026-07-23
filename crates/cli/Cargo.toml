@@ -53,6 +53,18 @@ dagr-render = { path = "../render" }
 # those).
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync"] }
 
+# rayon — the dedicated compute pool the T2 ADR (004 §3) chose over a capped
+# semaphore over `spawn_blocking`: a `rayon::ThreadPool` built with `num_threads(N)`
+# runs at most N closures concurrently regardless of how many are submitted, so
+# C13's "concurrently executing compute-class tasks never exceed the compute pool's
+# size" is *structural in the pool* rather than resting on a correctly-held
+# semaphore, and the blocking pool stays free for genuinely I/O-waiting work.
+# Execution-class DISPATCH (T33) is where the ADR said this dependency lands; it is
+# added to dagr-cli (which owns the driver/dispatch), NOT dagr-core, so core stays
+# pure (Stability / T1). The default features are the work-stealing thread pool
+# this needs; rayon's tree (rayon-core, crossbeam-*, either) is MIT OR Apache-2.0.
+rayon = "1"
+
 [dev-dependencies]
 # The driver tests parse the event stream the driver wrote (the T24 test-plan
 # requirement: assert against the actual sink output, not internal state). The
