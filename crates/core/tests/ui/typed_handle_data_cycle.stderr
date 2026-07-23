@@ -1,0 +1,24 @@
+# Compile-failure snapshot for `typed_handle_data_cycle.rs` — ticket T5 (018).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C2; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# A DATA-edge cycle is inexpressible by construction: binding B's not-yet-created
+# handle into A (registered first) is a use of an undeclared binding. The
+# substrings are the stable, toolchain-pinned facets: the error CODE `E0425` (a
+# name-resolution failure) and the canonical `cannot find value` phrase. Both are
+# stable v1 facets of "the cycle cannot be written."
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+E0425
+cannot find value
