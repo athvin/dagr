@@ -25,6 +25,18 @@ name = "dagr_artifact"
 path = "src/lib.rs"
 
 [dependencies]
+# Serialization stack sanctioned by the T4 ADR (017): the event-stream writer
+# (C19 / T19) targets JSON Lines, and serde + serde_json are the ADR's named
+# runtime serialization stack ("The runtime writers (T19, T40, T42) depend only
+# on `serde` + `serde_json`"). serde_json does NOT sort object keys, so the
+# writer applies the T4 §6 canonicalization (sorted keys, integer numbers,
+# compact) itself over a serde_json::Value.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# UUIDv7 run identity (T0.6 §4 / C19: "Run identity is a UUIDv7,
+# operator-overridable"). The `v7` feature enables time-ordered ids; `serde`
+# lets the run id serialize into the record envelope directly.
+uuid = { version = "1", features = ["v7", "serde"] }
 
 [lints]
 workspace = true
