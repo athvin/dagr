@@ -63,7 +63,40 @@ Each scenario is set up against a real assembled pipeline (or a deliberately-fai
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket header and `docs/tasks.md`'s T24 entry list **no** formal open
+questions (no `Q:` items). The design choices the ticket deliberately left to
+implementation are recorded here for the record:
+
+- **M1 concurrency model — resolved: simple concurrent spawn on an isolated
+  framework runtime.** The DoD requires both no-wave-batching (a fast branch's
+  descendant admitted before an unrelated slow branch terminates) *and*
+  framework-machinery survival under a task that jams its worker (the timeout
+  still fires and the stream is still written). A purely sequential loop cannot
+  satisfy the second, so the driver builds **two** multi-threaded tokio runtimes
+  (T2's isolated framework runtime): attempts spawn onto a `tasks` runtime while
+  the loop, per-attempt timers, and the single-owner event writer run on a
+  `framework` runtime. Admitted attempts report their terminal state and buffered
+  records back over a `tokio::sync::mpsc` channel; the loop drains each into the
+  writer in order and feeds the outcome back into the tracker. This is the minimal
+  spawn model — no admission pools, weighted permits, or class dispatch (those are
+  T31/T33).
+
+- **Zombie-at-exit detection in M1 — resolved: terminal-state-based candidate
+  set.** M1 has no permit ledger to confirm a blocking closure returned (that is
+  T31), so the driver treats a node that terminated `timed-out`/`abandoned` as a
+  zombie candidate, waits at most the C16 grace period at natural run end, then
+  emits `zombie-at-exit` for each. The `tasks` runtime is shut down with
+  `shutdown_background` (not a blocking `Drop`) so an unkillable busy blocking
+  thread never holds the run open — the abandoned closure is *decided*, not
+  in-flight.
+
+- **Abstract-sink → concrete-writer adaptation — resolved (the seam T20 left to
+  T24).** The C14 runner emits abstract `AttemptEvent` records through the
+  infallible `AttemptEventSink` port; the driver translates each into the concrete
+  C19 `Event` and stamps the envelope via `EventStreamWriter`. A spawned attempt
+  emits into a per-attempt buffering sink off the framework runtime; the loop
+  drains it into the single-owner writer, keeping the writer's write-through,
+  single-writer contract intact.
 
 ## Out of scope
 - The exit-code table and precedence rules (C26, T55) — the driver reports the overall outcome; the run verb maps outcome to code.

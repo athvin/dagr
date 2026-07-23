@@ -15,8 +15,8 @@
 //!    every field known at start (identity, pipeline identity, both fingerprints,
 //!    parameters/data interval, captured environment);
 //! 3. drives the execution loop: it admits the ready nodes the C11
-//!    [`ReadinessTracker`](dagr_core::readiness::ReadinessTracker) reports, spawns
-//!    each admitted node's attempt through the C14 attempt runner on the
+//!    [`ReadinessTracker`] reports,
+//!    spawns each admitted node's attempt through the C14 attempt runner on the
 //!    **task-execution runtime**, and feeds every terminal outcome back into the
 //!    tracker so dependents decrement and either become ready or receive their
 //!    propagated terminal state — **never batching a whole level into a wave**;
