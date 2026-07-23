@@ -126,6 +126,42 @@ fn target_profile_dir() -> Option<PathBuf> {
     exe.parent().and_then(Path::parent).map(Path::to_path_buf)
 }
 
+/// Locate the built `dagr_core` rlib under `<target>/<profile>` portably.
+///
+/// Cargo's canonical output for a library is the **hash-suffixed** file in the
+/// `deps/` dir (`deps/libdagr_core-<metahash>.rlib`); that file is produced by
+/// *any* build that compiles the crate, including when it is only a dependency
+/// of the `--test ui` target (which is exactly how the CI gate invokes it:
+/// `cargo test -p dagr-core --test ui`). The un-suffixed `libdagr_core.rlib`
+/// that sits directly in `<target>/<profile>` is merely an *uplifted* copy that
+/// cargo writes only when `dagr_core` is a *primary* build target — so it is
+/// present after a plain `cargo build`/`cargo test`, but **absent** on a fresh
+/// machine that runs only the scoped test command (Linux CI). Keying on the
+/// un-suffixed copy is therefore macOS-local-build-order luck, not a contract.
+///
+/// We prefer the canonical `deps/` rlib (newest, if several stale ones linger)
+/// and fall back to the uplifted copy, so the harness resolves the rlib the
+/// same way regardless of platform or which cargo command built it. This also
+/// benefits T12, which links the same rlib.
+fn resolve_dagr_core_rlib(profile_dir: &Path) -> Option<PathBuf> {
+    let deps = profile_dir.join("deps");
+    let newest_hashed = fs::read_dir(&deps).ok().and_then(|entries| {
+        entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // deps/libdagr_core-<hash>.rlib (crate name uses `_`).
+                name.starts_with("libdagr_core-") && p.extension().is_some_and(|ext| ext == "rlib")
+            })
+            .max_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
+    });
+    newest_hashed.or_else(|| {
+        // Fall back to the uplifted un-suffixed copy if cargo produced one.
+        let uplifted = profile_dir.join("libdagr_core.rlib");
+        uplifted.exists().then_some(uplifted)
+    })
+}
+
 /// Whether `sample` references the real `dagr_core` crate (so it must be linked
 /// against the built rlib rather than compiled standalone). A self-contained
 /// throwaway sketch (the T5 fixtures) does not, and is compiled bare.
@@ -164,13 +200,14 @@ fn compile_sample(sample: &Path) -> (String, bool) {
             "the running test executable resolves to a target/<profile> dir; a real-API \
              UI sample needs the built dagr_core rlib beside it",
         );
-        let rlib = profile_dir.join("libdagr_core.rlib");
-        assert!(
-            rlib.exists(),
-            "expected the built dagr_core rlib at {} — run `cargo test` (which builds \
-             the lib first) rather than invoking this harness in isolation",
-            rlib.display(),
-        );
+        let rlib = resolve_dagr_core_rlib(&profile_dir).unwrap_or_else(|| {
+            panic!(
+                "expected a built dagr_core rlib under {} (deps/libdagr_core-*.rlib, or the \
+                 uplifted libdagr_core.rlib) — run `cargo test` (which builds the lib first) \
+                 rather than invoking this harness in isolation",
+                profile_dir.display(),
+            )
+        });
         cmd.arg("--extern")
             .arg(format!("dagr_core={}", rlib.display()))
             .arg("-L")
