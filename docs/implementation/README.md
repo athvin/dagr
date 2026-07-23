@@ -58,7 +58,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **035** · [T25 — C11: termination property test](035-T25-termination-property-test.md) · M · feature (tests) — after T24
 - [x] **036** · [T26 — C10: bounded-memory chain test](036-T26-bounded-memory-chain-test.md) · S · feature (tests) — after T17, T24
 - [x] **037** · [T27 — C19: crash-safety and I/O fault-injection tests](037-T27-crash-safety-fault-injection-tests.md) · M · feature (tests) — after T19, T24, T0.6
-- [ ] **038** · [T28 — M1 demo: three-node chain with retry](038-T28-m1-demo-three-node-chain.md) · M · feature (demo) — after T12, T15, T21, T22, T23, T25, T26, T27
+- [x] **038** · [T28 — M1 demo: three-node chain with retry](038-T28-m1-demo-three-node-chain.md) · M · feature (demo) — after T12, T15, T21, T22, T23, T25, T26, T27
 
 ## M2 — It survives
 
