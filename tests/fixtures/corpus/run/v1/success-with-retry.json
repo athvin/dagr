@@ -1,0 +1,63 @@
+{
+  "header": {
+    "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+    "pipeline": "example-pipeline",
+    "fingerprint_structural": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "fingerprint_policy": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+    "fingerprint_algorithm_version": 1,
+    "parameters": { "date": "2026-07-23" },
+    "data_interval": { "start": "2026-07-23T00:00:00Z", "end": "2026-07-24T00:00:00Z" },
+    "captured_environment": { "DAGR_REGION": "us-east-1" },
+    "resume_lineage": null,
+    "overall_outcome": "succeeded"
+  },
+  "attempts": [
+    {
+      "node": "load",
+      "attempt": 1,
+      "status": "failed",
+      "phase_durations_ns": { "queued": 100, "running": 400 },
+      "worker": "worker-0",
+      "message": "transient failure",
+      "error": { "kind": "transient", "detail": "timeout reading source" },
+      "metrics": { "rows_read": 0 },
+      "cost_declared": { "memory_bytes": 1024 },
+      "cost_measured": { "memory_bytes": 512 }
+    },
+    {
+      "node": "load",
+      "attempt": 2,
+      "status": "succeeded",
+      "phase_durations_ns": { "queued": 50, "running": 950 },
+      "worker": "worker-0",
+      "message": "ok",
+      "error": null,
+      "metrics": { "rows_read": 1000 },
+      "cost_declared": { "memory_bytes": 1024 },
+      "cost_measured": { "memory_bytes": 900 },
+      "durable_reference": { "storage_key": "file:///runs/example/load/output", "content_hash": "blake3:abcd" }
+    },
+    {
+      "node": "sink",
+      "attempt": 1,
+      "status": "satisfied-from-prior",
+      "phase_durations_ns": { "queued": 0, "running": 0 },
+      "worker": "resume",
+      "message": null,
+      "error": null,
+      "metrics": {},
+      "cost_declared": null,
+      "cost_measured": null,
+      "satisfied_from_run": "018f0000-0000-7000-8000-000000000001",
+      "durable_reference": { "storage_key": "file:///runs/prior/sink/output" }
+    }
+  ],
+  "summary": {
+    "total_elapsed_ns": 1500,
+    "critical_path_ns": 1400,
+    "peak_slot_residency": 2,
+    "retained_values": ["load"],
+    "abandoned_pinned_time_ns": 0,
+    "abandoned_pinned_capacity": 0
+  }
+}

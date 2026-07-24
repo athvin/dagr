@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/athvin/dagr/schemas/graph/v1.schema.json",
+  "title": "dagr.graph@1",
+  "description": "The C20 graph artifact: a pipeline's structure, obtainable without executing it. A single canonical JSON document (T4 §2) with a header (schema version, tool version, generation time, pipeline identity, build provenance, both fingerprint hashes + algorithm version) plus per-node and per-edge descriptions. Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate. The `type_name` field is reserved as an INFORMATIONAL DEBUG field only (std::any::type_name is unstable across compilers) and is never identity — stable author-declared names are.",
+  "type": "object",
+  "required": ["header", "nodes", "edges"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tool_version",
+        "generated_at",
+        "pipeline",
+        "build_provenance",
+        "fingerprint_structural",
+        "fingerprint_policy",
+        "fingerprint_algorithm_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "description": "Self-identifying schema version (T4 §3).",
+          "const": "dagr.graph@1"
+        },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "generated_at": {
+          "description": "Generation time. Excluded from byte-identity comparison (C20/T4 §6); everything else is fixed per binary.",
+          "type": "string",
+          "minLength": 1
+        },
+        "pipeline": { "type": "string", "minLength": 1 },
+        "build_provenance": {
+          "description": "Build provenance embedded at build time (C20): tool version, git commit, lockfile hash.",
+          "type": "object",
+          "required": ["tool_version", "git_commit", "lockfile_hash"],
+          "properties": {
+            "tool_version": { "type": "string", "minLength": 1 },
+            "git_commit": { "type": "string", "minLength": 1 },
+            "lockfile_hash": { "type": "string", "minLength": 1 }
+          }
+        },
+        "fingerprint_structural": {
+          "description": "The structural fingerprint (C21) — reserved here; computing it is T41. A version-prefixed hash string.",
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint_policy": {
+          "description": "The policy hash (C21) — reserved here; computing it is T41.",
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint_algorithm_version": {
+          "description": "The versioned fingerprint algorithm identifier (C21/T0.10): a mismatch reads as 'cannot compare', never a false difference.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "description": "One node: name, group, stable task name, stable input/output type names, execution class, complete effective policy, declared resource requirements, dependency list. `type_name` is an OPTIONAL informational debug field only; it can never stand in for the required stable `output_type_name`.",
+      "required": [
+        "name",
+        "group",
+        "task_name",
+        "input_type_names",
+        "output_type_name",
+        "execution_class",
+        "policy",
+        "resources",
+        "dependencies"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "group": { "type": "string" },
+        "task_name": {
+          "description": "The author-declared stable task name (C20). Uniqueness checked at assembly.",
+          "type": "string",
+          "minLength": 1
+        },
+        "input_type_names": {
+          "description": "Author-declared stable input type names.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "output_type_name": {
+          "description": "Author-declared stable output type name (C20). REQUIRED identity; never `type_name`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "execution_class": {
+          "description": "The node's execution class (C13).",
+          "type": "string",
+          "minLength": 1
+        },
+        "policy": {
+          "description": "The COMPLETE effective policy (C5), defaults written out — retries, timeout, cost, execution class, durability flag (T0.8), trigger rule.",
+          "type": "object",
+          "required": ["durable", "trigger_rule"],
+          "properties": {
+            "durable": { "type": "boolean" },
+            "trigger_rule": {
+              "type": "string",
+              "enum": ["all-succeeded", "all-terminal", "any-failed"]
+            }
+          }
+        },
+        "resources": {
+          "description": "Declared resource requirements (C9).",
+          "type": "object"
+        },
+        "dependencies": {
+          "description": "Names of nodes this node depends on.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "type_name": {
+          "description": "RESERVED informational debug field (std::any::type_name). Never identity, never in the fingerprint (C20). Optional and free-form.",
+          "type": "string"
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "description": "One edge, tagged data-vs-ordering. A DATA edge carries the stable name of the type it carries; an ORDERING edge carries no type.",
+      "required": ["from", "to", "kind"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["data", "ordering"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "data" } } },
+          "then": {
+            "description": "A data edge MUST carry the stable name of the type carried (C20).",
+            "required": ["type_name"],
+            "properties": { "type_name": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ]
+    }
+  }
+}

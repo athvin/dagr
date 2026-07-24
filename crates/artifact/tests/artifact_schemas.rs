@@ -109,7 +109,9 @@ fn event_record_of_every_kind_validates_and_carries_the_header() {
     ];
     for kind in simple_kinds {
         let mut rec = event_header(kind);
-        rec.as_object_mut().unwrap().insert("node".into(), json!("n1"));
+        rec.as_object_mut()
+            .unwrap()
+            .insert("node".into(), json!("n1"));
         assert_valid(ArtifactKind::EventStream, 1, &rec);
         let obj = rec.as_object().unwrap();
         for field in ["run_id", "schema_version", "seq", "wall", "offset_ns"] {
@@ -172,19 +174,26 @@ fn run_started_header_completeness() {
 fn sequence_and_offset_typing() {
     // Negative sequence -> rejected.
     let mut neg = event_header("node-ready");
-    neg.as_object_mut().unwrap().insert("node".into(), json!("n1"));
+    neg.as_object_mut()
+        .unwrap()
+        .insert("node".into(), json!("n1"));
     neg["seq"] = json!(-1);
     assert_invalid(ArtifactKind::EventStream, 1, &neg);
 
     // Non-integer sequence -> rejected.
     let mut frac = event_header("node-ready");
-    frac.as_object_mut().unwrap().insert("node".into(), json!("n1"));
+    frac.as_object_mut()
+        .unwrap()
+        .insert("node".into(), json!("n1"));
     frac["seq"] = json!(1.5);
     assert_invalid(ArtifactKind::EventStream, 1, &frac);
 
     // Absent monotonic offset -> rejected (offset is authoritative).
     let mut no_offset = event_header("node-ready");
-    no_offset.as_object_mut().unwrap().insert("node".into(), json!("n1"));
+    no_offset
+        .as_object_mut()
+        .unwrap()
+        .insert("node".into(), json!("n1"));
     no_offset.as_object_mut().unwrap().remove("offset_ns");
     assert_invalid(ArtifactKind::EventStream, 1, &no_offset);
 }
@@ -201,7 +210,10 @@ fn zombie_at_exit_is_an_event_not_a_terminal_transition() {
     // validating against the EVENT schema; it is NOT a run-artifact attempt
     // record — feeding it as a node-terminal transition would require a
     // terminal status, which zombie-at-exit deliberately lacks.
-    assert!(zombie.get("status").is_none(), "zombie-at-exit is not a terminal state");
+    assert!(
+        zombie.get("status").is_none(),
+        "zombie-at-exit is not a terminal state"
+    );
 }
 
 #[test]
@@ -209,14 +221,22 @@ fn event_stream_supports_concatenation_and_partition_by_run_identity() {
     // Two records from two different runs both validate; each carries its own
     // run_id, so a concatenated stream partitions safely by run identity.
     let mut a = event_header("node-ready");
-    a.as_object_mut().unwrap().insert("node".into(), json!("n1"));
+    a.as_object_mut()
+        .unwrap()
+        .insert("node".into(), json!("n1"));
     let mut b = event_header("node-ready");
     let bo = b.as_object_mut().unwrap();
     bo.insert("node".into(), json!("n1"));
-    bo.insert("run_id".into(), json!("018f4a1e-6c2a-7b3d-9e10-ffffffffffff"));
+    bo.insert(
+        "run_id".into(),
+        json!("018f4a1e-6c2a-7b3d-9e10-ffffffffffff"),
+    );
     assert_valid(ArtifactKind::EventStream, 1, &a);
     assert_valid(ArtifactKind::EventStream, 1, &b);
-    assert_ne!(a["run_id"], b["run_id"], "records carry distinct run identities");
+    assert_ne!(
+        a["run_id"], b["run_id"],
+        "records carry distinct run identities"
+    );
 }
 
 // === graph artifact (C20) =================================================
@@ -399,7 +419,10 @@ fn attempt_taxonomy_coverage() {
     // A satisfied-from-prior record missing its originating run identity is
     // rejected.
     let mut missing_origin = attempt_record("n1", 1, "satisfied-from-prior");
-    missing_origin.as_object_mut().unwrap().remove("satisfied_from_run");
+    missing_origin
+        .as_object_mut()
+        .unwrap()
+        .remove("satisfied_from_run");
     let mut art = run_artifact_full();
     art["attempts"] = json!([missing_origin]);
     assert_invalid(ArtifactKind::Run, 1, &art);
@@ -428,7 +451,10 @@ fn durable_reference_field_present_and_copied_forward() {
     // also validates.
     let mut carried = attempt_record("n2", 1, "satisfied-from-prior");
     let c = carried.as_object_mut().unwrap();
-    c.insert("satisfied_from_run".into(), json!("018f0000-0000-7000-8000-000000000001"));
+    c.insert(
+        "satisfied_from_run".into(),
+        json!("018f0000-0000-7000-8000-000000000001"),
+    );
     c.insert(
         "durable_reference".into(),
         json!({ "storage_key": "s3://bucket/n2/output" }),
@@ -502,8 +528,7 @@ fn bootstrap_failed_variant_is_distinct_from_assembly_failed() {
     assert_invalid(ArtifactKind::Run, 1, &conflated);
     // And the two accepted values are genuinely different tokens.
     assert_ne!(
-        bootstrap["header"]["overall_outcome"],
-        assembly["header"]["overall_outcome"],
+        bootstrap["header"]["overall_outcome"], assembly["header"]["overall_outcome"],
         "assembly-failed and bootstrap-failed are distinct outcome values"
     );
 }
@@ -590,7 +615,11 @@ fn additive_only_evolution_ignores_unknown_and_defaults_missing() {
 fn published_schema_files_exist_for_every_family() {
     // Every artifact family publishes at least one versioned schema, at the
     // T4-fixed path `schemas/<kind>/v<version>.schema.json`.
-    for kind in [ArtifactKind::EventStream, ArtifactKind::Graph, ArtifactKind::Run] {
+    for kind in [
+        ArtifactKind::EventStream,
+        ArtifactKind::Graph,
+        ArtifactKind::Run,
+    ] {
         let versions = published_schema_versions(kind);
         assert!(
             versions.contains(&1),
@@ -605,7 +634,8 @@ fn fixture_corpus_round_trip() {
     // schema; the helper fails loudly (naming the offending fixture) if any does
     // not. This is the standing CI obligation (T0.10 / Stability), exercised
     // here over the seeded corpus.
-    check_corpus().unwrap_or_else(|e| panic!("corpus round-trip failed: {e}\nCORPUS_DIR={CORPUS_DIR}"));
+    check_corpus()
+        .unwrap_or_else(|e| panic!("corpus round-trip failed: {e}\nCORPUS_DIR={CORPUS_DIR}"));
 }
 
 #[test]
