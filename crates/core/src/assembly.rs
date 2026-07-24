@@ -89,6 +89,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::binding::{DataEdge, OrderingEdge, ReceiveMode, TriggerRule};
+use crate::error::RehydrateError;
 use crate::execution::{Backoff, RetryConfig};
 use crate::flow::{Pipeline, PipelineNode};
 use crate::handle::NodeId;
@@ -115,19 +116,82 @@ pub const FINGERPRINT_ALGORITHM_VERSION: u64 = 1;
 /// to be marked durable (arch.md C27; T0.8 ADR §4).
 ///
 /// A durable node's output value *is* a reference to where the value durably
-/// lives; the full contract (serialize-reference, existence-probe, rehydrate) is
-/// **T57's** to define — this module lands only the **marker seam** assembly
-/// needs: whether a node's statically-known output type satisfies the contract.
-/// A durable-marked node whose output type does **not** implement `DurableOutput`
-/// fails assembly with a [`ProblemKind::DurableWithoutContract`] problem naming
-/// the node (T0.8 ADR §5); a non-durable node demands nothing of its output type.
+/// lives. Marking a node durable (C5) requires its output type to implement this
+/// contract; a durable-marked node whose output type does **not** implement
+/// `DurableOutput` fails assembly with a [`ProblemKind::DurableWithoutContract`]
+/// problem naming the node (T0.8 ADR §5), reported alongside every other assembly
+/// problem (C7). A non-durable node demands nothing of its output type.
 ///
-/// This trait sits on the **output type**, not the task, so any durable value is
-/// reconstructable regardless of which node produced it (T0.8 ADR §4). T57
-/// supersedes this marker with the full trait pair (serialize-reference /
-/// existence-probe / rehydrate); assembly only reads the "implements the
-/// contract" witness.
-pub trait DurableOutput {}
+/// # The two operations (T0.8 ADR §4)
+///
+/// - [`serialize_reference`](DurableOutput::serialize_reference) — produce a
+///   **self-describing** reference to where the value durably lives (a storage
+///   key, a URL, a content hash — the task's choice). **Infallible**: it is called
+///   *on success*, after the task has already durably written the value, so it only
+///   *names* an already-written value. The reference is an owned UTF-8 `String`
+///   (dagr-core is dependency-free — no `serde`); a `String` is trivially
+///   serde-serializable downstream and round-trips through the artifact schema's
+///   opaque `durable_reference` slot (C22 / T39). dagr never interprets the
+///   reference's bytes — it serializes, records, existence-checks, and rehydrates
+///   them.
+/// - [`rehydrate`](DurableOutput::rehydrate) — reconstruct the typed value from a
+///   deserialized reference **later**, possibly in a different process (resume /
+///   single-node replay). **Fallible** ([`RehydrateError`]) because the referent
+///   may be gone, unreachable, or corrupt. The contract's async wrapping
+///   (reconstruction is I/O) is applied by **T58** at the resume call site where
+///   the runtime lives; the fallibility the contract fixes is here.
+///
+/// # On the OUTPUT TYPE, not the task (T0.8 ADR §4 rationale)
+///
+/// The contract sits on the **output type** so any durable value is
+/// reconstructable **regardless of which node produced it** — single-node replay
+/// (C26) and demand-driven resume (C27) must rehydrate an input from a reference
+/// *without running the producing task*. This trait supersedes the T14 assembly
+/// **marker** (which had no methods): the durability policy flag plus the
+/// [`DurableWitness`] captured at the typed registration site still arm assembly's
+/// durable-without-contract check exactly as before.
+///
+/// # Scope boundaries this contract deliberately preserves
+///
+/// - **Teardown-deleted outputs are not resume-safe.** If a teardown that covers a
+///   durable node executed in the prior run, the node's durable output may have
+///   been destroyed; resume treats such nodes as not satisfiable and re-executes
+///   them (arch.md C17 ↔ C27). Do not rely on a reference whose referent a teardown
+///   deletes.
+/// - **In-memory outputs cannot be rehydrated.** A non-durable node produces an
+///   in-memory value with no reference; a re-running consumer that demands it forces
+///   the producer to re-execute (arch.md C27). This is why the contract is required
+///   **only** on durable-marked nodes — it creates useful authoring pressure to make
+///   expensive stage boundaries produce durable, addressable outputs (C10).
+///
+/// The cheap existence **probe** (present / absent / cannot-determine) and the
+/// plan-time dangling refusal that consume references at resume are **T58**'s
+/// (T0.8 ADR §7); T57 lands declaration + recording + the serialize/rehydrate
+/// round-trip.
+pub trait DurableOutput {
+    /// Produce the self-describing durable reference for an **already-written**
+    /// value (T0.8 ADR §4). Infallible: the value is in external storage by the
+    /// time this is called; this only *names* it. The returned `String` is
+    /// recorded verbatim in the attempt's artifact record (C22).
+    fn serialize_reference(&self) -> String;
+
+    /// Reconstruct the typed value from a durable reference later (T0.8 ADR §4).
+    ///
+    /// Fallible: the referent may be [absent](RehydrateError::is_absent) (a
+    /// dangling reference), transiently unreachable, or corrupt. Given the same
+    /// reference [`serialize_reference`](DurableOutput::serialize_reference)
+    /// produced, this yields a value **equal** to the original (a lossless
+    /// round-trip through a serialized reference). The async wrapping (I/O) is
+    /// T58's at the resume call site.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`RehydrateError`] when the referent cannot be turned
+    /// back into a value.
+    fn rehydrate(reference: &str) -> Result<Self, RehydrateError>
+    where
+        Self: Sized;
+}
 
 /// The **durable-contract witness** a node carries: whether its
 /// statically-known output type implements the [`DurableOutput`] contract (T0.8

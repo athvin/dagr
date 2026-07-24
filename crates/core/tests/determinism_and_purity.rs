@@ -86,9 +86,16 @@ struct Rows;
 struct Schema;
 struct Report;
 
-/// A durable-reference output type (implements the C27 contract).
+/// A durable-reference output type (implements the C27 contract; T57).
 struct Snapshot;
-impl DurableOutput for Snapshot {}
+impl DurableOutput for Snapshot {
+    fn serialize_reference(&self) -> String {
+        "snapshot/ref".to_string()
+    }
+    fn rehydrate(_reference: &str) -> Result<Self, dagr_core::RehydrateError> {
+        Ok(Snapshot)
+    }
+}
 
 /// A sourceless task producing `Rows`. Its `run` would read the run's parameters
 /// off the `RunContext` at execution time — never at assembly.

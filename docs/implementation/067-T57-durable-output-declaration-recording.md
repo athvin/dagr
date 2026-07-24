@@ -54,7 +54,33 @@ Make durability a first-class, enforced, recorded property of a node, without im
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket. One interface-realization choice arose during implementation
+and is resolved here (the semantics are fixed by the T0.8 ADR; only the Rust
+surface was open):
+
+- **Reference type in a dep-free core.** The T0.8 ADR §4 sketches
+  `Self::Reference: Serialize + DeserializeOwned` as *illustrative* ("not shipping
+  code; T57 own the real definitions"). `dagr-core` is contractually
+  dependency-free (no `serde`), so the shipped contract expresses the
+  self-describing, serde-serializable reference as an **owned UTF-8 `String`** that
+  the task's own output type produces and consumes: `serialize_reference(&self)
+  -> String` (infallible, per ADR) and `rehydrate(reference: &str) -> Result<Self,
+  RehydrateError>` (fallible, per ADR). A `String` is trivially serde-serializable
+  and round-trips through the artifact schema's opaque `durable_reference` slot
+  (the schema says "OPAQUE … whatever the task's Reference type serializes to"),
+  so no semantics from the ADR change — only the concrete Rust bound. The
+  existence-`probe` operation and its present/absent/cannot-determine
+  classification (ADR §7) are **T58's** consumers; T57 lands the recorded reference
+  and its serialize/rehydrate round-trip, matching this ticket's "here only the
+  contract's shape and its serialize side are exercised."
+- **`rehydrate` fallibility/async.** The ADR fixes rehydrate as fallible + async.
+  Keeping core dep-free (no async runtime, no `futures`), T57 lands `rehydrate` as
+  a **fallible synchronous** contract method returning `Result<Self,
+  RehydrateError>`; the async wrapper (reconstruction-is-I/O) is applied by T58 at
+  the resume call site where the runtime lives. The fallibility (the load-bearing
+  half the ADR names — "the referent may be gone/corrupt") is preserved; only the
+  async wrapping is deferred to its consumer, exactly as the ADR defers the probe
+  and demand algorithm to T58. This is recorded, not silently chosen.
 
 ## Out of scope
 - The resume algorithm itself — the must-run seed, downward closure, upward demand resolution, `satisfied-from-prior` marking, and slot-filling by rehydration are T58 (C27). This ticket only declares, enforces, and records.

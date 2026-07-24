@@ -278,6 +278,32 @@ impl AttemptOutcomeRecord {
     }
 }
 
+/// Record a durable node's **serialized reference** onto its succeeded attempt's
+/// outcome record — the C27 declaration-to-recording bridge (ticket T57).
+///
+/// `reference` is the owned `String` a durable output type's
+/// `DurableOutput::serialize_reference` produced (dagr-core, C27/T0.8 ADR §4);
+/// this stamps it onto the attempt record's [`durable_reference`] slot as an opaque
+/// value, so the T42 fold carries it into the run artifact (C22) and it round-trips
+/// through the published schema's opaque `durable_reference` field (T39). The
+/// caller passes:
+///
+/// - `Some(reference)` **only** on a durable node's **succeeded** attempt (the one
+///   that produced a value, hence a reference), and
+/// - `None` for a non-durable node, or any attempt that did not succeed —
+///   leaving the slot **absent** (never `null`-stamped), so a run with no durable
+///   declaration is byte-identical.
+///
+/// The reference is a plain serialized value (a JSON string here — a JSON blob, a
+/// storage key, a URL — whatever the task serialized); it carries **no live
+/// handle** and no dependency on the producing process, so a later resume or
+/// single-node replay (T58/T55) reads it straight from the artifact.
+///
+/// [`durable_reference`]: AttemptOutcomeRecord::durable_reference
+pub fn record_durable_reference(record: &mut AttemptOutcomeRecord, reference: Option<String>) {
+    record.durable_reference = reference.map(serde_json::Value::String);
+}
+
 /// The normative terminal states from arch.md "Vocabulary".
 ///
 /// Every node ends a run in exactly one of these. The wire form (below) is the

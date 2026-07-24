@@ -188,3 +188,132 @@ impl Error for TaskError {
             .map(|boxed| &**boxed as &(dyn Error + 'static))
     }
 }
+
+/// The classification a [`RehydrateError`] carries when reconstructing a durable
+/// value from its reference fails (C27; T0.8 ADR §4). Three-valued, mirroring the
+/// existence-check outcomes T58 consumes: the referent is **absent**, a fetch was
+/// **transient**ly unreachable, or the fetched bytes were **corrupt**.
+///
+/// This is the *rehydrate* half of the durable-output contract. The *cheap
+/// existence probe* (present / absent / cannot-determine, T0.8 ADR §7) and the
+/// plan-time dangling refusal that reads this classification are **T58**'s; T57
+/// lands the fallible rehydrate side the contract's round-trip test exercises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RehydrateClass {
+    /// The referent is **gone** — a deleted object, a missing file, a `404`. A
+    /// durable reference that rehydrates absent is a **dangling** reference; at
+    /// resume this fails the plan up front (T58), and at single-node replay it is
+    /// the "which input and why" refusal (C26).
+    Absent,
+    /// A **transient**, retry-eligible fetch failure — the store was unreachable,
+    /// timed out, or refused temporarily. Distinct from `Absent`: the value may
+    /// well still exist; the fetch merely could not be completed now.
+    Transient,
+    /// The bytes fetched are **not a valid value** of the output type — a
+    /// deserialization/corruption failure. The referent exists but is unusable.
+    Corruption,
+}
+
+/// The error [`DurableOutput::rehydrate`](crate::assembly::DurableOutput::rehydrate)
+/// returns when reconstructing a durable value from its reference fails (C27; T0.8
+/// ADR §4).
+///
+/// A `RehydrateError` is a [`RehydrateClass`] plus a human-readable message and an
+/// optional underlying cause (preserved through [`Error::source`]). The class is
+/// **load-bearing**: it is what lets T58 distinguish a dangling reference (fail
+/// the resume plan) from a transient fetch failure (retry) from corruption. The
+/// contract fixes rehydrate as **fallible** precisely because "the referent may be
+/// gone, unreachable, or corrupt" (T0.8 ADR §4).
+#[derive(Debug)]
+pub struct RehydrateError {
+    class: RehydrateClass,
+    message: String,
+    source: Option<Box<dyn Error + Send + Sync + 'static>>,
+}
+
+impl RehydrateError {
+    fn new(class: RehydrateClass, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    /// An **absent** referent — the durable value is gone (a dangling reference).
+    #[must_use]
+    pub fn absent(message: impl Into<String>) -> Self {
+        Self::new(RehydrateClass::Absent, message)
+    }
+
+    /// A **transient**, retry-eligible fetch failure — the store was unreachable
+    /// or timed out; the value may still exist.
+    #[must_use]
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self::new(RehydrateClass::Transient, message)
+    }
+
+    /// A **corruption** failure — the fetched bytes are not a valid value.
+    #[must_use]
+    pub fn corruption(message: impl Into<String>) -> Self {
+        Self::new(RehydrateClass::Corruption, message)
+    }
+
+    /// Attach an underlying cause, preserved through [`Error::source`].
+    #[must_use]
+    pub fn with_source(mut self, source: impl Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+
+    /// The failure classification.
+    #[must_use]
+    pub fn class(&self) -> RehydrateClass {
+        self.class
+    }
+
+    /// The human-readable message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Whether the referent is [absent](RehydrateClass::Absent) — a dangling
+    /// reference (what fails the resume plan up front, T58).
+    #[must_use]
+    pub fn is_absent(&self) -> bool {
+        self.class == RehydrateClass::Absent
+    }
+
+    /// Whether the failure is [transient](RehydrateClass::Transient) and
+    /// retry-eligible.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        self.class == RehydrateClass::Transient
+    }
+
+    /// Whether the fetched bytes were [corrupt](RehydrateClass::Corruption).
+    #[must_use]
+    pub fn is_corruption(&self) -> bool {
+        self.class == RehydrateClass::Corruption
+    }
+}
+
+impl fmt::Display for RehydrateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self.class {
+            RehydrateClass::Absent => "absent",
+            RehydrateClass::Transient => "transient",
+            RehydrateClass::Corruption => "corruption",
+        };
+        write!(f, "rehydrate {label}: {}", self.message)
+    }
+}
+
+impl Error for RehydrateError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|boxed| &**boxed as &(dyn Error + 'static))
+    }
+}
