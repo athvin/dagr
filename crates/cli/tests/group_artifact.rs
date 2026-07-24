@@ -88,8 +88,12 @@ impl Task for BuildReport {
 /// reuses the exact same shape.
 fn fixture(group_of: impl Fn(&str) -> Option<&'static str>) -> Pipeline {
     let mut flow = Flow::new();
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, group_of("rows"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        group_of("rows"),
+        NodePolicy::new(),
+    );
     let schema = flow.register_source_named::<MakeSchema>(
         "schema",
         &MakeSchema,
@@ -141,8 +145,13 @@ fn test_provenance() -> BuildProvenance {
 const GEN: &str = "2026-07-24T00:00:00Z";
 
 fn emit(pipeline: &Pipeline, generated_at: &str) -> String {
-    emit_graph(pipeline, "grouped-pipeline", generated_at, &test_provenance())
-        .expect("fixture pipeline emits")
+    emit_graph(
+        pipeline,
+        "grouped-pipeline",
+        generated_at,
+        &test_provenance(),
+    )
+    .expect("fixture pipeline emits")
 }
 
 fn parse(json: &str) -> Value {
@@ -155,7 +164,7 @@ fn group_of_node(artifact: &Value, name: &str) -> String {
         .as_array()
         .expect("nodes array")
         .iter()
-        .find(|n| n["name"] == Value::from(name))
+        .find(|n| n["name"].as_str() == Some(name))
         .unwrap_or_else(|| panic!("node `{name}` present"))["group"]
         .as_str()
         .expect("group is a string")
@@ -281,7 +290,7 @@ fn removing_groups_keeps_fingerprints_and_dependencies() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|n| n["name"] == Value::from(name))
+            .find(|n| n["name"].as_str() == Some(name))
             .unwrap()["dependencies"]
             .clone()
     };

@@ -182,7 +182,9 @@ fn renaming_every_group_changes_neither_hash() {
 /// presentation — they never touch scheduling or readiness.
 #[test]
 fn removing_every_group_changes_no_fingerprint_and_no_behaviour() {
-    let grouped_art = build_diamond(grouped).assemble().expect("grouped assembles");
+    let grouped_art = build_diamond(grouped)
+        .assemble()
+        .expect("grouped assembles");
     let bare_art = build_diamond(ungrouped)
         .assemble()
         .expect("ungrouped assembles");

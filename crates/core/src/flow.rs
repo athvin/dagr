@@ -29,13 +29,17 @@
 //!
 //! # The group label is carried alongside identity, never part of it
 //!
-//! Each node reserves a **group-label slot** (C6 / T51). A group label is
-//! **presentation metadata**: it feeds artifact organization and diagram
-//! clustering only, and is **excluded from node identity** (and from both graph
-//! fingerprints — C21). Two nodes with the same name but different group labels
-//! have the *same* identity. This ticket exposes only a minimal seam for the
-//! label ([`Flow::register_source_in_group`]); the real group-labelling API is
-//! T51's.
+//! Each node carries an optional, flat **group label** (C6 — groups do not
+//! nest). A group label is **presentation metadata**: it feeds artifact
+//! organization and diagram clustering only (the C24 renderer draws each group
+//! as a cluster, T46), and is **excluded from node identity** (and from both
+//! graph fingerprints — C21), so a rename or regroup is review-visible in the
+//! structure diff (C28) but never breaks resume (C27). Two nodes with the same
+//! name but different group labels have the *same* identity — and because a name
+//! is unique across the whole pipeline regardless of grouping, that pair is a
+//! duplicate-name assembly error, not two distinct nodes. The label carries **no**
+//! execution semantics. Attach it at registration with the `register_*_in_group`
+//! API (e.g. [`Flow::register_source_in_group`], [`Flow::register_in_group`]).
 //!
 //! # Assembly is pure
 //!
@@ -192,8 +196,11 @@ pub struct PipelineNode {
     /// The name-derived identity token (opaque; T10). Redundant with `name` but
     /// kept so identity comparison never re-hashes.
     id: NodeId,
-    /// The group label (C6), or `None`. Presentation metadata — **excluded** from
-    /// identity and from both fingerprints (C21). T51 supplies the real API.
+    /// The group label (C6), or `None`. A flat, presentation-only label
+    /// (groups do **not** nest) — **excluded** from identity and from both
+    /// fingerprints (C21), so a rename/regroup is review-visible in the artifact
+    /// (C28) but never breaks resume. Set it at registration through the
+    /// `register_*_in_group` API; it carries no execution semantics.
     group: Option<String>,
     /// The declared data edges, in input order (T11). Empty for a source node.
     edges: Vec<DataEdge>,
@@ -546,11 +553,17 @@ impl Flow {
     /// Register a **source** node under `name` **in a group**, returning its
     /// output [`Handle`].
     ///
-    /// The `group` argument is the minimal **group-label seam** this ticket
-    /// exposes (C6); T51 supplies the real group-labelling API. The label is
-    /// presentation metadata carried alongside identity and **excluded** from it
-    /// ([module docs](self)) — passing a different label leaves the node's
-    /// [identity](NodeId) unchanged.
+    /// `group` attaches the node's C6 **group label** — a flat, presentation-only
+    /// label used for artifact organization and diagram clustering (the C24
+    /// renderer draws each group as a cluster, T46). It is carried alongside
+    /// identity and **excluded** from it ([module docs](self)): passing a different
+    /// label leaves the node's [identity](NodeId) unchanged, and the label feeds
+    /// **neither** C21 fingerprint hash — so a rename or regroup is review-visible
+    /// but never breaks resume. Groups do **not** nest (there is no way to express
+    /// a nested group), node names stay unique across the whole pipeline regardless
+    /// of grouping, and the label carries **no** execution semantics (no
+    /// group-level concurrency limit, no group-level failure handling). Pass
+    /// `None::<String>` for an ungrouped node.
     #[must_use]
     pub fn register_source_in_group<T>(
         &mut self,
@@ -859,8 +872,12 @@ impl Flow {
     /// Register a **data-dependent** node under `name` **in a group**, binding
     /// `deps`, and returning its output [`Handle`].
     ///
-    /// As [`register`](Flow::register), plus the minimal group-label seam (C6 /
-    /// T51). The label is excluded from identity ([module docs](self)).
+    /// As [`register`](Flow::register), plus the node's C6 **group label** — a
+    /// flat, presentation-only label for artifact organization and diagram
+    /// clustering (T46). It is excluded from identity ([module docs](self)) and
+    /// from both C21 fingerprints, groups do not nest, and it carries no execution
+    /// semantics. See [`register_source_in_group`](Flow::register_source_in_group)
+    /// for the full group contract. Pass `None::<String>` for an ungrouped node.
     #[must_use]
     pub fn register_in_group<T, D>(
         &mut self,
