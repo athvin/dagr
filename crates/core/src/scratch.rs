@@ -47,6 +47,18 @@
 //! operator's one infrastructure choice (arch.md "The shape of a run"), not this
 //! store's concern.
 //!
+//! # Survives a process restart (T54a)
+//!
+//! Because a write lands **through the run store on disk**, a value written by one
+//! process is readable, **byte-for-byte, by a later, separate process** that opens
+//! the same run directory — the store keeps no live in-process state a value
+//! depends on. This is the durability foundation resume (C27 / T58) stands on: a
+//! checkpoint written before a process ends is still there after it. It is proven
+//! by `crates/core/tests/scratch_survives_restart.rs` against a **real** separate
+//! writing process (the `dagr-scratch-run` test-support harness) whose scratch a
+//! *different* process reads back after the writer has exited — and it holds only
+//! as far as the operator's base itself survives (see above).
+//!
 //! # Enforced cross-node isolation
 //!
 //! Isolation is **enforced by construction, not by convention**. A [`ScratchStore`]
@@ -64,6 +76,15 @@
 //! deleted implicitly at run end; that retained scratch is exactly what a later
 //! resume (C27 / T54b) copies forward, and it is reclaimed only by the prune verb
 //! (C26). Neither resume copy-forward nor prune is this ticket's concern.
+//!
+//! **Retention is the operator's, and prune's, alone (T54a / T0.6 §8).** Stated
+//! as the operator-facing guarantee: after a run ends, a **succeeded** node's
+//! scratch is **gone**; a **non-succeeded** node's scratch (failed, timed-out,
+//! cancelled, skipped, or never-terminal) **survives the process restart** on
+//! disk and is **the operator's to prune**. The run-finished path performs no
+//! blanket cleanup, and no timer or subsequent run reclaims it — **prune (C26) is
+//! the sole implicit-deletion path**, and it reclaims retained scratch by removing
+//! the **whole per-run directory** `<base>/<pipeline>/<run-id>/`.
 //!
 //! # Failure classification (C4)
 //!

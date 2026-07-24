@@ -38,7 +38,23 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket, and `docs/tasks.md`'s T54a entry carries no `Q:` items.
+
+Resolution notes (recorded per ticket-conventions §5, no contested decision):
+- **How to prove restart survival honestly.** Resolved by mirroring T68's
+  separate-process pattern: a checked-in test-support harness bin
+  (`crates/core/src/bin/dagr-scratch-run.rs`) writes a node's scratch through the
+  real `ScratchStore` and **exits**; a **later, separate** process
+  (`crates/core/tests/scratch_survives_restart.rs`) reads it back. An in-process
+  handle round trip (already T53's `scratch_store.rs`) does not cross a process
+  boundary and would not prove restart survival.
+- **Where the harness bin lives.** In `dagr-core` itself (auto-discovered
+  `src/bin/`, resolved via `CARGO_BIN_EXE_dagr-scratch-run`), matching the
+  established repo pattern (`dagr-artifact`'s `dagr-crashy-run`). It links only
+  against `dagr_core`, so **core stays dependency-free** (arch.md "Stability").
+- **Was any production change needed?** No — restart survival is a property T53's
+  on-disk atomic store already has; T54a proves it. This ticket is tests + docs
+  only (the retention/prune guarantee is documented at the scratch API).
 
 ## Out of scope
 - Copying scratch *forward* into a resumed run's namespace — that is the resume carry-forward behavior owned by T54b/T58 (arch.md line 391); this ticket only guarantees the prior run's scratch survives so there is something to copy.
