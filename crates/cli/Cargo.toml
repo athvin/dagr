@@ -27,6 +27,16 @@ path = "src/lib.rs"
 name = "dagr"
 path = "src/main.rs"
 
+# The M4 gate demo run/resume harness (T63) — test-support scaffolding the
+# `m4_demo_kill_resume_review` integration test launches and kills. It depends on
+# the `test-kit`-gated `dagr_cli::t63_demo` reference pipeline, so it is gated behind
+# the same default-on feature: a production `default-features = false` build cleanly
+# excludes both. It ships in no released binary.
+[[bin]]
+name = "dagr-t63-demo-run"
+path = "src/bin/dagr-t63-demo-run.rs"
+required-features = ["test-kit"]
+
 # --- Schema-validation forward (T39/T40), OFF by default ---------------------
 # The graph-artifact round-trip test (`tests/graph_artifact_schema_roundtrip.rs`)
 # validates a REAL emitted artifact against the published
