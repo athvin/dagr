@@ -51,7 +51,24 @@ Every scenario is independently checkable. These are behavioral tests exercising
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket as written. One implementation decision, recorded here per the
+open-questions duty:
+
+- **Where the kit lives and how it is gated (resolved).** The kit ships in
+  `dagr-core` as a new module `src/test_kit.rs`
+  (`dagr_core::test_kit::SingleTaskTest` / `TaskOutcome`), behind a **default-on**
+  cargo feature `test-kit`. Default-on — rather than the default-off pattern the
+  `schema-validation` feature uses — because (a) the kit adds **no dependency** and
+  **no production runtime behavior** (it is inert constructor/driver code reachable
+  only when test code calls it, so there is nothing to "leak"), and (b) the merge
+  gate and CI run `cargo test/clippy/doc --workspace` with **default features
+  only**, so the kit must be in the default surface for its behavioral tests to run
+  under `cargo test --workspace`, for the coverage-matrix verifier to find the
+  mapped C28 test id, and for the rustdoc lint to cover the kit's public surface.
+  The feature still exists so a production build can `default-features = false` to
+  exclude the kit entirely, satisfying "use a feature gate if it needs one" and
+  "do not leak into non-test production behavior" without a bespoke CI step. No
+  deviation from any DoD line results.
 
 ## Out of scope
 - The structure-snapshot testing level of C28 — semantic node/edge/policy comparison, structural-diff output, and the blessed single-command fixture regeneration (C28 / T61). This ticket is the single-task level only.
