@@ -455,6 +455,22 @@ impl RunArtifact {
     pub fn summary_peak_slot_residency(&self) -> u64 {
         self.summary.as_ref().map_or(0, |s| s.peak_slot_residency)
     }
+    /// The run's **total elapsed time** — the authoritative monotonic wall of the
+    /// run (last event offset minus the run-start offset, which is 0), never from
+    /// the informational `wall` stamps (summary; C22 · T43). Zero when there is no
+    /// summary.
+    #[must_use]
+    pub fn summary_total_elapsed_ns(&self) -> u64 {
+        self.summary.as_ref().map_or(0, |s| s.total_elapsed_ns)
+    }
+    /// The run's **critical-path time** — the longest dependency-respecting chain
+    /// of node executing contributions (summary; C22 · T43). See the module-level
+    /// critical-path note and `docs/adr/0001-critical-path-definition.md` for
+    /// exactly what it includes and excludes. Zero when there is no summary.
+    #[must_use]
+    pub fn summary_critical_path_ns(&self) -> u64 {
+        self.summary.as_ref().map_or(0, |s| s.critical_path_ns)
+    }
     /// The time pinned by abandoned-but-running (zombie) work (summary; C10/C14).
     #[must_use]
     pub fn summary_abandoned_pinned_time_ns(&self) -> u64 {

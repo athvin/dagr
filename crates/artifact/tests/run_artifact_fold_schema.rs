@@ -567,3 +567,99 @@ fn e2e_real_writer_truncated_stream_folds_interrupted_and_validates() {
         "attempts up to the crash are included"
     );
 }
+
+// === T43: a REAL folded artifact WITH the critical path validates ==========
+//
+// T42 populated `critical_path_ns` with a conservative placeholder; T43 makes it
+// the true dependency-respecting longest chain. This test folds a real two-node
+// DEPENDENCY CHAIN stream, asserts the summary now carries the dependency-aware
+// critical path (a→b executing chain, NOT the single longest attempt), and
+// asserts the artifact — with that critical path — validates against the
+// UNMODIFIED `schemas/run/v1.schema.json` (`critical_path_ns` is an existing
+// summary field; T43 edits no schema).
+
+/// A two-node chain a→b with known offsets: `a` executes 100→1000 (900ns), `b`
+/// becomes ready only after `a` terminal (1000) and executes 1000→3000 (2000ns).
+/// The dependency-respecting critical path is a(900)+b(2000) = 2900ns.
+fn chain_stream() -> Vec<u8> {
+    stream(&[
+        with(env(0, 0, "run-started"), &[("header", start_header())]),
+        with(env(1, 50, "node-ready"), &[("node", json!("a"))]),
+        with(env(2, 80, "node-admitted"), &[("node", json!("a"))]),
+        with(
+            env(3, 100, "attempt-started"),
+            &[("node", json!("a")), ("attempt", json!(1))],
+        ),
+        with(
+            env(4, 1000, "attempt-outcome"),
+            &[
+                ("node", json!("a")),
+                ("attempt", json!(1)),
+                ("status", json!("succeeded")),
+            ],
+        ),
+        with(
+            env(5, 1000, "node-terminal"),
+            &[("node", json!("a")), ("state", json!("succeeded"))],
+        ),
+        // b becomes ready the instant a is terminal (1000), then executes 2000ns.
+        with(env(6, 1000, "node-ready"), &[("node", json!("b"))]),
+        with(env(7, 1000, "node-admitted"), &[("node", json!("b"))]),
+        with(
+            env(8, 1000, "attempt-started"),
+            &[("node", json!("b")), ("attempt", json!(1))],
+        ),
+        with(
+            env(9, 3000, "attempt-outcome"),
+            &[
+                ("node", json!("b")),
+                ("attempt", json!(1)),
+                ("status", json!("succeeded")),
+            ],
+        ),
+        with(
+            env(10, 3000, "node-terminal"),
+            &[("node", json!("b")), ("state", json!("succeeded"))],
+        ),
+        with(
+            env(11, 3000, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
+    ])
+}
+
+#[test]
+fn folded_run_with_critical_path_validates_against_published_schema() {
+    let art = fold_stream(&chain_stream(), &["a".to_string(), "b".to_string()]).expect("fold");
+    let value = art.to_value();
+
+    // (1) The summary carries the dependency-aware critical path: the a→b
+    // executing chain 900 + 2000 = 2900, NOT the single longest attempt (2000).
+    let cp = value["summary"]["critical_path_ns"].as_u64().unwrap();
+    assert_eq!(cp, 2900, "critical path is the a→b executing chain");
+    assert!(
+        cp > value["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["phase_durations_ns"]["executing"].as_u64().unwrap())
+            .max()
+            .unwrap(),
+        "the dependency chain exceeds any single node ⇒ T43, not the T42 placeholder"
+    );
+    // Total elapsed is the monotonic wall.
+    assert_eq!(value["summary"]["total_elapsed_ns"].as_u64().unwrap(), 3000);
+
+    // (2) The REAL artifact WITH the critical path validates against the
+    // UNMODIFIED published run schema (`critical_path_ns` is an existing field).
+    validate_value(ArtifactKind::Run, 1, &value)
+        .unwrap_or_else(|e| panic!("folded artifact WITH critical path must validate: {e}"));
+
+    // Teeth: a non-integer critical path is rejected — the check is not vacuous.
+    let mut bad = value.clone();
+    bad["summary"]["critical_path_ns"] = json!("nope");
+    assert!(
+        validate_value(ArtifactKind::Run, 1, &bad).is_err(),
+        "the schema check has teeth on the critical-path field"
+    );
+}
