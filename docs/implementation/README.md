@@ -105,7 +105,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **073** · [T60 — C28: single-task test kit](073-T60-single-task-test-kit.md) · M · feature — after T16, T30
 - [x] **074** · [T61 — C28: structure snapshot testing](074-T61-structure-snapshot-testing.md) · M · feature — after T40, T0.7
 - [x] **075** · [T62 — C28: full-pipeline fakes harness](075-T62-full-pipeline-fakes-harness.md) · M · feature — after T24, T60
-- [ ] **076** · [T69 — Scale benchmark](076-T69-scale-benchmark.md) · S · feature (bench) — after T24, T48
+- [x] **076** · [T69 — Scale benchmark](076-T69-scale-benchmark.md) · S · feature (bench) — after T24, T48
 - [ ] **077** · [T70 — Platform-matrix CI](077-T70-platform-matrix-ci.md) · S · feature (ci) — after T7, T32, T36
 - [ ] **078** · [T63 — M4 demo: kill, resume, and review](078-T63-m4-demo-kill-resume-review.md) · M · feature (demo) — after T36, T51, T52, T56, T59, T61, T62
 - [ ] **079** · [T64 — README, quickstart, and cookbook](079-T64-readme-quickstart-and-cookbook.md) · L · feature (docs) — after T49, T55
