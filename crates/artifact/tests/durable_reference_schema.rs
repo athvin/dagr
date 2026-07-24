@@ -4,13 +4,14 @@
 //!
 //! A REAL folded run artifact carrying a durable node's recorded reference
 //! validates against the UNMODIFIED published `schemas/run/v1.schema.json` (T39,
-//! §durable_reference — "OPAQUE to the schema"). T57 edits **no** schema: the
+//! §`durable_reference` — "OPAQUE to the schema"). T57 edits **no** schema: the
 //! `durable_reference` slot was published by T39; this proves the recording bridge
 //! emits into it validly. Teeth: a corrupted copy is rejected.
 
 #![cfg(feature = "schema-validation")]
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -30,7 +31,13 @@ struct CaptureSink {
 }
 impl CaptureSink {
     fn bytes(&self) -> Vec<u8> {
-        self.lines.lock().unwrap().iter().flatten().copied().collect()
+        self.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect()
     }
 }
 impl EventSink for CaptureSink {
@@ -63,9 +70,9 @@ fn header() -> RunStartedHeader {
             "blake3:2222222222222222222222222222222222222222222222222222222222222222".to_string(),
         ),
         fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
-        parameters: Default::default(),
+        parameters: BTreeMap::new(),
         data_interval: None,
-        captured_env: Default::default(),
+        captured_env: BTreeMap::new(),
         resumed_from: None,
     }
 }

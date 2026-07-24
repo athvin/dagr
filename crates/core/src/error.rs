@@ -189,11 +189,10 @@ impl Error for TaskError {
     }
 }
 
-/// The classification a [`RehydrateError`](crate::assembly::RehydrateError)
-/// carries when reconstructing a durable value from its reference fails (C27;
-/// T0.8 ADR §4). Three-valued, mirroring the existence-check outcomes T58
-/// consumes: the referent is **absent**, a fetch was **transient**ly unreachable,
-/// or the fetched bytes were **corrupt**.
+/// The classification a [`RehydrateError`] carries when reconstructing a durable
+/// value from its reference fails (C27; T0.8 ADR §4). Three-valued, mirroring the
+/// existence-check outcomes T58 consumes: the referent is **absent**, a fetch was
+/// **transient**ly unreachable, or the fetched bytes were **corrupt**.
 ///
 /// This is the *rehydrate* half of the durable-output contract. The *cheap
 /// existence probe* (present / absent / cannot-determine, T0.8 ADR §7) and the

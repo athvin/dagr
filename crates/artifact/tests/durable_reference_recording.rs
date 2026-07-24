@@ -21,6 +21,7 @@
 //! serialized. A `String` from the core contract is carried as a JSON string.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -41,7 +42,13 @@ struct CaptureSink {
 }
 impl CaptureSink {
     fn bytes(&self) -> Vec<u8> {
-        self.lines.lock().unwrap().iter().flatten().copied().collect()
+        self.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect()
     }
 }
 impl EventSink for CaptureSink {
@@ -84,9 +91,9 @@ fn header() -> RunStartedHeader {
             "blake3:2222222222222222222222222222222222222222222222222222222222222222".to_string(),
         ),
         fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
-        parameters: Default::default(),
+        parameters: BTreeMap::new(),
         data_interval: None,
-        captured_env: Default::default(),
+        captured_env: BTreeMap::new(),
         resumed_from: None,
     }
 }
@@ -155,7 +162,7 @@ fn drive_and_fold(records: &[AttemptOutcomeRecord], graph_nodes: &[&str]) -> Run
     w.run_finished(RunOutcome::Succeeded).expect("run-finished");
     w.finish().expect("flush");
 
-    let nodes: Vec<String> = graph_nodes.iter().map(|s| s.to_string()).collect();
+    let nodes: Vec<String> = graph_nodes.iter().map(|s| (*s).to_string()).collect();
     fold_stream(&sink.bytes(), &nodes).expect("fold")
 }
 
@@ -308,10 +315,7 @@ fn recorded_reference_is_self_contained_and_round_trips_through_the_artifact() {
 
 #[test]
 fn a_run_with_no_durable_declaration_is_byte_identical() {
-    let baseline = drive_and_fold(
-        &[ok("a", 1), ok("b", 1), ok("c", 1)],
-        &["a", "b", "c"],
-    );
+    let baseline = drive_and_fold(&[ok("a", 1), ok("b", 1), ok("c", 1)], &["a", "b", "c"]);
 
     let via_bridge = drive_and_fold(
         &[
