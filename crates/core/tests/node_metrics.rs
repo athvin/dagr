@@ -16,6 +16,20 @@
 //! `unsafe`. The allocator forwards every call to the system allocator and only
 //! updates atomics + a thread-local; it adds no unsafety of its own.
 #![allow(unsafe_code)]
+// Test-ergonomics allows: metric values are stored as exact-integer `f64`s, so
+// `assert_eq!(value, 42.0)` on a value that was attached as an integer is an
+// exact, deterministic comparison (`float_cmp`); the `_ as u64` / `_ as usize`
+// casts are of small loop counters and compile-time constants that cannot
+// overflow (`cast_*`); and `&format!(...)` passed to a `impl Into<String>`
+// argument is the readable spelling (`needless_borrows_for_generic_args`).
+#![allow(
+    clippy::float_cmp,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::cast_precision_loss,
+    clippy::needless_borrows_for_generic_args
+)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -39,7 +53,8 @@ fn a_task_attaches_a_novel_metric_with_no_framework_change() {
     // The name is not known to the framework and never was — no enum, no
     // registry edit is required to accept it.
     let mut m = AttemptMetrics::new();
-    m.attach("widgets_frobnicated", 7u64).expect("novel metric accepted");
+    m.attach("widgets_frobnicated", 7u64)
+        .expect("novel metric accepted");
 
     let entries = m.collected();
     let got = entries
@@ -57,7 +72,13 @@ fn numeric_value_shapes_are_all_accepted_and_stored_as_numbers() {
     m.attach("ratio_fraction", 0.5f64).unwrap();
     m.attach("count_small", 3u32).unwrap();
 
-    let v = |name: &str| m.collected().into_iter().find(|(k, _)| k == name).unwrap().1;
+    let v = |name: &str| {
+        m.collected()
+            .into_iter()
+            .find(|(k, _)| k == name)
+            .unwrap()
+            .1
+    };
     assert_eq!(v("rows_read"), 42.0);
     assert_eq!(v("bytes_spilled"), 1234.0);
     assert_eq!(v("ratio_fraction"), 0.5);
@@ -73,7 +94,9 @@ fn numeric_value_shapes_are_all_accepted_and_stored_as_numbers() {
 fn reserved_prefix_is_rejected_at_attach_time_naming_the_metric() {
     let mut m = AttemptMetrics::new();
     let name = format!("{RESERVED_PREFIX}sneaky");
-    let err = m.attach(&name, 1u64).expect_err("reserved-prefix attach must fail");
+    let err = m
+        .attach(&name, 1u64)
+        .expect_err("reserved-prefix attach must fail");
     match err {
         MetricError::ReservedPrefix { metric } => {
             assert_eq!(metric, name, "the error names the offending metric");
@@ -123,8 +146,15 @@ fn entry_count_cap_truncates_deterministically_and_records_it() {
     };
     let sa = names(&a);
     let sb = names(&b);
-    assert_eq!(sa.len(), MAX_ENTRIES, "exactly the cap's worth of task metrics survive");
-    assert_eq!(sa, sb, "survivors are order-independent (deterministic rule)");
+    assert_eq!(
+        sa.len(),
+        MAX_ENTRIES,
+        "exactly the cap's worth of task metrics survive"
+    );
+    assert_eq!(
+        sa, sb,
+        "survivors are order-independent (deterministic rule)"
+    );
 
     // Truncation recorded as a framework metric under the reserved prefix.
     let dropped = a
@@ -148,7 +178,10 @@ fn byte_size_cap_truncates_deterministically_and_records_it() {
     }
     m.finalize_task_metrics();
 
-    assert!(m.encoded_size() <= MAX_ENCODED_BYTES, "encoded set held at or under the byte cap");
+    assert!(
+        m.encoded_size() <= MAX_ENCODED_BYTES,
+        "encoded set held at or under the byte cap"
+    );
     let dropped_bytes = m
         .collected()
         .into_iter()
@@ -192,13 +225,20 @@ fn framework_metrics_present_when_the_task_attaches_nothing() {
     m.finalize_task_metrics();
 
     let has = |name: &str| m.collected().iter().any(|(k, _)| k == name);
-    assert!(has(METRIC_PEAK_MEMORY_BYTES), "peak memory present under dagr.");
     assert!(
-        m.collected().iter().any(|(k, _)| k.starts_with("dagr.permit.")),
+        has(METRIC_PEAK_MEMORY_BYTES),
+        "peak memory present under dagr."
+    );
+    assert!(
+        m.collected()
+            .iter()
+            .any(|(k, _)| k.starts_with("dagr.permit.")),
         "permit sizes present under dagr."
     );
     assert!(
-        m.collected().iter().any(|(k, _)| k.starts_with("dagr.phase.")),
+        m.collected()
+            .iter()
+            .any(|(k, _)| k.starts_with("dagr.phase.")),
         "phase timings present under dagr."
     );
     // Every framework metric is under the reserved prefix.
@@ -241,13 +281,13 @@ fn every_builtin_metric_name_follows_the_units_in_name_convention() {
 #[test]
 fn peak_memory_is_per_attempt_not_process_wide_under_concurrency() {
     let barrier = Arc::new(Barrier::new(2));
-    let big = 4 * 1024 * 1024; // A's large, held allocation.
-    let small = 64 * 1024; // B's small allocation.
+    let big: u64 = 4 * 1024 * 1024; // A's large, held allocation.
+    let small: u64 = 64 * 1024; // B's small allocation.
 
     let b_a = Arc::clone(&barrier);
     let a = thread::spawn(move || {
         let _g = AttributingAllocator::enter_attempt();
-        let held: Vec<u8> = vec![0xAB; big];
+        let held: Vec<u8> = vec![0xAB; big as usize];
         b_a.wait(); // hold while B allocates its small amount
         let peak = AttributingAllocator::attempt_peak_bytes();
         b_a.wait();
@@ -257,7 +297,7 @@ fn peak_memory_is_per_attempt_not_process_wide_under_concurrency() {
     let b_b = Arc::clone(&barrier);
     let b = thread::spawn(move || {
         let _g = AttributingAllocator::enter_attempt();
-        let held: Vec<u8> = vec![0xCD; small];
+        let held: Vec<u8> = vec![0xCD; small as usize];
         b_b.wait();
         b_b.wait();
         let peak = AttributingAllocator::attempt_peak_bytes();
@@ -270,22 +310,34 @@ fn peak_memory_is_per_attempt_not_process_wide_under_concurrency() {
 
     // A's peak reflects roughly A's own allocation; B's reflects B's — neither is
     // inflated by the other's live allocation.
-    assert!(peak_a >= big, "A's peak covers its own large allocation ({peak_a} >= {big})");
-    assert!(peak_b < big / 2, "B's peak is NOT inflated by A's live allocation ({peak_b})");
-    assert!(peak_b >= small, "B's peak covers its own small allocation ({peak_b} >= {small})");
+    assert!(
+        peak_a >= big,
+        "A's peak covers its own large allocation ({peak_a} >= {big})"
+    );
+    assert!(
+        peak_b < big / 2,
+        "B's peak is NOT inflated by A's live allocation ({peak_b})"
+    );
+    assert!(
+        peak_b >= small,
+        "B's peak covers its own small allocation ({peak_b} >= {small})"
+    );
 }
 
 #[test]
 fn peak_memory_tracks_the_high_water_mark_not_the_residual() {
     let _g = AttributingAllocator::enter_attempt();
-    let high = 2 * 1024 * 1024;
+    let high: u64 = 2 * 1024 * 1024;
     {
-        let _big: Vec<u8> = vec![7u8; high];
+        let _big: Vec<u8> = vec![7u8; high as usize];
         // high-water reached here
     } // freed
     let _small: Vec<u8> = vec![1u8; 4096]; // smaller residual
     let peak = AttributingAllocator::attempt_peak_bytes();
-    assert!(peak >= high, "peak reflects the high-water point ({peak} >= {high}), not the residual");
+    assert!(
+        peak >= high,
+        "peak reflects the high-water point ({peak} >= {high}), not the residual"
+    );
 }
 
 #[test]
@@ -310,7 +362,9 @@ fn allocations_outside_any_attempt_are_unattributed_and_the_allocator_is_correct
         "outside allocations do not appear in the attempt's peak ({peak})"
     );
     // The allocator behaved correctly (no panic) with no attempt current — the
-    // outside Vec was allocated, read, and freed above without incident.
-    let _witness = AtomicUsize::new(0);
-    _witness.fetch_add(1, Ordering::SeqCst);
+    // outside Vec was allocated, read, and freed above without incident, which
+    // reaching this line demonstrates.
+    let witness = AtomicUsize::new(0);
+    witness.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(witness.load(Ordering::SeqCst), 1);
 }

@@ -44,6 +44,7 @@ fn start_header() -> Value {
         "parameters": {},
         "data_interval": null,
         "captured_environment": {},
+        "resume_lineage": null,
     })
 }
 
@@ -54,7 +55,10 @@ fn stream_with_metrics(metrics: &Value) -> Vec<u8> {
         with(env(0, 0, "run-started"), &[("header", start_header())]),
         with(env(1, 10, "node-ready"), &[("node", json!("collector"))]),
         with(env(2, 20, "node-admitted"), &[("node", json!("collector"))]),
-        with(env(3, 30, "attempt-started"), &[("node", json!("collector")), ("attempt", json!(1))]),
+        with(
+            env(3, 30, "attempt-started"),
+            &[("node", json!("collector")), ("attempt", json!(1))],
+        ),
         with(
             env(4, 130, "attempt-outcome"),
             &[
@@ -69,7 +73,10 @@ fn stream_with_metrics(metrics: &Value) -> Vec<u8> {
             env(5, 130, "node-terminal"),
             &[("node", json!("collector")), ("state", json!("succeeded"))],
         ),
-        with(env(6, 140, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(6, 140, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ];
     let mut bytes = Vec::new();
     for r in records {
@@ -137,8 +144,9 @@ mod schema {
         let artifact = fold_stream(&bytes, &["collector".to_string()]).expect("folds");
         let value = artifact.to_value();
 
-        validate_value(&value, ArtifactKind::Run)
-            .expect("the metrics-carrying folded artifact validates against schemas/run/v1.schema.json");
+        validate_value(ArtifactKind::Run, 1, &value).expect(
+            "the metrics-carrying folded artifact validates against schemas/run/v1.schema.json",
+        );
 
         // And the metrics survived into the validated document unmodified.
         let attempt = &value["attempts"][0];

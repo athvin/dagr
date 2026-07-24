@@ -265,6 +265,7 @@ pub mod execution;
 pub mod flow;
 pub mod handle;
 pub mod limits;
+pub mod metrics;
 pub mod readiness;
 pub mod slot;
 pub mod stable_name;
@@ -298,6 +299,12 @@ pub use handle::{Handle, NodeId};
 pub use limits::{
     detect_capacities, CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, PinnedPools,
     HEADROOM_DEFAULT,
+};
+pub use metrics::{
+    AttemptMetrics, AttemptScope, AttributingAllocator, MetricError, MetricValue,
+    MAX_ENCODED_BYTES, MAX_ENTRIES, METRIC_PEAK_MEMORY_BYTES, METRIC_TRUNCATED,
+    METRIC_TRUNCATED_DROPPED_BYTES, METRIC_TRUNCATED_DROPPED_ENTRIES, PERMIT_PREFIX, PHASE_PREFIX,
+    RESERVED_PREFIX, VALUE_ENCODED_BYTES,
 };
 pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
 pub use slot::{
