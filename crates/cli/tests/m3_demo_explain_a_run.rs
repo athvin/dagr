@@ -61,7 +61,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
-use dagr_artifact::fold::{fold_stream, RunArtifact, PHASE_EXECUTING, PHASE_PERMIT_WAIT, PHASE_READY_WAIT};
+use dagr_artifact::fold::{
+    fold_stream, RunArtifact, PHASE_EXECUTING, PHASE_PERMIT_WAIT, PHASE_READY_WAIT,
+};
 use serde_json::Value;
 
 /// The checked-in reference-pipeline producer (a real run leaving real artifacts).
@@ -255,8 +257,14 @@ fn profile_of(run: &RunArtifact, node: &str) -> NodeProfile {
 #[test]
 fn both_artifacts_are_produced_by_one_run() {
     let a = produce("run-both-artifacts");
-    assert!(a.graph_path().is_file(), "graph artifact written to the run store");
-    assert!(a.stream_path().is_file(), "event stream written to the run store");
+    assert!(
+        a.graph_path().is_file(),
+        "graph artifact written to the run store"
+    );
+    assert!(
+        a.stream_path().is_file(),
+        "event stream written to the run store"
+    );
 
     let graph: Value = serde_json::from_slice(&a.graph_bytes()).expect("graph artifact parses");
     assert_eq!(graph["header"]["pipeline"].as_str(), Some(PIPELINE));
@@ -317,14 +325,24 @@ fn every_graph_node_is_covered_by_the_run_artifact() {
         .collect();
     assert_eq!(
         graph_names,
-        GRAPH_NODES.iter().map(|s| (*s).to_string()).collect::<BTreeSet<_>>(),
+        GRAPH_NODES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect::<BTreeSet<_>>(),
         "the graph artifact carries exactly the reference roster"
     );
 
     let run = fold_artifacts(&a);
-    let covered: BTreeSet<String> = run.attempts().iter().map(|at| at.node().to_string()).collect();
+    let covered: BTreeSet<String> = run
+        .attempts()
+        .iter()
+        .map(|at| at.node().to_string())
+        .collect();
     for node in &graph_names {
-        assert!(covered.contains(node), "graph node `{node}` appears in the run artifact");
+        assert!(
+            covered.contains(node),
+            "graph node `{node}` appears in the run artifact"
+        );
     }
 
     // The never-ran node carries a propagated terminal state (upstream-skipped),
@@ -461,7 +479,10 @@ fn structure_vs_resource_limited_distinguishable_at_the_summary() {
     let critical_upper_bound = run.summary_critical_path_ns();
 
     assert!(total > 0, "the run has a positive total elapsed");
-    assert!(critical_upper_bound > 0, "the run has a positive critical-path bound");
+    assert!(
+        critical_upper_bound > 0,
+        "the run has a positive critical-path bound"
+    );
 
     // `critical_path_ns` is an UPPER BOUND on the true dependency chain (T43 ADR:
     // it can only over-attribute). So the true critical path is ≤ this number, and
@@ -555,14 +576,23 @@ fn overlay_renders_from_artifacts_only_and_is_structurally_sound() {
     // Every node appears in both outputs (structural soundness).
     for node in GRAPH_NODES {
         assert!(dot.contains(node), "DOT overlay contains node `{node}`");
-        assert!(mermaid.contains(node), "Mermaid overlay contains node `{node}`");
+        assert!(
+            mermaid.contains(node),
+            "Mermaid overlay contains node `{node}`"
+        );
     }
     // Originated vs propagated skip are distinguishable: the overlay tags each node
     // with its state, so `skipped` (originated) and `upstream-skipped` (propagated)
     // both appear as distinct textual tags.
     assert!(dot.contains("skipped"), "originated skip tag present (DOT)");
-    assert!(dot.contains("upstream-skipped"), "propagated skip tag present (DOT)");
-    assert!(mermaid.contains("skipped"), "originated skip tag present (Mermaid)");
+    assert!(
+        dot.contains("upstream-skipped"),
+        "propagated skip tag present (DOT)"
+    );
+    assert!(
+        mermaid.contains("skipped"),
+        "originated skip tag present (Mermaid)"
+    );
     assert!(
         mermaid.contains("upstream-skipped"),
         "propagated skip tag present (Mermaid)"
@@ -591,14 +621,18 @@ fn the_explainer_consults_no_log_line_and_no_binary() {
     // Fold ONCE, then make the event stream (the only log/stdout stream) and the
     // producer's live state provably inaccessible: delete the entire run store.
     let run = fold_artifacts(&a);
-    std::fs::remove_dir_all(&a.base).expect("delete the run store — nothing but the artifact remains");
+    std::fs::remove_dir_all(&a.base)
+        .expect("delete the run store — nothing but the artifact remains");
     assert!(!a.stream_path().exists(), "the event stream is gone");
     assert!(!a.graph_path().exists(), "even the graph file is gone");
 
     // Answers 5, 6, 7 are produced from the in-memory run artifact ALONE — no
     // stream, no file, no binary.
     let slowest = slowest_node(&run);
-    assert_eq!(slowest.node, DESIGNED_BOTTLENECK, "answer 5 from the artifact alone");
+    assert_eq!(
+        slowest.node, DESIGNED_BOTTLENECK,
+        "answer 5 from the artifact alone"
+    );
     assert_eq!(
         profile_of(&run, DESIGNED_BOTTLENECK).verdict(),
         "working",
@@ -693,7 +727,10 @@ fn the_demo_is_deterministic_across_runs() {
     // The graph artifacts are byte-identical outside the generation-time field.
     let g1 = mask_generated_at(serde_json::from_slice(&a1.graph_bytes()).unwrap());
     let g2 = mask_generated_at(serde_json::from_slice(&a2.graph_bytes()).unwrap());
-    assert_eq!(g1, g2, "graph artifacts are byte-identical outside generation time");
+    assert_eq!(
+        g1, g2,
+        "graph artifacts are byte-identical outside generation time"
+    );
 
     let _ = std::fs::remove_dir_all(&a1.base);
     let _ = std::fs::remove_dir_all(&a2.base);
@@ -730,6 +767,33 @@ fn criteria_matrix_coverage_check_passes() {
         matrix.contains("m3_demo_explain_a_run"),
         "the SL5 row names this demo file as the M3 done-when machine test"
     );
+}
+
+// ===========================================================================
+// Scenario 1 (schema half) — both artifacts validate against their schemas
+// ===========================================================================
+
+/// **Both artifacts validate against their published schemas.** The real emitted
+/// graph artifact validates against `schemas/graph/v1.schema.json` and the real
+/// folded run artifact validates against `schemas/run/v1.schema.json` (C20/C22),
+/// via the T39 validator. Gated behind `schema-validation` (default OFF, pulling
+/// the CI-/dev-scoped `jsonschema` validator), mirroring T40's graph round-trip
+/// suite; CI runs it with the feature ON.
+#[cfg(feature = "schema-validation")]
+#[test]
+fn both_artifacts_validate_against_their_published_schemas() {
+    use dagr_artifact::schema::{validate_value, ArtifactKind};
+
+    let a = produce("run-schema-valid");
+    let graph: Value = serde_json::from_slice(&a.graph_bytes()).unwrap();
+    validate_value(ArtifactKind::Graph, 1, &graph)
+        .expect("the emitted graph artifact validates against its published schema");
+
+    let run_value = fold_artifacts(&a).to_value();
+    validate_value(ArtifactKind::Run, 1, &run_value)
+        .expect("the folded run artifact validates against its published schema");
+
+    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================

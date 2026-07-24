@@ -281,10 +281,20 @@ fn build_pipeline() -> Pipeline {
     flow.allow_env_capture([ALLOWLISTED_ENV.to_string()]);
 
     let load = flow.register_source_named::<Load>("load", &Load, None::<String>, NodePolicy::new());
-    let transform =
-        flow.register_named::<Transform, _>("transform", &Transform, load, None::<String>, NodePolicy::new());
-    let _publish =
-        flow.register_named::<Publish, _>("publish", &Publish, transform, None::<String>, NodePolicy::new());
+    let transform = flow.register_named::<Transform, _>(
+        "transform",
+        &Transform,
+        load,
+        None::<String>,
+        NodePolicy::new(),
+    );
+    let _publish = flow.register_named::<Publish, _>(
+        "publish",
+        &Publish,
+        transform,
+        None::<String>,
+        NodePolicy::new(),
+    );
 
     let _slow = flow.register_source_named::<SlowCompute>(
         "slow-compute",
@@ -457,38 +467,72 @@ fn main() -> ExitCode {
     parameters.insert("date".to_string(), "2026-07-24".to_string());
 
     clock.set(0);
-    if writer
-        .run_started(RunStartedHeader {
-            pipeline: PIPELINE.to_string(),
-            fingerprint_structural: Some(fp_structural),
-            fingerprint_policy: Some(fp_policy),
-            fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
-            parameters,
-            data_interval: Some([
-                "2026-07-24T00:00:00Z".to_string(),
-                "2026-07-25T00:00:00Z".to_string(),
-            ]),
-            captured_env,
-            resumed_from: None,
-        })
-        .is_err()
-    {
+    let header = RunStartedHeader {
+        pipeline: PIPELINE.to_string(),
+        fingerprint_structural: Some(fp_structural),
+        fingerprint_policy: Some(fp_policy),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
+        parameters,
+        data_interval: Some([
+            "2026-07-24T00:00:00Z".to_string(),
+            "2026-07-25T00:00:00Z".to_string(),
+        ]),
+        captured_env,
+        resumed_from: None,
+    };
+    if writer.run_started(header).is_err() {
         eprintln!("run-started write failed");
         return ExitCode::from(2);
     }
 
+    drive_run_stream(&mut writer, &clock);
+    ExitCode::SUCCESS
+}
+
+/// Drive the reference pipeline's deterministic lifecycle through the real C19
+/// writer, after `run-started`: the happy chain, the compute-bound bottleneck, the
+/// queue/permit-limited contrast, the originated-skip pair, and `run-finished`. All
+/// offsets are hand-stepped so every phase duration is a fixed number.
+fn drive_run_stream(writer: &mut EventStreamWriter<FileSink, ClockRef<'_>>, clock: &StepClock) {
     // The happy chain: load → transform → publish. Small, quick executes.
     // Offsets: ready/admitted/started/finished. `executing = finished − started`.
-    emit_ran_node(&mut writer, &clock, "load", 10, 20, 30, 130, metrics_json(1_000, 2_048, 100));
-    emit_ran_node(&mut writer, &clock, "transform", 140, 150, 160, 260, metrics_json(1_000, 2_048, 100));
-    emit_ran_node(&mut writer, &clock, "publish", 270, 280, 290, 390, metrics_json(0, 1_024, 100));
+    emit_ran_node(
+        writer,
+        clock,
+        "load",
+        10,
+        20,
+        30,
+        130,
+        metrics_json(1_000, 2_048, 100),
+    );
+    emit_ran_node(
+        writer,
+        clock,
+        "transform",
+        140,
+        150,
+        160,
+        260,
+        metrics_json(1_000, 2_048, 100),
+    );
+    emit_ran_node(
+        writer,
+        clock,
+        "publish",
+        270,
+        280,
+        290,
+        390,
+        metrics_json(0, 1_024, 100),
+    );
 
     // The designed compute-bound bottleneck: LONGEST total AND executing dominates.
     // total = 900 − 400 = 500; executing = 900 − 500 = 400 (started at 500); the
     // waits (ready→admitted→started) are small, so it reads "working".
     emit_ran_node(
-        &mut writer,
-        &clock,
+        writer,
+        clock,
         "slow-compute",
         400,
         420,
@@ -551,6 +595,4 @@ fn main() -> ExitCode {
     clock.set(1_000);
     let _ = writer.run_finished(RunOutcome::Succeeded);
     let _ = writer.finish();
-
-    ExitCode::SUCCESS
 }
