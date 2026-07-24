@@ -79,7 +79,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **050** · [T39 — Publish artifact schemas](050-T39-publish-artifact-schemas.md) · M · feature — after T4, T0.8, T0.10
 - [x] **051** · [T40 — C20: graph artifact emission](051-T40-graph-artifact-emission.md) · M · feature — after T15, T29, T39, T0.7
 - [x] **052** · [T41 — C21: fingerprints](052-T41-fingerprints.md) · M · feature — after T14, T40, T0.7
-- [ ] **053** · [T42 — C22: event-stream folding into run artifact](053-T42-event-stream-folding.md) · M · feature — after T19, T31, T39
+- [x] **053** · [T42 — C22: event-stream folding into run artifact](053-T42-event-stream-folding.md) · M · feature — after T19, T31, T39
 - [ ] **054** · [T43 — C22: run summary and critical path](054-T43-run-summary-and-critical-path.md) · S · feature — after T42
 - [ ] **055** · [T44 — C23: node metrics](055-T44-node-metrics.md) · M · feature — after T16, T42
 - [ ] **056** · [T45 — C25: logging and tracing integration](056-T45-logging-and-tracing-integration.md) · M · feature — after T20, T30
