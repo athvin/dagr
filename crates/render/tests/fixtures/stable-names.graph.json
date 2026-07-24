@@ -1,0 +1,100 @@
+{
+  "header": {
+    "schema_version": "dagr.graph@1",
+    "tool_version": "0.0.0",
+    "generated_at": "2026-07-24T00:00:00Z",
+    "pipeline": "stable-names-demo",
+    "build_provenance": {
+      "tool_version": "0.0.0",
+      "git_commit": "0123456789abcdef0123456789abcdef01234567",
+      "lockfile_hash": "fnv1a-64:0011223344556677"
+    },
+    "fingerprint_structural": "fnv1a-64:v1:0000000000000001",
+    "fingerprint_policy": "fnv1a-64:v1:0000000000000002",
+    "fingerprint_algorithm_version": 1
+  },
+  "nodes": [
+    {
+      "name": "source",
+      "group": "g",
+      "task_name": "SourceTask",
+      "input_type_names": [],
+      "output_type_name": "Widget",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [],
+      "type_name": "my_crate::internal::UnstableWidgetImpl<alloc::string::String>"
+    },
+    {
+      "name": "sink",
+      "group": "g",
+      "task_name": "SinkTask",
+      "input_type_names": [
+        "Widget"
+      ],
+      "output_type_name": "unit",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "source"
+      ],
+      "type_name": "my_crate::internal::UnstableSinkImpl"
+    }
+  ],
+  "edges": [
+    {
+      "from": "source",
+      "to": "sink",
+      "kind": "data",
+      "type_name": "Widget"
+    }
+  ]
+}
