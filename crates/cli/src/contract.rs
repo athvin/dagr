@@ -29,14 +29,20 @@
 //! - the **verb bodies** that wire already-built machinery: [`validate_verb`]
 //!   (assembly only, prints every problem), [`render_verb`] (the C24 renderer
 //!   reachable from artifacts alone, with an optional run overlay), [`fold_verb`]
-//!   (the standalone C22/T42 fold), [`resume_verb_stub`] (the recognized "not yet
-//!   implemented" stub T58 replaces), and the [`single_node_refusal_check`]
-//!   durability gate.
+//!   (the standalone C22/T42 fold), [`resume_verb`] (the real C27/T58 resume:
+//!   gate + seed/closure/demand plan + resumed-artifact recording, wired to a
+//!   pipeline; [`resume_verb_stub`] remains for the pipeline-less reference
+//!   driver), and the [`single_node_refusal_check`] durability gate.
 //!
 //! # What this module does NOT own
 //!
-//! - The **resume algorithm** (seed/closure/demand, fingerprint gating) — T58.
-//!   This module only stubs the `resume` verb and reserves its refusal code.
+//! - The **resume *algorithm*** (the pure seed/closure/demand plan + fingerprint
+//!   gating) — [`dagr_core::resume`]. This module wires it ([`resume_verb`]): it
+//!   reads the prior artifact, derives parameters/interval, and records the
+//!   resumed artifact around the pure plan.
+//! - **Scratch carry-forward** for re-executing nodes — T54b. [`resume_verb`]
+//!   only surfaces which nodes re-execute (the plan's must-run set) so T54b can
+//!   copy their retained scratch forward.
 //! - The **durable-output reference contract** and reference *recording* — T57.
 //!   This module only *consumes* recorded references for the single-node check.
 //! - The **renderer internals** — T46/T47. This module only wires the verb.
@@ -60,6 +66,8 @@ use clap::ValueEnum;
 use dagr_artifact::event_stream::RunOutcome;
 use dagr_artifact::fold::fold_stream;
 use dagr_core::flow::Pipeline;
+use dagr_core::resume::{plan_resume, PriorNode, PriorRun, ReferenceExistence, ResumePlan};
+use dagr_core::TerminalState;
 use dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay};
 use dagr_render::{render_dot, render_mermaid, GraphArtifact};
 
@@ -746,17 +754,501 @@ pub fn fold_verb<W: Write>(stream_bytes: &[u8], graph_nodes: &[String], out: &mu
     }
 }
 
-/// The `resume` verb **stub** (arch.md C26; the real algorithm is T58). It is a
-/// recognized, help-listed verb that reports "not yet implemented" and exits with
-/// the [resume-refusal code](ExitCode::ResumeRefusal), leaving a stable seam T58
-/// replaces without changing the surface.
+/// The `resume` verb **stub** (arch.md C26). It is a recognized, help-listed verb
+/// that reports "not yet implemented" for a binary that has **not wired** the real
+/// resume behaviour, and exits with the [resume-refusal code](ExitCode::ResumeRefusal).
+///
+/// T58 lands the real resume as [`resume_verb`] (the C27 gate + seed/closure/demand
+/// plan + resumed-artifact recording), which a pipeline binary calls with its own
+/// assembled pipeline. A binary that does not opt to wire it — the reference `dagr`
+/// driver (no pipeline) and any pipeline that has not adopted resume — keeps this
+/// stub, so the verb stays recognized and the C26 refusal code is reserved without
+/// changing the surface. The phrase "not yet implemented" marks the unwired seam.
 pub fn resume_verb_stub<W: Write>(out: &mut W) -> ExitCode {
     let _ = writeln!(
         out,
-        "resume is not yet implemented (the resume algorithm lands in T58); \
-         the verb is recognized and reserved. Refusing."
+        "resume is not yet implemented for this binary: the C27 resume algorithm \
+         (`dagr_cli::contract::resume_verb`) lands in T58, but this binary has not wired \
+         it to a pipeline. The verb is recognized and its refusal code is reserved. Refusing."
     );
     ExitCode::ResumeRefusal
+}
+
+// ===========================================================================
+// The real resume verb (C27 / T58) — wired to a pipeline
+// ===========================================================================
+
+/// The tool-version string this binary records into (and gates resume against),
+/// per the C27 no-cross-tool-version promise. v1: a single stable token.
+pub const TOOL_VERSION: &str = "dagr@1";
+
+/// The operator-supplied inputs to a [`resume_verb`] invocation (arch.md C27).
+///
+/// The library-owned flags (`--run-id`, `--store`, `--force`, `--data-interval`)
+/// and the typed parameters are parsed by the C26 surface (T55) and handed here as
+/// this struct; `resume_verb` derives the *rest* — the prior parameters and
+/// interval — from the prior artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeOptions {
+    /// The identity to mint for the resumed run (the new run id).
+    pub new_run_id: String,
+    /// This binary's tool version (gated against the prior run's; use
+    /// [`TOOL_VERSION`]).
+    pub tool_version: String,
+    /// Whether the prior run's **run store** is still present. A run whose store
+    /// is gone is not resumable and is refused up front (arch.md C27).
+    pub store_present: bool,
+    /// Whether `--force` was given: override a parameter/interval conflict with the
+    /// prior run (recorded in the resumed artifact).
+    pub force: bool,
+    /// Operator-supplied parameter overrides (name → value). A value that
+    /// conflicts with the prior run refuses unless [`force`](Self::force) is set.
+    pub param_overrides: BTreeMap<String, String>,
+    /// An operator-supplied data-interval override (`[start, end]`), or `None` to
+    /// derive it from the prior artifact.
+    pub interval_override: Option<[String; 2]>,
+}
+
+/// The outcome of a [`resume_verb`] invocation (arch.md C27).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeOutcome {
+    /// Resume proceeded: the resumed run's own artifact (a `serde_json::Value`
+    /// conforming to the published run schema, T39 — satisfied-from-prior nodes
+    /// recorded with their originating run identity, durable references copied
+    /// forward, lineage linked) and the computed [plan](ResumePlan) the caller
+    /// executes (the must-run set is the hand-off T54b consumes).
+    Resumed {
+        /// The resumed run artifact (schema-valid, self-contained).
+        artifact: serde_json::Value,
+        /// The computed resume plan (which nodes re-execute, what is rehydrated,
+        /// what is satisfied-from-prior).
+        plan: ResumePlan,
+    },
+    /// Resume was refused. The [`code`](ResumeOutcome::Refused::code) is always
+    /// [`ExitCode::ResumeRefusal`] (aligned with the C26 exit-code table — the
+    /// resume-refusal code shared with a single-node replay refusal), and the
+    /// `message` is the printable diagnostic (a gate diff, a store-gone message, a
+    /// parameter-conflict diff, or a dangling-reference plan failure).
+    Refused {
+        /// Always [`ExitCode::ResumeRefusal`].
+        code: ExitCode,
+        /// The diagnostic to print.
+        message: String,
+    },
+}
+
+impl ResumeOutcome {
+    fn refused(message: impl Into<String>) -> Self {
+        ResumeOutcome::Refused {
+            code: ExitCode::ResumeRefusal,
+            message: message.into(),
+        }
+    }
+}
+
+/// The `resume` verb (arch.md `### C27 · Resume`; ticket T58) — the real resume
+/// behaviour T58 wires behind the T55 stub.
+///
+/// Given `pipeline` (this binary's assembled graph), the prior run's folded
+/// artifact bytes (`prior_run_bytes`), the operator [`options`](ResumeOptions),
+/// and a durable-reference existence `probe`, it:
+///
+/// 1. **Refuses a gone run store** up front (a run whose store is gone is not
+///    resumable).
+/// 2. **Reads** the prior run's fingerprints, tool version, run identity, prior
+///    parameters/interval, prior lineage, and per-node terminal states + durable
+///    references from the artifact.
+/// 3. **Derives** the resumed run's parameters and interval from the prior
+///    artifact — a supplied value that conflicts refuses with a diff; `--force`
+///    overrides and is recorded.
+/// 4. Runs the pure [`plan_resume`] gate + seed/closure/demand algorithm (a
+///    structural / algorithm-version / tool-version mismatch, or a dangling
+///    demanded durable reference, refuses).
+/// 5. **Produces** the resumed run artifact: satisfied-from-prior nodes recorded
+///    distinctly (status `satisfied-from-prior`) with their originating run
+///    identity, durable references copied forward so the artifact is
+///    self-contained, and the header linked to both the immediate parent run and
+///    the lineage-root run.
+///
+/// Every refusal maps to [`ExitCode::ResumeRefusal`] (the C26 resume-refusal code,
+/// shared with a single-node replay refusal). The `must_run` set the returned
+/// [`ResumePlan`] carries is the hand-off T54b consumes to copy retained scratch
+/// forward; **this verb does not re-execute nodes** (that is the driver's).
+///
+/// # Determinism
+///
+/// The algorithm and the produced artifact are pure functions of the inputs — no
+/// clock, no ambient state. A **non-resume** run is unaffected: this path is
+/// reached only by the `resume` verb.
+pub fn resume_verb<P>(
+    pipeline: &Pipeline,
+    prior_run_bytes: &[u8],
+    options: &ResumeOptions,
+    probe: P,
+) -> ResumeOutcome
+where
+    P: Fn(&str, &str) -> ReferenceExistence,
+{
+    // (1) A run whose store is gone is not resumable — refuse before any planning.
+    if !options.store_present {
+        return ResumeOutcome::refused(
+            "resume refused: the prior run's run store is gone — a run whose store no longer \
+             exists is not resumable (arch.md C27). Resume requires the original run to have \
+             used a durable run store.",
+        );
+    }
+
+    // (2) Read the prior artifact.
+    let prior_json: serde_json::Value = match serde_json::from_slice(prior_run_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            return ResumeOutcome::refused(format!(
+                "resume refused: cannot read the prior run artifact: {e}"
+            ));
+        }
+    };
+    let header = prior_json.get("header").unwrap_or(&serde_json::Value::Null);
+    let prior_run_id = header
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if prior_run_id.is_empty() {
+        return ResumeOutcome::refused(
+            "resume refused: the prior run artifact carries no run identity.",
+        );
+    }
+
+    // (3) Derive parameters + interval, applying conflict / force rules.
+    let prior_params = read_prior_parameters(header);
+    let (parameters, forced_params) =
+        match derive_parameters(&prior_params, &options.param_overrides, options.force) {
+            Ok(v) => v,
+            Err(message) => return ResumeOutcome::refused(message),
+        };
+    let prior_interval = header
+        .get("data_interval")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let (data_interval, forced_interval) = match derive_interval(
+        &prior_interval,
+        options.interval_override.as_ref(),
+        options.force,
+    ) {
+        Ok(v) => v,
+        Err(message) => return ResumeOutcome::refused(message),
+    };
+    let forced = forced_params || forced_interval;
+
+    // (4) Assemble the serde-free prior facts and run the pure plan.
+    let prior = build_prior_run(header, &prior_json, &prior_run_id);
+    let plan = match plan_resume(pipeline, &prior, &options.tool_version, probe) {
+        Ok(plan) => plan,
+        // Every gate / dangling-reference refusal maps to the C26 resume-refusal
+        // code and prints the carried diff (the `ResumeRefusal` Display).
+        Err(refusal) => return ResumeOutcome::refused(refusal.to_string()),
+    };
+
+    // (5) Produce the resumed run artifact (satisfied-from-prior recording,
+    //     copy-forward, lineage).
+    let artifact = build_resumed_artifact(
+        &options.new_run_id,
+        header,
+        parameters,
+        data_interval,
+        forced,
+        &prior_run_id,
+        &prior,
+        &plan,
+    );
+    ResumeOutcome::Resumed { artifact, plan }
+}
+
+/// The prior run's parameters as a name→value string map (verbatim from the
+/// header).
+fn read_prior_parameters(header: &serde_json::Value) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    if let Some(obj) = header
+        .get("parameters")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (k, v) in obj {
+            let value = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            out.insert(k.clone(), value);
+        }
+    }
+    out
+}
+
+/// Derive the resumed run's parameters from the prior run's, applying any
+/// operator overrides. A conflicting override without `--force` refuses with a
+/// diff; with `--force` the override wins and the fact that force was used is
+/// returned so it can be recorded.
+fn derive_parameters(
+    prior: &BTreeMap<String, String>,
+    overrides: &BTreeMap<String, String>,
+    force: bool,
+) -> Result<(BTreeMap<String, String>, bool), String> {
+    let mut derived = prior.clone();
+    let mut forced = false;
+    for (name, supplied) in overrides {
+        match prior.get(name) {
+            Some(prior_value) if prior_value != supplied && !force => {
+                return Err(format!(
+                    "resume refused: parameter `{name}` conflicts with the prior run \
+                     (prior=`{prior_value}`, supplied=`{supplied}`). Resume derives parameters \
+                     from the prior artifact; pass --force to override the conflict.",
+                ));
+            }
+            Some(prior_value) if prior_value != supplied => {
+                // --force: the override wins and its use is recorded.
+                forced = true;
+                derived.insert(name.clone(), supplied.clone());
+            }
+            _ => {
+                // No prior value, or an identical value: accept without a conflict.
+                derived.insert(name.clone(), supplied.clone());
+            }
+        }
+    }
+    Ok((derived, forced))
+}
+
+/// Derive the resumed run's data interval from the prior run's, applying an
+/// optional operator override with the same conflict/force discipline.
+fn derive_interval(
+    prior: &serde_json::Value,
+    override_interval: Option<&[String; 2]>,
+    force: bool,
+) -> Result<(serde_json::Value, bool), String> {
+    let Some([start, end]) = override_interval else {
+        return Ok((prior.clone(), false));
+    };
+    let supplied = serde_json::json!({ "start": start, "end": end });
+    if !prior.is_null() && *prior != supplied {
+        if !force {
+            return Err(format!(
+                "resume refused: the supplied data interval [{start}, {end}] conflicts with the \
+                 prior run's interval ({prior}). Pass --force to override the conflict.",
+            ));
+        }
+        return Ok((supplied, true));
+    }
+    Ok((supplied, false))
+}
+
+/// Parse a recorded fingerprint string (`"<algo>:<hex>"`, e.g. `"fnv:00ab…"`) to
+/// the `u64` digest the resume gate compares. A missing or malformed value yields
+/// `None`, which the gate treats as an unmatched (mismatching) fingerprint.
+fn parse_fingerprint(header: &serde_json::Value, field: &str) -> Option<u64> {
+    let raw = header.get(field).and_then(serde_json::Value::as_str)?;
+    let hex = raw.rsplit(':').next().unwrap_or(raw);
+    u64::from_str_radix(hex, 16).ok()
+}
+
+/// Assemble the serde-free [`PriorRun`] the pure plan reads: the fingerprints, the
+/// algorithm/tool versions, and each node's prior terminal state + durable
+/// reference + originating run identity.
+fn build_prior_run(
+    header: &serde_json::Value,
+    artifact: &serde_json::Value,
+    prior_run_id: &str,
+) -> PriorRun {
+    let structural = parse_fingerprint(header, "fingerprint_structural").unwrap_or(u64::MAX);
+    let policy = parse_fingerprint(header, "fingerprint_policy").unwrap_or(u64::MAX);
+    let algorithm_version = header
+        .get("fingerprint_algorithm_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let tool_version = header
+        .get("tool_version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(TOOL_VERSION)
+        .to_string();
+
+    // Per-node facts from the attempts (last attempt per node wins for its
+    // terminal state; the durable reference and origin come from that record).
+    let mut nodes: BTreeMap<String, PriorNode> = BTreeMap::new();
+    let attempts = artifact
+        .get("attempts")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for a in &attempts {
+        let Some(node) = a.get("node").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let status = a
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("failed");
+        let terminal = terminal_from_str(status);
+        let durable_reference = a
+            .get("durable_reference")
+            .filter(|v| !v.is_null())
+            .map(reference_to_string);
+        // A node's originating run: the run it was satisfied-from in the prior run
+        // (carried across generations), else the prior run itself.
+        let originating_run = a
+            .get("satisfied_from_run")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(prior_run_id)
+            .to_string();
+        nodes.insert(
+            node.to_string(),
+            PriorNode {
+                terminal,
+                durable_reference,
+                originating_run,
+            },
+        );
+    }
+
+    PriorRun {
+        structural_fingerprint: structural,
+        policy_hash: policy,
+        algorithm_version,
+        tool_version,
+        nodes,
+    }
+}
+
+/// Render a recorded durable-reference value to the reference string the resume
+/// core existence-probes and copies forward (opaque to dagr; a string stays a
+/// string, a structured reference is serialized).
+fn reference_to_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Map a recorded status token to the normative [`TerminalState`]. An unknown
+/// token is treated as a failure-like non-success (so the node re-runs).
+fn terminal_from_str(status: &str) -> TerminalState {
+    match status {
+        "succeeded" => TerminalState::Succeeded,
+        "timed-out" => TerminalState::TimedOut,
+        "skipped" => TerminalState::Skipped,
+        "upstream-skipped" => TerminalState::UpstreamSkipped,
+        "upstream-failed" => TerminalState::UpstreamFailed,
+        "cancelled" => TerminalState::Cancelled,
+        "abandoned" => TerminalState::Abandoned,
+        "satisfied-from-prior" => TerminalState::SatisfiedFromPrior,
+        _ => TerminalState::Failed,
+    }
+}
+
+/// Build the resumed run's own artifact (arch.md C22/C27): a schema-valid
+/// `serde_json::Value` that records satisfied-from-prior nodes with their
+/// originating run identity, copies durable references forward so it is
+/// self-contained, and links the header to both the immediate parent run and the
+/// lineage-root run.
+#[allow(clippy::too_many_arguments)]
+fn build_resumed_artifact(
+    new_run_id: &str,
+    prior_header: &serde_json::Value,
+    parameters: BTreeMap<String, String>,
+    data_interval: serde_json::Value,
+    forced: bool,
+    parent_run_id: &str,
+    prior: &PriorRun,
+    plan: &ResumePlan,
+) -> serde_json::Value {
+    // Lineage: the immediate parent is the prior run; the lineage root is the
+    // prior run's own root when it was itself a resume, else the prior run.
+    let lineage_root = prior_header
+        .get("resume_lineage")
+        .and_then(|l| l.get("lineage_root_run_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(parent_run_id)
+        .to_string();
+
+    let pipeline = prior_header
+        .get("pipeline")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    let params_obj: serde_json::Map<String, serde_json::Value> = parameters
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+
+    let mut header = serde_json::Map::new();
+    header.insert("run_id".into(), serde_json::json!(new_run_id));
+    header.insert("pipeline".into(), serde_json::json!(pipeline));
+    // The resumed run's fingerprints match this binary's (it passed the gate); the
+    // prior header's recorded fingerprints stand for them (structural is byte-equal
+    // by the gate, policy is this binary's — carried from the prior header, which
+    // is what a fresh non-resume run of the same binary would record).
+    for f in [
+        "fingerprint_structural",
+        "fingerprint_policy",
+        "fingerprint_algorithm_version",
+    ] {
+        if let Some(v) = prior_header.get(f) {
+            header.insert(f.into(), v.clone());
+        }
+    }
+    header.insert("tool_version".into(), serde_json::json!(TOOL_VERSION));
+    header.insert("parameters".into(), serde_json::Value::Object(params_obj));
+    header.insert("data_interval".into(), data_interval);
+    header.insert(
+        "captured_environment".into(),
+        prior_header
+            .get("captured_environment")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    );
+    header.insert(
+        "resume_lineage".into(),
+        serde_json::json!({
+            "parent_run_id": parent_run_id,
+            "lineage_root_run_id": lineage_root,
+        }),
+    );
+    if forced {
+        // Additive marker: the resumed artifact records that --force was used
+        // (open-world schema, T0.10 — validates against the unmodified schema).
+        header.insert("resume_forced".into(), serde_json::json!(true));
+    }
+    header.insert("overall_outcome".into(), serde_json::json!("succeeded"));
+
+    // Attempts: one record per satisfied-from-prior node (recorded distinctly with
+    // its originating run identity + copied-forward durable reference). Nodes in
+    // the must-run set are re-executed by the driver (T54b hand-off) and record
+    // their own attempts there — not here.
+    let mut attempts: Vec<serde_json::Value> = Vec::new();
+    for (node, origin) in plan.satisfied_from_prior() {
+        let mut record = serde_json::Map::new();
+        record.insert("node".into(), serde_json::json!(node));
+        record.insert("attempt".into(), serde_json::json!(1));
+        record.insert("status".into(), serde_json::json!("satisfied-from-prior"));
+        record.insert(
+            "phase_durations_ns".into(),
+            serde_json::json!({ "executing": 0 }),
+        );
+        record.insert("worker".into(), serde_json::json!("resume"));
+        // The originating run identity a satisfied-from-prior record MUST carry.
+        record.insert("satisfied_from_run".into(), serde_json::json!(origin));
+        // Copy the durable reference forward so the resumed artifact stands alone.
+        if let Some(prior_node) = prior.nodes.get(node) {
+            if let Some(reference) = &prior_node.durable_reference {
+                record.insert("durable_reference".into(), serde_json::json!(reference));
+            }
+        }
+        attempts.push(serde_json::Value::Object(record));
+    }
+    // Deterministic ordering (satisfied_from_prior is a BTreeMap, already sorted).
+
+    serde_json::json!({
+        "header": serde_json::Value::Object(header),
+        "attempts": attempts,
+        "summary": serde_json::Value::Null,
+    })
 }
 
 /// The single-node **durability gate** (arch.md C26): given the prior run

@@ -247,6 +247,22 @@
 //!   check that refuses to run under `panic = "abort"` (nothing to catch), with a
 //!   refusal message naming the required profile setting (`panic = "unwind"`).
 //!
+//! The **C27 resume core** (ticket T58): the pure gate + seed/closure/demand plan.
+//!
+//! - [`resume::plan_resume`] — given this binary's [`Pipeline`] and a prior run's
+//!   decoded per-node facts ([`resume::PriorRun`]), computes a demand-driven
+//!   re-execution [plan](resume::ResumePlan) or [refuses](resume::ResumeRefusal).
+//!   The gate refuses a changed structural fingerprint, an incomparable
+//!   fingerprint-algorithm version, or a cross-tool-version prior; a policy-hash
+//!   divergence proceeds with a [diff](resume::PolicyDiff). The must-run seed is
+//!   every non-`succeeded` node plus every teardown-covered node, closed downward
+//!   and resolved upward — a demanded durable producer is rehydrated (its
+//!   reference [existence-probed](resume::ReferenceExistence); a definite absence
+//!   fails the plan), a demanded in-memory producer re-executes and cascades.
+//!   Every prior success left outside the must-run set is `satisfied-from-prior`
+//!   carrying its originating run identity. Pure and dependency-free; the CLI
+//!   (`dagr_cli::contract`) wires it behind the T55 `resume` verb.
+//!
 //! Execution-class dispatch (T33) and the run-loop driver (T24) build on this
 //! core rather than reshape it.
 //!
@@ -267,6 +283,7 @@ pub mod handle;
 pub mod limits;
 pub mod metrics;
 pub mod readiness;
+pub mod resume;
 pub mod scratch;
 pub mod slot;
 pub mod stable_name;
@@ -308,6 +325,9 @@ pub use metrics::{
     RESERVED_PREFIX, VALUE_ENCODED_BYTES,
 };
 pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
+pub use resume::{
+    plan_resume, PolicyDiff, PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal,
+};
 pub use slot::{
     ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,
     SlotRef,
