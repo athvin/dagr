@@ -117,6 +117,13 @@ jobs:
       # extends this into the enduring compatibility gate + scale artifact.
       - name: artifact-schema validation + fixture-corpus round-trip (T39)
         run: cargo test -p dagr-artifact --features schema-validation --test artifact_schemas
+      # C20 graph-artifact emission (T40, ticket 051): a REAL emitted artifact is
+      # round-tripped against the published `schemas/graph/v1.schema.json` via the
+      # same T39 helper. Gated behind cli's `schema-validation` feature (which
+      # forwards to dagr-artifact's), so the `jsonschema` validator is pulled only
+      # here — the shipped binary and the bare `cargo test --workspace` never do.
+      - name: graph-artifact schema round-trip (T40)
+        run: cargo test -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
 
   # --- Rustdoc-on-public-items lint (Documentation) --------------------------
   rustdoc:
