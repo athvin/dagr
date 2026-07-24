@@ -116,7 +116,11 @@ fn frozen_corpus_round_trips_by_enumerating_the_directory() {
 
     // Teeth: enumerating the directory and validating each file independently
     // agrees with the walker (a fixture the walker skipped would show here).
-    for kind in [ArtifactKind::Graph, ArtifactKind::Run, ArtifactKind::EventStream] {
+    for kind in [
+        ArtifactKind::Graph,
+        ArtifactKind::Run,
+        ArtifactKind::EventStream,
+    ] {
         for version in published_schema_versions(kind) {
             for file in corpus_files(kind, version) {
                 let value = read_json(&file);
@@ -185,7 +189,9 @@ fn the_drift_guard_rejects_a_non_additive_schema_change() {
         "a schema that closes an object must be flagged as non-additive"
     );
     assert!(
-        violations.iter().any(|v| v.contains("additionalProperties")),
+        violations
+            .iter()
+            .any(|v| v.contains("additionalProperties")),
         "the violation names the offending keyword, got: {violations:?}"
     );
 
@@ -432,6 +438,11 @@ fn scale_artifact_is_generated_from_the_real_producers_validates_and_parses() {
 
 #[test]
 fn scale_artifact_size_is_proportional_to_attempt_count() {
+    // A single canonical attempt record for this shape is well under 512 bytes;
+    // that is the documented proportionality bound. Proportional ⇒ per-attempt
+    // marginal cost is bounded by a constant, independent of n.
+    const PER_ATTEMPT_BYTE_BOUND: u64 = 512;
+
     // Keep the tooling honest at scale (arch.md Performance envelope): the
     // serialized artifact size grows PROPORTIONALLY to attempt count, not
     // super-linearly. Compare a small and the full scale artifact: the per-attempt
@@ -453,10 +464,6 @@ fn scale_artifact_size_is_proportional_to_attempt_count() {
     let delta_bytes = (big.len() - small.len()) as u64;
     let per_attempt = delta_bytes / delta_attempts;
 
-    // A single canonical attempt record for this shape is well under 512 bytes;
-    // that is the documented proportionality bound. Proportional ⇒ per-attempt
-    // marginal cost is bounded by a constant, independent of n.
-    const PER_ATTEMPT_BYTE_BOUND: u64 = 512;
     assert!(
         per_attempt <= PER_ATTEMPT_BYTE_BOUND,
         "scale artifact size must be proportional to attempt count: \
@@ -558,7 +565,10 @@ fn phase_durations_sum_exactly_on_every_corpus_run_fixture() {
                 let mut sum: u64 = 0;
                 for (name, v) in phases {
                     let ns = v.as_u64().unwrap_or_else(|| {
-                        panic!("{}: phase `{name}` is a non-negative integer", file.display())
+                        panic!(
+                            "{}: phase `{name}` is a non-negative integer",
+                            file.display()
+                        )
                     });
                     sum = sum.checked_add(ns).expect("phase sum fits in u64");
                 }
