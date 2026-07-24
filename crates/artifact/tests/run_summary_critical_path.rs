@@ -203,21 +203,20 @@ fn structure_limited_run_reads_as_structure_limited() {
     t.node_run("b", 1_000, 1_000, 1_000, 2_000, "succeeded", &[]);
     t.node_run("c", 2_000, 2_000, 2_000, 3_000, "succeeded", &[]);
     t.node_run("d", 3_000, 3_000, 3_000, 4_000, "succeeded", &[]);
-    let bytes = t.finish(
-        4_000,
-        "succeeded",
-    );
-    let art = fold_stream(
-        &bytes,
-        &["a".into(), "b".into(), "c".into(), "d".into()],
-    )
-    .expect("fold");
+    let bytes = t.finish(4_000, "succeeded");
+    let art = fold_stream(&bytes, &["a".into(), "b".into(), "c".into(), "d".into()]).expect("fold");
     let total = art.summary_total_elapsed_ns();
     let cp = art.summary_critical_path_ns();
     assert_eq!(total, 4_000, "four serial nodes, 1000ns each");
-    assert_eq!(cp, 4_000, "critical path is the whole 4-node executing chain");
+    assert_eq!(
+        cp, 4_000,
+        "critical path is the whole 4-node executing chain"
+    );
     // structure-limited: critical path ≈ total elapsed.
-    assert_eq!(cp, total, "critical-path ≈ total elapsed ⇒ structure-limited");
+    assert_eq!(
+        cp, total,
+        "critical-path ≈ total elapsed ⇒ structure-limited"
+    );
 }
 
 #[test]
@@ -272,11 +271,7 @@ fn critical_path_respects_dependencies_not_raw_duration() {
     // executes 1000 → terminal 6500.
     t.node_run("d", 5_500, 5_500, 5_500, 6_500, "succeeded", &[]);
     let bytes = t.finish(6_500, "succeeded");
-    let art = fold_stream(
-        &bytes,
-        &["a".into(), "b".into(), "c".into(), "d".into()],
-    )
-    .expect("fold");
+    let art = fold_stream(&bytes, &["a".into(), "b".into(), "c".into(), "d".into()]).expect("fold");
     let cp = art.summary_critical_path_ns();
     // Longest EXECUTING chain a→c→d = 1000 + 2000 + 1000 = 4000.
     assert_eq!(
@@ -366,7 +361,15 @@ fn permit_wait_treatment_matches_the_adr() {
     let build = |b_admitted: u64, b_started: u64, b_outcome: u64, finish: u64| {
         let mut t = Timeline::new();
         t.node_run("a", 0, 0, 0, 1_000, "succeeded", &[]);
-        t.node_run("b", 1_000, b_admitted, b_started, b_outcome, "succeeded", &[]);
+        t.node_run(
+            "b",
+            1_000,
+            b_admitted,
+            b_started,
+            b_outcome,
+            "succeeded",
+            &[],
+        );
         let bytes = t.finish(finish, "succeeded");
         fold_stream(&bytes, &["a".into(), "b".into()])
             .expect("fold")
