@@ -177,7 +177,7 @@ fn durable_with_the_full_contract_assembles() {
     // Durability is recorded in the effective policy in the graph artifact.
     assert!(
         pipeline
-            .node(dagr_core::flow::NodeId::from_name("snap"))
+            .node(dagr_core::handle::NodeId::from_name("snap"))
             .expect("node present")
             .effective_policy()
             .is_durable(),

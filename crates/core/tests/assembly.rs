@@ -90,9 +90,16 @@ impl Task for BlockingTask {
 
 // --- A durable-contract-satisfying output type and one that lacks it ---------
 
-/// An output type that IS a durable reference — implements the contract.
+/// An output type that IS a durable reference — implements the contract (T57).
 struct DurableBlob;
-impl DurableOutput for DurableBlob {}
+impl DurableOutput for DurableBlob {
+    fn serialize_reference(&self) -> String {
+        "durable-blob/ref".to_string()
+    }
+    fn rehydrate(_reference: &str) -> Result<Self, dagr_core::RehydrateError> {
+        Ok(DurableBlob)
+    }
+}
 
 /// A sourceless task whose output satisfies the durable-output contract.
 struct MakeDurable;

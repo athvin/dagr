@@ -287,7 +287,7 @@ pub use context::{
     ResourceRequirement, ResourceRequirements, RunContext, RunContextBuilder, RunId, ScratchError,
     ScratchStore, Secret, TerminalState,
 };
-pub use error::{TaskError, TaskErrorClass};
+pub use error::{RehydrateClass, RehydrateError, TaskError, TaskErrorClass};
 pub use execution::{
     check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt,
     run_attempt_caught, run_attempt_with_timeout, run_with_retries, run_with_retries_caught,
