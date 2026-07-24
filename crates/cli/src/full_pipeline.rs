@@ -17,7 +17,7 @@
 //! ([`dagr_core::test_kit::SingleTaskTest`], T60): that kit exercises **one** task
 //! with a hand-built context; this harness runs a **whole flow** through the real
 //! driver. It does **not** reimplement the driver — it composes the real
-//! [`drive`](crate::driver::drive) entry point, the real
+//! [`crate::driver::drive`] entry point, the real
 //! [`dagr_core::flow`] authoring API, and the real
 //! [`dagr_artifact::fold`] run-artifact fold.
 //!
@@ -122,6 +122,18 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 use crate::driver::{drive, NodeRunner, RunConfig, RunPlan};
+
+/// A run's type-erased node runners, keyed by node name — the map the driver
+/// consumes.
+type RunnerMap = BTreeMap<String, Box<dyn NodeRunner>>;
+
+/// The assembled artifacts one harness run drives: the pipeline, its node runners,
+/// and the run-level ordering-upstream map (for consume-nothing contingencies).
+struct BuiltPlan {
+    pipeline: Pipeline,
+    runners: RunnerMap,
+    ordering: BTreeMap<String, Vec<String>>,
+}
 
 // ===========================================================================
 // Scripted outcomes
@@ -517,6 +529,7 @@ impl FullPipelineTest {
     /// Panics on a test-authoring error (an unknown upstream name, an ambiguous
     /// same-typed fake, or a flow that fails to assemble) — these are mistakes in
     /// the test, surfaced loudly rather than papered over.
+    #[must_use]
     pub fn run(mut self) -> HarnessRun {
         // --- Build the immutable fake registry (C9), shared into every runner.
         let mut stager = ResourceRegistryStager::new();
@@ -540,7 +553,11 @@ impl FullPipelineTest {
         // runner with its input slot(s). All fake outputs are `u64`, so edges wire
         // uniformly; data edges opt into clone-on-read (safe for retry and
         // non-retry, and `u64: Clone`).
-        let (pipeline, runners, ordering) = self.build_plan(&registry);
+        let BuiltPlan {
+            pipeline,
+            runners,
+            ordering,
+        } = self.build_plan(&registry);
 
         // --- Drive through the REAL driver with an injected deterministic clock +
         // captured in-memory sink, under a PRIVATE per-run temp base.
@@ -599,94 +616,16 @@ impl FullPipelineTest {
 
     /// Assemble the pipeline and build the runner map + ordering map. Split out so
     /// [`run`](Self::run) reads as one linear drive sequence.
-    fn build_plan(
-        &self,
-        registry: &ResourceRegistry,
-    ) -> (
-        Pipeline,
-        BTreeMap<String, Box<dyn NodeRunner>>,
-        BTreeMap<String, Vec<String>>,
-    ) {
+    fn build_plan(&self, registry: &ResourceRegistry) -> BuiltPlan {
         let mut flow = Flow::new();
-        // Output slots, keyed by node name — a downstream reads its upstream's slot.
-        let mut slots: BTreeMap<String, Arc<Slot<u64>>> = BTreeMap::new();
         // Handles, keyed by name, so a later node can bind an earlier one.
         let mut handles: BTreeMap<String, dagr_core::handle::Handle<u64>> = BTreeMap::new();
-        let ledger = ResidencyLedger::new();
-
-        // How many downstream data consumers each node has (for its slot's consumer
-        // count — the residency bookkeeping the real slot tracks).
-        let mut consumer_count: BTreeMap<String, u32> = BTreeMap::new();
-        for spec in &self.nodes {
-            for up in &spec.data_upstreams {
-                *consumer_count.entry(up.clone()).or_insert(0) += 1;
-            }
-        }
 
         // Register every node in declaration order (a valid topological order —
         // upstreams are declared before downstreams by construction of the test).
         let mut ordering: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for spec in &self.nodes {
-            let policy = NodePolicy::new().working_memory(spec.outcome.working_memory);
-            let handle = match spec.data_upstreams.len() {
-                0 if spec.ordering_upstreams.is_empty() => {
-                    flow.register_source_with_trigger(
-                        &spec.name,
-                        &FakeSource,
-                        policy,
-                        spec.trigger_rule,
-                    )
-                }
-                0 => {
-                    // A consume-nothing contingency attached by ordering edges.
-                    let ordering_handles: Vec<_> = spec
-                        .ordering_upstreams
-                        .iter()
-                        .map(|up| {
-                            (*handles.get(up).unwrap_or_else(|| {
-                                panic!("contingency `{}` orders after unknown node `{up}`", spec.name)
-                            }))
-                            .ordering()
-                        })
-                        .collect();
-                    ordering.insert(spec.name.clone(), spec.ordering_upstreams.clone());
-                    flow.register_source_ordered_after_with_trigger(
-                        &spec.name,
-                        &FakeSource,
-                        &ordering_handles,
-                        policy,
-                        spec.trigger_rule,
-                    )
-                }
-                1 => {
-                    let up = &spec.data_upstreams[0];
-                    let uh = *handles.get(up).unwrap_or_else(|| {
-                        panic!("node `{}` depends on unknown node `{up}`", spec.name)
-                    });
-                    flow.register_with::<FakeMap, _>(
-                        &spec.name,
-                        &FakeMap,
-                        uh.clone_on_read(),
-                        policy,
-                    )
-                }
-                _ => {
-                    let a = &spec.data_upstreams[0];
-                    let b = &spec.data_upstreams[1];
-                    let ha = *handles.get(a).unwrap_or_else(|| {
-                        panic!("node `{}` depends on unknown node `{a}`", spec.name)
-                    });
-                    let hb = *handles.get(b).unwrap_or_else(|| {
-                        panic!("node `{}` depends on unknown node `{b}`", spec.name)
-                    });
-                    flow.register_with::<FakeJoin, _>(
-                        &spec.name,
-                        &FakeJoin,
-                        (ha.clone_on_read(), hb.clone_on_read()),
-                        policy,
-                    )
-                }
-            };
+            let handle = register_node(&mut flow, spec, &handles, &mut ordering);
             handles.insert(spec.name.clone(), handle);
         }
 
@@ -695,7 +634,18 @@ impl FullPipelineTest {
             .assemble()
             .expect("the fake flow assembles (a test-authoring error otherwise)");
 
+        // How many downstream data consumers each node has (its slot's consumer
+        // count — the residency bookkeeping the real slot tracks).
+        let mut consumer_count: BTreeMap<String, u32> = BTreeMap::new();
+        for spec in &self.nodes {
+            for up in &spec.data_upstreams {
+                *consumer_count.entry(up.clone()).or_insert(0) += 1;
+            }
+        }
+
         // Build each node's output slot with its real consumer count.
+        let ledger = ResidencyLedger::new();
+        let mut slots: BTreeMap<String, Arc<Slot<u64>>> = BTreeMap::new();
         for spec in &self.nodes {
             let consumers = consumer_count.get(&spec.name).copied().unwrap_or(0);
             slots.insert(
@@ -712,7 +662,7 @@ impl FullPipelineTest {
         }
 
         // Build the type-erased runner for every node, reading its upstream slot(s).
-        let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+        let mut runners: RunnerMap = BTreeMap::new();
         for spec in &self.nodes {
             let slot = Arc::clone(&slots[&spec.name]);
             let upstream_refs: Vec<SlotRef<u64>> = spec
@@ -733,7 +683,69 @@ impl FullPipelineTest {
             );
         }
 
-        (pipeline, runners, ordering)
+        BuiltPlan {
+            pipeline,
+            runners,
+            ordering,
+        }
+    }
+}
+
+/// Register one fake node on `flow` by its data-upstream arity (0 source, 0 +
+/// ordering contingency, 1 map, 2 fan-in join), recording a contingency's ordering
+/// upstreams into `ordering`. Returns the node's output handle.
+///
+/// # Panics
+///
+/// Panics if the node names an upstream that was not registered earlier — a
+/// test-authoring error surfaced loudly.
+fn register_node(
+    flow: &mut Flow,
+    spec: &NodeSpec,
+    handles: &BTreeMap<String, dagr_core::handle::Handle<u64>>,
+    ordering: &mut BTreeMap<String, Vec<String>>,
+) -> dagr_core::handle::Handle<u64> {
+    let policy = NodePolicy::new().working_memory(spec.outcome.working_memory);
+    let lookup = |up: &str| {
+        *handles.get(up).unwrap_or_else(|| {
+            panic!("node `{}` references unknown upstream `{up}`", spec.name)
+        })
+    };
+    match spec.data_upstreams.len() {
+        0 if spec.ordering_upstreams.is_empty() => {
+            flow.register_source_with_trigger(&spec.name, &FakeSource, policy, spec.trigger_rule)
+        }
+        0 => {
+            // A consume-nothing contingency attached by ordering edges.
+            let ordering_handles: Vec<_> = spec
+                .ordering_upstreams
+                .iter()
+                .map(|up| lookup(up).ordering())
+                .collect();
+            ordering.insert(spec.name.clone(), spec.ordering_upstreams.clone());
+            flow.register_source_ordered_after_with_trigger(
+                &spec.name,
+                &FakeSource,
+                &ordering_handles,
+                policy,
+                spec.trigger_rule,
+            )
+        }
+        1 => flow.register_with::<FakeMap, _>(
+            &spec.name,
+            &FakeMap,
+            lookup(&spec.data_upstreams[0]).clone_on_read(),
+            policy,
+        ),
+        _ => flow.register_with::<FakeJoin, _>(
+            &spec.name,
+            &FakeJoin,
+            (
+                lookup(&spec.data_upstreams[0]).clone_on_read(),
+                lookup(&spec.data_upstreams[1]).clone_on_read(),
+            ),
+            policy,
+        ),
     }
 }
 
@@ -942,7 +954,7 @@ fn normalize_volatile(value: &mut serde_json::Value) {
         });
     }
     // The summary's timing fields are likewise clock-derived.
-    if value.get("summary").map(Value::is_object).unwrap_or(false) {
+    if value.get("summary").is_some_and(Value::is_object) {
         value.as_object_mut().unwrap().insert(
             "summary".into(),
             Value::from("<normalized>"),
@@ -1060,7 +1072,7 @@ impl Task for ScriptedAdapter {
 
 impl ScriptedAdapter {
     /// Build the context the scripted body reads: the driver's context enriched with
-    /// the fake registry (identity, attempt, cancellation, temp_dir threaded
+    /// the fake registry (identity, attempt, cancellation, `temp_dir` threaded
     /// through). On the retry path (`registry == None`) the driver's context is used
     /// as-is (the retry loop already minted it).
     fn enriched_ctx(&self, driver_ctx: &RunContext) -> RunContext {
@@ -1087,7 +1099,7 @@ impl ScriptedAdapter {
 }
 
 /// Rebuild a `RunContext` carrying the driver's identity/attempt/cancellation/
-/// temp_dir, optionally with a resource registry added. The single-task kit builds
+/// `temp_dir`, optionally with a resource registry added. The single-task kit builds
 /// its context the same way; this is the full-pipeline analogue for injecting
 /// resources into a driver-minted context.
 fn clone_ctx(src: &RunContext, registry: Option<ResourceRegistry>) -> RunContext {

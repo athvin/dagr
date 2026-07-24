@@ -275,7 +275,7 @@ fn scripted_retry_then_succeed() {
         .attempts()
         .iter()
         .filter(|r| r.node() == "flaky")
-        .map(|r| r.attempt_number())
+        .map(dagr_artifact::fold::AttemptRecord::attempt_number)
         .collect();
     assert_eq!(attempts, vec![1, 2], "attempt number increments across the retry");
 
