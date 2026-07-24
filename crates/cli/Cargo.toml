@@ -45,6 +45,32 @@ dagr-core = { path = "../core" }
 dagr-artifact = { path = "../artifact" }
 dagr-render = { path = "../render" }
 
+# clap — the C26 command-line contract's argument parser (T55). The pipeline
+# declares a typed parameter surface and the library *derives* the verb/flag
+# parsing (arch.md C26: "the library derives the parsing"); clap's derive is the
+# idiomatic expression of that seam, and it owns the reserved library-flag
+# namespace so a pipeline parameter can never shadow a library-owned flag. It is
+# added to dagr-cli — the pipeline binary that owns the CLI contract — NOT
+# dagr-core, so core stays dependency-free (Stability / the T1 ADR). The feature
+# set is kept minimal: `std` + `derive` + `help` + `usage` + `error-context`.
+# `color`, `suggestions` (strsim), `wrap_help` (terminal_size), `env`, and
+# `unicode` are DELIBERATELY OFF so `--help`/usage output is deterministic — no
+# terminal-width- or TTY-dependent formatting, a C26/Determinism requirement —
+# and the transitive tree stays small. The whole transitive addition (clap,
+# clap_builder, clap_lex, clap_derive, anstyle, anstyle-parse, anstyle-query,
+# anstream, colorchoice, is_terminal_polyfill, once_cell_polyfill, utf8parse,
+# heck; proc-macro2/quote/syn/unicode-ident were already present via
+# serde_derive) resolves to MIT under the MIT-only deny.toml — the sole non-MIT
+# id, unicode-ident's `Unicode-3.0`, is ALREADY allowed (added by T19). NO
+# deny.toml change is needed; `cargo deny`/`cargo audit` stay green.
+clap = { version = "4", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+    "error-context",
+] }
+
 # serde_json — the T4-sanctioned (017) runtime serialization stack. The C20
 # graph-artifact emitter (T40, `src/graph.rs`) builds the artifact as a
 # `serde_json::Value` and serializes it through dagr-artifact's shared T4 §6

@@ -22,6 +22,7 @@
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;
 pub mod graph;
