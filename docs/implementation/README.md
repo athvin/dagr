@@ -87,7 +87,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **058** · [T47 — C24: run-overlay rendering](058-T47-run-overlay-rendering.md) · S · feature — after T42, T46
 - [x] **059** · [T48 — Artifact validation and compatibility CI](059-T48-artifact-validation-compatibility-ci.md) · M · feature — after T7, T40, T42, T0.10
 - [x] **060** · [T68 — Crashed-run finalize path](060-T68-crashed-run-finalize-path.md) · S · feature (tests) — after T42
-- [ ] **061** · [T49 — M3 demo: explain a run from artifacts](061-T49-m3-demo-explain-a-run.md) · M · feature (demo) — after T41, T43, T44, T45, T47, T48, T68
+- [x] **061** · [T49 — M3 demo: explain a run from artifacts](061-T49-m3-demo-explain-a-run.md) · M · feature (demo) — after T41, T43, T44, T45, T47, T48, T68
 
 ## M4 — It is operable
 
