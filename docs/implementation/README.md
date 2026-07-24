@@ -92,7 +92,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 ## M4 — It is operable
 
 - [x] **062** · [T50 — C4: ordering dependencies](062-T50-ordering-dependencies.md) · M · feature — after T11, T40, T0.9
-- [ ] **063** · [T51 — C6: groups](063-T51-groups.md) · S · feature — after T13, T46
+- [x] **063** · [T51 — C6: groups](063-T51-groups.md) · S · feature — after T13, T46
 - [ ] **064** · [T52 — C17: teardown nodes](064-T52-teardown-nodes.md) · M · feature — after T35, T50, T0.4
 - [ ] **065** · [T53 — C18: durable scratch store (local)](065-T53-durable-scratch-store-local.md) · M · feature — after T16, T0.6
 - [ ] **066** · [T54a — C18: scratch survives process restart under the run store](066-T54a-scratch-survives-restart.md) · S · feature — after T53
