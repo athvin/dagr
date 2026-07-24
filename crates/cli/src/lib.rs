@@ -25,6 +25,8 @@
 pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;
+#[cfg(feature = "test-kit")]
+pub mod full_pipeline;
 pub mod graph;
 pub mod logging;
 pub mod signals;

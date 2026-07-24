@@ -38,6 +38,16 @@ path = "src/main.rs"
 # `cargo test --workspace` never activate it, which keeps `cargo deny` from seeing
 # `jsonschema`'s permissive-but-unlisted transitive licences (no deny.toml change).
 [features]
+# --- The C28 full-pipeline fakes harness (T62), ON by default ---------------
+# `dagr_cli::full_pipeline` — the third C28 testing level (a whole flow of fake
+# tasks driven through the REAL T24 `drive` loop against fakes + a tiny fixture,
+# deterministically). It ships ON by default so a downstream test can use it with
+# no opt-in (mirroring dagr-core's default-on `test-kit` feature for the
+# single-task kit, T60), while a production `default-features = false` build can
+# still exclude it. It adds NO dependency — it composes already-present library
+# entry points (`driver`, `dagr_core::flow`, `dagr_artifact::fold`).
+default = ["test-kit"]
+test-kit = []
 schema-validation = ["dagr-artifact/schema-validation"]
 
 [dependencies]
