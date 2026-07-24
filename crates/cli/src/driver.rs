@@ -830,6 +830,15 @@ impl AttemptEventSink for BufferingSink {
 /// or a task runtime that could not be built); a sink fault is absorbed and
 /// surfaced through the returned report's outcome, never a panic.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the driver is one linear bootstrap-then-drive sequence (mint identity, \
+              open the stream, record the run-started header, run the assembly/bootstrap \
+              fail-fast checks, drive the loop, finalize shutdown); its early-return \
+              failure paths each record a full run-started/run-finished pair, so splitting \
+              them would scatter the single ordered narrative the record-before-act \
+              contract (arch.md C19) depends on"
+)]
 pub fn drive<S, C>(
     config: &RunConfig,
     pipeline_name: &str,
@@ -1474,47 +1483,81 @@ where
     } else {
         done.state
     };
+    // Drain the buffered per-transition events, and — alongside each attempt's
+    // CLOSING outcome event — emit the single rich `attempt-outcome` record for
+    // that attempt (arch.md l.331: "Every attempt produces exactly one
+    // attempt-outcome record … alongside its per-transition events"). A retried
+    // node buffers several attempts, so this emits one outcome record per attempt,
+    // each just before the (shared) node-terminal. The record carries the
+    // attempt's status/number/panic-message the driver has; cost/metrics/worker
+    // are not yet measured at M1/M2 (the C22 fold defaults each absent field).
+    // This records what happened; it changes no execution behavior.
+    //
+    // On a drain-cancel reclassify the raw buffered node-terminal is suppressed
+    // and one authoritative `cancelled` outcome + terminal are emitted instead.
+    let mut last_attempt = 1;
     for ev in &done.events {
         if reclassified && matches!(ev, AttemptEvent::NodeTerminal { .. }) {
             continue;
         }
         let _ = write_attempt_event(writer, ev);
+        if !reclassified {
+            if let Some(record) = closing_outcome_record(&done.node, ev) {
+                last_attempt = record.attempt;
+                let _ = writer.attempt_outcome(record);
+            }
+        }
     }
-    // Emit the single rich `attempt-outcome` record for this attempt (arch.md
-    // l.331: "Every attempt produces exactly one attempt-outcome record …
-    // alongside its per-transition events"). It carries the recorded terminal
-    // status, the attempt number, and the panic message when the attempt
-    // panicked — the fields the M1/M2 driver has (cost/metrics/worker are not yet
-    // measured, so those fields are absent and the C22 fold defaults them). This
-    // records what happened; it does not change execution behavior.
-    let outcome = build_outcome_record(&done.node, recorded_state, &done.events);
-    let attempt = outcome.attempt;
-    let _ = writer.attempt_outcome(outcome);
+    if reclassified {
+        // The whole node is being torn down: one authoritative cancelled outcome.
+        let attempt = attempt_number_of(&done.events);
+        last_attempt = attempt;
+        let _ = writer.attempt_outcome(AttemptOutcomeRecord::new(
+            &done.node,
+            attempt,
+            wire_terminal(TerminalState::Cancelled).as_str(),
+        ));
+    }
     record_terminal(&done.node, recorded_state, terminal_states);
     if reclassified {
         let _ = writer.node_terminal(&done.node, wire_terminal(recorded_state));
     }
     if is_zombie_candidate(recorded_state) {
-        zombie_candidates.push((done.node.clone(), attempt));
+        zombie_candidates.push((done.node.clone(), last_attempt));
     }
     recorded_state
 }
 
-/// Build the single `attempt-outcome` record for a finished attempt from what
-/// the driver knows: the node, its recorded terminal state (the `status`, in the
-/// normative kebab-case taxonomy the fold reads), the attempt number (from the
-/// attempt's own buffered events), and the panic message when it panicked. The
-/// richer fold fields (metrics, cost, worker, durable reference) are not measured
-/// at M1/M2, so they are left absent — the C22 fold defaults each missing field.
-fn build_outcome_record(
-    node: &str,
-    recorded_state: TerminalState,
-    events: &[AttemptEvent],
-) -> AttemptOutcomeRecord {
-    // The attempt number this attempt reported (the closing outcome event, or any
-    // attempt-numbered event); default 1 for a never-numbered propagated outcome.
-    let attempt = events
+/// If `ev` is an attempt's **closing** outcome event (succeeded / failed /
+/// timed-out / panicked — not the mid-cycle backoff marker or the node-terminal),
+/// build the single `attempt-outcome` record for that attempt: its node, status
+/// (the normative kebab-case token the fold reads), attempt number, and — for a
+/// panic — the captured message. The richer fold fields (metrics, cost, worker,
+/// durable reference) are not measured at M1/M2, so they are left absent (the
+/// fold defaults each). Returns `None` for a non-closing event.
+fn closing_outcome_record(node: &str, ev: &AttemptEvent) -> Option<AttemptOutcomeRecord> {
+    let (attempt, status, message) = match ev {
+        AttemptEvent::AttemptSucceeded { attempt, .. } => (*attempt, "succeeded", None),
+        AttemptEvent::AttemptFailed { attempt, .. } => (*attempt, "failed", None),
+        AttemptEvent::AttemptTimedOut { attempt, .. } => (*attempt, "timed-out", None),
+        AttemptEvent::AttemptPanicked {
+            attempt, message, ..
+        } => (*attempt, "failed", Some(message.clone())),
+        // The backoff marker is a phase, not an attempt outcome; node-terminal is
+        // the node's decided state, not an attempt-outcome record.
+        _ => return None,
+    };
+    let mut record = AttemptOutcomeRecord::new(node, attempt, status);
+    record.message = message;
+    Some(record)
+}
+
+/// The 1-based attempt number the buffered events name (the last-seen
+/// attempt-numbered event), defaulting to 1 for a never-numbered outcome.
+fn attempt_number_of(events: &[AttemptEvent]) -> u32 {
+    events
         .iter()
+        .rev()
         .find_map(|e| match e {
             AttemptEvent::AttemptStarted { attempt, .. }
             | AttemptEvent::AttemptSucceeded { attempt, .. }
@@ -1524,15 +1567,7 @@ fn build_outcome_record(
             | AttemptEvent::BackoffStarted { attempt, .. } => Some(*attempt),
             _ => None,
         })
-        .unwrap_or(1);
-    // A panic payload the boundary captured (T23), surfaced as the outcome message.
-    let message = events.iter().find_map(|e| match e {
-        AttemptEvent::AttemptPanicked { message, .. } => Some(message.clone()),
-        _ => None,
-    });
-    let mut record = AttemptOutcomeRecord::new(node, attempt, wire_terminal(recorded_state).as_str());
-    record.message = message;
-    record
+        .unwrap_or(1)
 }
 
 /// Record every attempt still in flight past the cancellation grace as `abandoned`

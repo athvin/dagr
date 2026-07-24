@@ -728,15 +728,11 @@ fn walk(bytes: &[u8]) -> Vec<Rec> {
         .iter()
         .map(|rec| Rec {
             kind: rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            node: rec
-                .get("body")
-                .and_then(|b| b.get("node"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            node: rec.get("node").and_then(|v| v.as_str()).map(str::to_string),
             seq: rec
                 .get("seq")
                 .and_then(serde_json::Value::as_u64)
@@ -748,14 +744,10 @@ fn walk(bytes: &[u8]) -> Vec<Rec> {
 fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
     let stream = read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        let is_terminal = rec.get("event").and_then(|v| v.as_str()) == Some("node-terminal");
-        let this_node = rec
-            .get("body")
-            .and_then(|b| b.get("node"))
-            .and_then(|v| v.as_str());
+        let is_terminal = rec.get("kind").and_then(|v| v.as_str()) == Some("node-terminal");
+        let this_node = rec.get("node").and_then(|v| v.as_str());
         if is_terminal && this_node == Some(node) {
-            rec.get("body")
-                .and_then(|b| b.get("state"))
+            rec.get("state")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         } else {

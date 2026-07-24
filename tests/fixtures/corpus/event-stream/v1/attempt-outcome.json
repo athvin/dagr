@@ -1,0 +1,22 @@
+{
+  "attempt": 1,
+  "cost_declared": {
+    "memory_bytes": 1024
+  },
+  "cost_measured": {
+    "memory_bytes": 900
+  },
+  "kind": "attempt-outcome",
+  "message": "ok",
+  "metrics": {
+    "rows_read": 42
+  },
+  "node": "load",
+  "offset_ns": 1,
+  "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+  "schema_version": "dagr.event-stream@1",
+  "seq": 1,
+  "status": "succeeded",
+  "wall": "2026-07-23T00:00:00.000Z",
+  "worker": "compute#3"
+}

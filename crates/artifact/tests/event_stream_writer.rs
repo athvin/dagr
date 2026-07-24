@@ -15,9 +15,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{
-    read_records, Event, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, TerminalState, EVENTS_FILE_NAME, EVENT_STREAM_SCHEMA_VERSION,
-    EVENT_STREAM_UNWRITABLE,
+    read_records, AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunId,
+    RunOutcome, RunStartedHeader, TerminalState, EVENTS_FILE_NAME, EVENT_STREAM_SCHEMA_VERSION,
+    EVENT_STREAM_UNWRITABLE, FINGERPRINT_ALGORITHM_VERSION, FINGERPRINT_UNAVAILABLE,
 };
 
 // === Test doubles =========================================================
@@ -158,6 +158,7 @@ fn header() -> RunStartedHeader {
         pipeline: "my-pipeline".to_string(),
         fingerprint_structural: Some("blake3:aaaa".to_string()),
         fingerprint_policy: Some("blake3:bbbb".to_string()),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
         parameters: params,
         data_interval: Some(["2026-07-22".to_string(), "2026-07-23".to_string()]),
         captured_env: env,
@@ -171,11 +172,12 @@ fn as_obj(line: &[u8]) -> serde_json::Map<String, serde_json::Value> {
     v.as_object().expect("record is a JSON object").clone()
 }
 
-/// A fixed informational wall-clock stamp. Byte-identity of two emissions of the
-/// same record is defined with the wall stamp held equal — the record's analog
-/// of the artifact's excluded generation-time field (T4 §6).
-fn fixed_wall() -> u64 {
-    1_700_000_000_000
+/// A fixed informational wall-clock stamp (an RFC3339 string, per the published
+/// schema's `wall`). Byte-identity of two emissions of the same record is defined
+/// with the wall stamp held equal — the record's analog of the artifact's
+/// excluded generation-time field (T4 §6).
+fn fixed_wall() -> String {
+    "2023-11-14T22:13:20.000Z".to_string()
 }
 
 // === Tests ================================================================
@@ -192,12 +194,14 @@ fn envelope_completeness() {
     w.attempt_started("n", 1).unwrap();
     w.attempt_succeeded("n", 1).unwrap();
     w.attempt_failed("n", 1).unwrap();
+    w.attempt_outcome(AttemptOutcomeRecord::new("n", 1, "succeeded"))
+        .unwrap();
     w.node_terminal("n", TerminalState::Succeeded).unwrap();
-    w.zombie_at_exit("n").unwrap();
+    w.zombie_at_exit("n", 1).unwrap();
     w.run_finished(RunOutcome::Succeeded).unwrap();
 
     let lines = sink.lines();
-    assert_eq!(lines.len(), 9, "one record per emitted transition");
+    assert_eq!(lines.len(), 10, "one record per emitted transition");
     for line in &lines {
         let obj = as_obj(line);
         for field in ["schema_version", "run_id", "seq", "wall", "offset_ns"] {
@@ -211,7 +215,13 @@ fn envelope_completeness() {
             serde_json::json!(EVENT_STREAM_SCHEMA_VERSION)
         );
         assert_eq!(obj["run_id"], serde_json::json!("run-fixed-0001"));
-        assert!(obj.contains_key("event"), "record names its event kind");
+        assert!(obj.contains_key("kind"), "record names its event kind");
+        // `wall` is an RFC3339 STRING now (schema: `wall` is a string), never an
+        // integer millis stamp.
+        assert!(
+            obj["wall"].is_string(),
+            "wall is an RFC3339 string, not an integer"
+        );
     }
 }
 
@@ -278,27 +288,50 @@ fn run_started_carries_full_header() {
     w.run_started(header()).unwrap();
 
     let obj = as_obj(&sink.lines()[0]);
-    assert_eq!(obj["event"], serde_json::json!("run-started"));
-    let body = obj["body"].as_object().expect("run-started has a body");
-    assert_eq!(body["pipeline"], serde_json::json!("my-pipeline"));
+    assert_eq!(obj["kind"], serde_json::json!("run-started"));
+    let header = obj["header"].as_object().expect("run-started has a header");
+    // The header repeats the run identity (schema-required inside the header).
+    assert_eq!(header["run_id"], serde_json::json!("run-fixed-0001"));
+    assert_eq!(header["pipeline"], serde_json::json!("my-pipeline"));
     assert_eq!(
-        body["fingerprint_structural"],
+        header["fingerprint_structural"],
         serde_json::json!("blake3:aaaa")
     );
-    assert_eq!(body["fingerprint_policy"], serde_json::json!("blake3:bbbb"));
-    assert_eq!(body["parameters"]["date"], serde_json::json!("2026-07-23"));
     assert_eq!(
-        body["captured_env"]["REGION"],
+        header["fingerprint_policy"],
+        serde_json::json!("blake3:bbbb")
+    );
+    // The fingerprint-algorithm version is stamped (C21).
+    assert_eq!(
+        header["fingerprint_algorithm_version"],
+        serde_json::json!(FINGERPRINT_ALGORITHM_VERSION)
+    );
+    assert_eq!(
+        header["parameters"]["date"],
+        serde_json::json!("2026-07-23")
+    );
+    // The captured environment is named `captured_environment` (schema field).
+    assert_eq!(
+        header["captured_environment"]["REGION"],
         serde_json::json!("us-east-1")
     );
-    assert_eq!(body["resumed_from"], serde_json::json!("run-prior-0000"));
+    // Resume lineage is an object carrying the originating run id (schema field
+    // `resume_lineage`, object|null), not a bare string named `resumed_from`.
     assert_eq!(
-        body["data_interval"],
-        serde_json::json!(["2026-07-22", "2026-07-23"])
+        header["resume_lineage"],
+        serde_json::json!({ "run_id": "run-prior-0000" })
+    );
+    // The data interval is a {start,end} OBJECT (schema), not a [start,end] array.
+    assert_eq!(
+        header["data_interval"],
+        serde_json::json!({ "start": "2026-07-22", "end": "2026-07-23" })
     );
     // Neither overall outcome nor summary is present at start.
-    assert!(!body.contains_key("outcome"), "no outcome at start");
-    assert!(!body.contains_key("summary"), "no summary at start");
+    assert!(
+        !header.contains_key("overall_outcome"),
+        "no outcome at start"
+    );
+    assert!(!header.contains_key("summary"), "no summary at start");
 }
 
 #[test]
@@ -310,30 +343,37 @@ fn header_when_assembly_failed() {
     h.fingerprint_structural = None; // assembly failed → no fingerprint
     h.fingerprint_policy = None;
     h.resumed_from = None;
+    h.data_interval = None; // no interval on this fixture's assembly-failed path
     w.run_started(h).unwrap();
     w.run_finished(RunOutcome::AssemblyFailed).unwrap();
 
     let lines = sink.lines();
     assert_eq!(lines.len(), 2, "valid two-record stream");
     let start = as_obj(&lines[0]);
-    let body = start["body"].as_object().unwrap();
-    assert!(
-        !body.contains_key("fingerprint_structural"),
-        "omitted when absent"
+    let header = start["header"].as_object().unwrap();
+    // The published schema REQUIRES the fingerprint fields on every run-started
+    // header; the assembly-failed stream (no fingerprints) records the documented
+    // sentinel so the record stays schema-valid, and the fold reads it as absent.
+    assert_eq!(
+        header["fingerprint_structural"],
+        serde_json::json!(FINGERPRINT_UNAVAILABLE)
     );
-    assert!(
-        !body.contains_key("fingerprint_policy"),
-        "omitted when absent"
+    assert_eq!(
+        header["fingerprint_policy"],
+        serde_json::json!(FINGERPRINT_UNAVAILABLE)
     );
+    // Data interval / resume lineage are null when absent (schema: object|null).
+    assert_eq!(header["data_interval"], serde_json::Value::Null);
+    assert_eq!(header["resume_lineage"], serde_json::Value::Null);
     // Still identifies the run.
     assert_eq!(start["run_id"], serde_json::json!("run-fixed-0001"));
-    assert_eq!(body["pipeline"], serde_json::json!("my-pipeline"));
+    assert_eq!(header["pipeline"], serde_json::json!("my-pipeline"));
     // Whole stream parses.
     let parsed = read_records(&sink.bytes()).unwrap();
     assert_eq!(parsed.records.len(), 2);
     assert!(!parsed.trailing_partial_discarded);
     let fin = parsed.records[1].as_object().unwrap();
-    assert_eq!(fin["body"]["outcome"], serde_json::json!("assembly-failed"));
+    assert_eq!(fin["outcome"], serde_json::json!("assembly-failed"));
 }
 
 #[test]
@@ -497,9 +537,9 @@ fn foldability_with_no_original_run_access() {
         .map(|r| r["seq"].as_u64().unwrap())
         .collect();
     assert_eq!(seqs, vec![0, 1, 2, 3, 4], "ordered with envelope intact");
-    assert_eq!(parsed.records[0]["event"], serde_json::json!("run-started"));
+    assert_eq!(parsed.records[0]["kind"], serde_json::json!("run-started"));
     assert_eq!(
-        parsed.records.last().unwrap()["event"],
+        parsed.records.last().unwrap()["kind"],
         serde_json::json!("run-finished")
     );
 }
@@ -526,6 +566,10 @@ fn canonical_bytes_are_deterministic_and_sorted() {
     .with_wall_clock(fixed_wall);
     w1.run_started(header()).unwrap();
     w2.run_started(header()).unwrap();
+    // A flat record (no nested header object) so the top-level key-order check
+    // below is unambiguous.
+    w1.node_ready("n").unwrap();
+    w2.node_ready("n").unwrap();
 
     assert_eq!(
         sink1.lines()[0],
@@ -534,7 +578,9 @@ fn canonical_bytes_are_deterministic_and_sorted() {
     );
 
     // Top-level keys are sorted and compact (no spaces after ':' or ',').
-    let line = String::from_utf8(sink1.lines()[0].clone()).unwrap();
+    // Use the flat node-ready record (its only payload key is `node`, which does
+    // not collide with any envelope key), so each `find` locates a top-level key.
+    let line = String::from_utf8(sink1.lines()[1].clone()).unwrap();
     assert!(
         line.ends_with('\n'),
         "record is one physical line terminated by \\n"
@@ -542,17 +588,17 @@ fn canonical_bytes_are_deterministic_and_sorted() {
     let trimmed = line.trim_end_matches('\n');
     assert!(!trimmed.contains(", "), "compact: no space after comma");
     assert!(!trimmed.contains(": "), "compact: no space after colon");
-    // The envelope keys appear in sorted order in the raw bytes.
-    let idx_event = trimmed.find("\"event\"").unwrap();
+    // The top-level keys appear in sorted order in the raw bytes:
+    // "kind" < "node" < "offset_ns" < "run_id" < "schema_version" < "seq" < "wall".
+    let idx_kind = trimmed.find("\"kind\"").unwrap();
+    let idx_node = trimmed.find("\"node\"").unwrap();
     let idx_offset = trimmed.find("\"offset_ns\"").unwrap();
     let idx_run = trimmed.find("\"run_id\"").unwrap();
     let idx_schema = trimmed.find("\"schema_version\"").unwrap();
     let idx_seq = trimmed.find("\"seq\"").unwrap();
     let idx_wall = trimmed.find("\"wall\"").unwrap();
-    // "body" < "event" < "offset_ns" < "run_id" < "schema_version" < "seq" < "wall"
-    let idx_body = trimmed.find("\"body\"").unwrap();
-    assert!(idx_body < idx_event);
-    assert!(idx_event < idx_offset);
+    assert!(idx_kind < idx_node);
+    assert!(idx_node < idx_offset);
     assert!(idx_offset < idx_run);
     assert!(idx_run < idx_schema);
     assert!(idx_schema < idx_seq);
@@ -580,8 +626,9 @@ fn terminal_states_use_normative_names() {
     {
         w.node_terminal(&format!("n{i}"), state).unwrap();
         let obj = as_obj(sink.lines().last().unwrap());
-        assert_eq!(obj["event"], serde_json::json!("node-terminal"));
-        assert_eq!(obj["body"]["state"], serde_json::json!(name));
+        assert_eq!(obj["kind"], serde_json::json!("node-terminal"));
+        // `state` is spread top-level now, not nested under `body`.
+        assert_eq!(obj["state"], serde_json::json!(name));
     }
 }
 
@@ -596,14 +643,16 @@ fn event_kinds_have_stable_wire_names() {
     w.attempt_started("n", 1).unwrap();
     w.attempt_succeeded("n", 1).unwrap();
     w.attempt_failed("n", 2).unwrap();
+    w.attempt_outcome(AttemptOutcomeRecord::new("n", 2, "failed"))
+        .unwrap();
     w.node_terminal("n", TerminalState::Failed).unwrap();
-    w.zombie_at_exit("n").unwrap();
+    w.zombie_at_exit("n", 2).unwrap();
     w.run_finished(RunOutcome::Failed).unwrap();
 
     let kinds: Vec<String> = sink
         .lines()
         .iter()
-        .map(|l| as_obj(l)["event"].as_str().unwrap().to_string())
+        .map(|l| as_obj(l)["kind"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(
         kinds,
@@ -614,15 +663,22 @@ fn event_kinds_have_stable_wire_names() {
             "attempt-started",
             "attempt-succeeded",
             "attempt-failed",
+            "attempt-outcome",
             "node-terminal",
             "zombie-at-exit",
             "run-finished",
         ]
     );
-    // Attempt records carry node + attempt number.
+    // Per-node/attempt fields are spread top-level (no `body`).
     let admit = as_obj(&sink.lines()[3]);
-    assert_eq!(admit["body"]["node"], serde_json::json!("n"));
-    assert_eq!(admit["body"]["attempt"], serde_json::json!(1));
+    assert_eq!(admit["node"], serde_json::json!("n"));
+    assert_eq!(admit["attempt"], serde_json::json!(1));
+    // The attempt-outcome carries node, attempt, and the terminal status.
+    let outcome = as_obj(&sink.lines()[6]);
+    assert_eq!(outcome["kind"], serde_json::json!("attempt-outcome"));
+    assert_eq!(outcome["node"], serde_json::json!("n"));
+    assert_eq!(outcome["attempt"], serde_json::json!(2));
+    assert_eq!(outcome["status"], serde_json::json!("failed"));
 }
 
 /// Event enum round-trips through the writer as the public constructor path.

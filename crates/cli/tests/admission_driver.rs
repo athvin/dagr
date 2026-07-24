@@ -71,15 +71,11 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
         .iter()
         .map(|rec| {
             let kind = rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let node = rec
-                .get("body")
-                .and_then(|b| b.get("node"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            let node = rec.get("node").and_then(|v| v.as_str()).map(str::to_string);
             (kind, node)
         })
         .collect()

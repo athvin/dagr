@@ -82,15 +82,12 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
         .iter()
         .map(|rec| {
             let kind = rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let node = rec
-                .get("body")
-                .and_then(|b| b.get("node"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            // Per-kind payload is spread top-level now (no `body`).
+            let node = rec.get("node").and_then(|v| v.as_str()).map(str::to_string);
             (kind, node)
         })
         .collect()
@@ -108,14 +105,10 @@ fn index_of(events: &[(String, Option<String>)], kind: &str, node: Option<&str>)
 fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
     let stream = dagr_artifact::event_stream::read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        let is_terminal = rec.get("event").and_then(|v| v.as_str()) == Some("node-terminal");
-        let this_node = rec
-            .get("body")
-            .and_then(|b| b.get("node"))
-            .and_then(|v| v.as_str());
+        let is_terminal = rec.get("kind").and_then(|v| v.as_str()) == Some("node-terminal");
+        let this_node = rec.get("node").and_then(|v| v.as_str());
         if is_terminal && this_node == Some(node) {
-            rec.get("body")
-                .and_then(|b| b.get("state"))
+            rec.get("state")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         } else {
@@ -128,8 +121,8 @@ fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
 fn run_started_body(bytes: &[u8]) -> Option<serde_json::Value> {
     let stream = dagr_artifact::event_stream::read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        if rec.get("event").and_then(|v| v.as_str()) == Some("run-started") {
-            rec.get("body").cloned()
+        if rec.get("kind").and_then(|v| v.as_str()) == Some("run-started") {
+            rec.get("header").cloned()
         } else {
             None
         }
@@ -672,7 +665,9 @@ fn allowlisted_env_captured_others_not() {
         TickClock::default(),
     );
     let body = run_started_body(&sink.bytes()).expect("header");
-    let captured = body.get("captured_env").expect("captured_env present");
+    let captured = body
+        .get("captured_environment")
+        .expect("captured_environment present");
     assert_eq!(
         captured.get("DAGR_TEST_ALLOWED").and_then(|v| v.as_str()),
         Some("visible-value"),
@@ -702,7 +697,9 @@ fn allowlisted_env_captured_others_not() {
         TickClock::default(),
     );
     let body2 = run_started_body(&sink2.bytes()).expect("header");
-    let captured2 = body2.get("captured_env").expect("captured_env present");
+    let captured2 = body2
+        .get("captured_environment")
+        .expect("captured_environment present");
     assert_eq!(
         captured2.as_object().map(serde_json::Map::len),
         Some(0),
@@ -809,13 +806,19 @@ fn every_outcome_is_fed_back() {
     );
 
     let events = parse_events(&sink.bytes());
-    // Each node: exactly one node-terminal record.
+    // Each node: exactly one node-terminal record AND exactly one attempt-outcome
+    // record (arch.md l.331: every attempt produces exactly one attempt-outcome).
     for n in ["up", "down"] {
-        let count = events
+        let terminals = events
             .iter()
             .filter(|(k, node)| k == "node-terminal" && node.as_deref() == Some(n))
             .count();
-        assert_eq!(count, 1, "exactly one node-terminal for {n}");
+        assert_eq!(terminals, 1, "exactly one node-terminal for {n}");
+        let outcomes = events
+            .iter()
+            .filter(|(k, node)| k == "attempt-outcome" && node.as_deref() == Some(n))
+            .count();
+        assert_eq!(outcomes, 1, "exactly one attempt-outcome for {n}");
     }
     // down readiness only after up terminal.
     let up_term = index_of(&events, "node-terminal", Some("up")).unwrap();

@@ -701,29 +701,47 @@ fn event_wire(event: &Event, run_id: &str) -> (&'static str, Vec<WireField>) {
         (name.to_string(), v)
     }
     match event {
-        Event::RunStarted(h) => ("run-started", vec![f("header", run_started_header(h, run_id))]),
+        Event::RunStarted(h) => (
+            "run-started",
+            vec![f("header", run_started_header(h, run_id))],
+        ),
         Event::NodeReady { node } => ("node-ready", vec![f("node", node.clone().into())]),
         Event::NodeAdmitted { node } => ("node-admitted", vec![f("node", node.clone().into())]),
         Event::AttemptStarted { node, attempt } => (
             "attempt-started",
-            vec![f("node", node.clone().into()), f("attempt", (*attempt).into())],
+            vec![
+                f("node", node.clone().into()),
+                f("attempt", (*attempt).into()),
+            ],
         ),
         Event::AttemptSucceeded { node, attempt } => (
             "attempt-succeeded",
-            vec![f("node", node.clone().into()), f("attempt", (*attempt).into())],
+            vec![
+                f("node", node.clone().into()),
+                f("attempt", (*attempt).into()),
+            ],
         ),
         Event::AttemptFailed { node, attempt } => (
             "attempt-failed",
-            vec![f("node", node.clone().into()), f("attempt", (*attempt).into())],
+            vec![
+                f("node", node.clone().into()),
+                f("attempt", (*attempt).into()),
+            ],
         ),
         Event::AttemptOutcome(record) => ("attempt-outcome", attempt_outcome_fields(record)),
         Event::NodeTerminal { node, state } => (
             "node-terminal",
-            vec![f("node", node.clone().into()), f("state", state.as_str().into())],
+            vec![
+                f("node", node.clone().into()),
+                f("state", state.as_str().into()),
+            ],
         ),
         Event::ZombieAtExit { node, attempt } => (
             "zombie-at-exit",
-            vec![f("node", node.clone().into()), f("attempt", (*attempt).into())],
+            vec![
+                f("node", node.clone().into()),
+                f("attempt", (*attempt).into()),
+            ],
         ),
         Event::RunFinished { outcome } => {
             ("run-finished", vec![f("outcome", outcome.as_str().into())])
@@ -834,8 +852,8 @@ fn string_map(map: &BTreeMap<String, String>) -> serde_json::Value {
 /// string. Never used for durations (the monotonic `offset_ns` is authoritative
 /// — T0.6 §7), so this stamp's only job is to be a valid, human-readable RFC3339
 /// instant. Computed dependency-free from `SystemTime` (no `chrono`/`time` — the
-/// runtime writer stays on serde_json + uuid only, per the T4 ADR supply-chain
-/// posture).
+/// runtime writer stays on `serde_json` + `uuid` only, per the T4 ADR
+/// supply-chain posture).
 fn rfc3339_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let unix_ms = SystemTime::now()
@@ -848,8 +866,11 @@ fn rfc3339_now() -> String {
 /// public-domain days-from-civil inverse (`civil_from_days`) so the conversion is
 /// exact for any date, dependency-free.
 fn rfc3339_from_unix_millis(unix_ms: u128) -> String {
-    let secs = (unix_ms / 1000) as i64;
-    let millis = (unix_ms % 1000) as u64;
+    // Unix millis fit i64 for any realistic instant (i64 millis span ±292M years);
+    // an out-of-range value saturates rather than panicking (the stamp is only
+    // informational).
+    let secs = i64::try_from(unix_ms / 1000).unwrap_or(i64::MAX);
+    let millis = u64::try_from(unix_ms % 1000).unwrap_or(0);
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
@@ -866,9 +887,7 @@ fn rfc3339_from_unix_millis(unix_ms: u128) -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let year = if month <= 2 { year + 1 } else { year };
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 // === Run identity ==========================================================
@@ -1065,13 +1084,10 @@ mod tests {
     #[test]
     fn rfc3339_from_unix_millis_is_correct() {
         // The Unix epoch.
-        assert_eq!(
-            rfc3339_from_unix_millis(0),
-            "1970-01-01T00:00:00.000Z"
-        );
+        assert_eq!(rfc3339_from_unix_millis(0), "1970-01-01T00:00:00.000Z");
         // A known instant: 2026-07-23T00:00:00.123Z. 2026-07-23 is 20657 days
         // after the epoch (verified against a reference calendar).
-        let ms = (20_657_u128 * 86_400 + 0) * 1000 + 123;
+        let ms = (20_657_u128 * 86_400) * 1000 + 123;
         assert_eq!(rfc3339_from_unix_millis(ms), "2026-07-23T00:00:00.123Z");
         // A leap-year date with a nonzero time of day: 2024-02-29T13:45:07.500Z.
         // 2024-02-29 is 19782 days after the epoch.
@@ -1089,7 +1105,7 @@ mod tests {
             metrics: Some(serde_json::json!({ "rows": 42 })),
             ..AttemptOutcomeRecord::default()
         };
-        let (kind, fields) = event_wire(&Event::AttemptOutcome(record));
+        let (kind, fields) = event_wire(&Event::AttemptOutcome(record), "run-xyz");
         assert_eq!(kind, "attempt-outcome");
         let map: std::collections::BTreeMap<String, serde_json::Value> =
             fields.into_iter().collect();

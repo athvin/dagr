@@ -123,7 +123,7 @@ fn parse_records(bytes: &[u8]) -> Vec<Record> {
         .iter()
         .map(|rec| Record {
             kind: rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .expect("every record carries an event kind")
                 .to_string(),

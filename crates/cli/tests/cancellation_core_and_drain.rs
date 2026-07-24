@@ -77,15 +77,11 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
         .iter()
         .map(|rec| {
             let kind = rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let node = rec
-                .get("body")
-                .and_then(|b| b.get("node"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            let node = rec.get("node").and_then(|v| v.as_str()).map(str::to_string);
             (kind, node)
         })
         .collect()
@@ -100,14 +96,10 @@ fn has_event(events: &[(String, Option<String>)], kind: &str, node: Option<&str>
 fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
     let stream = dagr_artifact::event_stream::read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        let is_terminal = rec.get("event").and_then(|v| v.as_str()) == Some("node-terminal");
-        let this_node = rec
-            .get("body")
-            .and_then(|b| b.get("node"))
-            .and_then(|v| v.as_str());
+        let is_terminal = rec.get("kind").and_then(|v| v.as_str()) == Some("node-terminal");
+        let this_node = rec.get("node").and_then(|v| v.as_str());
         if is_terminal && this_node == Some(node) {
-            rec.get("body")
-                .and_then(|b| b.get("state"))
+            rec.get("state")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         } else {
@@ -139,7 +131,7 @@ fn stream_is_complete_and_parseable(bytes: &[u8]) {
     let kinds: Vec<&str> = stream
         .records
         .iter()
-        .filter_map(|r| r.get("event").and_then(|v| v.as_str()))
+        .filter_map(|r| r.get("kind").and_then(|v| v.as_str()))
         .collect();
     assert_eq!(
         kinds.last().copied(),
