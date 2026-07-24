@@ -124,6 +124,21 @@ jobs:
       # here — the shipped binary and the bare `cargo test --workspace` never do.
       - name: graph-artifact schema round-trip (T40)
         run: cargo test -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
+      # C22 artifact validation + schema-compatibility gate (T48, ticket 059).
+      # The enduring compatibility CI: the frozen fixture corpus parses forever
+      # after (every checked-in fixture round-trips against its declared version's
+      # published schema, directory-enumerated so new fixtures are auto-covered),
+      # evolution is provably additive-only (a drift guard rejects any published
+      # schema that closes an object — the mechanical shape of a non-additive
+      # change), the corpus is complete (a new schema version without a matching
+      # fixture fails the build), and the ten-thousand-attempt scale artifact —
+      # GENERATED from the real producers (writer → fold), frozen as a corpus
+      # member — validates, parses, and stays size-proportional to attempt count.
+      # Deterministic + reliable: pure Rust through the same CI-/dev-scoped
+      # `jsonschema` helper the steps above use (no browser, no network, no
+      # unpinned install), behind the `schema-validation` feature.
+      - name: artifact validation + schema-compatibility gate (T48)
+        run: cargo test -p dagr-artifact --features schema-validation --test compatibility_ci
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference
