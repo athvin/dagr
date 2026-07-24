@@ -86,26 +86,68 @@ jobs:
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # --- Tests (includes the coverage-matrix integration test, SL8machine, and
-  # the T8 compile-failure UI harness) ---------------------------------------
-  # `cargo test --workspace` already runs the UI harness
-  # (crates/core/tests/ui.rs), which compiles each tests/ui/*.rs sample under
-  # the pinned toolchain (the rustc beside $CARGO — 1.95.0 here) and asserts
-  # both type names appear. The explicit step below runs it on its own first so
-  # a UI-snapshot mismatch is legible in the job log and unambiguously gates the
-  # build (T8 DoD: "runs under the pinned toolchain in CI on every pull request
-  # and gates the build"). It never blesses — DAGR_BLESS is unset, so a stale
-  # snapshot fails here rather than being silently rewritten.
+  # --- Tests: the T70 platform matrix (Linux tier-1 + macOS core) ------------
+  # arch.md "Platform support" (lines 627-633) commits to a two-tier CI posture,
+  # which T70 (ticket 077) wires here as a single `test` job fanned over an `os`
+  # matrix. Windows is DELIBERATELY ABSENT (arch.md: "explicitly unsupported in
+  # v1"; no Windows runner, no signal/process-model shim — see
+  # docs/coverage-matrix.md "Platform-conditional criteria (for T70)").
+  #
+  #   * ubuntu-latest — TIER 1. Runs the COMPLETE `cargo test --workspace`
+  #     suite: unit, integration, fault-injection (T37 permit-release, T36
+  #     unwritable-sink), the C12 cgroup v2/v1 limit-detection tests, and the
+  #     C16 OS-signal tests (SIGTERM/SIGINT → cancel → complete + fsync'd
+  #     stream) — the everything-works reference ("the full test suite runs in
+  #     CI here"). The schema-validation, scale-benchmark, and render steps that
+  #     were on this job stay Linux-only (below and in their own jobs).
+  #   * macos-latest — the CORE suite. macOS is unix, so everything compiles and
+  #     the C16 `#[cfg(unix)]` signal tests run here too; pool sizing exercises
+  #     the T32 HOST-FALLBACK path (no cgroups). The Linux-only C12 cgroup-
+  #     DETECTION tests are excluded BY INTENT via an explicit, reviewable
+  #     `--skip` set (NOT `continue-on-error`): removing a core test would still
+  #     fail the job. The excluded set is the three tests that assert a cgroup
+  #     source was found; the host-fallback tests (the correct macOS behaviour)
+  #     stay in the run and must pass.
+  #
+  # Both legs honour rust-toolchain.toml (rustup resolves the pinned 1.95.0 on
+  # every runner OS), so the T8 compile-fail UI snapshots are byte-stable on
+  # both — DAGR_BLESS is unset, so a stale snapshot fails rather than being
+  # rewritten. `cargo test --workspace` runs the UI harness
+  # (crates/core/tests/ui.rs); the explicit step below runs it first so a
+  # snapshot mismatch is legible in the log (T8 DoD).
+  #
+  # fail-fast is off so a macOS-only or Linux-only failure is both visible in one
+  # run rather than cancelling its sibling.
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - name: compile-failure UI harness (T8, pinned toolchain)
         run: cargo test -p dagr-core --test ui
-      - name: cargo test --workspace
+      # TIER 1 (Linux): the complete suite, nothing filtered.
+      - name: cargo test --workspace (Linux tier-1, full suite)
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test --workspace
+      # CORE (macOS): the same workspace suite MINUS the Linux-only C12 cgroup-
+      # DETECTION tests, excluded by an explicit named `--skip` set. The
+      # host-fallback C12 tests are NOT skipped — they are the macOS behaviour
+      # and must pass here (T70 DoD: "macOS pool sizing is exercised through the
+      # T32 host-fallback path (no cgroups), and that host-fallback test passes
+      # on macOS"). Skipping is by intent, not allow-failure: a core-test
+      # regression still reds this job.
+      - name: cargo test --workspace (macOS core suite, Linux-only cgroup detection skipped)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo test --workspace -- \
+            --skip container_limits_size_the_admission_pools_from_cgroup_v2 \
+            --skip cgroup_v1_is_used_when_v2_is_absent \
+            --skip the_pinning_flag_overrides_cgroup_detection
       # Scale benchmark (T69, ticket 076): the Performance-envelope gate. Drives a
       # thousand-node no-op graph through the REAL T24 run-loop driver
       # (`dagr_cli::scale_bench`), measures per-node framework overhead, and FAILS
@@ -127,7 +169,15 @@ jobs:
       # capacity), not by the timing number; each run uses a private per-run temp
       # base (no shared /tmp race). `--nocapture` surfaces the measured per-node
       # overhead in the log for re-baselining.
+      # Linux tier-1 only: the T69 perf gate and the schema-validation steps
+      # below are the everything-works reference checks (T70 keeps the macOS leg
+      # the lean core suite; these are not part of it). The scale benchmark also
+      # ran only on ubuntu before T70 — this `if` preserves that exactly. (Each
+      # runs under the same `cargo test --workspace` on the macOS leg implicitly
+      # only if part of the default suite; these feature-gated / explicit steps
+      # are intentionally Linux-only.)
       - name: scale benchmark — Performance-envelope budget (T69)
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-cli --test scale_benchmark -- --nocapture
       # Published-artifact-schema validation (T39, ticket 050). The validation
       # helper and its `jsonschema` dependency are gated behind the
@@ -139,6 +189,7 @@ jobs:
       # longer validates against its declared version's published schema. T48
       # extends this into the enduring compatibility gate + scale artifact.
       - name: artifact-schema validation + fixture-corpus round-trip (T39)
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-artifact --features schema-validation --test artifact_schemas
       # C20 graph-artifact emission (T40, ticket 051): a REAL emitted artifact is
       # round-tripped against the published `schemas/graph/v1.schema.json` via the
@@ -146,6 +197,7 @@ jobs:
       # forwards to dagr-artifact's), so the `jsonschema` validator is pulled only
       # here — the shipped binary and the bare `cargo test --workspace` never do.
       - name: graph-artifact schema round-trip (T40)
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
       # C22 artifact validation + schema-compatibility gate (T48, ticket 059).
       # The enduring compatibility CI: the frozen fixture corpus parses forever
@@ -161,6 +213,7 @@ jobs:
       # `jsonschema` helper the steps above use (no browser, no network, no
       # unpinned install), behind the `schema-validation` feature.
       - name: artifact validation + schema-compatibility gate (T48)
+        if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-artifact --features schema-validation --test compatibility_ci
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------

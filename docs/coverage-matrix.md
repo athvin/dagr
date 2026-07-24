@@ -132,3 +132,47 @@ The rows flagged `platform-conditional` — **C12** (limit detection), **C16**
 tested), but their pass/fail depends on the platform. T70 attaches the
 Linux-tier-1 full-suite and macOS-core-suite jobs and gates these rows per
 platform; this matrix names them so that ticket has an unambiguous target.
+
+**The tag is enforced, not decorative (T70, ticket 077).**
+[`scripts/check-coverage-matrix.sh`](../scripts/check-coverage-matrix.sh) now
+fails the build if any of C12/C16/C19 lacks the `platform-conditional` tag, or if
+any *other* criterion carries it (a stray tag misrepresents the matrix). The
+verifier self-tests
+([`scripts/check-coverage-verifier-selftest.sh`](../scripts/check-coverage-verifier-selftest.sh),
+cases 8–10) prove both directions and that tagging a Linux-only criterion keeps
+it **mapped** — the unmapped-machine gate stays green, so no criterion is silently
+dropped.
+
+**How the T70 CI matrix routes these rows** (`.github/workflows/ci.yml`, the
+`test` job's `os` matrix — `ubuntu-latest` + `macos-latest`):
+
+- **Linux tier-1 (`ubuntu-latest`)** runs the **complete** `cargo test --workspace`
+  suite — unit, integration, fault-injection, and OS-signal tests — as the
+  everything-works reference (arch.md Platform support: "the full test suite runs
+  in CI here"). C12 cgroup v2/v1 detection, C16 SIGTERM/SIGINT → cancel →
+  complete + fsync'd stream, and the unwritable-sink fault injection all execute
+  and pass here.
+- **macOS core suite (`macos-latest`)** runs the platform-portable core suite via
+  an **explicit, reviewable `--skip` selector** naming the Linux-only C12
+  cgroup-**detection** tests — `container_limits_size_the_admission_pools_from_cgroup_v2`,
+  `cgroup_v1_is_used_when_v2_is_absent`, and `the_pinning_flag_overrides_cgroup_detection`.
+  These are excluded **by intent** (a named set, not `continue-on-error`): removing
+  a *core* test from the run would still fail the job. The C12 **host-fallback**
+  path stays in the macOS run and passes (`host_resources_are_used_when_no_cgroup_exists`,
+  `an_unlimited_sentinel_falls_back_to_host_per_dimension`, `malformed_cgroup_values_fall_back_to_host`,
+  `the_pinning_flag_overrides_host_fallback`), demonstrating pool sizing derives
+  from host resources with no cgroup dependency. The C16 signal tests are already
+  `#[cfg(unix)]` — macOS **is** unix, so they run on both jobs; the C19 flush/fsync
+  assertions are written against documented per-platform expectations (no test
+  asserts byte-for-byte identical fsync semantics across platforms — the
+  detection tests inject a fake probe root and never read the real `/sys` or
+  `/proc`, and the flush tests assert flush *occurrence*, not OS fsync internals).
+
+**Windows is absent by design (v1 platform posture, arch.md Platform support:
+"Windows — explicitly unsupported in v1").** There is **no** Windows CI job and no
+signal/process-model shim; POSIX termination signals do not exist there and the
+process model differs enough that a green Windows job would encode untested
+promises. The one non-unix code path — `install_signal_handlers` on
+`#[cfg(not(unix))]` (`crates/cli/src/signals.rs`) — is a documented no-op that CI
+never exercises, precisely because no Windows runner is added. **Revisit on
+demand.**

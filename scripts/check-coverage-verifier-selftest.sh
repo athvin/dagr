@@ -79,16 +79,20 @@ write_good_matrix() { # write_good_matrix <path>
 
 | Criterion | Class | Platform | Test | Covered-by | Notes |
 |---|---|---|---|---|---|
-| MX | machine | — | coverage_matrix::verifier_passes_against_the_checked_in_matrix | T7 | mapped to an existing test |
+| MX | machine | platform-conditional | coverage_matrix::verifier_passes_against_the_checked_in_matrix | T7 | platform-conditional, mapped to an existing test |
 | MY | machine | — | unmapped | T99 | deferred; test ships with a later ticket |
 | HX | human | — | release-checklist | — | judgment, on the release checklist |
 | DX | disclaimer | — | — | — | the tool claims nothing here |
 EOF
 }
 
+# The fixture's platform-conditional id set: MX is platform-conditional in the
+# good matrix (mirroring C12/C16/C19 in the real one); nothing else is.
+plat_ids="MX"
+
 run_verifier() { # run_verifier <matrix> <ids> : prints output, returns exit code
   "$verifier" --matrix "$1" --required-ids "$2" --tests-from "$work/tests.txt" \
-    2>&1
+    --platform-conditional "$plat_ids" 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -151,7 +155,9 @@ fi
 # is an error. (A machine row `unmapped` against a *future* ticket is the
 # allowed deferred state; case 1's MY exercises that.)
 # ---------------------------------------------------------------------------
-sed 's/^| MX | machine | — | coverage_matrix::[^|]*|/| MX | machine | — | unmapped |/' \
+# Replace MX's mapped Test cell with `unmapped`, platform-cell-agnostic (MX is
+# platform-conditional in the good matrix, so the third cell is not `—`).
+sed -E 's/^(\| MX \| machine \| [^|]*\| )coverage_matrix::[^|]*\|/\1unmapped |/' \
   "$work/good.md" >"$work/unmapped.md"
 out=$(run_verifier "$work/unmapped.md" "$work/ids.txt"); rc=$?
 if [ "$rc" -ne 0 ]; then
@@ -209,6 +215,64 @@ if printf '%s' "$(run_verifier "$work/good.md" "$work/ids.txt")" >/dev/null \
   pass "machine row mapped to an existing test id is accepted"
 else
   bad "a machine row mapped to an existing test id must be accepted"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 8 — Untagged platform-conditional criterion fails (T70, ticket 077; Test
+# plan: "Matrix checker fails on an untagged platform-conditional criterion").
+# MX is in the platform-conditional set but its Platform cell is stripped to `—`;
+# the verifier must fail and NAME MX. Restoring the tag (the good matrix) passes.
+# This is the teeth: it proves the annotation is enforced, not decorative.
+# ---------------------------------------------------------------------------
+sed -E 's/^(\| MX \| machine \| )platform-conditional( \|)/\1—\2/' \
+  "$work/good.md" >"$work/untagged.md"
+out=$(run_verifier "$work/untagged.md" "$work/ids.txt"); rc=$?
+if [ "$rc" -ne 0 ]; then
+  pass "untagged platform-conditional criterion fails (nonzero exit)"
+else
+  bad "untagged platform-conditional criterion should fail but exited 0; output: $out"
+fi
+if printf '%s' "$out" | grep -q 'MX' \
+   && printf '%s' "$out" | grep -qiE 'platform-conditional'; then
+  pass "untagged-platform error names MX and says it must be platform-conditional"
+else
+  bad "untagged-platform error must name MX as needing the platform tag; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 9 — A criterion tagged platform-conditional but NOT in the set fails
+# (T70). MY is not platform-conditional; tagging it flags a stray annotation, so
+# the tag stays a faithful record of exactly which criteria are platform-
+# conditional. (Guards against the tag drifting onto the wrong rows.)
+# ---------------------------------------------------------------------------
+sed -E 's/^(\| MY \| machine \| )—( \|)/\1platform-conditional\2/' \
+  "$work/good.md" >"$work/stray.md"
+out=$(run_verifier "$work/stray.md" "$work/ids.txt"); rc=$?
+if [ "$rc" -ne 0 ]; then
+  pass "stray platform-conditional tag fails (nonzero exit)"
+else
+  bad "stray platform-conditional tag should fail but exited 0; output: $out"
+fi
+if printf '%s' "$out" | grep -q 'MY' \
+   && printf '%s' "$out" | grep -qiE 'stray|not in the platform-conditional set'; then
+  pass "stray-tag error names MY and says it is not in the platform-conditional set"
+else
+  bad "stray-tag error must name MY as a stray platform tag; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 10 — A Linux-only machine criterion stays MAPPED while tagged platform-
+# conditional (T70; Test plan: "macOS-excluded criterion is recorded, not
+# silently dropped"). MX is platform-conditional AND mapped to a real test in the
+# good matrix; it must NOT be reported as unmapped/dropped — the unmapped gate
+# stays green. (Case 1 already asserts the good matrix passes; asserted here for
+# the T70 property explicitly.)
+# ---------------------------------------------------------------------------
+out=$(run_verifier "$work/good.md" "$work/ids.txt"); rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qi 'unmapped'; then
+  pass "a platform-conditional criterion stays mapped, not reported unmapped/dropped"
+else
+  bad "a mapped platform-conditional criterion must not be reported unmapped; output: $out"
 fi
 
 if [ "$fail" -eq 0 ]; then
