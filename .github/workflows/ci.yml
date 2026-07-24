@@ -106,6 +106,17 @@ jobs:
         run: cargo test -p dagr-core --test ui
       - name: cargo test --workspace
         run: cargo test --workspace
+      # Published-artifact-schema validation (T39, ticket 050). The validation
+      # helper and its `jsonschema` dependency are gated behind the
+      # `schema-validation` feature (OFF by default, so the runtime writers pull
+      # no schema validator — T4 ADR 017 §4). This step turns the feature ON to
+      # run the schema suite (C19/C20/C22 validation) AND the standing
+      # fixture-corpus round-trip (T0.10 / Stability: "a corpus parsed in CI
+      # forever after"), which fails loudly if any checked-in corpus fixture no
+      # longer validates against its declared version's published schema. T48
+      # extends this into the enduring compatibility gate + scale artifact.
+      - name: artifact-schema validation + fixture-corpus round-trip (T39)
+        run: cargo test -p dagr-artifact --features schema-validation --test artifact_schemas
 
   # --- Rustdoc-on-public-items lint (Documentation) --------------------------
   rustdoc:

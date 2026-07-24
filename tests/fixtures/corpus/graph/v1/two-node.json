@@ -1,0 +1,59 @@
+{
+  "header": {
+    "schema_version": "dagr.graph@1",
+    "tool_version": "0.0.0",
+    "generated_at": "2026-07-23T00:00:00Z",
+    "pipeline": "example-pipeline",
+    "build_provenance": {
+      "tool_version": "0.0.0",
+      "git_commit": "abcdef0123456789abcdef0123456789abcdef01",
+      "lockfile_hash": "blake3:3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "fingerprint_structural": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "fingerprint_policy": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+    "fingerprint_algorithm_version": 1
+  },
+  "nodes": [
+    {
+      "name": "load",
+      "group": "ingest",
+      "task_name": "LoadTask",
+      "input_type_names": [],
+      "output_type_name": "Rows",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 0,
+        "timeout_ms": 60000,
+        "cost": { "memory_bytes": 1024 },
+        "execution_class": "compute",
+        "durable": false,
+        "trigger_rule": "all-succeeded"
+      },
+      "resources": { "memory_bytes": 1024 },
+      "dependencies": [],
+      "type_name": "example::LoadTask"
+    },
+    {
+      "name": "sink",
+      "group": "ingest",
+      "task_name": "SinkTask",
+      "input_type_names": ["Rows"],
+      "output_type_name": "Unit",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 0,
+        "timeout_ms": 60000,
+        "cost": { "memory_bytes": 1024 },
+        "execution_class": "compute",
+        "durable": false,
+        "trigger_rule": "all-succeeded"
+      },
+      "resources": { "memory_bytes": 1024 },
+      "dependencies": ["load"]
+    }
+  ],
+  "edges": [
+    { "from": "load", "to": "sink", "kind": "data", "type_name": "Rows" },
+    { "from": "load", "to": "sink", "kind": "ordering" }
+  ]
+}

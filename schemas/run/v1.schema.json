@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/athvin/dagr/schemas/run/v1.schema.json",
+  "title": "dagr.run@1",
+  "description": "The C22 run artifact: the outcome of one execution, joinable to the structure, derived from the event stream. A single canonical JSON document (T4 §2) with a header (run identity, pipeline identity, both fingerprint hashes, invocation parameters + data interval, allowlisted captured environment, resume lineage, overall outcome), one record PER ATTEMPT, and a summary. Accommodates the assembly-failed / bootstrap-failed variants (no fingerprint, non-empty error list, zero attempts) and the single-node replay variant (`not-requested` node marking). Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate.",
+  "type": "object",
+  "required": ["header", "attempts"],
+  "properties": {
+    "header": { "$ref": "#/$defs/header" },
+    "attempts": {
+      "description": "One record PER ATTEMPT (retries are the interesting signal, C22). Empty for the pre-execution failure variants.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/attempt" }
+    },
+    "summary": {
+      "description": "Run summary (C22). Null for the pre-execution failure variants (zero attempts).",
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/summary" }]
+    },
+    "variant": {
+      "description": "Optional artifact variant marker. `single-node-replay` marks a C26 single-node replay artifact whose out-of-request nodes carry the `not-requested` marking.",
+      "type": "string",
+      "enum": ["single-node-replay"]
+    },
+    "requested_node": {
+      "description": "Single-node-replay: the node the replay was requested for.",
+      "type": "string",
+      "minLength": 1
+    },
+    "node_markings": {
+      "description": "Single-node-replay: per-node markings. `not-requested` is an ARTIFACT MARKING for nodes outside the request (C22/C26), distinct from any terminal state.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["requested", "not-requested"]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "A pre-execution failure (assembly-failed or bootstrap-failed) carries a non-empty error list, no fingerprint, and zero attempts (C22).",
+      "if": {
+        "properties": {
+          "header": {
+            "properties": {
+              "overall_outcome": { "enum": ["assembly-failed", "bootstrap-failed"] }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "header": {
+            "required": ["errors"],
+            "not": {
+              "description": "A fingerprint is present ONLY when assembly succeeded, so a pre-execution failure must NOT carry either fingerprint hash.",
+              "anyOf": [
+                { "required": ["fingerprint_structural"] },
+                { "required": ["fingerprint_policy"] }
+              ]
+            }
+          },
+          "attempts": {
+            "description": "Zero attempts for a pre-execution failure.",
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "header": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "pipeline",
+        "parameters",
+        "data_interval",
+        "captured_environment",
+        "resume_lineage",
+        "overall_outcome"
+      ],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1 },
+        "pipeline": { "type": "string", "minLength": 1 },
+        "fingerprint_structural": {
+          "description": "Structural fingerprint (C21), present ONLY when assembly succeeded. Cross-references a graph artifact from the same build.",
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint_policy": { "type": "string", "minLength": 1 },
+        "fingerprint_algorithm_version": { "type": "integer", "minimum": 1 },
+        "parameters": { "type": "object" },
+        "data_interval": { "type": ["object", "null"] },
+        "captured_environment": {
+          "description": "Allowlisted captured environment values only, default allowlist empty (C22). Each value is a captured scalar (string/number/boolean); the schema does NOT sanction unbounded (nested-structure) environment capture.",
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "resume_lineage": {
+          "description": "Resume lineage: immediate parent and lineage-root run identities, when resumed; null otherwise (C22/C27).",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["parent_run_id", "lineage_root_run_id"],
+              "properties": {
+                "parent_run_id": { "type": "string", "minLength": 1 },
+                "lineage_root_run_id": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "overall_outcome": {
+          "description": "The overall run outcome. `assembly-failed` and `bootstrap-failed` are DISTINCT pre-execution-failure values (one the graph's fault, the other the machine's).",
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "assembly-failed",
+            "bootstrap-failed"
+          ]
+        },
+        "errors": {
+          "description": "The complete error list for a pre-execution failure variant (non-empty when present).",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "description": "One attempt record (C22): node identity, attempt number, terminal status from the normative taxonomy, named phase durations, worker, message, structured error detail, reported metrics, declared-vs-measured cost, and the optional durable-output reference (T0.8).",
+      "required": [
+        "node",
+        "attempt",
+        "status",
+        "phase_durations_ns",
+        "worker"
+      ],
+      "properties": {
+        "node": { "type": "string", "minLength": 1 },
+        "attempt": {
+          "description": "The attempt number (1-based).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "description": "Terminal status from the normative taxonomy (arch.md Vocabulary). `not-requested` is NOT here — it is an artifact marking, never a terminal state.",
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "timed-out",
+            "skipped",
+            "upstream-skipped",
+            "upstream-failed",
+            "cancelled",
+            "abandoned",
+            "satisfied-from-prior"
+          ]
+        },
+        "phase_durations_ns": {
+          "description": "Named phase durations in nanoseconds, computed from monotonic offsets so phases sum to the attempt total exactly (C22).",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "worker": {
+          "description": "Which worker ran this attempt.",
+          "type": "string",
+          "minLength": 1
+        },
+        "message": { "type": ["string", "null"] },
+        "error": {
+          "description": "Structured error detail (T3 error taxonomy), when the attempt did not succeed.",
+          "type": ["object", "null"]
+        },
+        "metrics": {
+          "description": "Reported metrics — an open numeric map (C23). Keys are metric names carrying units by convention; values are numeric.",
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "cost_declared": { "type": ["object", "null"] },
+        "cost_measured": { "type": ["object", "null"] },
+        "durable_reference": {
+          "description": "The durable-output reference (T0.8), present only on a durable node's succeeded attempt or copied forward on resume. OPAQUE to the schema — whatever the task's Reference type serializes to.",
+          "type": ["object", "string", "null"]
+        },
+        "satisfied_from_run": {
+          "description": "The ORIGINATING run identity a satisfied-from-prior attempt carries (C22/C27). Required when status is satisfied-from-prior (enforced below).",
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "satisfied-from-prior" } },
+            "required": ["status"]
+          },
+          "then": {
+            "description": "A satisfied-from-prior record MUST carry its originating run identity (C22/C27).",
+            "required": ["satisfied_from_run"]
+          }
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "description": "Run summary (C22): total elapsed, critical path, peak slot residency, retained values, abandoned-work-pinned time and capacity.",
+      "required": [
+        "total_elapsed_ns",
+        "critical_path_ns",
+        "peak_slot_residency",
+        "retained_values",
+        "abandoned_pinned_time_ns",
+        "abandoned_pinned_capacity"
+      ],
+      "properties": {
+        "total_elapsed_ns": { "type": "integer", "minimum": 0 },
+        "critical_path_ns": { "type": "integer", "minimum": 0 },
+        "peak_slot_residency": { "type": "integer", "minimum": 0 },
+        "retained_values": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "abandoned_pinned_time_ns": { "type": "integer", "minimum": 0 },
+        "abandoned_pinned_capacity": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

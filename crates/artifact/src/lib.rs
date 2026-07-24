@@ -12,13 +12,25 @@
 //! produced the artifacts."
 //!
 //! The first concrete artifact code lands with ticket T19 (029): the C19
-//! **event-stream writer** in [`event_stream`]. The graph artifact (C20 / T40),
-//! run artifact (C22 / T42), and versioned schemas (T39) still land later.
+//! **event-stream writer** in [`event_stream`]. The published versioned schemas
+//! (T39) and their validation helper live in the `schema` module — compiled only
+//! when the `schema-validation` feature is enabled, since its `jsonschema`
+//! dependency is CI-/dev-scoped (T4 ADR 017 §4). The graph artifact emitter
+//! (C20 / T40) and run artifact fold (C22 / T42) still land later.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
 pub mod event_stream;
+
+/// The T39 published-artifact-schema validation helper (arch.md C19/C20/C22).
+///
+/// Behind the `schema-validation` cargo feature (default OFF) because its
+/// `jsonschema` dependency is CI-/dev-scoped per the T4 ADR (017 §4); the
+/// runtime writers never pull it. The published schema documents themselves live
+/// at the repo root under `schemas/<kind>/v<version>.schema.json`.
+#[cfg(feature = "schema-validation")]
+pub mod schema;
 
 #[cfg(test)]
 mod tests {

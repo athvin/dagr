@@ -1,0 +1,17 @@
+{
+  "header": {
+    "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ac",
+    "pipeline": "example-pipeline",
+    "parameters": {},
+    "data_interval": null,
+    "captured_environment": {},
+    "resume_lineage": null,
+    "overall_outcome": "assembly-failed",
+    "errors": [
+      "node `a` duplicates node `a`",
+      "node `b` is marked durable but its output type lacks the durable-output contract"
+    ]
+  },
+  "attempts": [],
+  "summary": null
+}

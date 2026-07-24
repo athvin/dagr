@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/athvin/dagr/schemas/event-stream/v1.schema.json",
+  "title": "dagr.event-stream@1",
+  "description": "The C19 event stream: an append-only sequence of single-line JSON records (JSON Lines), one object per line. Every record carries the T0.6/C19 header (run identity, schema version, gapless strictly-increasing sequence, informational wall-clock stamp, authoritative monotonic offset) plus an event body keyed by `kind`. Published by T39 (ticket 050) against the T4 serialization ADR (017). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate and readers ignore them.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "seq", "wall", "offset_ns", "kind"],
+  "properties": {
+    "schema_version": {
+      "description": "Self-identifying schema version (T4 §3): the `dagr.event-stream` name disambiguates this record from co-located graph/run artifacts; `@1` is the single major integer.",
+      "const": "dagr.event-stream@1"
+    },
+    "run_id": {
+      "description": "The run identity every record carries, so a concatenated multi-run stream partitions safely (C19). A UUIDv7 string, operator-overridable.",
+      "type": "string",
+      "minLength": 1
+    },
+    "seq": {
+      "description": "Gapless, strictly-increasing sequence number within a run (C19). A non-negative integer.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "wall": {
+      "description": "Informational wall-clock stamp. Never used for durations (offsets are authoritative).",
+      "type": "string",
+      "minLength": 1
+    },
+    "offset_ns": {
+      "description": "Authoritative monotonic offset from run start, in nanoseconds. Durations are computed from offsets, never wall clocks (C19). Required and non-negative.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "kind": {
+      "description": "The event kind. The closed set covers every state-transition and lifecycle event (arch.md C19 + Vocabulary).",
+      "type": "string",
+      "enum": [
+        "run-started",
+        "node-ready",
+        "node-admitted",
+        "attempt-started",
+        "attempt-succeeded",
+        "attempt-failed",
+        "attempt-outcome",
+        "node-terminal",
+        "zombie-at-exit",
+        "run-finished"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "run-started" } } },
+      "then": {
+        "required": ["header"],
+        "properties": {
+          "header": {
+            "description": "Every run-artifact header field KNOWN AT START (C19): everything but the two end-only fields (overall outcome and summary), so a stream that ends one event later still identifies its run completely.",
+            "type": "object",
+            "required": [
+              "run_id",
+              "pipeline",
+              "fingerprint_structural",
+              "fingerprint_policy",
+              "fingerprint_algorithm_version",
+              "parameters",
+              "data_interval",
+              "captured_environment",
+              "resume_lineage"
+            ],
+            "properties": {
+              "run_id": { "type": "string", "minLength": 1 },
+              "pipeline": { "type": "string", "minLength": 1 },
+              "fingerprint_structural": { "type": "string", "minLength": 1 },
+              "fingerprint_policy": { "type": "string", "minLength": 1 },
+              "fingerprint_algorithm_version": { "type": "integer", "minimum": 1 },
+              "parameters": { "type": "object" },
+              "data_interval": { "type": ["object", "null"] },
+              "captured_environment": {
+                "description": "Allowlisted captured environment values only (default allowlist empty). Each value is a captured scalar (string/number/boolean), never an unbounded nested structure — the schema does not sanction unbounded environment capture (C22).",
+                "type": "object",
+                "additionalProperties": { "type": ["string", "number", "boolean"] }
+              },
+              "resume_lineage": { "type": ["object", "null"] }
+            },
+            "not": {
+              "description": "The two end-only fields must NOT appear at start: the run-started event predates the overall outcome and the summary. Expressed as a `not` on their presence (rather than additionalProperties:false) so future additive header fields still validate (T0.10).",
+              "anyOf": [
+                { "required": ["overall_outcome"] },
+                { "required": ["summary"] }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "zombie-at-exit" } } },
+      "then": {
+        "description": "A zombie-at-exit event references the attempt whose thread was left behind (C14). It is an EVENT record, never a terminal-state transition — it carries no terminal `status`.",
+        "required": ["node", "attempt"],
+        "properties": {
+          "node": { "type": "string", "minLength": 1 },
+          "attempt": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  ]
+}
