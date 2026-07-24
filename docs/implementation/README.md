@@ -101,7 +101,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **069** · [T56 — C26: CLI acceptance tests](069-T56-cli-acceptance-tests.md) · M · feature (tests) — after T55
 - [x] **070** · [T58 — C27: resume core](070-T58-resume-core.md) · M · feature — after T41, T54a, T55, T57
 - [x] **071** · [T54b — C18: resume scratch carry-forward](071-T54b-resume-scratch-carry-forward.md) · S · feature — after T54a, T58
-- [ ] **072** · [T59 — C27: resume acceptance tests](072-T59-resume-acceptance-tests.md) · M · feature (tests) — after T58, T54b
+- [x] **072** · [T59 — C27: resume acceptance tests](072-T59-resume-acceptance-tests.md) · M · feature (tests) — after T58, T54b
 - [ ] **073** · [T60 — C28: single-task test kit](073-T60-single-task-test-kit.md) · M · feature — after T16, T30
 - [ ] **074** · [T61 — C28: structure snapshot testing](074-T61-structure-snapshot-testing.md) · M · feature — after T40, T0.7
 - [ ] **075** · [T62 — C28: full-pipeline fakes harness](075-T62-full-pipeline-fakes-harness.md) · M · feature — after T24, T60
