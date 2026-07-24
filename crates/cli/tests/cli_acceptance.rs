@@ -657,37 +657,17 @@ fn parameter_flag_collision_is_rejected_and_named_for_both() {
 // The T55-deferred round-trip: parameters + verbatim data-interval in the header.
 // ===========================================================================
 
-/// A run records its parameters **and** the verbatim `data-interval` in the
-/// run-artifact header (the assertion T55 deferred to T56): drive the real run,
-/// then read the emitted artifact and assert the interval round-trips verbatim.
-#[test]
-fn a_run_records_parameters_and_the_verbatim_data_interval_in_the_header() {
-    let base = private_base("interval");
-    let out = run(
-        ALPHA,
-        &[
-            "run",
-            "--store",
-            base.to_str().unwrap(),
-            "--run-id",
-            "iv1",
-            "--durable-boundary",
-            "--shard",
-            "9",
-            "--data-interval",
-            "2026-07-24T00:00:00Z..2026-07-25T00:00:00Z",
-        ],
-    );
-    assert_eq!(code(&out), SUCCESS, "the run completes");
-    let run_json = read_json(&run_dir(&base, ALPHA_PIPELINE, "iv1").join("run.json"));
-    let header = &run_json["header"];
-    // The parameter round-trips into the header.
-    assert_eq!(
-        header["parameters"]["shard"].as_str(),
-        Some("9"),
-        "the parameter is recorded verbatim in the run-artifact header"
-    );
-    // The data-interval round-trips VERBATIM (both endpoints, unchanged).
+/// The distinctive `--data-interval` endpoints used by the round-trip test. These
+/// values are DELIBERATELY absent from every hand-stamped constant in the sample
+/// harness (`t56_sample.rs` stamps `2026-07-24`/`2026-07-25`), so the assertion can
+/// ONLY pass if the flag value is actually threaded config→driver→emitted-header —
+/// a hardcoded stamp would fail it, defeating the earlier tautology.
+const IV_START: &str = "2019-03-07T11:22:33Z";
+const IV_END: &str = "2019-03-08T00:00:00Z";
+
+/// Read the header's `data_interval` endpoints, tolerating either the `{start,end}`
+/// object shape (what the C19 writer emits) or a two-element array.
+fn header_interval_endpoints(header: &Value) -> (Option<String>, Option<String>) {
     let interval = &header["data_interval"];
     let start = interval["start"].as_str().or_else(|| {
         interval
@@ -701,15 +681,85 @@ fn a_run_records_parameters_and_the_verbatim_data_interval_in_the_header() {
             .and_then(|a| a.get(1))
             .and_then(Value::as_str)
     });
+    (start.map(str::to_owned), end.map(str::to_owned))
+}
+
+/// A run records its parameters **and** the verbatim `data-interval` in the
+/// run-artifact header (the assertion T55 deferred to T56): drive the **real** run
+/// path (the general `run` branch that runs `drive()` and folds the emitted
+/// stream — NOT the hand-stamped `--durable-boundary` producer), passing a
+/// DISTINCTIVE interval, then read the emitted artifact and assert the interval
+/// round-trips verbatim (both endpoints, unchanged). Because the asserted value is
+/// absent from every hardcoded stamp, this FAILS if the flag is not threaded —
+/// proving the config→driver→emitted-header path, not a constant.
+#[test]
+fn a_run_records_parameters_and_the_verbatim_data_interval_in_the_header() {
+    let base = private_base("interval");
+    let out = run(
+        ALPHA,
+        &[
+            "run",
+            "--store",
+            base.to_str().unwrap(),
+            "--run-id",
+            "iv1",
+            "--shard",
+            "9",
+            "--data-interval",
+            &format!("{IV_START}..{IV_END}"),
+        ],
+    );
+    assert_eq!(code(&out), SUCCESS, "the real run completes");
+    let run_json = read_json(&run_dir(&base, ALPHA_PIPELINE, "iv1").join("run.json"));
+    let header = &run_json["header"];
+    // The parameter round-trips into the header.
     assert_eq!(
-        start,
-        Some("2026-07-24T00:00:00Z"),
-        "the data-interval start round-trips verbatim into the header"
+        header["parameters"]["shard"].as_str(),
+        Some("9"),
+        "the parameter is recorded verbatim in the run-artifact header"
+    );
+    // The data-interval round-trips VERBATIM (both endpoints, unchanged) — the
+    // configured flag value threaded through the real `drive()` into the header.
+    let (start, end) = header_interval_endpoints(header);
+    assert_eq!(
+        start.as_deref(),
+        Some(IV_START),
+        "the data-interval start round-trips verbatim into the emitted header"
     );
     assert_eq!(
-        end,
-        Some("2026-07-25T00:00:00Z"),
-        "the data-interval end round-trips verbatim into the header"
+        end.as_deref(),
+        Some(IV_END),
+        "the data-interval end round-trips verbatim into the emitted header"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The negative/robustness half of the round-trip: a real run with NO
+/// `--data-interval` flag emits a header whose `data_interval` is absent/null —
+/// proving the header field REFLECTS THE FLAG rather than a baked-in constant (if
+/// the emitter stamped a constant, this would carry endpoints and fail).
+#[test]
+fn a_run_without_data_interval_flag_emits_no_interval_in_the_header() {
+    let base = private_base("no-interval");
+    let out = run(
+        ALPHA,
+        &[
+            "run",
+            "--store",
+            base.to_str().unwrap(),
+            "--run-id",
+            "ni1",
+            "--shard",
+            "9",
+        ],
+    );
+    assert_eq!(code(&out), SUCCESS, "the real run completes");
+    let run_json = read_json(&run_dir(&base, ALPHA_PIPELINE, "ni1").join("run.json"));
+    let header = &run_json["header"];
+    assert!(
+        header["data_interval"].is_null(),
+        "with no --data-interval flag the header carries no interval, got: {}",
+        header["data_interval"]
     );
     let _ = std::fs::remove_dir_all(&base);
 }

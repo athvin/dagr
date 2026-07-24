@@ -758,7 +758,20 @@ fn run_started_header_carries_start_fields() {
             .and_then(|v| v.as_str()),
         Some("5")
     );
-    assert!(body.get("data_interval").is_some(), "data interval present");
+    // The data interval threads through `drive()` VERBATIM: the exact configured
+    // endpoints appear in the emitted header (not merely "present" — proving the
+    // driver carries the interval it was given, byte-for-byte).
+    let interval = body.get("data_interval").expect("data interval present");
+    assert_eq!(
+        interval.get("start").and_then(|v| v.as_str()),
+        Some("2026-01-01"),
+        "the configured interval start threads verbatim into the emitted header"
+    );
+    assert_eq!(
+        interval.get("end").and_then(|v| v.as_str()),
+        Some("2026-01-02"),
+        "the configured interval end threads verbatim into the emitted header"
+    );
     // The overall outcome and summary are NOT in the run-started header.
     assert!(body.get("outcome").is_none(), "no overall outcome at start");
 }
