@@ -347,6 +347,7 @@ impl CancelTrigger {
                 node: CANCEL_WAKE_SENTINEL.to_string(),
                 state: TerminalState::Cancelled,
                 events: Vec::new(),
+                durable_reference: None,
             });
         }
     }
@@ -585,6 +586,22 @@ pub trait NodeRunner: Send {
         ctx: &'a RunContext,
         sink: &'a mut (dyn AttemptEventSink + Send),
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TerminalState> + Send + 'a>>;
+
+    /// The **durable reference** this node's succeeded attempt recorded (arch.md C27
+    /// / T57), or [`None`] for a non-durable node (an in-memory value that cannot be
+    /// rehydrated). Read by the driver **after** a successful attempt and stamped
+    /// into that attempt's `attempt-outcome` record (via
+    /// `dagr_artifact::event_stream::record_durable_reference`), so a later resume
+    /// finds the reference in the folded prior artifact and can rehydrate the value.
+    ///
+    /// The default is [`None`] — every existing runner is a non-durable node and its
+    /// stream is byte-identical. A durable node's runner overrides this to return the
+    /// reference its output type serialized (C27's durable-output contract). This is
+    /// the minimal seam that lets a **durable producer record its reference through
+    /// the real `drive()` loop** — the M4 gate demo's stage boundary depends on it.
+    fn durable_reference(&self) -> Option<String> {
+        None
+    }
 }
 
 // ===========================================================================
@@ -610,6 +627,18 @@ pub struct RunPlan {
     /// its fingerprint/render treatment are T50; this seam seeds only the readiness
     /// tracker's dependency structure.
     ordering: BTreeMap<String, Vec<String>>,
+    /// **Resume pre-satisfied nodes** (C27 / T63): node name → the durable reference
+    /// its prior success recorded (or `None` for an undemanded/non-durable prior
+    /// success). Each is a node the C27 resume plan left `satisfied-from-prior` — it
+    /// does **not** re-execute (it has no runner in `runners`), and it carries no
+    /// data-upstream re-run. Before the loop starts the driver records each terminal
+    /// `satisfied-from-prior` (a success-like state), so its dependents in the
+    /// must-run set become ready and its recorded durable reference is copied onto its
+    /// `attempt-outcome` record. When a demanded consumer reads a satisfied producer's
+    /// value, its output slot is pre-filled by rehydration by the caller (the resume
+    /// driver). **Empty for a non-resume run** — the loop is then byte-for-byte the
+    /// M1/T34 run.
+    pre_satisfied: BTreeMap<String, Option<String>>,
 }
 
 impl RunPlan {
@@ -623,6 +652,7 @@ impl RunPlan {
             pipeline,
             runners,
             ordering: BTreeMap::new(),
+            pre_satisfied: BTreeMap::new(),
         }
     }
 
@@ -648,7 +678,26 @@ impl RunPlan {
             pipeline,
             runners,
             ordering,
+            pre_satisfied: BTreeMap::new(),
         }
+    }
+
+    /// Declare the run's **resume pre-satisfied nodes** (C27 / T63): `pre_satisfied`
+    /// maps each node the C27 resume plan left `satisfied-from-prior` to the durable
+    /// reference its prior success recorded (or `None` for an undemanded/non-durable
+    /// prior success).
+    ///
+    /// This is the **resume driver seam** the M4 gate demo composes: it lets a
+    /// resumed run drive only the **must-run subset** (the `runners` map) while the
+    /// satisfied-from-prior nodes are pre-seeded terminal, so their dependents become
+    /// ready without re-executing and a demanded durable producer's slot is filled by
+    /// rehydration (the caller pre-fills the slot before drive). A pre-satisfied node
+    /// must **not** also have a runner. An empty map yields exactly the
+    /// [`with_ordering`](Self::with_ordering) run — a non-resume run is unchanged.
+    #[must_use]
+    pub fn with_resume(mut self, pre_satisfied: BTreeMap<String, Option<String>>) -> Self {
+        self.pre_satisfied = pre_satisfied;
+        self
     }
 }
 
@@ -935,6 +984,7 @@ where
         pipeline,
         runners,
         ordering,
+        pre_satisfied,
     } = plan;
     let artifact = pipeline
         .assemble()
@@ -1015,6 +1065,8 @@ where
         &config.capacities,
         &config.cancel_trigger,
         &temp_dir,
+        &config.base,
+        &pre_satisfied,
         &mut writer,
     );
 
@@ -1034,10 +1086,12 @@ where
     run_teardown_phase(
         &pipeline,
         &run_id_str,
+        pipeline_name,
         teardown_runners,
         &covered_states,
         config.teardown_deadline,
         &temp_dir,
+        &config.base,
         &mut writer,
         &mut terminal_states,
     );
@@ -1132,6 +1186,11 @@ struct AttemptDone {
     node: String,
     state: TerminalState,
     events: Vec<AttemptEvent>,
+    /// The durable reference the node's succeeded attempt recorded (C27 / T57), or
+    /// [`None`] for a non-durable node. Stamped by the loop onto the succeeded
+    /// attempt's `attempt-outcome` record so a later resume can rehydrate it. `None`
+    /// for every non-durable node — the stream is then byte-identical.
+    durable_reference: Option<String>,
 }
 
 /// The reserved sentinel node name for a **cancellation wake** pushed through the
@@ -1171,6 +1230,17 @@ struct AdmitCtx<'a> {
     // attempt's `RunContext` so a task reaches its confined local scratch through
     // the context. Created at bootstrap and reclaimed at run end by the driver.
     temp_dir: &'a std::path::Path,
+    // The run-store base (arch.md C18; T63), threaded into each attempt's
+    // `RunContext` so a task reaches its **durable scratch store** — its per-node
+    // namespace `<base>/<pipeline>/<run-id>/scratch/<node>/`. This is the wiring the
+    // M4 gate demo depends on: a re-executing node reads its carried-forward
+    // checkpoint through the ordinary C18 context API. A task that touches no scratch
+    // is unaffected, so a non-scratch run is byte-identical.
+    scratch_base: &'a str,
+    // The pipeline identity used to resolve the scratch namespace (and, at teardown,
+    // the same), so the driver's scratch layout and a later resume's carry-forward
+    // agree on `<base>/<pipeline>/…`.
+    pipeline_name: &'a str,
 }
 
 /// The readiness-driven execution loop (arch.md C11; the driver's half of the
@@ -1200,7 +1270,7 @@ struct AdmitCtx<'a> {
 fn run_loop<S, C>(
     pipeline: &Pipeline,
     run_id: &str,
-    _pipeline_name: &str,
+    pipeline_name: &str,
     runners: BTreeMap<String, Box<dyn NodeRunner>>,
     mut tracker: ReadinessTracker,
     grace: Duration,
@@ -1209,6 +1279,8 @@ fn run_loop<S, C>(
     capacities: &PoolCapacities,
     cancel_trigger: &Arc<CancelTrigger>,
     temp_dir: &std::path::Path,
+    scratch_base: &str,
+    pre_satisfied: &BTreeMap<String, Option<String>>,
     writer: &mut EventStreamWriter<S, C>,
 ) -> (
     RunOutcome,
@@ -1310,13 +1382,60 @@ where
             run_cancel: &run_cancel,
             live: &live,
             temp_dir,
+            scratch_base,
+            pipeline_name,
         };
+
+        // --- Resume pre-satisfied nodes (C27 / T63) --------------------------
+        // Before the frontier, record every node the resume plan left
+        // `satisfied-from-prior` as terminal (a success-like state): emit its ready /
+        // satisfied attempt-outcome (carrying the copied-forward durable reference) /
+        // node-terminal records, mark its terminal state, and feed it into the tracker
+        // so its dependents in the must-run set become ready. It has no runner (it is
+        // NOT re-executed); its demanded value, if any, was pre-filled into its output
+        // slot by the caller (rehydration). For a non-resume run `pre_satisfied` is
+        // empty and this whole block is skipped, so the loop is byte-for-byte the M1
+        // run.
+        for (node, durable_reference) in pre_satisfied {
+            let _ = writer.node_ready(node);
+            let mut record = AttemptOutcomeRecord::new(
+                node,
+                1,
+                wire_terminal(TerminalState::SatisfiedFromPrior).as_str(),
+            );
+            dagr_artifact::event_stream::record_durable_reference(
+                &mut record,
+                durable_reference.clone(),
+            );
+            let _ = writer.attempt_outcome(record);
+            record_terminal(node, TerminalState::SatisfiedFromPrior, &mut terminal_states);
+            let _ = writer.node_terminal(node, wire_terminal(TerminalState::SatisfiedFromPrior));
+            // Cascade: a satisfied producer's dependents in the must-run set can now
+            // become ready (success-like upstream).
+            let decisions = tracker
+                .notify_terminal(NodeId::from_name(node), TerminalState::SatisfiedFromPrior);
+            apply_decisions(
+                &actx,
+                &decisions,
+                writer,
+                stopping,
+                draining,
+                &mut terminal_states,
+                &mut zombie_candidates,
+                &mut pending,
+                &mut in_flight,
+            );
+        }
 
         // Offer the initial-ready frontier (every zero-dependency source node) to
         // admission. A node that fits its pools is admitted (in flight); one that
-        // does not waits in `pending` for a release.
+        // does not waits in `pending` for a release. A node already settled
+        // satisfied-from-prior above is skipped here (it is decided, not ready).
         for id in tracker.initial_ready().to_vec() {
             if let Some(name) = node_name(pipeline, id) {
+                if terminal_states.contains_key(&name) {
+                    continue;
+                }
                 offer_or_pend(&actx, &name, writer, &mut pending, &mut in_flight);
             }
         }
@@ -1553,8 +1672,19 @@ where
         }
         let _ = write_attempt_event(writer, ev);
         if !reclassified {
-            if let Some(record) = closing_outcome_record(&done.node, ev) {
+            if let Some(mut record) = closing_outcome_record(&done.node, ev) {
                 last_attempt = record.attempt;
+                // (C27 / T57 / T63) Stamp the durable reference onto the SUCCEEDED
+                // attempt-outcome record so a later resume finds it in the folded
+                // artifact. Only a succeeded outcome carries a reference; a
+                // non-durable node reports `None`, leaving the field absent (the
+                // fold defaults it), so a non-durable run's record is unchanged.
+                if matches!(ev, AttemptEvent::AttemptSucceeded { .. }) {
+                    dagr_artifact::event_stream::record_durable_reference(
+                        &mut record,
+                        done.durable_reference.clone(),
+                    );
+                }
                 let _ = writer.attempt_outcome(record);
             }
         }
@@ -1802,6 +1932,7 @@ fn reject_over_demand(
             node: name.to_string(),
             state: TerminalState::Failed,
         }],
+        durable_reference: None,
     });
 }
 
@@ -1851,6 +1982,7 @@ fn cancel_node(
             node: name.to_string(),
             state: TerminalState::Cancelled,
         }],
+        durable_reference: None,
     });
     *in_flight += 1;
 }
@@ -1969,6 +2101,7 @@ where
             node: name.to_string(),
             state: TerminalState::Failed,
             events: Vec::new(),
+            durable_reference: None,
         });
         return;
     };
@@ -1996,6 +2129,13 @@ where
     // attempt's context so a task reaches its confined local scratch through the
     // context (`RunContext::temp_dir`). Owned into the future so it outlives `actx`.
     let temp_dir = actx.temp_dir.to_path_buf();
+    // The run-store base (arch.md C18; T63), threaded into the attempt's context so
+    // a task reaches its **durable scratch store** through `RunContext::scratch` —
+    // its per-node namespace `<base>/<pipeline>/<run-id>/scratch/<node>/`. A task
+    // that touches no scratch is unaffected. Owned into the future so it outlives
+    // `actx`.
+    let scratch_base = actx.scratch_base.to_string();
+    let pipeline_name = actx.pipeline_name.to_string();
     // The attempt future — driven on the surface `class` names. It owns the runner,
     // the buffering sink, and the permit; producing the `(state, events)` the loop
     // records once the attempt returns.
@@ -2003,10 +2143,19 @@ where
         // A per-attempt buffering sink: the attempt emits into it off the
         // framework runtime; the loop drains it into the writer in order.
         let mut sink = BufferingSink::default();
-        let ctx = RunContext::builder(CoreRunId::new(run_id), PipelineId::new("pipeline"), node_id)
-            .cancellation(attempt_signal)
-            .temp_dir(temp_dir)
-            .build();
+        let ctx = RunContext::builder(
+            CoreRunId::new(run_id),
+            PipelineId::new(pipeline_name),
+            node_id,
+        )
+        .cancellation(attempt_signal)
+        .temp_dir(temp_dir)
+        // C18 / T63 — the run-store base, so the node's scratch resolves to its real
+        // per-node namespace under the run directory (where a resume carries prior
+        // scratch forward). The store is unwired for an empty base (a hand-built
+        // no-store context, C8), so a no-scratch run is byte-identical.
+        .scratch_root(std::path::PathBuf::from(scratch_base))
+        .build();
         // (C25 / T45) Open the attempt span — run/node/attempt identity — and
         // instrument the attempt future with it, so every line the task or a
         // third-party library it calls emits beneath this future carries that
@@ -2015,6 +2164,16 @@ where
         // lifecycle; its identity is read off the C8 context's dep-free `LogSpan`.
         let span = crate::logging::attempt_span_from(ctx.span(), &name_owned);
         let state = runner.run(&ctx, &mut sink).instrument(span).await;
+        // (C27 / T57 / T63) A durable node's runner reports the reference its output
+        // serialized once the attempt succeeded; the loop stamps it onto the
+        // succeeded `attempt-outcome` record so a later resume can rehydrate the
+        // value. `None` for every non-durable node (the default), so the stream is
+        // byte-identical for a non-durable run.
+        let durable_reference = if state == TerminalState::Succeeded {
+            runner.durable_reference()
+        } else {
+            None
+        };
         // Release the C12 permit at the attempt's terminal state (its working
         // memory + thread cost returns to the pools) BEFORE reporting done, so the
         // loop sees freed capacity when it re-offers the pending waiters. An
@@ -2022,18 +2181,23 @@ where
         // a blocking/compute-timeout zombie keeps it until its closure returns
         // (T0.3 ADR). The permit drops on whichever surface ran the attempt.
         drop(permit);
-        (name_owned, state, sink.drain())
+        (name_owned, state, sink.drain(), durable_reference)
     };
     // Route by class (C13 / T33). `on_done` sends the finished attempt back to the
     // framework loop over `tx`; it runs on the surface the attempt ran on, off the
     // framework runtime, so a jammed task surface never touches the writer.
-    dispatcher.dispatch(class, attempt, move |(node, state, events)| {
-        let _ = tx.send(AttemptDone {
-            node,
-            state,
-            events,
-        });
-    });
+    dispatcher.dispatch(
+        class,
+        attempt,
+        move |(node, state, events, durable_reference)| {
+            let _ = tx.send(AttemptDone {
+                node,
+                state,
+                events,
+                durable_reference,
+            });
+        },
+    );
 }
 
 /// Act on each decision the tracker unlocked. A [`Decision::Ready`] node is
@@ -2062,6 +2226,11 @@ fn apply_decisions<S, C>(
         match decision {
             Decision::Ready(id) => {
                 if let Some(name) = node_name(pipeline, *id) {
+                    // A node already settled terminal (a resume pre-satisfied node,
+                    // C27 / T63) is decided, not ready — never offer it to admission.
+                    if terminal_states.contains_key(&name) {
+                        continue;
+                    }
                     // C16 / T35: under a **full drain** (an external interrupt) no
                     // new work is admitted at all — every newly-ready node is settled
                     // `cancelled` (including a contingency). C15 / T34: under a
@@ -2147,10 +2316,12 @@ fn partition_teardown_runners(pipeline: &Pipeline, runners: RunnerMap) -> (Runne
 fn run_teardown_phase<S, C>(
     pipeline: &Pipeline,
     run_id: &str,
+    pipeline_name: &str,
     mut teardown_runners: RunnerMap,
     covered_states: &BTreeMap<String, TerminalState>,
     teardown_deadline: Duration,
     temp_dir: &std::path::Path,
+    scratch_base: &str,
     writer: &mut EventStreamWriter<S, C>,
     terminal_states: &mut BTreeMap<String, TerminalState>,
 ) where
@@ -2197,12 +2368,15 @@ fn run_teardown_phase<S, C>(
         let node_id = NodeId::from_name(name);
         let ctx = RunContext::builder(
             CoreRunId::new(run_id.to_string()),
-            PipelineId::new("pipeline"),
+            PipelineId::new(pipeline_name),
             node_id,
         )
         .cancellation(fresh.signal())
         .covered_terminal_states(covered_view)
         .temp_dir(temp_dir.to_path_buf())
+        // C18 / T63 — a teardown reaches its own per-node scratch namespace too, so
+        // a teardown that checkpoints is on the same footing as any node.
+        .scratch_root(std::path::PathBuf::from(scratch_base))
         .build();
 
         // Emit `node-ready` (mirroring the main loop's admit), then run the teardown
@@ -2233,6 +2407,7 @@ fn run_teardown_phase<S, C>(
             node: name.clone(),
             state,
             events: sink.drain(),
+            durable_reference: None,
         };
         record_teardown_outcome(&done, deadline_hit, writer, terminal_states);
     }
