@@ -99,7 +99,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **067** · [T57 — C27: durable-output declaration and recording](067-T57-durable-output-declaration-recording.md) · M · feature — after T42, T0.8
 - [x] **068** · [T55 — C26: CLI contract](068-T55-cli-contract.md) · M · feature — after T34, T36, T40, T42, T46, T57, T0.6
 - [x] **069** · [T56 — C26: CLI acceptance tests](069-T56-cli-acceptance-tests.md) · M · feature (tests) — after T55
-- [ ] **070** · [T58 — C27: resume core](070-T58-resume-core.md) · M · feature — after T41, T54a, T55, T57
+- [x] **070** · [T58 — C27: resume core](070-T58-resume-core.md) · M · feature — after T41, T54a, T55, T57
 - [ ] **071** · [T54b — C18: resume scratch carry-forward](071-T54b-resume-scratch-carry-forward.md) · S · feature — after T54a, T58
 - [ ] **072** · [T59 — C27: resume acceptance tests](072-T59-resume-acceptance-tests.md) · M · feature (tests) — after T58, T54b
 - [ ] **073** · [T60 — C28: single-task test kit](073-T60-single-task-test-kit.md) · M · feature — after T16, T30
