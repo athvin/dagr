@@ -773,6 +773,39 @@ impl Flow {
         )
     }
 
+    /// Register a **stable-name-aware teardown node** (C17) covering an explicit set
+    /// of upstream handles — the [`register_teardown`](Flow::register_teardown)
+    /// counterpart that also captures the node's author-declared
+    /// [stable names](StableName) for the C20 graph artifact / C28 structure snapshot,
+    /// so a pipeline **with** a teardown is snapshottable and its structure is
+    /// review-visible like any other node. Pins the teardown flag and the
+    /// [`all-terminal`](TriggerRule::AllTerminal) rule exactly as
+    /// [`register_teardown`](Flow::register_teardown).
+    #[must_use]
+    pub fn register_teardown_named<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        covered: &[OrderingHandle],
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName,
+        T::Output: StableName,
+    {
+        let handle = self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy.teardown(true),
+            DurableWitness::Absent,
+            TriggerRule::AllTerminal,
+            covered,
+        );
+        self.attach_stable_names::<T>(handle.id());
+        handle
+    }
+
     /// Register a **source** node under `name`, in an optional group, with an
     /// explicit [`NodePolicy`], durable-contract [`witness`](DurableWitness), and
     /// [trigger rule](TriggerRule) — the full source-registration surface the other
@@ -1070,6 +1103,47 @@ impl Flow {
             group,
             policy,
             DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
+            &[],
+        );
+        self.attach_stable_names::<T>(handle.id());
+        handle
+    }
+
+    /// Register a **durable, stable-name-aware source** node under `name`, in an
+    /// optional group — the [`register_source_named`](Flow::register_source_named)
+    /// counterpart that also marks the node's output **durable** (C27 / C5) and
+    /// carries the [`DurableWitness::Present`] the durable-without-contract assembly
+    /// check consumes (T0.8 §5).
+    ///
+    /// This is the registrar an **expensive stage-boundary producer** uses: its
+    /// output type implements the [`DurableOutput`] reference contract so a resume
+    /// (C27) rehydrates the value instead of recomputing it, **and** it carries the
+    /// author-declared [stable names](StableName) the C20 graph artifact / C28
+    /// structure snapshot need — so the same durable producer participates in both
+    /// the resume machinery and the review structure fixture (the M4 gate demo's
+    /// reference stage boundary). Assembly rejects a durable-marked node whose output
+    /// type does not implement [`DurableOutput`] (enforced through the `T::Output:
+    /// DurableOutput` bound + the witness), exactly as
+    /// [`register_source_durable`](Flow::register_source_durable) does.
+    #[must_use]
+    pub fn register_source_named_durable<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName,
+        T::Output: DurableOutput + StableName,
+    {
+        let handle = self.register_source_in_group_with::<T>(
+            name,
+            task,
+            group,
+            policy.durable(true),
+            DurableWitness::Present,
             TriggerRule::AllSucceeded,
             &[],
         );
