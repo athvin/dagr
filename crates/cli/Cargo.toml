@@ -95,6 +95,35 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # this needs; rayon's tree (rayon-core, crossbeam-*, either) is MIT OR Apache-2.0.
 rayon = "1"
 
+# tracing + tracing-subscriber — the C25 logging/tracing integration (T45, 056).
+# arch.md C25 makes tracing a *named public integration*, not the cfg-gated
+# optional dep dagx used: every attempt runs beneath a span carrying run/node/
+# attempt identity so any line — framework or third-party the task calls — is
+# attributable without correlating timestamps, with a structured-by-default and a
+# human-readable output mode switchable by an environment variable (no recompile).
+# It is added to dagr-cli — the pipeline binary that owns bootstrap and the run
+# loop where attempts execute — NOT dagr-core, so core stays dependency-free
+# (Stability / the T1 ADR): core exposes only the dep-free `LogSpan` identity
+# payload on the `RunContext`; the subscriber install and the span wiring live
+# here (`src/logging.rs`) and the driver instruments each attempt future with the
+# span. The C25 tracing layer is the developer/operator observability surface and
+# is deliberately DISTINCT from the C19 durable event stream (the authoritative
+# record): a tracing line is not an event-stream record and never replaces one.
+#   * tracing — the facade the framework and third-party libraries emit through;
+#     `Span`/`Instrument` carry the attempt identity across `.await` points.
+#   * tracing-subscriber with default-features OFF and only `fmt` + `json` + `std`:
+#     `fmt` gives the human-readable local-dev layer, `json` the structured
+#     machine-queryable default (run/node/attempt as discrete fields). `env-filter`
+#     is deliberately NOT enabled — the mode env var selects the *format*, a level
+#     cap is set directly — which keeps `matchers`/`regex`/`nu-ansi-term`/`smallvec`
+#     out of the tree. The whole transitive addition (tracing, tracing-core,
+#     tracing-attributes, tracing-serde, sharded-slab, thread_local, once_cell,
+#     pin-project-lite; serde/serde_json/memchr were already present) resolves to
+#     MIT under the MIT-only deny.toml — NO deny.toml change is needed, and
+#     `cargo audit`/`cargo deny` stay green.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
+
 [dev-dependencies]
 # libc — T36 (046) only. The C16 signal test proves the *end-to-end* OS-signal
 # path without killing the test-runner by `fork`ing a controlled child that
