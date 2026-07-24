@@ -267,6 +267,7 @@ pub mod handle;
 pub mod limits;
 pub mod readiness;
 pub mod slot;
+pub mod stable_name;
 pub mod task;
 
 pub use assembly::{
@@ -292,7 +293,7 @@ pub use execution::{
     LateResultBarrier, NoJitter, PanicStrategy, RetryConfig, SeededJitter, TimeoutDecision,
     ZombieObserver,
 };
-pub use flow::{FailureMode, Flow, Pipeline, PipelineNode};
+pub use flow::{FailureMode, Flow, Pipeline, PipelineNode, StableTypeNames};
 pub use handle::{Handle, NodeId};
 pub use limits::{
     detect_capacities, CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, PinnedPools,
@@ -303,4 +304,5 @@ pub use slot::{
     ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,
     SlotRef,
 };
+pub use stable_name::{is_well_formed, StableInputNames, StableName, UNIT_STABLE_NAME};
 pub use task::{ExecutionClass, Task};

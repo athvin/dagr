@@ -72,22 +72,72 @@
 //! **Node identity** — this module's subject — is the explicit **registration
 //! name**, a per-node `String` the author supplies at each registration. It is
 //! *distinct* from the **stable task/payload *type* name** the T0.7 ADR fixes: a
-//! `StableName` associated-constant carried by task and payload *types*, feeding
-//! the graph artifact (C20 / T40) and the two fingerprints (C21 / T41). Nothing
-//! in this ticket consumes a stable *type* name — node identity, the immutable
-//! pipeline, and its read surface are all built on the registration *name* alone
-//! — so the `StableName` trait and its one-line derive land with their first
-//! consumer, the fingerprint/artifact tickets (T40/T41), not here. Duplicate
-//! *stable-type-name* checking (like duplicate *node-name* checking) is an
-//! assembly concern deferred to T14.
+//! [`StableName`] associated-constant carried by task and payload *types*, feeding
+//! the graph artifact (C20 / T40) and the two fingerprints (C21 / T41). T13 built
+//! node identity on the registration *name* alone; the [`StableName`] trait lands
+//! with its first consumer, **T40** (C20 graph-artifact emission), which is where
+//! the
+//! stable-name-aware registrars
+//! ([`register_source_named`](Flow::register_source_named) /
+//! [`register_named`](Flow::register_named)) capture a node's
+//! [stable type names](StableTypeNames) into [`PipelineNode::stable_names`].
+//! Duplicate *stable-type-name* checking (like duplicate *node-name* checking) is
+//! an assembly concern deferred to T14.
 
 use std::collections::BTreeMap;
 
 use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, EffectivePolicy, NodePolicy};
 use crate::binding::{DataEdge, NodeBinding, TriggerRule};
 use crate::handle::{Handle, NodeId};
+use crate::stable_name::{StableInputNames, StableName};
 use crate::task::{ExecutionClass, Task};
 use crate::Deps;
+
+/// The **author-declared stable names** a node carries for the graph artifact
+/// (arch.md C20; T0.7 §1–§2) — the stable *task* name, the ordered stable *input*
+/// type names, and the stable *output* type name, all captured at the typed
+/// registration site from the [`StableName`] constants on the task and payload
+/// types.
+///
+/// Distinct from the node's **identity name** (the registration `String`): the
+/// identity name is how the pipeline keys and wires the node (C2/C7), while these
+/// are the author-declared *type* names the C20 artifact records and the C21
+/// fingerprints hash (never [`std::any::type_name`], which is admitted only as an
+/// informational debug field — T0.7 §1). They are captured **only** by the
+/// stable-name-aware registrars ([`Flow::register_source_named`],
+/// [`Flow::register_named`]); a node registered through the type-erased registrars
+/// carries [`None`] and is not emittable to the C20 contract (which requires them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StableTypeNames {
+    task: &'static str,
+    inputs: Vec<&'static str>,
+    output: &'static str,
+}
+
+impl StableTypeNames {
+    /// The author-declared stable **task** name (C20) — the `STABLE_NAME` of the
+    /// task type registered for this node.
+    #[must_use]
+    pub fn task(&self) -> &'static str {
+        self.task
+    }
+
+    /// The ordered author-declared stable **input** type names (C20) — one per
+    /// bound input in declaration order, empty for a consume-nothing node.
+    #[must_use]
+    pub fn inputs(&self) -> &[&'static str] {
+        &self.inputs
+    }
+
+    /// The author-declared stable **output** type name (C20) — the `STABLE_NAME`
+    /// of the produced payload type, or the reserved unit sentinel
+    /// ([`UNIT_STABLE_NAME`](crate::stable_name::UNIT_STABLE_NAME)) for an
+    /// effect-only (`()`-output) node.
+    #[must_use]
+    pub fn output(&self) -> &'static str {
+        self.output
+    }
+}
 
 /// The run-level **failure mode** — what happens to the *rest* of the run when a
 /// node reaches a failure-like terminal state (arch.md `### C15 · Failure policy
@@ -170,6 +220,11 @@ pub struct PipelineNode {
     /// collapses duplicates to one node, so this count is where assembly reads
     /// that both declarations existed (C7).
     registration_count: usize,
+    /// The author-declared [stable type names](StableTypeNames) captured at the
+    /// typed registration site (C20 / T0.7), or [`None`] when the node was
+    /// registered through a type-erased registrar. Present only via the
+    /// stable-name-aware registrars; the graph artifact (T40) requires it.
+    stable_names: Option<StableTypeNames>,
 }
 
 impl PipelineNode {
@@ -283,6 +338,22 @@ impl PipelineNode {
     #[must_use]
     pub fn registration_count(&self) -> usize {
         self.registration_count
+    }
+
+    /// The node's author-declared [stable type names](StableTypeNames) (C20 /
+    /// T0.7) — the stable task name and the stable input/output type names — or
+    /// [`None`] when the node was registered through a type-erased registrar.
+    ///
+    /// A node carries these **only** when registered through a stable-name-aware
+    /// registrar ([`Flow::register_source_named`], [`Flow::register_named`]),
+    /// which captures them from the [`StableName`] constants on the task and
+    /// payload types. The C20 graph artifact (T40) records them; a node lacking
+    /// them cannot be emitted to that contract. They are the **author-declared**
+    /// identity — never [`std::any::type_name`], which the artifact admits only as
+    /// an informational debug field (T0.7 §1).
+    #[must_use]
+    pub fn stable_names(&self) -> Option<&StableTypeNames> {
+        self.stable_names.as_ref()
     }
 }
 
@@ -552,6 +623,7 @@ impl Flow {
             durable_witness,
             output_is_unit: output_is_unit::<T::Output>(),
             registration_count: 1,
+            stable_names: None,
         };
         self.insert_node(name, node);
         handle
@@ -708,9 +780,127 @@ impl Flow {
             durable_witness,
             output_is_unit: output_is_unit::<T::Output>(),
             registration_count: 1,
+            stable_names: None,
         };
         self.insert_node(name, pipeline_node);
         handle
+    }
+
+    /// Register a **source** node under `name` whose task and output payload types
+    /// carry author-declared [`StableName`]s, capturing those
+    /// [stable names](StableTypeNames) for the C20 graph artifact (arch.md C20;
+    /// T0.7 §1–§2), and returning its output [`Handle`].
+    ///
+    /// This is the stable-name-aware source registrar: alongside the identity name
+    /// (the registration `String`) it records `T::STABLE_NAME` (the stable *task*
+    /// name), an empty stable *input* list (a source consumes nothing), and
+    /// `T::Output`'s stable name (or the reserved unit sentinel for a `()`-output
+    /// effect node). The type-erased [`register_source`](Flow::register_source)
+    /// captures no stable names; a node needs this registrar to be emittable to the
+    /// C20 contract. `policy` is the C5 policy (defaults via [`NodePolicy::new`]).
+    #[must_use]
+    pub fn register_source_named<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName,
+        T::Output: StableName,
+    {
+        let handle = self.register_source_in_group_with::<T>(
+            name,
+            task,
+            group,
+            policy,
+            DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
+        );
+        self.attach_stable_names::<T>(handle.id());
+        handle
+    }
+
+    /// Register a **data-dependent** node under `name` whose task and payload types
+    /// carry author-declared [`StableName`]s, binding `deps` and capturing the
+    /// node's [stable names](StableTypeNames) for the C20 graph artifact (arch.md
+    /// C20; T0.7 §1–§2), returning its output [`Handle`].
+    ///
+    /// As [`register`](Flow::register) (the exact-type / arity binding is the same
+    /// `D: Deps<Inputs = T::Input>` compile-time check), plus capture of
+    /// `T::STABLE_NAME` (the stable *task* name), the ordered stable *input* type
+    /// names of `T::Input` (via [`StableInputNames`]), and `T::Output`'s stable
+    /// name. A node registered through the type-erased [`register`](Flow::register)
+    /// captures none of these and is not emittable to the C20 contract.
+    #[must_use]
+    pub fn register_named<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task + StableName,
+        T::Input: StableInputNames,
+        T::Output: StableName,
+        D: Deps<Inputs = T::Input>,
+    {
+        let handle = self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            group,
+            policy,
+            DurableWitness::Absent,
+        );
+        self.attach_stable_names_with_inputs::<T, T::Input>(handle.id());
+        handle
+    }
+
+    /// Attach the captured [stable names](StableTypeNames) for a **source** node
+    /// (empty input list) to the just-registered node identified by `id`.
+    fn attach_stable_names<T>(&mut self, id: NodeId)
+    where
+        T: Task<Input = ()> + StableName,
+        T::Output: StableName,
+    {
+        self.set_stable_names(
+            id,
+            StableTypeNames {
+                task: <T as StableName>::STABLE_NAME,
+                inputs: Vec::new(),
+                output: <T::Output as StableName>::STABLE_NAME,
+            },
+        );
+    }
+
+    /// Attach the captured [stable names](StableTypeNames) for a **data-dependent**
+    /// node (input list resolved from `I: StableInputNames`) to the node `id`.
+    fn attach_stable_names_with_inputs<T, I>(&mut self, id: NodeId)
+    where
+        T: Task + StableName,
+        T::Output: StableName,
+        I: StableInputNames,
+    {
+        self.set_stable_names(
+            id,
+            StableTypeNames {
+                task: <T as StableName>::STABLE_NAME,
+                inputs: I::stable_input_names(),
+                output: <T::Output as StableName>::STABLE_NAME,
+            },
+        );
+    }
+
+    /// Store the captured [stable names](StableTypeNames) on the node with this
+    /// identity (the node the preceding registration just inserted).
+    fn set_stable_names(&mut self, id: NodeId, names: StableTypeNames) {
+        if let Some((_, node)) = self.nodes.iter_mut().find(|(_, n)| n.id == id) {
+            node.stable_names = Some(names);
+        }
     }
 
     /// Insert a node under its name, **counting** a name collision.
