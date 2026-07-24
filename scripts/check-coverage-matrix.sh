@@ -56,14 +56,28 @@ partition="docs/criteria-matrix.md"
 required_ids=""      # optional fixture: lines "<id> <class>"
 tests_from=""        # optional fixture: existing test ids, one per line
 owner_ticket="T7"    # the "owed here" sentinel; any other owner is a deferral
+# --- Platform-conditional annotation set (T70, ticket 077) -------------------
+# arch.md "Platform support" (lines 627-633) makes limit detection, signal
+# handling, and flush behaviour platform-conditional acceptance criteria, "named
+# as such in the coverage matrix". The T70 CI matrix (Linux tier-1 + macOS core)
+# keys off that tag, so the tag is load-bearing, not decorative. This is the
+# set of criterion ids whose Platform cell MUST read `platform-conditional`:
+#   C12 — container/cgroup limit detection (Linux tier-1 vs macOS host-fallback)
+#   C16 — OS signal handling + final flush (unix; non-unix is a documented no-op)
+#   C19 — event-stream flush/fsync (per-platform fsync semantics)
+# Overridable so the hermetic self-tests can inject their own synthetic set.
+platform_conditional_ids="C12 C16 C19"
+# The single accepted platform tag and the "not platform-conditional" marker.
+platform_tag="platform-conditional"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --matrix)       matrix=$2; shift 2 ;;
-    --required-ids) required_ids=$2; shift 2 ;;
-    --tests-from)   tests_from=$2; shift 2 ;;
-    --owner)        owner_ticket=$2; shift 2 ;;
-    *) echo "usage: check-coverage-matrix.sh [--matrix M] [--required-ids F] [--tests-from T] [--owner TID]" >&2; exit 2 ;;
+    --matrix)                matrix=$2; shift 2 ;;
+    --required-ids)          required_ids=$2; shift 2 ;;
+    --tests-from)            tests_from=$2; shift 2 ;;
+    --owner)                 owner_ticket=$2; shift 2 ;;
+    --platform-conditional)  platform_conditional_ids=$2; shift 2 ;;
+    *) echo "usage: check-coverage-matrix.sh [--matrix M] [--required-ids F] [--tests-from T] [--owner TID] [--platform-conditional \"IDS\"]" >&2; exit 2 ;;
   esac
 done
 
@@ -129,7 +143,8 @@ test_exists() { grep -qxF "$1" "$tests_file"; }
 # count (for the duplicate check) and the parsed cells of its first row.
 #
 # Portability: macOS ships bash 3.2, which has no associative arrays. We key by
-# id through a flat file, one line per parsed row: "<id>\t<class>\t<test>\t<cover>".
+# id through a flat file, one line per parsed row:
+# "<id>\t<class>\t<test>\t<cover>\t<platform>".
 rows="$tmp/rows.tsv"; : >"$rows"
 # A row is a data row iff its first cell is a criterion-id token: non-empty, no
 # whitespace, not the literal header word "Criterion", and not a "---" table
@@ -155,9 +170,10 @@ while IFS= read -r line; do
     esac
   fi
   cls=$(printf '%s'  "$line" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}')
+  plat=$(printf '%s' "$line" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$4); print $4}')
   test=$(printf '%s' "$line" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$5); print $5}')
   cover=$(printf '%s' "$line" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$6); print $6}')
-  printf '%s\t%s\t%s\t%s\n' "$id" "$cls" "$test" "$cover" >>"$rows"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$cls" "$test" "$cover" "$plat" >>"$rows"
 done <"$matrix"
 
 # Per-id accessors over the flat file (first matching row wins for the cells).
@@ -165,6 +181,7 @@ row_count() { awk -F'\t' -v id="$1" '$1==id{c++} END{print c+0}' "$rows"; }
 row_class() { awk -F'\t' -v id="$1" '$1==id{print $2; exit}' "$rows"; }
 row_test()  { awk -F'\t' -v id="$1" '$1==id{print $3; exit}' "$rows"; }
 row_cover() { awk -F'\t' -v id="$1" '$1==id{print $4; exit}' "$rows"; }
+row_plat()  { awk -F'\t' -v id="$1" '$1==id{print $5; exit}' "$rows"; }
 
 # --- 4. Totality + duplicate + mapping checks --------------------------------
 n_machine=0; n_human=0; n_disc=0
@@ -208,6 +225,45 @@ while read -r id class; do
     disclaimer) n_disc=$((n_disc + 1)) ;;
   esac
 done <"$req"
+
+# --- 4b. Platform-conditional annotation (T70, ticket 077) -------------------
+# arch.md "Platform support" requires the limit-detection (C12), signal-handling
+# (C16), and flush (C19) criteria to be *named as platform-conditional* in the
+# coverage matrix; the T70 Linux-tier-1 / macOS-core CI matrix reads that tag.
+# This makes the annotation ENFORCED, not decorative (Test plan: "Matrix checker
+# fails on an untagged platform-conditional criterion"):
+#   * every id in $platform_conditional_ids MUST carry the `platform-conditional`
+#     tag in its Platform cell — a missing/blank/wrong tag fails the build, naming
+#     the criterion;
+#   * conversely NO other criterion may carry the tag (a stray tag is as much a
+#     drift as a missing one), so the annotation stays a faithful, reviewable
+#     record of exactly which criteria are platform-conditional.
+# The Linux-only machine criteria (e.g. C12 cgroup detection) stay MAPPED to their
+# Linux tests above (section 4); tagging them platform-conditional records the
+# platform dimension WITHOUT dropping the mapping, so the unmapped-machine gate
+# stays green (Test plan: "macOS-excluded criterion is recorded, not silently
+# dropped").
+is_platform_conditional() {
+  for want in $platform_conditional_ids; do [ "$1" = "$want" ] && return 0; done
+  return 1
+}
+cut -f1 "$rows" | sort -u | while read -r id; do
+  [ -n "$id" ] || continue
+  # Only consider ids that are real criteria in the partition (section 5 handles
+  # invented rows); read this row's Platform cell.
+  is_required_id "$id" || continue
+  plat=$(row_plat "$id")
+  if is_platform_conditional "$id"; then
+    if [ "$plat" != "$platform_tag" ]; then
+      echo "FAIL  platform-conditional criterion $id must carry the '$platform_tag' tag in its Platform cell (found '$plat'); arch.md Platform support requires limit-detection/signal-handling/flush criteria to be named platform-conditional (T70)"
+    fi
+  else
+    if [ "$plat" = "$platform_tag" ]; then
+      echo "FAIL  criterion $id is tagged '$platform_tag' but is not in the platform-conditional set ($platform_conditional_ids); a stray platform tag misrepresents the platform matrix (T70)"
+    fi
+  fi
+done >"$tmp/platform.txt"
+if [ -s "$tmp/platform.txt" ]; then cat "$tmp/platform.txt"; fail=1; fi
 
 # --- 5. Coverage-matrix rows that are not required criteria ------------------
 # A row whose id is not in the partition means the coverage matrix invented a
