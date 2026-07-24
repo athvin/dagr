@@ -106,6 +106,29 @@ jobs:
         run: cargo test -p dagr-core --test ui
       - name: cargo test --workspace
         run: cargo test --workspace
+      # Scale benchmark (T69, ticket 076): the Performance-envelope gate. Drives a
+      # thousand-node no-op graph through the REAL T24 run-loop driver
+      # (`dagr_cli::scale_bench`), measures per-node framework overhead, and FAILS
+      # ON REGRESSION against a checked-in budget (arch.md "Performance envelope":
+      # framework overhead per node budgeted under 1 ms/node). This step runs the
+      # benchmark on its own (with output captured) so a budget regression is
+      # legible in the job log and unambiguously gates the build, alongside — not
+      # replacing — the ordinary `cargo test --workspace` above (which also runs it).
+      #
+      # RUNNER NORMALIZATION / CI RELIABILITY: admission capacity is PINNED via the
+      # C12 pinning flag to a fixed benchmark configuration (`bench_capacities`), so
+      # the measurement is a property of dagr's overhead, not of the runner's
+      # cgroup/host limits or core count — deterministic run to run and machine to
+      # machine. A wall-clock benchmark on a shared runner is inherently noisy, so
+      # the gate is a GENEROUS budget (16 ms/node, 16× the 1 ms spec ceiling): it
+      # catches an orders-of-magnitude regression while ordinary variance never
+      # flaps it. Correctness is carried by the benchmark's DETERMINISTIC invariants
+      # (exactly 1000 nodes, every node succeeded, phases sum exactly, pinned
+      # capacity), not by the timing number; each run uses a private per-run temp
+      # base (no shared /tmp race). `--nocapture` surfaces the measured per-node
+      # overhead in the log for re-baselining.
+      - name: scale benchmark — Performance-envelope budget (T69)
+        run: cargo test -p dagr-cli --test scale_benchmark -- --nocapture
       # Published-artifact-schema validation (T39, ticket 050). The validation
       # helper and its `jsonschema` dependency are gated behind the
       # `schema-validation` feature (OFF by default, so the runtime writers pull
