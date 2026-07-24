@@ -9,8 +9,14 @@
 //! - **object keys sorted** lexicographically by byte order (`serde_json` does
 //!   not sort keys itself — this module does),
 //! - **compact** — no insignificant whitespace,
-//! - **integers only** — every dagr numeric field is an integer (T4 §6), so no
-//!   float-formatting ambiguity arises,
+//! - **numbers via `serde_json`'s deterministic formatter** — most dagr numeric
+//!   fields are integers (T4 §6), but a C23/T44 node-metric value is a JSON
+//!   `number` (`schemas/run/v1.schema.json` types `metrics` as `number`, not
+//!   `integer`) and MAY be non-integer. Non-integer numbers reach the output only
+//!   via `serde_json::Value::to_string` below, which formats floats with **ryu**
+//!   (locale-independent, shortest round-trip, byte-stable) — so the canonical
+//!   output stays deterministic and byte-identical for non-integer values too, not
+//!   just integers,
 //! - **minimally escaped** — only what JSON requires (`"`, `\`, control chars
 //!   `U+0000`–`U+001F`); printable non-ASCII is emitted literally as UTF-8, never
 //!   `\u`-escaped.
@@ -25,8 +31,10 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 /// Serialize `value` to its **canonical** JSON string (T4 §6): object keys sorted
-/// lexicographically, compact, integers only, minimally escaped. Two canonical
-/// serializations of equal [`Value`]s are byte-identical.
+/// lexicographically, compact, minimally escaped, numbers via `serde_json`'s
+/// deterministic (ryu-backed, byte-stable) formatter — so even a non-integer
+/// number (e.g. a C23/T44 metric value) serializes deterministically. Two
+/// canonical serializations of equal [`Value`]s are byte-identical.
 #[must_use]
 pub fn to_canonical_string(value: &Value) -> String {
     let mut out = String::new();
@@ -62,9 +70,12 @@ pub(crate) fn write_canonical(value: &Value, out: &mut String) {
             out.push(']');
         }
         Value::String(s) => write_json_string(s, out),
-        // Booleans, integers, and null render identically to serde_json's compact
-        // form; all dagr numeric fields are integers (T4 §6), so no float
-        // formatting hazard arises.
+        // Booleans, numbers, and null render identically to serde_json's compact
+        // form. Integers (T4 §6) format exactly; a non-integer number — e.g. a
+        // C23/T44 metric value, typed `number` (not `integer`) by the run schema —
+        // formats via serde_json's ryu-backed float writer (locale-independent,
+        // shortest round-trip, byte-stable), so no float-formatting nondeterminism
+        // arises for non-integer values either.
         other => out.push_str(&other.to_string()),
     }
 }
