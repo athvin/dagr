@@ -36,11 +36,21 @@
 use std::fmt::Write as _;
 
 use crate::model::{Edge, EdgeKind, GraphArtifact, Node};
+use crate::overlay::Overlay;
 
 /// Render `artifact` to Graphviz DOT source (arch.md C24). Deterministic and
 /// byte-stable; parseable by the `dot` reference tool.
 #[must_use]
 pub fn render(artifact: &GraphArtifact) -> String {
+    render_with_overlay(artifact, None)
+}
+
+/// Render `artifact` to DOT, optionally applying a **run overlay** (T47): when
+/// `overlay` is `Some`, each joined node is drawn `style="filled"` with its
+/// documented per-state `fillcolor` and a label carrying its state tag and
+/// duration; the structure (nodes, edges, clusters) is identical to the base
+/// render. With `None` the output is byte-for-byte the base structural diagram.
+pub(crate) fn render_with_overlay(artifact: &GraphArtifact, overlay: Option<&Overlay>) -> String {
     let mut out = String::new();
 
     // A stable, human-legible header comment; then the digraph and its
@@ -48,6 +58,9 @@ pub fn render(artifact: &GraphArtifact) -> String {
     out.push_str("// Rendered by dagr-render (C24) from a graph artifact.\n");
     out.push_str("// Data edges: solid, labelled with the carried type. ");
     out.push_str("Ordering edges: dashed, unlabelled.\n");
+    if overlay.is_some() {
+        out.push_str("// Run overlay: nodes filled by terminal state, labelled with duration.\n");
+    }
     out.push_str("digraph pipeline {\n");
     out.push_str("  rankdir=TB;\n");
     out.push_str("  node [shape=box];\n");
@@ -73,14 +86,14 @@ pub fn render(artifact: &GraphArtifact) -> String {
         let _ = writeln!(out, "  subgraph \"cluster_{}\" {{", escape_dot_id(group));
         let _ = writeln!(out, "    label=\"{}\";", escape_dot_string(group));
         for node in nodes.iter().filter(|n| n.group() == *group) {
-            emit_node(&mut out, node, 4);
+            emit_node(&mut out, node, 4, overlay);
         }
         out.push_str("  }\n");
     }
 
     // Ungrouped nodes at the top level, outside every cluster.
     for node in nodes.iter().filter(|n| n.group().is_empty()) {
-        emit_node(&mut out, node, 2);
+        emit_node(&mut out, node, 2, overlay);
     }
 
     // Edges in canonical (from, to, kind) order.
@@ -96,15 +109,50 @@ pub fn render(artifact: &GraphArtifact) -> String {
     }
 
     out.push_str("}\n");
+
+    // Report run records whose node id is absent from the graph, as a trailing
+    // comment (a documented, non-panicking rule — never a phantom node).
+    if let Some(ov) = overlay {
+        if !ov.extra_run_nodes.is_empty() {
+            let _ = writeln!(
+                out,
+                "// extra run records not in graph: {}",
+                ov.extra_run_nodes.join(", ")
+            );
+        }
+    }
     out
 }
 
-/// Emit one node declaration at the given indent (spaces): `"id" [label="id"];`.
-/// The id and label are both the node's stable identity name (never `type_name`).
-fn emit_node(out: &mut String, node: &Node, indent: usize) {
+/// Emit one node declaration at the given indent (spaces). Without an overlay:
+/// `"id" [label="id"];`. With an overlay and a joined state: the node is filled
+/// with its documented per-state colour and its label carries the state tag and
+/// duration. An unmatched graph node (no run record) keeps the base styling.
+fn emit_node(out: &mut String, node: &Node, indent: usize, overlay: Option<&Overlay>) {
     let pad = " ".repeat(indent);
     let id = escape_dot_string(node.name());
-    let _ = writeln!(out, "{pad}\"{id}\" [label=\"{id}\"];");
+    match overlay.and_then(|ov| ov.by_node.get(node.name())) {
+        Some(dec) => {
+            // Base label is the stable name; the overlay appends the state tag
+            // and (when the node ran) its duration, on their own label lines.
+            let mut label = id.clone();
+            label.push_str("\\n");
+            label.push_str(&escape_dot_string(&dec.state_tag));
+            if let Some(dur) = &dec.duration {
+                label.push_str("\\n");
+                label.push_str(&escape_dot_string(dur));
+            }
+            let _ = writeln!(
+                out,
+                "{pad}\"{id}\" [label=\"{label}\", style=filled, \
+                 fillcolor=\"{}\", fontcolor=\"{}\"];",
+                dec.fillcolor, dec.fontcolor
+            );
+        }
+        None => {
+            let _ = writeln!(out, "{pad}\"{id}\" [label=\"{id}\"];");
+        }
+    }
 }
 
 /// Emit one edge line with its kind's documented, disjoint styling.

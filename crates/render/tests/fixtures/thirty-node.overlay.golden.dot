@@ -1,0 +1,81 @@
+// Rendered by dagr-render (C24) from a graph artifact.
+// Data edges: solid, labelled with the carried type. Ordering edges: dashed, unlabelled.
+// Run overlay: nodes filled by terminal state, labelled with duration.
+digraph pipeline {
+  rankdir=TB;
+  node [shape=box];
+  subgraph "cluster_ingest" {
+    label="ingest";
+    "ingest_01" [label="ingest_01\ntimed-out\n3.00µs", style=filled, fillcolor="#ef6c00", fontcolor="#ffffff"];
+    "ingest_02" [label="ingest_02\nskipped", style=filled, fillcolor="#fdd835", fontcolor="#000000"];
+    "ingest_03" [label="ingest_03\nupstream-skipped", style=filled, fillcolor="#fff59d", fontcolor="#000000"];
+    "ingest_04" [label="ingest_04\nupstream-failed", style=filled, fillcolor="#ef9a9a", fontcolor="#000000"];
+    "ingest_05" [label="ingest_05\ncancelled", style=filled, fillcolor="#455a64", fontcolor="#ffffff"];
+    "ingest_06" [label="ingest_06\nabandoned", style=filled, fillcolor="#212121", fontcolor="#ffffff"];
+  }
+  subgraph "cluster_publish" {
+    label="publish";
+    "publish_01" [label="publish_01\nsatisfied-from-prior", style=filled, fillcolor="#a5d6a7", fontcolor="#000000"];
+    "publish_02" [label="publish_02\nsucceeded\n10.00µs", style=filled, fillcolor="#2e7d32", fontcolor="#ffffff"];
+    "publish_03" [label="publish_03\nfailed\n11.00µs", style=filled, fillcolor="#c62828", fontcolor="#ffffff"];
+    "publish_04" [label="publish_04\ntimed-out\n12.00µs", style=filled, fillcolor="#ef6c00", fontcolor="#ffffff"];
+    "publish_05" [label="publish_05\nskipped", style=filled, fillcolor="#fdd835", fontcolor="#000000"];
+    "publish_06" [label="publish_06\nupstream-skipped", style=filled, fillcolor="#fff59d", fontcolor="#000000"];
+  }
+  subgraph "cluster_report" {
+    label="report";
+    "report_archive" [label="report_archive\nupstream-failed", style=filled, fillcolor="#ef9a9a", fontcolor="#000000"];
+    "report_audit" [label="report_audit\ncancelled", style=filled, fillcolor="#455a64", fontcolor="#ffffff"];
+    "report_index" [label="report_index\nabandoned", style=filled, fillcolor="#212121", fontcolor="#ffffff"];
+    "report_metrics" [label="report_metrics\nsatisfied-from-prior", style=filled, fillcolor="#a5d6a7", fontcolor="#000000"];
+    "report_render" [label="report_render\nsucceeded\n19.00µs", style=filled, fillcolor="#2e7d32", fontcolor="#ffffff"];
+    "report_summary" [label="report_summary\nfailed\n20.00µs", style=filled, fillcolor="#c62828", fontcolor="#ffffff"];
+  }
+  subgraph "cluster_transform" {
+    label="transform";
+    "transform_01" [label="transform_01\ntimed-out\n21.00µs", style=filled, fillcolor="#ef6c00", fontcolor="#ffffff"];
+    "transform_02" [label="transform_02\nskipped", style=filled, fillcolor="#fdd835", fontcolor="#000000"];
+    "transform_03" [label="transform_03\nupstream-skipped", style=filled, fillcolor="#fff59d", fontcolor="#000000"];
+    "transform_04" [label="transform_04\nupstream-failed", style=filled, fillcolor="#ef9a9a", fontcolor="#000000"];
+    "transform_05" [label="transform_05\ncancelled", style=filled, fillcolor="#455a64", fontcolor="#ffffff"];
+    "transform_06" [label="transform_06\nabandoned", style=filled, fillcolor="#212121", fontcolor="#ffffff"];
+    "transform_07" [label="transform_07\nsatisfied-from-prior", style=filled, fillcolor="#a5d6a7", fontcolor="#000000"];
+    "transform_08" [label="transform_08\nsucceeded\n28.00µs", style=filled, fillcolor="#2e7d32", fontcolor="#ffffff"];
+    "transform_09" [label="transform_09\nfailed\n29.00µs", style=filled, fillcolor="#c62828", fontcolor="#ffffff"];
+    "transform_10" [label="transform_10\ntimed-out\n30.00µs", style=filled, fillcolor="#ef6c00", fontcolor="#ffffff"];
+  }
+  "cleanup" [label="cleanup\nsucceeded\n1.00µs", style=filled, fillcolor="#2e7d32", fontcolor="#ffffff"];
+  "heartbeat" [label="heartbeat\nfailed\n2.00µs", style=filled, fillcolor="#c62828", fontcolor="#ffffff"];
+  "ingest_01" -> "transform_01" [style=solid, arrowhead=normal, label="Raw1"];
+  "ingest_02" -> "transform_02" [style=solid, arrowhead=normal, label="Raw2"];
+  "ingest_03" -> "transform_03" [style=solid, arrowhead=normal, label="Raw3"];
+  "ingest_04" -> "transform_04" [style=solid, arrowhead=normal, label="Raw4"];
+  "ingest_05" -> "transform_05" [style=solid, arrowhead=normal, label="Raw5"];
+  "ingest_06" -> "transform_06" [style=solid, arrowhead=normal, label="Raw6"];
+  "publish_01" -> "publish_05" [style=solid, arrowhead=normal, label="Published01"];
+  "publish_02" -> "publish_05" [style=solid, arrowhead=normal, label="Published02"];
+  "publish_03" -> "publish_05" [style=dashed, arrowhead=empty];
+  "publish_04" -> "publish_06" [style=dashed, arrowhead=empty];
+  "publish_05" -> "publish_06" [style=dashed, arrowhead=empty];
+  "publish_05" -> "report_metrics" [style=solid, arrowhead=normal, label="PublishedAgg"];
+  "publish_06" -> "report_render" [style=dashed, arrowhead=empty];
+  "report_archive" -> "cleanup" [style=dashed, arrowhead=empty];
+  "report_audit" -> "report_summary" [style=solid, arrowhead=normal, label="AuditLog"];
+  "report_metrics" -> "report_render" [style=solid, arrowhead=normal, label="Metrics"];
+  "report_metrics" -> "report_summary" [style=solid, arrowhead=normal, label="Metrics"];
+  "report_render" -> "report_archive" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "report_render" -> "report_audit" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "report_render" -> "report_index" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "transform_01" -> "transform_07" [style=solid, arrowhead=normal, label="Clean1"];
+  "transform_01" -> "transform_10" [style=solid, arrowhead=normal, label="Clean1"];
+  "transform_02" -> "transform_07" [style=solid, arrowhead=normal, label="Clean2"];
+  "transform_03" -> "transform_08" [style=solid, arrowhead=normal, label="Clean3"];
+  "transform_04" -> "transform_08" [style=solid, arrowhead=normal, label="Clean4"];
+  "transform_04" -> "transform_10" [style=solid, arrowhead=normal, label="Clean4"];
+  "transform_05" -> "transform_09" [style=solid, arrowhead=normal, label="Clean5"];
+  "transform_06" -> "transform_09" [style=solid, arrowhead=normal, label="Clean6"];
+  "transform_07" -> "publish_01" [style=solid, arrowhead=normal, label="Merged07"];
+  "transform_08" -> "publish_02" [style=solid, arrowhead=normal, label="Merged08"];
+  "transform_09" -> "publish_03" [style=solid, arrowhead=normal, label="Merged09"];
+  "transform_10" -> "publish_04" [style=solid, arrowhead=normal, label="Merged10"];
+}

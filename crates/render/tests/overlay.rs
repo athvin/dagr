@@ -31,7 +31,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use dagr_artifact::fold::fold_stream;
-use dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay, RunArtifact, TERMINAL_STATES};
+use dagr_render::overlay::{
+    render_dot_overlay, render_mermaid_overlay, RunArtifact, TERMINAL_STATES,
+};
 use dagr_render::{render_dot, render_mermaid, GraphArtifact};
 use serde_json::{json, Value};
 
@@ -127,7 +129,10 @@ fn succeeded_node(recs: &mut Vec<Value>, seq: &mut u64, base: u64, node: &str, d
         *seq += 1;
         v
     };
-    recs.push(with(env(s(seq), base, "node-ready"), &[("node", json!(node))]));
+    recs.push(with(
+        env(s(seq), base, "node-ready"),
+        &[("node", json!(node))],
+    ));
     recs.push(with(
         env(s(seq), base, "node-admitted"),
         &[("node", json!(node))],
@@ -163,8 +168,8 @@ fn real_folded_two_node_run() -> (String, RunArtifact) {
         &[("outcome", json!("succeeded"))],
     ));
     let bytes = stream(&recs);
-    let art = fold_stream(&bytes, &["load".to_string(), "sink".to_string()])
-        .expect("real fold succeeds");
+    let art =
+        fold_stream(&bytes, &["load".to_string(), "sink".to_string()]).expect("real fold succeeds");
     let json = art.to_canonical_json();
     let view = RunArtifact::from_json_str(&json).expect("folded run artifact parses");
     (json, view)
@@ -186,26 +191,43 @@ fn dot_node_line<'a>(dot: &'a str, node: &str) -> &'a str {
         .unwrap_or_else(|| panic!("DOT has no declaration for node `{node}`"))
 }
 
+/// Sanitize a node identity to its Mermaid id token the same way the renderer
+/// does (non-alphanumeric, non-`_` → `_`), so a hyphenated identity like
+/// `timed-out` matches the `timed_out` id the renderer emits.
+fn mermaid_id(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// The Mermaid declaration line for `node` (`node[...]`), excluding subgraph
 /// headers and links.
 fn mermaid_node_line<'a>(mmd: &'a str, node: &str) -> &'a str {
+    let id = mermaid_id(node);
     mmd.lines()
         .find(|l| {
             let t = l.trim();
-            t.starts_with(&format!("{node}[")) && !t.contains("-->") && !t.contains("-.->")
+            t.starts_with(&format!("{id}[")) && !t.contains("-->") && !t.contains("-.->")
         })
         .unwrap_or_else(|| panic!("Mermaid has no declaration for node `{node}`"))
 }
 
 /// The Mermaid `class <node> <className>` assignment line for `node`, if any.
 fn mermaid_class_of(mmd: &str, node: &str) -> Option<String> {
+    let id = mermaid_id(node);
     mmd.lines().find_map(|l| {
         let t = l.trim();
         let rest = t.strip_prefix("class ")?;
         let mut it = rest.split_whitespace();
         let n = it.next()?;
         let cls = it.next()?;
-        (n == node).then(|| cls.to_string())
+        (n == id).then(|| cls.to_string())
     })
 }
 
@@ -316,7 +338,11 @@ fn every_state_distinct_documented_style_dot() {
             "state `{state}` reuses fillcolor `{fc}` — styles must be mutually distinct"
         );
     }
-    assert_eq!(styles.len(), 9, "nine states → nine distinct DOT fillcolors");
+    assert_eq!(
+        styles.len(),
+        9,
+        "nine states → nine distinct DOT fillcolors"
+    );
 }
 
 /// **Every state gets a distinct documented style (Mermaid).** The same nine
@@ -344,7 +370,11 @@ fn every_state_distinct_documented_style_mermaid() {
             "class `{cls}` must have a filled classDef"
         );
     }
-    assert_eq!(classes.len(), 9, "nine states → nine distinct Mermaid classes");
+    assert_eq!(
+        classes.len(),
+        9,
+        "nine states → nine distinct Mermaid classes"
+    );
 }
 
 /// **Originated vs propagated skip are distinguishable.** A `skipped` node and a
@@ -364,12 +394,21 @@ fn originated_vs_propagated_skip_distinguishable() {
     let orig_dot = extract_attr(dot_node_line(&dot, "orig"), "fillcolor");
     let prop_dot = extract_attr(dot_node_line(&dot, "prop"), "fillcolor");
     let other_dot = extract_attr(dot_node_line(&dot, "other"), "fillcolor");
-    assert_ne!(orig_dot, prop_dot, "skipped vs upstream-skipped differ (DOT)");
-    assert_ne!(orig_dot, other_dot, "originated skip not reused for a propagated state");
+    assert_ne!(
+        orig_dot, prop_dot,
+        "skipped vs upstream-skipped differ (DOT)"
+    );
+    assert_ne!(
+        orig_dot, other_dot,
+        "originated skip not reused for a propagated state"
+    );
 
     let orig_m = mermaid_class_of(&mmd, "orig").unwrap();
     let prop_m = mermaid_class_of(&mmd, "prop").unwrap();
-    assert_ne!(orig_m, prop_m, "skipped vs upstream-skipped differ (Mermaid)");
+    assert_ne!(
+        orig_m, prop_m,
+        "skipped vs upstream-skipped differ (Mermaid)"
+    );
 }
 
 /// **Originated vs propagated failure are distinguishable.** `failed`,
@@ -396,7 +435,10 @@ fn originated_vs_propagated_failure_distinguishable() {
     let fm = mermaid_class_of(&mmd, "f").unwrap();
     let tm = mermaid_class_of(&mmd, "t").unwrap();
     let ufm = mermaid_class_of(&mmd, "uf").unwrap();
-    assert!(fm != ufm && tm != ufm && fm != tm, "three distinct Mermaid classes");
+    assert!(
+        fm != ufm && tm != ufm && fm != tm,
+        "three distinct Mermaid classes"
+    );
 }
 
 /// **Cancellation-family states are distinct.** `cancelled` and `abandoned`
@@ -517,7 +559,11 @@ fn every_node_and_edge_present_with_overlay() {
         .lines()
         .filter(|l| l.contains("-->") || l.contains("-.->"))
         .count();
-    assert_eq!(mmd_edge_lines, graph.edges().len(), "all Mermaid edges present");
+    assert_eq!(
+        mmd_edge_lines,
+        graph.edges().len(),
+        "all Mermaid edges present"
+    );
     // Data edges stay solid, ordering dashed (T46 guarantee preserved).
     assert!(dot.contains("style=solid"));
     assert!(dot.contains("style=dashed"));
@@ -545,12 +591,22 @@ fn overlaid_30node_golden_is_byte_stable() {
     let dot = render_dot_overlay(&graph, &run);
     let mmd = render_mermaid_overlay(&graph, &run);
 
+    if std::env::var("DAGR_BLESS").is_ok_and(|v| v == "1") {
+        std::fs::write(render_fixture("thirty-node.overlay.golden.dot"), &dot).unwrap();
+        std::fs::write(render_fixture("thirty-node.overlay.golden.mmd"), &mmd).unwrap();
+    }
     let golden_dot =
         std::fs::read_to_string(render_fixture("thirty-node.overlay.golden.dot")).unwrap();
     let golden_mmd =
         std::fs::read_to_string(render_fixture("thirty-node.overlay.golden.mmd")).unwrap();
-    assert_eq!(dot, golden_dot, "overlaid DOT must match the golden");
-    assert_eq!(mmd, golden_mmd, "overlaid Mermaid must match the golden");
+    assert_eq!(
+        dot, golden_dot,
+        "overlaid DOT must match the golden; bless with DAGR_BLESS=1 if intended"
+    );
+    assert_eq!(
+        mmd, golden_mmd,
+        "overlaid Mermaid must match the golden; bless with DAGR_BLESS=1 if intended"
+    );
 }
 
 /// **Determinism: overlaid rendering is byte-stable across repetitions.**
@@ -582,7 +638,10 @@ fn works_on_a_historical_artifact() {
 
     // load's FINAL attempt succeeded → succeeded style; sink satisfied-from-prior.
     let load = dot_node_line(&dot, "load");
-    assert!(load.contains("succeeded"), "load final state is succeeded: {load}");
+    assert!(
+        load.contains("succeeded"),
+        "load final state is succeeded: {load}"
+    );
     let sink = dot_node_line(&dot, "sink");
     assert!(
         sink.contains("satisfied-from-prior"),
@@ -672,7 +731,7 @@ fn extract_attr(line: &str, key: &str) -> String {
 
 /// The distinct DOT fillcolors the overlay assigns to the given states.
 fn distinct_state_fillcolors(states: &[&str]) -> BTreeSet<String> {
-    let names: Vec<String> = states.iter().map(|s| s.to_string()).collect();
+    let names: Vec<String> = states.iter().map(|s| (*s).to_string()).collect();
     let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let graph = graph_of_nodes(&name_refs);
     let pairs: Vec<(&str, &str)> = states.iter().map(|s| (*s, *s)).collect();

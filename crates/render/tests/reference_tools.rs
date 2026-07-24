@@ -233,7 +233,9 @@ fn dot_reference_tool_accepts_the_overlaid_dot() {
             !tools_required(),
             "`dot` (Graphviz) is required in CI (DAGR_REQUIRE_RENDER_TOOLS=1) but was not found"
         );
-        eprintln!("SKIP: `dot` (Graphviz) not installed; skipping the overlaid-DOT reference-tool gate");
+        eprintln!(
+            "SKIP: `dot` (Graphviz) not installed; skipping the overlaid-DOT reference-tool gate"
+        );
         return;
     }
 
