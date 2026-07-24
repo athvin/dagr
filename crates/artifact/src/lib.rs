@@ -21,6 +21,7 @@
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+pub mod canonical;
 pub mod event_stream;
 
 /// The T39 published-artifact-schema validation helper (arch.md C19/C20/C22).
