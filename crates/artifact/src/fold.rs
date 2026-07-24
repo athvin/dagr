@@ -45,6 +45,32 @@
 //! corruption, or a *second* trailing corruption, is a hard [`FoldError`], never
 //! silently dropped (the C19 tolerance boundary).
 //!
+//! # Interrupted representation (why `cancelled` + a first-class `interrupted`)
+//!
+//! A crash-truncated stream — one with no `run-finished` record — has no
+//! terminal outcome to fold. The published run schema's `overall_outcome` enum
+//! (`schemas/run/v1.schema.json`) is **closed** (`succeeded`/`failed`/
+//! `cancelled`/`assembly-failed`/`bootstrap-failed`) and carries **no dedicated
+//! `interrupted` token**, so `overall_outcome` is set to `cancelled` (an
+//! interrupted run terminated without completing) — staying inside the closed
+//! enum keeps the artifact schema-valid.
+//!
+//! To keep a consumer from conflating a *crash-truncation* with a *deliberate
+//! cancellation* (both read `overall_outcome = "cancelled"`), the interrupted
+//! signal is promoted to a **first-class, top-level artifact field**
+//! `interrupted` (a boolean) on the folded artifact — mirrored on
+//! [`RunArtifact::is_interrupted`] and (for a reader that reads only that block)
+//! `fold_reader.interrupted`. This is safe and additive: the run schema is
+//! **open-world at every level** — no object sets `additionalProperties:false`
+//! (the schema's own header note; T0.10 additive evolution) — so a top-level
+//! `interrupted` field validates against the *unmodified* published schema. A
+//! downstream consumer therefore distinguishes crash-truncation from deliberate
+//! cancellation by reading one boolean, without any provenance archaeology.
+//!
+//! Promoting the distinction into `overall_outcome` itself (a dedicated
+//! `interrupted` enum token) is **deferred to a schema revision** (`dagr.run@2`),
+//! since it would widen a *closed* enum and is out of this ticket's scope.
+//!
 //! # Open-question resolutions (recorded here, per the ticket)
 //!
 //! - **Canonical phase list** — the fold names four phases that *partition* an
@@ -317,14 +343,22 @@ impl RunArtifact {
     }
     /// The overall run outcome (`succeeded`/`failed`/`cancelled`/
     /// `assembly-failed`/`bootstrap-failed`). A crash-truncated run with no
-    /// `run-finished` is reported `cancelled` and flagged
-    /// [`is_interrupted`](Self::is_interrupted).
+    /// `run-finished` is reported `cancelled` (the closed enum has no dedicated
+    /// interrupted token) and flagged [`is_interrupted`](Self::is_interrupted) —
+    /// **read `is_interrupted` to tell a crash-truncation apart from a deliberate
+    /// cancellation**, since both read `cancelled` here (see the module-level
+    /// "interrupted representation" note).
     #[must_use]
     pub fn overall_outcome(&self) -> &str {
         &self.overall_outcome
     }
     /// Whether the stream ended without a `run-finished` record — a crash-
-    /// truncated (interrupted) run (C22).
+    /// truncated (interrupted) run (C22). This is the **first-class** distinction
+    /// between a crash-truncation and a deliberate cancellation (both carry
+    /// [`overall_outcome`](Self::overall_outcome) `cancelled`); it is serialized
+    /// as a top-level `interrupted` boolean on [`to_value`](Self::to_value), so a
+    /// consumer of the folded artifact detects it without reading the
+    /// `fold_reader` provenance block.
     #[must_use]
     pub fn is_interrupted(&self) -> bool {
         self.interrupted
@@ -437,8 +471,9 @@ impl RunArtifact {
     }
 
     /// The artifact as a `serde_json::Value`, conforming to the published
-    /// `schemas/run/v1.schema.json` (T39) plus the additive `fold_reader`
-    /// declaration.
+    /// `schemas/run/v1.schema.json` (T39) plus the additive top-level
+    /// `interrupted` boolean and `fold_reader` declaration (both validate against
+    /// the unmodified schema — it is open-world at every level, T0.10).
     #[must_use]
     pub fn to_value(&self) -> Value {
         let mut o = serde_json::Map::new();
@@ -463,7 +498,18 @@ impl RunArtifact {
                 .as_ref()
                 .map_or(Value::Null, RunSummary::to_value),
         );
-        // Additive fold-reader declaration (T0.10: unknown fields validate).
+        // First-class crash-truncation signal, promoted to a **top-level artifact
+        // field** (not buried in the reader-provenance block) so a consumer keying
+        // off the artifact detects an interrupted run without reading
+        // `fold_reader`, while `overall_outcome` stays inside its closed enum
+        // (`cancelled`). This is additive and schema-valid because the run schema
+        // is open-world at every level — no object sets `additionalProperties:false`
+        // (`schemas/run/v1.schema.json` header note; T0.10). See the module-level
+        // "interrupted representation" note for the full rationale.
+        o.insert("interrupted".into(), Value::from(self.interrupted));
+        // Additive fold-reader declaration (T0.10: unknown fields validate). The
+        // `interrupted` flag is mirrored here too, so the reader-provenance block
+        // stays self-describing for a consumer that reads only it.
         o.insert(
             "fold_reader".into(),
             serde_json::json!({
