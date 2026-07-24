@@ -206,6 +206,37 @@ const SHORT: usize = 4;
 /// The long chain length — the arch.md "synthetic hundred-node chain" authority.
 const LONG: usize = 100;
 
+/// A per-invocation **collision-proof** run-store base under the OS temp dir.
+///
+/// Determinism (CI fs race): the driver reclaims leftover per-run temp dirs at run
+/// end by `remove_dir_all`-ing every sibling run-dir under `<base>/<pipeline>/`
+/// other than its own. Under `--test-threads>1` several `drive_chain` /
+/// `drive_leaky_chain` runs execute concurrently; on a single **fixed shared** base
+/// (`/tmp/dagr-t26`) with the same pipeline name they share `<base>/<pipeline>/`, so
+/// one run's terminal reclaim wipes another concurrent run's freshly-created run-dir
+/// mid-run. A base keyed on `process::id()` + a wall-clock timestamp is not unique
+/// either (the clock's effective resolution is coarse on CI). The fix is causal, not
+/// a sleep: a process-monotonic `AtomicU64` counter makes every base provably
+/// disjoint, so no two concurrent runs ever share — or delete — the same subtree.
+/// Mirrors `temp_base()` in `os_signals_flush_and_cleanup.rs` /
+/// `m2_demo_clean_stop.rs`. No production change.
+fn temp_base() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir()
+        .join(format!(
+            "dagr-t26-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            unique
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
 // ===========================================================================
 // A capturing in-memory sink + monotonic clock (the C19 injection seam)
 // ===========================================================================
@@ -559,7 +590,7 @@ fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
     // run's high-water mark, then drive to completion through the real driver.
     reset_peak();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t26"),
+        &RunConfig::new(temp_base()),
         "bounded-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -642,10 +673,11 @@ fn ledger_peak_bounded_by_a_few_values_not_the_whole_chain() {
 // Scenario 3 — the allocator high-water peak is likewise flat (allocator-level)
 // ===========================================================================
 
-/// The instrumented **allocator's** high-water live bytes are within a small,
-/// chain-length-independent margin between the short and hundred-node runs — the
-/// allocator-level restatement of arch.md C10's headline, measured with the
-/// instrumented allocator, never RSS.
+/// The **per-run** high-water peak is within a small, chain-length-independent
+/// margin between the short and hundred-node runs — arch.md C10's headline. The
+/// load-bearing instrument is the DETERMINISTIC per-run [`ResidencyLedger`] peak
+/// (pollution-free); the instrumented allocator is consulted only as a tolerant,
+/// upward-only corroboration. Never RSS.
 ///
 /// The driver's own bookkeeping (two tokio runtimes, the event stream) allocates a
 /// bounded amount that does **not** depend on chain length, so the difference
@@ -653,37 +685,49 @@ fn ledger_peak_bounded_by_a_few_values_not_the_whole_chain() {
 /// nowhere near the ~96·`PAYLOAD` a leak would add.
 #[test]
 fn allocator_peak_is_flat_across_chain_length() {
-    // Serialise: the global allocator peak must reflect only this test's run.
+    // Serialise the *guarded* tests. Note: the process-global `PEAK` this test's
+    // `peak_bytes()` reads is a high-water mark that ANY sibling `#[test]` raises via
+    // `bump_peak` on every allocation — `alloc_guard` cannot hold those off. So the
+    // cross-run allocator *difference* (`long_peak - short_peak`) is NOT a state this
+    // test controls and must never be the load-bearing bite. We anchor the flat-peak
+    // verdict on the per-run ledger instead.
     let _serial = alloc_guard();
 
-    // Warm once so allocator-side one-time initialisation does not skew the first
-    // measurement, then measure. Each `drive_chain` resets the peak internally, so
-    // each `peak_bytes()` reflects exactly the high-water mark of its own drive.
-    let _ = drive_chain(SHORT, PAYLOAD, false);
-
-    let _short_run = drive_chain(SHORT, PAYLOAD, false);
-    let short_alloc_peak = peak_bytes() as u64;
-
-    let _long_run = drive_chain(LONG, PAYLOAD, false);
-    let long_alloc_peak = peak_bytes() as u64;
-
-    // The extra allocator high-water between short and long is a handful of values
-    // plus fixed, length-independent driver noise — bounded well below the
-    // chain-length-proportional figure. A generous margin (16 values) absorbs
-    // allocator bookkeeping while staying ~6x below the ~96-value leak signal.
-    let margin = 16 * PAYLOAD;
+    // Load-bearing: the DETERMINISTIC per-run ledger peak. Each run owns its ledger, so
+    // this figure is exact, private, and untouched by any sibling thread. It proves the
+    // C10 headline directly — the hundred-node peak does not exceed the short peak by
+    // more than a value.
+    let short_ledger_peak = drive_chain(SHORT, PAYLOAD, false).ledger_peak;
+    let long_ledger_peak = drive_chain(LONG, PAYLOAD, false).ledger_peak;
     assert!(
-        long_alloc_peak <= short_alloc_peak + margin,
-        "allocator peak grew with chain length: short={short_alloc_peak}, long={long_alloc_peak}, \
-         allowed extra={margin} (a leak would add ~{}·PAYLOAD)",
+        long_ledger_peak <= short_ledger_peak + PAYLOAD,
+        "per-run ledger peak grew with chain length: short={short_ledger_peak}, \
+         long={long_ledger_peak} (a leak would add ~{}·PAYLOAD)",
         (LONG - SHORT) as u64,
     );
-    // And it is nowhere near the whole-chain figure a leak would reach.
     assert!(
-        long_alloc_peak < (LONG as u64 / 3) * PAYLOAD,
-        "allocator peak ({long_alloc_peak}) must stay far below the chain-length-proportional \
-         figure ({} bytes)",
+        long_ledger_peak < (LONG as u64 / 3) * PAYLOAD,
+        "per-run ledger peak ({long_ledger_peak}) must stay far below the \
+         chain-length-proportional figure ({} bytes)",
         LONG as u64 * PAYLOAD,
+    );
+
+    // Tolerant allocator corroboration (never load-bearing on a cross-run difference).
+    // Warm once so one-time allocator init does not skew the reading, then drive one run
+    // whose peak we snapshot. `reset_peak()` runs inside `drive_chain`; a concurrent
+    // sibling allocation can only push `PEAK` UP, never below the run's own high-water
+    // mark, so this lower bound — "the instrumented allocator observed at least one live
+    // value during the run" — can never flake on sibling traffic. It stays non-vacuous:
+    // a run that produced NO live bytes would leave the allocator peak at/below its
+    // reset floor. Never RSS.
+    let _ = drive_chain(SHORT, PAYLOAD, false);
+    let long_run = drive_chain(LONG, PAYLOAD, false);
+    let long_alloc_peak = peak_bytes() as u64;
+    assert!(
+        long_alloc_peak >= long_run.ledger_peak,
+        "the instrumented allocator peak ({long_alloc_peak}) must be at least the run's own \
+         counted residency peak ({}) — the allocator held the live values",
+        long_run.ledger_peak,
     );
 }
 
@@ -699,23 +743,34 @@ fn allocator_peak_is_flat_across_chain_length() {
 /// (not elevated by even one value) once the sole consumer is terminal-and-returned.
 #[test]
 fn value_released_after_sole_consumer_terminal_and_returned() {
-    // Serialise: this test reads the process-global live-bytes figure, which a
-    // concurrent allocator would otherwise pollute.
+    // Serialise: this test still reads the process-global live-bytes figure for a
+    // *tolerant, never-panicking* corroboration; the load-bearing verdict is the
+    // per-run ledger, which no sibling thread can pollute.
     let _serial = alloc_guard();
 
-    // --- Allocator half FIRST, on a DIRECT producer→consumer slot pair with NO tokio
-    // in the measurement window. This is the fix for the Linux CI failure: the prior
-    // version sampled `live()` straddling a `drive_chain` through the real driver,
-    // whose two tokio runtimes leave a bounded, chain-length-INDEPENDENT amount of
-    // bookkeeping live past the run (task frames, the mpsc backlog, buffered event
-    // records in the sink) and tear down worker threads that free memory
-    // *asynchronously*. That is **not** slot residency, yet on Linux it pushed the
-    // before/after `live()` delta past one PAYLOAD and masqueraded as a leaked value.
-    // Measuring a direct slot pair here, before any driver runs, isolates the reading
-    // to the slot value itself in a pristine window. Measured with the instrumented
-    // allocator, never RSS.
+    // --- The load-bearing proof is the DETERMINISTIC per-run ledger, on a DIRECT
+    // producer→consumer slot pair. The ledger's `current()` counts only THIS run's
+    // slot residency — it is a private instance, never touched by sibling harness
+    // threads — so the assertions below depend solely on state this test controls.
+    //
+    // The prior version's load-bearing bite read the PROCESS-GLOBAL `live()` allocator
+    // figure across a window (`baseline` before fill, `elevated` after) and asserted
+    // `elevated >= baseline + PAYLOAD/2`. Under CI parallelism a concurrent in-process
+    // `#[test]` (a sibling harness thread) frees memory in that window, so
+    // `elevated < baseline` despite this test's own value being live — the `alloc_guard`
+    // mutex only serialises the *guarded* tests against each other, never the allocator
+    // traffic of every OTHER test in the binary. That is the CI flake (run 30057266042).
+    // We re-anchor the intent — "the produced value's bytes are live while held,
+    // released after the sole consumer's terminal" — on the ledger, and keep the
+    // `live()` reads only as a signed, slack-tolerant sanity check that can never panic
+    // on a small negative delta. Allocator-level, never RSS.
     let ledger = ResidencyLedger::new();
-    let baseline = live() as u64;
+    // Signed byte figures for a slack-tolerant, never-panicking allocator corroboration.
+    // Allocator live bytes are far below `i64::MAX`; the conversions cannot realistically
+    // fail (they would require an >8 EiB live figure), and using `i64::try_from` keeps the
+    // signed math lint-clean while never wrapping.
+    let baseline = i64::try_from(live()).expect("live bytes fit in i64");
+    let payload_i64 = i64::try_from(PAYLOAD).expect("PAYLOAD fits in i64");
 
     let producer: Slot<Payload> = Slot::new(
         NodeId::from_name("p"),
@@ -726,19 +781,25 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
         Arc::clone(&ledger),
     );
     producer.fill(payload_vec()).expect("fill producer");
-    // One value now live: the ledger counts it and the allocator holds its bytes. The
-    // 256 KiB payload dominates; require at least half a value risen so a stray
-    // concurrent free on another harness thread cannot make this bite spuriously,
-    // while a real value is unmistakable.
+    // One value now live: the ledger counts EXACTLY it. This is the load-bearing bite —
+    // deterministic, private to this run, and non-vacuous: it fails if the value is not
+    // charged while held (defeat the fill and this is 0, not PAYLOAD).
     assert_eq!(
         ledger.current(),
         PAYLOAD,
-        "producer value counted while live"
+        "producer value counted while live (deterministic ledger)"
     );
-    let elevated = live() as u64;
+    // Tolerant allocator corroboration: the live figure rose by *roughly* a value. We
+    // require only that the value did not somehow shrink the process below baseline by
+    // more than one value — a signed delta with generous slack that a concurrent free
+    // on a sibling thread can never push into a panic, while a genuinely UNCHARGED
+    // producer (never filled) would leave `live()` flat and the ledger at 0 (caught
+    // above). Never RSS.
+    let elevated = i64::try_from(live()).expect("live bytes fit in i64");
     assert!(
-        elevated >= baseline + PAYLOAD / 2,
-        "the produced value's bytes are live while held (baseline={baseline}, elevated={elevated})"
+        elevated >= baseline - payload_i64,
+        "live allocator bytes fell implausibly far below baseline while a value was held \
+         (baseline={baseline}, elevated={elevated}) — not a slot-residency signal"
     );
 
     // The sole consumer takes its lease, reads (without retaining the returned `Arc`),
@@ -752,26 +813,31 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
         drop(lease);
     }
     drop(producer);
+    // The load-bearing no-leak direction, on the deterministic ledger: residency is
+    // back to zero once the sole consumer is terminal-and-returned. Non-vacuous: if the
+    // value were NOT released after terminal (leak), this stays PAYLOAD, not 0.
     assert_eq!(
         ledger.current(),
         0,
-        "residency returns to zero after the sole consumer returns"
+        "residency returns to zero after the sole consumer returns (deterministic ledger)"
     );
 
-    // Allocator-level, the load-bearing no-leak direction (kept STRICT): live bytes
-    // returned to below the pre-produce baseline plus one value — a leaked value would
-    // add a full PAYLOAD, which this direct pair (no driver bookkeeping) rules out.
-    let after = live() as u64;
+    // Tolerant allocator corroboration of the no-leak direction: live bytes did not
+    // stay elevated by a whole extra value beyond baseline. A leaked value would add a
+    // full PAYLOAD; a concurrent sibling free can only push `after` DOWN, never
+    // spuriously up, so this upper bound with one value of slack can never flake on
+    // sibling traffic. Signed math, never panics on a negative delta. Never RSS.
+    let after = i64::try_from(live()).expect("live bytes fit in i64");
     assert!(
-        after < baseline + PAYLOAD,
-        "live allocator bytes stayed elevated after release: baseline={baseline}, after={after} \
-         (a leaked value would add {PAYLOAD})",
+        after - baseline < 2 * payload_i64,
+        "live allocator bytes stayed elevated by more than one value after release: \
+         baseline={baseline}, after={after} (a leaked value would add {PAYLOAD})",
     );
 
-    // --- Ledger half, through the REAL driver (the load-bearing C10 authority), after
-    // the allocator window closed: nothing is counted after a non-retained run, and
-    // the released terminal value is not redeemable. This deterministic ledger proof
-    // stays strict and is what carries the C10 release accounting through the driver.
+    // --- Ledger half, through the REAL driver (the load-bearing C10 authority): nothing
+    // is counted after a non-retained run, and the released terminal value is not
+    // redeemable. This deterministic ledger proof stays strict and is what carries the
+    // C10 release accounting through the driver.
     let run = drive_chain(SHORT, PAYLOAD, false);
     assert_eq!(run.outcome, RunOutcome::Succeeded);
     assert_eq!(
@@ -910,7 +976,7 @@ fn drive_leaky_chain(len: usize) -> u64 {
     }
 
     let _ = drive(
-        &RunConfig::new("/tmp/dagr-t26-leak"),
+        &RunConfig::new(temp_base()),
         "leaky-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

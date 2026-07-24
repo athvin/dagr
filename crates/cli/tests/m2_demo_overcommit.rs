@@ -319,6 +319,30 @@ fn slot_for(name: &str) -> Arc<Slot<u64>> {
     ))
 }
 
+/// A **collision-proof, per-invocation** run-store base under the OS temp dir.
+///
+/// Determinism (CI fs race): this binary runs concurrently with its sibling
+/// `m2_demo_clean_stop` under `--test-threads>1`, and each `drive_*` here spawns the
+/// driver's detached next-invocation reclamation sweep over its pipeline directory.
+/// This file makes **no** temp-cleanup-timing assertion (it never reads back the temp
+/// dir), so a shared fixed `/tmp` base is not itself a flake source here — but giving
+/// every drive a private, disjoint base removes all cross-drive contention on a shared
+/// pipeline subtree outright, mirroring the `temp_base()` fix in
+/// `os_signals_flush_and_cleanup.rs` and `m2_demo_clean_stop.rs`. No production change.
+fn temp_base() -> std::path::PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir().join(format!(
+        "dagr-t38-overcommit-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        unique
+    ))
+}
+
 // ===========================================================================
 // Stream helpers
 // ===========================================================================
@@ -413,15 +437,20 @@ fn drive_overcommit() -> Overcommit {
         );
     }
 
+    let base = temp_base();
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t38-overcommit").capacities(PoolCapacities::new().memory(M)),
+        &RunConfig::new(base.to_str().expect("temp base is valid UTF-8"))
+            .capacities(PoolCapacities::new().memory(M)),
         "m2-overcommit",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
         sink.clone(),
         TickClock::default(),
     );
+    // Leave no debris under the OS temp dir (the driver's best-effort cleanup already
+    // reclaims the run's own `tmp/` subtree; this removes the whole private base).
+    let _ = std::fs::remove_dir_all(&base);
 
     Overcommit {
         report,
@@ -590,15 +619,18 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
         TrivialRunner::boxed("fits", slot_for("fits")),
     );
 
+    let base = temp_base();
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t38-oversized").capacities(capacities),
+        &RunConfig::new(base.to_str().expect("temp base is valid UTF-8")).capacities(capacities),
         "m2-oversized",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
         sink.clone(),
         TickClock::default(),
     );
+    // Leave no debris under the OS temp dir.
+    let _ = std::fs::remove_dir_all(&base);
 
     // The run failed at bootstrap — distinct from a mid-run failure and from
     // success. Nothing executed.
