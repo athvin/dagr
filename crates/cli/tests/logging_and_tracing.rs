@@ -99,7 +99,10 @@ fn a_task_line_and_a_third_party_line_both_carry_node_and_attempt() {
     for rec in &records {
         let span = rec.get("span").expect("record carries its span fields");
         assert_eq!(span.get("node").and_then(|v| v.as_str()), Some("extract"));
-        assert_eq!(span.get("attempt").and_then(serde_json::Value::as_u64), Some(1));
+        assert_eq!(
+            span.get("attempt").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
         assert_eq!(span.get("run").and_then(|v| v.as_str()), Some("run-abc"));
     }
 }
@@ -118,10 +121,15 @@ fn a_third_party_line_inherits_the_attempt_span() {
         .find(|l| !l.trim().is_empty())
         .and_then(|l| serde_json::from_str(l).ok())
         .expect("the third-party line was captured as a JSON record");
-    let span = rec.get("span").expect("the third-party line is annotated with span fields");
+    let span = rec
+        .get("span")
+        .expect("the third-party line is annotated with span fields");
     assert_eq!(span.get("run").and_then(|v| v.as_str()), Some("run-xyz"));
     assert_eq!(span.get("node").and_then(|v| v.as_str()), Some("load"));
-    assert_eq!(span.get("attempt").and_then(serde_json::Value::as_u64), Some(1));
+    assert_eq!(
+        span.get("attempt").and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
 }
 
 /// Tiny helper so the third-party call reads as "emitted beneath the span".
@@ -167,7 +175,10 @@ fn concurrent_node_lines_are_separable_by_span_fields() {
             .and_then(|s| s.get("node"))
             .and_then(|v| v.as_str())
             .expect("each line carries an unambiguous node field");
-        assert!(node == "node-a" || node == "node-b", "node is one of the two: {node}");
+        assert!(
+            node == "node-a" || node == "node-b",
+            "node is one of the two: {node}"
+        );
     }
     let a_lines = records
         .iter()
@@ -229,20 +240,14 @@ fn an_unrecognized_mode_falls_back_to_the_documented_default() {
 
 #[test]
 fn the_environment_variable_selects_human_readable_output() {
-    assert_eq!(
-        OutputMode::from_env_value(Some("human")),
-        OutputMode::Human
-    );
+    assert_eq!(OutputMode::from_env_value(Some("human")), OutputMode::Human);
     // Recognizing "structured" explicitly is also honored.
     assert_eq!(
         OutputMode::from_env_value(Some("structured")),
         OutputMode::Structured
     );
     // Selection is case-insensitive so an operator's casing does not surprise.
-    assert_eq!(
-        OutputMode::from_env_value(Some("HUMAN")),
-        OutputMode::Human
-    );
+    assert_eq!(OutputMode::from_env_value(Some("HUMAN")), OutputMode::Human);
 }
 
 #[test]
@@ -279,9 +284,18 @@ fn human_mode_is_not_json_but_still_carries_the_fields() {
         "human output is not machine-JSON: {out}"
     );
     // ...but still carries the node + attempt so a developer can attribute it.
-    assert!(out.contains("node"), "human line names the node field: {out}");
-    assert!(out.contains('n'), "human line carries the node value: {out}");
-    assert!(out.contains("human line"), "human line carries the message: {out}");
+    assert!(
+        out.contains("node"),
+        "human line names the node field: {out}"
+    );
+    assert!(
+        out.contains('n'),
+        "human line carries the node value: {out}"
+    );
+    assert!(
+        out.contains("human line"),
+        "human line carries the message: {out}"
+    );
 }
 
 #[test]
@@ -380,7 +394,10 @@ fn installing_the_global_subscriber_is_idempotent_and_coexists() {
     let second = dagr_cli::logging::init_tracing();
     // At most one install per process: whether or not THIS test won the race
     // (another test may have installed first), a second call is never an install.
-    assert!(!second, "a repeat install is a no-op, never a double install");
+    assert!(
+        !second,
+        "a repeat install is a no-op, never a double install"
+    );
     // `first` is true only if this test won the global-install race; either way
     // the calls returned rather than panicking, which is the coexistence claim.
     let _ = first;

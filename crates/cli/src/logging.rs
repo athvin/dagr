@@ -32,7 +32,7 @@
 //! # Where tracing lives, and why not in `dagr-core`
 //!
 //! `dagr-core` is kept **dependency-free** (arch.md "Stability"; the T1 crate-layout
-//! ADR): it exposes only the dep-free [`LogSpan`](dagr_core::context::LogSpan)
+//! ADR): it exposes only the dep-free [`LogSpan`]
 //! *identity payload* on the [`RunContext`](dagr_core::context::RunContext). The
 //! [`tracing`] dependency and the subscriber wiring live **here**, in `dagr-cli`
 //! — the pipeline binary that owns bootstrap and the run loop where attempts
@@ -54,7 +54,8 @@
 //! A value **marked secret** in the C9 [`ResourceRegistry`](dagr_core::context::ResourceRegistry)
 //! (wrapped in [`Secret`](dagr_core::context::Secret)) never appears on any
 //! **framework-controlled** output path — log lines, span fields, or
-//! framework-formatted diagnostics. This holds **by construction**: [`Secret`]
+//! framework-formatted diagnostics. This holds **by construction**:
+//! [`Secret`](dagr_core::context::Secret)
 //! implements neither `Debug` nor `Display`, so framework code — which reaches
 //! values only through those formatters — literally cannot render the wrapped
 //! bytes onto a trace line (a framework `{:?}`/`{}` on a secret fails to compile),
@@ -226,7 +227,9 @@ where
 /// The structured-mode `fmt` builder: JSON output, the current span's fields
 /// included (so run/node/attempt appear as discrete keys), ANSI off (structured
 /// output is consumed by machines), capped at [`MAX_LEVEL`].
-fn structured_builder<W>(writer: W) -> tracing_subscriber::fmt::SubscriberBuilder<
+fn structured_builder<W>(
+    writer: W,
+) -> tracing_subscriber::fmt::SubscriberBuilder<
     tracing_subscriber::fmt::format::JsonFields,
     tracing_subscriber::fmt::format::Format<tracing_subscriber::fmt::format::Json>,
     tracing_subscriber::filter::LevelFilter,
@@ -248,7 +251,9 @@ where
 /// The human-mode `fmt` builder: the readable text format with the current span's
 /// fields, ANSI off (so captured/redirected output has no escape codes), capped
 /// at [`MAX_LEVEL`].
-fn human_builder<W>(writer: W) -> tracing_subscriber::fmt::SubscriberBuilder<
+fn human_builder<W>(
+    writer: W,
+) -> tracing_subscriber::fmt::SubscriberBuilder<
     tracing_subscriber::fmt::format::DefaultFields,
     tracing_subscriber::fmt::format::Format,
     tracing_subscriber::filter::LevelFilter,
@@ -290,7 +295,7 @@ pub fn attempt_span(run: &str, node: &str, attempt: u32) -> tracing::Span {
 }
 
 /// Open the [attempt span](attempt_span) directly from the dep-free
-/// [`LogSpan`](dagr_core::context::LogSpan) identity payload the C8
+/// [`LogSpan`] identity payload the C8
 /// [`RunContext`](dagr_core::context::RunContext) carries — the seam the driver
 /// uses so the span's identity comes from the context rather than being
 /// re-derived. `node` is supplied separately because a
