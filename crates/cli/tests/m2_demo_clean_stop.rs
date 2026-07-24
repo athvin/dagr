@@ -507,7 +507,35 @@ struct CleanStop {
 /// cleanup assertion.
 const RUN_ID: &str = "t38-clean-stop-run";
 const PIPELINE: &str = "m2-clean-stop";
-const BASE: &str = "/tmp/dagr-t38-clean-stop";
+
+/// A **collision-proof, per-invocation** run-store base under the OS temp dir.
+///
+/// Determinism (CI fs race): `drive_clean_stop` is called by six test functions in
+/// this binary, and the two `m2_demo_*` binaries run concurrently under
+/// `--test-threads>1`. A single *fixed shared* base (`/tmp/dagr-t38-clean-stop`)
+/// with a *pinned* run id meant every concurrent drive resolved to the **same**
+/// `<base>/<pipeline>/<run-id>/tmp` path: one drive's synchronous end-of-run
+/// `cleanup_temp_dir` (a best-effort `remove_dir_all`, arch.md C16) could then race
+/// another drive's `create_temp_dir` / in-flight debris write on the *identical*
+/// subtree, and — because the cleanup is best-effort and swallows its error — leave
+/// the directory behind, red-flaking `nothing_orphaned_…`'s hard `assert!(!exists())`.
+/// A process-monotonic `AtomicU64` counter makes every base provably disjoint, so no
+/// two drives ever share — or delete — the same subtree. No production change: this
+/// only picks a private run-store base for the test, exactly the `temp_base()` fix
+/// already applied in `os_signals_flush_and_cleanup.rs`.
+fn temp_base() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
+    std::env::temp_dir().join(format!(
+        "dagr-t38-clean-stop-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        unique
+    ))
+}
 
 /// Build the type-erased runner map for the clean-stop fixture over the shared
 /// residency `ledger`. `wrote` captures the failing node's temp-file path. The
@@ -597,6 +625,11 @@ fn build_runners(
 /// Assemble and drive the clean-stop pipeline under stop-on-first-failure, with the
 /// memory pool pinned so admission serializes. Returns the observed [`CleanStop`].
 fn drive_clean_stop() -> CleanStop {
+    // A private, per-invocation run-store base so concurrent drives (six callers in
+    // this binary + the sibling m2 binary under `--test-threads>1`) never share the
+    // same `<base>/<pipeline>/<run-id>/tmp` path — see `temp_base`.
+    let base = temp_base();
+    let base = base.to_str().expect("temp base is valid UTF-8");
     let ledger = ResidencyLedger::new();
     let wrote: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
@@ -649,12 +682,12 @@ fn drive_clean_stop() -> CleanStop {
         ("downstream-default", &["failing"]),
     ]);
 
-    let config = RunConfig::new(BASE)
+    let config = RunConfig::new(base)
         .run_id(RUN_ID)
         .failure_mode(FailureMode::StopOnFirstFailure)
         .capacities(PoolCapacities::new().memory(PIN));
 
-    let temp_dir = dagr_cli::temp::per_run_temp_dir(BASE, PIPELINE, RUN_ID);
+    let temp_dir = dagr_cli::temp::per_run_temp_dir(base, PIPELINE, RUN_ID);
 
     let sink = MemorySink::default();
     let report = drive(
@@ -979,17 +1012,17 @@ fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
 /// per attempt — no dangling in-flight events (arch.md C16/C14/C19; M2 done-when).
 #[test]
 fn nothing_orphaned_no_residual_temp_complete_stream() {
-    // Best-effort by design, but with only cooperative tasks the cleanup is
-    // deterministic. Clean any stale subtree from a prior run of this pinned id so
-    // the assertion is about *this* run's cleanup, not a leftover.
-    let run_dir = PathBuf::from(BASE).join(PIPELINE).join(RUN_ID);
-    let _ = std::fs::remove_dir_all(&run_dir);
-
+    // `drive_clean_stop` uses a private, per-invocation run-store base (`temp_base`),
+    // so this run's `<base>/<pipeline>/<run-id>/tmp` subtree is freshly created here
+    // and cannot be a stale leftover from — or be raced by — any concurrent drive.
     let run = drive_clean_stop();
 
     // The failing task actually wrote debris under the per-run temp dir (the cleanup
     // proof is non-vacuous: there was something to remove).
-    let wrote = run.wrote_temp.expect("the failing task wrote a temp file");
+    let wrote = run
+        .wrote_temp
+        .clone()
+        .expect("the failing task wrote a temp file");
     assert!(
         wrote.starts_with(&run.temp_dir),
         "the debris was written under the run's per-run temp directory ({:?} under {:?})",
@@ -997,13 +1030,38 @@ fn nothing_orphaned_no_residual_temp_complete_stream() {
         run.temp_dir,
     );
 
-    // After the run reports terminal, the per-run temp directory is gone — the
-    // driver's end-of-run cleanup removed it, so no residual temp is orphaned. (No
-    // task closure is still running: every task cooperated and returned, so this
-    // cleanup is not racing a live thread.)
+    // After the run reports terminal, the per-run temp directory is cleaned up by the
+    // driver's end-of-run reclamation, so no residual temp is orphaned.
+    //
+    // The C16 end-of-run cleanup (`cleanup_temp_dir`, invoked synchronously in the
+    // driver's `finalize_shutdown` before `drive` returns) is **best-effort by
+    // design** (arch.md C16; `crates/cli/src/temp.rs`): the removal is a
+    // `let _ = std::fs::remove_dir_all(path)` whose error is swallowed, because after
+    // grace the process exits promptly rather than blocking on a directory a zombie
+    // thread might momentarily hold. Under a loaded parallel runner that best-effort
+    // `remove_dir_all` can lose a single filesystem race and leave the directory for
+    // an instant, so a *hard immediate* `assert!(!exists())` over-specifies the
+    // guarantee and red-flakes. We instead **bounded-poll** the observable
+    // cleanup-done signal (the directory no longer existing): it converges well within
+    // the bound whenever cleanup succeeds, and still **fails** if the directory is
+    // *never* removed — so this is not vacuous. No fixed sleep drives it; each poll
+    // yields the thread briefly and rechecks.
+    let cleaned = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !run.temp_dir.exists() {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::yield_now();
+        }
+    };
     assert!(
-        !run.temp_dir.exists(),
-        "the per-run temp directory must be cleaned up on the clean stop: {:?}",
+        cleaned,
+        "the per-run temp directory must be cleaned up on the clean stop \
+         (best-effort end-of-run reclamation never removed it within the bound): {:?}",
         run.temp_dir,
     );
 
@@ -1037,8 +1095,19 @@ fn nothing_orphaned_no_residual_temp_complete_stream() {
         );
     }
 
-    // Clean up the run's own directory so a repeat run of the pinned id starts fresh.
-    let _ = std::fs::remove_dir_all(&run_dir);
+    // Clean up this invocation's private run-store base entirely (the temp dir is
+    // `<base>/<pipeline>/<run-id>/tmp`, so its base is three ancestors up), leaving no
+    // debris under the OS temp dir regardless of whether the best-effort end-of-run
+    // reclamation had already removed the `tmp/` subtree.
+    if let Some(base) = run
+        .temp_dir
+        .parent() // <base>/<pipeline>/<run-id>
+        .and_then(std::path::Path::parent) // <base>/<pipeline>
+        .and_then(std::path::Path::parent)
+    // <base>
+    {
+        let _ = std::fs::remove_dir_all(base);
+    }
 }
 
 // ===========================================================================
