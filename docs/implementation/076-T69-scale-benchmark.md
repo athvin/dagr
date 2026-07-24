@@ -41,7 +41,41 @@ Concrete pieces of work:
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket; `docs/tasks.md`'s T69 entry carries no `Q:` items. Three
+implementation decisions were made and are recorded here (defensible defaults, no
+contested move of a merged decision):
+
+- **CI gate form — integration test under `cargo test --workspace`, not a new
+  criterion-bench job or new dependency.** The benchmark ships as
+  `crates/cli/tests/scale_benchmark.rs` (driving the reusable
+  `dagr_cli::scale_bench` module) and runs inside the already-gating
+  `cargo test --workspace` CI job, with a dedicated named CI step added for
+  legibility. This keeps `dagr-core` dependency-free and adds **no** crate
+  (no `criterion`), so `cargo deny`/`cargo audit` stay green with no `deny.toml`
+  change — the overhead is measured with `std::time::Instant`, per the
+  supply-chain constraint. The benchmark is the passing test T65's criteria
+  matrix cites (DoD #8); no new criterion id exists for the Performance envelope
+  in `docs/criteria-matrix.md`, so the coverage matrix is not edited (adding an
+  unlisted row would break the verifier's partition/totality check).
+- **Threshold — a generous CI budget (16 ms/node) that gates, plus the 1 ms/node
+  spec ceiling recorded and asserted only as a pure, host-independent check.** A
+  tight wall-clock gate at the 1 ms ceiling would flap on a shared CI runner
+  (CI-reliability is paramount). The build gates on `CI_BUDGET_NS_PER_NODE`
+  (16× the ceiling) — generous enough that ordinary variance never trips it,
+  strict enough that an orders-of-magnitude regression does. The 1 ms/node spec
+  ceiling (`SPEC_CEILING_NS_PER_NODE`) is documented, printed for re-baselining,
+  and proven assertable by the failure-path test; correctness weight is carried
+  by deterministic invariants (exactly 1000 nodes, all-succeeded terminals,
+  phases-sum, pinned capacity), not by the wall-clock number.
+- **Phase-breakdown interpretation under a deterministic clock.** The driver is
+  fed a monotonic *tick clock* (1 ns/read) so the folded per-attempt phases are
+  reproducible; the fold labels the whole `attempt-started → terminal` window
+  `executing` by construction (node-level readiness/admission waits precede
+  `attempt-started`). The "overhead is the framework's, not the task's" check
+  therefore proves (a) C22 phases-sum exactly, (b) each no-op attempt window is a
+  small bounded constant (no per-node task work), and (c) the framework's
+  per-node `node-ready`/`node-admitted` events are recorded — while the honest
+  budget number is the separate real-`Instant` wall-clock measurement.
 
 ## Out of scope
 - Optimizing the driver to *hit* the budget — this ticket measures and gates; any actual overhead reduction is separate work under the driver's own components (C11/C12/C14/C19).
