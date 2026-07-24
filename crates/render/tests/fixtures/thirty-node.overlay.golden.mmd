@@ -1,0 +1,115 @@
+%% Rendered by dagr-render (C24) from a graph artifact.
+%% Data edges: solid, labelled with the carried type. Ordering edges: dashed, unlabelled.
+%% Run overlay: nodes classed by terminal state, labelled with duration.
+flowchart TB
+  classDef succeeded fill:#2e7d32,color:#ffffff,stroke:#333,stroke-width:1px
+  classDef failed fill:#c62828,color:#ffffff,stroke:#333,stroke-width:1px
+  classDef timedOut fill:#ef6c00,color:#ffffff,stroke:#333,stroke-width:1px
+  classDef skipped fill:#fdd835,color:#000000,stroke:#333,stroke-width:1px
+  classDef upstreamSkipped fill:#fff59d,color:#000000,stroke:#333,stroke-width:1px
+  classDef upstreamFailed fill:#ef9a9a,color:#000000,stroke:#333,stroke-width:1px
+  classDef cancelled fill:#455a64,color:#ffffff,stroke:#333,stroke-width:1px
+  classDef abandoned fill:#212121,color:#ffffff,stroke:#333,stroke-width:1px
+  classDef satisfiedFromPrior fill:#a5d6a7,color:#000000,stroke:#333,stroke-width:1px
+  classDef notRequested fill:#eceff1,color:#000000,stroke:#333,stroke-width:1px
+  classDef unknown fill:#ffffff,color:#000000,stroke:#333,stroke-width:1px
+  subgraph group_ingest["ingest"]
+    ingest_01["ingest_01<br/>timed-out<br/>3.00µs"]
+    ingest_02["ingest_02<br/>skipped"]
+    ingest_03["ingest_03<br/>upstream-skipped"]
+    ingest_04["ingest_04<br/>upstream-failed"]
+    ingest_05["ingest_05<br/>cancelled"]
+    ingest_06["ingest_06<br/>abandoned"]
+  end
+  subgraph group_publish["publish"]
+    publish_01["publish_01<br/>satisfied-from-prior"]
+    publish_02["publish_02<br/>succeeded<br/>10.00µs"]
+    publish_03["publish_03<br/>failed<br/>11.00µs"]
+    publish_04["publish_04<br/>timed-out<br/>12.00µs"]
+    publish_05["publish_05<br/>skipped"]
+    publish_06["publish_06<br/>upstream-skipped"]
+  end
+  subgraph group_report["report"]
+    report_archive["report_archive<br/>upstream-failed"]
+    report_audit["report_audit<br/>cancelled"]
+    report_index["report_index<br/>abandoned"]
+    report_metrics["report_metrics<br/>satisfied-from-prior"]
+    report_render["report_render<br/>succeeded<br/>19.00µs"]
+    report_summary["report_summary<br/>failed<br/>20.00µs"]
+  end
+  subgraph group_transform["transform"]
+    transform_01["transform_01<br/>timed-out<br/>21.00µs"]
+    transform_02["transform_02<br/>skipped"]
+    transform_03["transform_03<br/>upstream-skipped"]
+    transform_04["transform_04<br/>upstream-failed"]
+    transform_05["transform_05<br/>cancelled"]
+    transform_06["transform_06<br/>abandoned"]
+    transform_07["transform_07<br/>satisfied-from-prior"]
+    transform_08["transform_08<br/>succeeded<br/>28.00µs"]
+    transform_09["transform_09<br/>failed<br/>29.00µs"]
+    transform_10["transform_10<br/>timed-out<br/>30.00µs"]
+  end
+  cleanup["cleanup<br/>succeeded<br/>1.00µs"]
+  heartbeat["heartbeat<br/>failed<br/>2.00µs"]
+  ingest_01 -- "Raw1" --> transform_01
+  ingest_02 -- "Raw2" --> transform_02
+  ingest_03 -- "Raw3" --> transform_03
+  ingest_04 -- "Raw4" --> transform_04
+  ingest_05 -- "Raw5" --> transform_05
+  ingest_06 -- "Raw6" --> transform_06
+  publish_01 -- "Published01" --> publish_05
+  publish_02 -- "Published02" --> publish_05
+  publish_03 -.-> publish_05
+  publish_04 -.-> publish_06
+  publish_05 -.-> publish_06
+  publish_05 -- "PublishedAgg" --> report_metrics
+  publish_06 -.-> report_render
+  report_archive -.-> cleanup
+  report_audit -- "AuditLog" --> report_summary
+  report_metrics -- "Metrics" --> report_render
+  report_metrics -- "Metrics" --> report_summary
+  report_render -- "ReportDoc" --> report_archive
+  report_render -- "ReportDoc" --> report_audit
+  report_render -- "ReportDoc" --> report_index
+  transform_01 -- "Clean1" --> transform_07
+  transform_01 -- "Clean1" --> transform_10
+  transform_02 -- "Clean2" --> transform_07
+  transform_03 -- "Clean3" --> transform_08
+  transform_04 -- "Clean4" --> transform_08
+  transform_04 -- "Clean4" --> transform_10
+  transform_05 -- "Clean5" --> transform_09
+  transform_06 -- "Clean6" --> transform_09
+  transform_07 -- "Merged07" --> publish_01
+  transform_08 -- "Merged08" --> publish_02
+  transform_09 -- "Merged09" --> publish_03
+  transform_10 -- "Merged10" --> publish_04
+  class cleanup succeeded
+  class heartbeat failed
+  class ingest_01 timedOut
+  class ingest_02 skipped
+  class ingest_03 upstreamSkipped
+  class ingest_04 upstreamFailed
+  class ingest_05 cancelled
+  class ingest_06 abandoned
+  class publish_01 satisfiedFromPrior
+  class publish_02 succeeded
+  class publish_03 failed
+  class publish_04 timedOut
+  class publish_05 skipped
+  class publish_06 upstreamSkipped
+  class report_archive upstreamFailed
+  class report_audit cancelled
+  class report_index abandoned
+  class report_metrics satisfiedFromPrior
+  class report_render succeeded
+  class report_summary failed
+  class transform_01 timedOut
+  class transform_02 skipped
+  class transform_03 upstreamSkipped
+  class transform_04 upstreamFailed
+  class transform_05 cancelled
+  class transform_06 abandoned
+  class transform_07 satisfiedFromPrior
+  class transform_08 succeeded
+  class transform_09 failed
+  class transform_10 timedOut

@@ -34,17 +34,43 @@
 use std::fmt::Write as _;
 
 use crate::model::{Edge, EdgeKind, GraphArtifact, Node};
+use crate::overlay::{all_classes, Overlay};
 
 /// Render `artifact` to Mermaid flowchart source (arch.md C24). Deterministic and
 /// byte-stable; accepted by Mermaid's parser.
 #[must_use]
 pub fn render(artifact: &GraphArtifact) -> String {
+    render_with_overlay(artifact, None)
+}
+
+/// Render `artifact` to Mermaid, optionally applying a **run overlay** (T47):
+/// when `overlay` is `Some`, a per-state `classDef` prelude is emitted and each
+/// joined node gets a `class <node> <state>` assignment plus a duration in its
+/// label; the structure is identical to the base render. With `None` the output
+/// is byte-for-byte the base structural diagram.
+pub(crate) fn render_with_overlay(artifact: &GraphArtifact, overlay: Option<&Overlay>) -> String {
     let mut out = String::new();
 
     out.push_str("%% Rendered by dagr-render (C24) from a graph artifact.\n");
     out.push_str("%% Data edges: solid, labelled with the carried type. ");
     out.push_str("Ordering edges: dashed, unlabelled.\n");
+    if overlay.is_some() {
+        out.push_str("%% Run overlay: nodes classed by terminal state, labelled with duration.\n");
+    }
     out.push_str("flowchart TB\n");
+
+    // Overlay style prelude: one `classDef` per documented state, in a fixed
+    // order (deterministic). Emitted only under an overlay so the base render is
+    // byte-identical.
+    if overlay.is_some() {
+        for (class, style) in all_classes() {
+            let _ = writeln!(
+                out,
+                "  classDef {class} fill:{},color:{},stroke:#333,stroke-width:1px",
+                style.fillcolor, style.fontcolor
+            );
+        }
+    }
 
     let mut nodes: Vec<&Node> = artifact.nodes().iter().collect();
     nodes.sort_by(|a, b| a.name().cmp(b.name()));
@@ -67,14 +93,14 @@ pub fn render(artifact: &GraphArtifact) -> String {
             escape_mermaid_text(group)
         );
         for node in nodes.iter().filter(|n| n.group() == *group) {
-            emit_node(&mut out, node, 4);
+            emit_node(&mut out, node, 4, overlay);
         }
         out.push_str("  end\n");
     }
 
     // Ungrouped nodes at the top level, outside every subgraph.
     for node in nodes.iter().filter(|n| n.group().is_empty()) {
-        emit_node(&mut out, node, 2);
+        emit_node(&mut out, node, 2, overlay);
     }
 
     // Links in canonical (from, to, kind) order.
@@ -89,16 +115,42 @@ pub fn render(artifact: &GraphArtifact) -> String {
         emit_edge(&mut out, edge);
     }
 
+    // Overlay class assignments (`class <node> <state>`), in node-name order for
+    // determinism; then the extra-run-record report as a trailing comment.
+    if let Some(ov) = overlay {
+        for (node, dec) in &ov.by_node {
+            let _ = writeln!(out, "  class {} {}", sanitize_id(node), dec.class);
+        }
+        if !ov.extra_run_nodes.is_empty() {
+            let _ = writeln!(
+                out,
+                "%% extra run records not in graph: {}",
+                ov.extra_run_nodes.join(", ")
+            );
+        }
+    }
+
     out
 }
 
 /// Emit one node declaration at the given indent: `id["name"]`. The id is the
 /// sanitized identity name; the bracketed label is the exact stable identity name
-/// (never `type_name`).
-fn emit_node(out: &mut String, node: &Node, indent: usize) {
+/// (never `type_name`). Under an overlay with a joined state, the label also
+/// carries the state tag and (when the node ran) its duration.
+fn emit_node(out: &mut String, node: &Node, indent: usize, overlay: Option<&Overlay>) {
     let pad = " ".repeat(indent);
     let id = sanitize_id(node.name());
-    let label = escape_mermaid_text(node.name());
+    let mut label = escape_mermaid_text(node.name());
+    if let Some(dec) = overlay.and_then(|ov| ov.by_node.get(node.name())) {
+        // `<br/>` is Mermaid's in-label line break; append the state tag and
+        // duration below the identity name.
+        label.push_str("<br/>");
+        label.push_str(&escape_mermaid_text(&dec.state_tag));
+        if let Some(dur) = &dec.duration {
+            label.push_str("<br/>");
+            label.push_str(&escape_mermaid_text(dur));
+        }
+    }
     let _ = writeln!(out, "{pad}{id}[\"{label}\"]");
 }
 
