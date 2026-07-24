@@ -76,8 +76,9 @@ fn runs_the_real_scheduler_not_a_stub() {
 
     // The event stream is the REAL driver's: run-started first, run-finished last,
     // and each node's per-transition anchors present.
-    assert_eq!(run.event_kinds().first().copied(), Some("run-started"));
-    assert_eq!(run.event_kinds().last().copied(), Some("run-finished"));
+    let kinds = run.event_kinds();
+    assert_eq!(kinds.first().map(String::as_str), Some("run-started"));
+    assert_eq!(kinds.last().map(String::as_str), Some("run-finished"));
     for node in ["a", "b", "c", "d"] {
         assert!(
             run.has_event("node-ready", Some(node)),
@@ -172,18 +173,33 @@ fn fake_substitution_needs_no_task_edits() {
 /// ordered after `a`; `a` is scripted to fail permanently; run under
 /// stop-on-first-failure. `a` is `failed`, `b` is `upstream-failed` without
 /// executing, the contingency still executes, and an unrelated default-rule
-/// pending node ends `cancelled` — the propagation decisions are the framework's
-/// (C15), reproduced verbatim by the harness, not computed by the test.
+/// **pending** node ends `cancelled` — the propagation decisions are the
+/// framework's (C15), reproduced verbatim by the harness, not computed by the test.
+///
+/// Determinism (the same signal the real T34 suite gates on): `unrelated`'s
+/// `cancelled` terminal depends on the stop landing **before** it is admitted. `a`
+/// fails and triggers the stop, but its *return* is the trigger, so it cannot hold
+/// a permit until then. Admission is serialized by **pinning the memory pool**: a
+/// zero-cost `a`, a `keeper` that occupies the whole pinned pool until the run is
+/// cancelled, and a costed `unrelated` that stays provably pending across the whole
+/// pre-stop window. No wall clock, no sleep.
 #[test]
 fn scripted_permanent_failure_propagates_through_the_real_policy() {
+    // `keeper` and `unrelated` each cost 10 bytes; the pool is pinned to 10, so
+    // exactly one fits. `keeper` (name order: a < keeper < unrelated; `a` is
+    // cost-free) grabs the sole permit and holds it until cancelled, keeping
+    // `unrelated` pending until the stop settles it `cancelled`.
     let run = FullPipelineTest::new("perm-failure")
         .stop_on_first_failure()
+        .capacity_memory(10)
         .source("a", Outcome::fail_permanent())
         .node("b", &["a"], Outcome::succeed())
         // A consume-nothing contingency ordered after `a`, firing on `a`'s failure.
         .contingency("notify", &["a"], TriggerRule::AnyFailed, Outcome::succeed())
-        // An unrelated default-rule node with no dependency on `a`.
-        .source("unrelated", Outcome::succeed())
+        // A keeper that occupies the entire pinned pool until cancellation.
+        .source("keeper", Outcome::hold_until_cancelled().working_memory(10))
+        // An unrelated default-rule node kept provably pending by the pinned pool.
+        .source("unrelated", Outcome::succeed().working_memory(10))
         .run();
 
     assert_eq!(
@@ -212,7 +228,7 @@ fn scripted_permanent_failure_propagates_through_the_real_policy() {
     assert_eq!(
         run.terminal_state("unrelated"),
         Some(TerminalState::Cancelled),
-        "the unrelated default-rule node ends cancelled under stop-on-first-failure"
+        "the unrelated default-rule pending node ends cancelled under stop-on-first-failure"
     );
     assert_eq!(run.overall_outcome(), "failed", "the run failed overall");
 
