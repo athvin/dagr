@@ -247,7 +247,9 @@ fn synchronous_task_uses_injected_fake() {
         .expect("unambiguous")
         .build();
 
-    let outcome = SingleTaskTest::new(ReadsFake).resources(registry).run_sync();
+    let outcome = SingleTaskTest::new(ReadsFake)
+        .resources(registry)
+        .run_sync();
 
     assert_eq!(outcome.output(), Some(&"fake-payload".to_string()));
     assert_eq!(store.read_count(), 1, "the fake recorded exactly one read");
@@ -279,7 +281,10 @@ fn every_context_field_is_populated_on_defaults() {
     assert_eq!(seen.interval, None, "no data interval by default");
     assert!(!seen.cancelled, "cancellation un-tripped by default");
     assert_eq!(seen.span_attempt, 1, "span carries the attempt");
-    assert!(!seen.scratch_present, "honest-empty scratch seam by default");
+    assert!(
+        !seen.scratch_present,
+        "honest-empty scratch seam by default"
+    );
     assert_eq!(seen.registry_len, 0, "honest-empty registry by default");
 }
 
@@ -396,7 +401,10 @@ fn classified_error_surfaces_to_the_caller() {
     assert!(!retry.is_success());
     assert!(retry.output().is_none(), "no output on failure");
     let err = retry.error().expect("an error surfaced");
-    assert!(err.is_retryable(), "classification readable: retry-eligible");
+    assert!(
+        err.is_retryable(),
+        "classification readable: retry-eligible"
+    );
 
     let permanent = SingleTaskTest::new(FailsWith {
         err: || TaskError::permanent("bad input"),
@@ -500,10 +508,7 @@ fn captured_metrics_are_observable() {
 /// scratch store the test can inspect after the run.
 #[test]
 fn scratch_is_capturable_when_rooted() {
-    let tmp = std::env::temp_dir().join(format!(
-        "dagr-t60-scratch-{}",
-        std::process::id() as u64 * 2 + 1
-    ));
+    let tmp = std::env::temp_dir().join(format!("dagr-t60-scratch-{}", std::process::id()));
     let outcome = SingleTaskTest::new(SyncDoubler { n: 1 })
         .scratch_root(tmp.clone())
         .run_sync();

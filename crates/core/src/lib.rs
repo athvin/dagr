@@ -263,6 +263,27 @@
 //!   carrying its originating run identity. Pure and dependency-free; the CLI
 //!   (`dagr_cli::contract`) wires it behind the T55 `resume` verb.
 //!
+//! The **C28 single-task test kit** (ticket T60), behind the default-on
+//! `test-kit` feature: the first of C28's three testing levels — a *shipped*
+//! utility downstream test code calls to exercise **one** task in isolation.
+//!
+//! - [`test_kit::SingleTaskTest`] — configures a controlled [`RunContext`] (C8)
+//!   and a fake [`ResourceRegistry`] (C9), then drives
+//!   the task with [`run_sync`](test_kit::SingleTaskTest::run_sync) (**no async
+//!   runtime**) or [`run_await`](test_kit::SingleTaskTest::run_await) (the kit's
+//!   **provided** dependency-free test runtime — the caller stands up none). It
+//!   runs one task with **no driver, scheduler, or event stream**, and threads
+//!   cancellation/attempt/params/interval/scratch/secrets in explicitly so two
+//!   runs of the same inputs behave identically.
+//! - [`test_kit::TaskOutcome`] — the captured result: the produced output *or*
+//!   the classified [`TaskError`] (classification readable), the observed attempt,
+//!   the attempt [`metrics`](metrics::AttemptMetrics) (C23), the
+//!   [`scratch`](context::ScratchStore) store (C18), and a framework-output dump
+//!   used to prove a marked [`Secret`] never leaks (C9). The
+//!   context-construction and fake-injection surface it exposes is the seam the
+//!   full-pipeline harness (C28 / T62) reuses. Adds **no** dependency and **no**
+//!   production runtime behavior.
+//!
 //! Execution-class dispatch (T33) and the run-loop driver (T24) build on this
 //! core rather than reshape it.
 //!
@@ -288,6 +309,8 @@ pub mod scratch;
 pub mod slot;
 pub mod stable_name;
 pub mod task;
+#[cfg(feature = "test-kit")]
+pub mod test_kit;
 
 pub use assembly::{
     AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, EffectivePolicy,
@@ -334,3 +357,5 @@ pub use slot::{
 };
 pub use stable_name::{is_well_formed, StableInputNames, StableName, UNIT_STABLE_NAME};
 pub use task::{ExecutionClass, Task};
+#[cfg(feature = "test-kit")]
+pub use test_kit::{SingleTaskTest, TaskOutcome};
