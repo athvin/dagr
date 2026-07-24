@@ -66,10 +66,11 @@
 //! # Scope (T40 / T41)
 //!
 //! This module **emits** the C20 artifact and populates its C21 fingerprint slot
-//! (T41). It folds **no** event stream (T42), renders **no** diagram (T46), and
-//! adds **no** ordering-edge authoring surface (T50 — it serializes whatever
-//! ordering edges the assembled graph already carries, which is none today). None
-//! of its output is a runtime outcome — it describes **structure only**.
+//! (T41). It folds **no** event stream (T42) and renders **no** diagram (T46). It
+//! serializes whatever **ordering** edges (C4 / T50) the assembled graph carries —
+//! tagged `ordering` with no carried type, distinct from `data` edges — and the
+//! ordering-edge *authoring* surface itself lives in `dagr-core` (T50). None of
+//! its output is a runtime outcome — it describes **structure only**.
 
 use std::fmt;
 
@@ -527,26 +528,33 @@ fn build_resources(policy: &EffectivePolicy) -> Value {
 }
 
 /// The dependency names of `node` — the identity names of its upstream nodes, in
-/// deterministic (sorted, deduplicated) order.
+/// deterministic (sorted, deduplicated) order. Covers **both** data and ordering
+/// upstreams (C4 / T50): a node ordered after another depends on it (it runs after
+/// it), so the ordering upstream belongs in the dependency list, even though no
+/// value flows.
 fn dependency_names(pipeline: &Pipeline, node: &PipelineNode) -> Vec<String> {
     let mut deps: Vec<String> = node
         .data_edges()
         .iter()
         .filter_map(|edge| pipeline.node(edge.upstream()).map(|n| n.name().to_string()))
+        .chain(
+            node.ordering_edges()
+                .iter()
+                .filter_map(|edge| pipeline.node(edge.upstream()).map(|n| n.name().to_string())),
+        )
         .collect();
     deps.sort();
     deps.dedup();
     deps
 }
 
-/// Build the edge array (C20): one edge per data dependency, tagged `data` and
-/// carrying the stable name of the type it carries; ordering edges are tagged
-/// `ordering` and carry no type. Emitted in canonical `(from, to, kind)` order,
-/// independent of registration order (T0.7 §6).
+/// Build the edge array (C20): one edge per dependency, **data** edges tagged
+/// `data` and carrying the stable name of the type they carry; **ordering** edges
+/// (C4 / T50) tagged `ordering` and carrying **no** type. Emitted in canonical
+/// `(from, to, kind)` order, independent of registration order (T0.7 §6).
 ///
-/// The assembled graph carries only **data** edges today; the ordering-edge
-/// authoring surface is T50, and this emitter serializes whatever ordering edges
-/// the graph already carries (none yet) — it invents none.
+/// The two kinds are recorded distinctly: a data edge's entry has a `type_name`
+/// field (the producer's stable output type), an ordering edge's entry has none.
 fn build_edges(pipeline: &Pipeline) -> Result<Vec<Value>, GraphEmitError> {
     // Collect (from, to, kind, carried-type) tuples, then sort by (from, to, kind)
     // for a total, registration-order-independent order.
@@ -567,16 +575,28 @@ fn build_edges(pipeline: &Pipeline) -> Result<Vec<Value>, GraphEmitError> {
                 })?
                 .output();
             validate_stable_name(producer.name(), carried)?;
-            // `PipelineNode::data_edges()` returns only DATA edges (T11); the
-            // ordering-edge authoring surface is T50, and the graph carries none
-            // yet. `EdgeKind` is `#[non_exhaustive]`, so assert the invariant
-            // rather than pretend to handle a kind this collection cannot contain.
             debug_assert_eq!(edge.kind(), EdgeKind::Data);
             edges.push((
                 producer.name().to_string(),
                 node.name().to_string(),
                 "data",
                 Some(carried.to_string()),
+            ));
+        }
+        // Ordering edges (C4 / T50): sequence-only, no value, so no carried type.
+        // The upstream needs NO stable names — nothing flows along the edge, so an
+        // ordering upstream that lacks stable output names is still emittable (only
+        // a DATA edge requires its producer's stable output type).
+        for edge in node.ordering_edges() {
+            let Some(producer) = pipeline.node(edge.upstream()) else {
+                continue;
+            };
+            debug_assert_eq!(edge.kind(), EdgeKind::Ordering);
+            edges.push((
+                producer.name().to_string(),
+                node.name().to_string(),
+                "ordering",
+                None,
             ));
         }
     }

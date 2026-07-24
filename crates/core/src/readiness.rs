@@ -305,11 +305,13 @@ impl ReadinessTracker {
     /// The per-node countdown is seeded from T14's
     /// [remaining-dependency counts](AssemblyArtifact::remaining_dependency_count),
     /// the dependents map and trigger rules are read from the pipeline's recorded
-    /// edges, and the [initial-ready frontier](Self::initial_ready) collects every
-    /// zero-dependency (source) node — ready from the start. The `pipeline` and
-    /// `artifact` must describe the same assembled graph (pass the artifact
-    /// [`assemble`](Pipeline::assemble) returned for this pipeline); the tracker
-    /// copies what it needs and borrows neither afterward.
+    /// edges — **both** data edges and the node's structural **ordering** edges
+    /// (C4 / T50), which count toward the countdown exactly like data upstreams but
+    /// deliver no value — and the [initial-ready frontier](Self::initial_ready)
+    /// collects every zero-dependency (source) node, ready from the start. The
+    /// `pipeline` and `artifact` must describe the same assembled graph (pass the
+    /// artifact [`assemble`](Pipeline::assemble) returned for this pipeline); the
+    /// tracker copies what it needs and borrows neither afterward.
     #[must_use]
     pub fn new(pipeline: &Pipeline, artifact: &AssemblyArtifact) -> Self {
         Self::new_with_ordering(pipeline, artifact, &BTreeMap::new())
@@ -344,15 +346,28 @@ impl ReadinessTracker {
         ordering: &BTreeMap<String, Vec<String>>,
     ) -> Self {
         // Resolve each node's distinct, in-pipeline ordering upstreams (name-keyed,
-        // deduped) — the extra upstreams the seam contributes beyond data edges.
+        // deduped) — the extra upstreams beyond data edges. Two sources combine:
+        //   1. the node's STRUCTURAL ordering edges (C4 / T50) recorded on the
+        //      pipeline itself — real graph shape, present in every run of this
+        //      graph; and
+        //   2. the RUN-LEVEL `ordering` map (C15 / T34) — a runtime-only seam a
+        //      driver may add on top (an empty map contributes nothing).
+        // Both are treated identically by readiness: an ordering upstream must be
+        // terminal and contributes its terminal state to the rule picture, but
+        // delivers no value.
         let ordering_upstreams = |name: &str| -> Vec<String> {
-            let mut ups: Vec<String> = ordering
+            let structural = pipeline
+                .node(NodeId::from_name(name))
+                .into_iter()
+                .flat_map(|node| node.ordering_edges().iter())
+                .filter_map(|edge| pipeline.node(edge.upstream()).map(|u| u.name().to_string()));
+            let run_level = ordering
                 .get(name)
                 .into_iter()
                 .flatten()
                 .filter(|up| pipeline.node(NodeId::from_name(up)).is_some())
-                .cloned()
-                .collect();
+                .cloned();
+            let mut ups: Vec<String> = structural.chain(run_level).collect();
             ups.sort();
             ups.dedup();
             ups

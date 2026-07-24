@@ -87,7 +87,7 @@
 use std::collections::BTreeMap;
 
 use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, EffectivePolicy, NodePolicy};
-use crate::binding::{DataEdge, NodeBinding, TriggerRule};
+use crate::binding::{DataEdge, NodeBinding, OrderingEdge, OrderingHandle, TriggerRule};
 use crate::handle::{Handle, NodeId};
 use crate::stable_name::{StableInputNames, StableName};
 use crate::task::{ExecutionClass, Task};
@@ -197,6 +197,12 @@ pub struct PipelineNode {
     group: Option<String>,
     /// The declared data edges, in input order (T11). Empty for a source node.
     edges: Vec<DataEdge>,
+    /// The declared ordering edges (C4 / T50) — the upstreams this node runs
+    /// *after* without consuming their value, in declaration order. Empty for a
+    /// node with no ordering dependencies. Distinct from `edges`: an ordering edge
+    /// carries no value, so it feeds readiness/assembly and the structural
+    /// fingerprint but demands no input slot.
+    ordering_edges: Vec<OrderingEdge>,
     /// The node's trigger rule (T0.4 / T11). `AllSucceeded` for a data-dependent
     /// node (the typestate makes any other rule inexpressible on it).
     trigger_rule: TriggerRule,
@@ -263,6 +269,20 @@ impl PipelineNode {
     #[must_use]
     pub fn data_edges(&self) -> &[DataEdge] {
         &self.edges
+    }
+
+    /// This node's declared **ordering** edges (C4 / T50) — the upstreams it runs
+    /// *after* without consuming their value, in declaration order. Empty for a
+    /// node with no ordering dependencies.
+    ///
+    /// An ordering edge carries no value (unlike a [data edge](PipelineNode::data_edges)):
+    /// readiness (C11) waits for its upstream's terminal state and propagates a
+    /// failure/skip across it under the default rule, but no value slot is wired.
+    /// Ordering edges are part of the graph shape, so they feed the structural
+    /// fingerprint (C21) and the graph artifact (C20).
+    #[must_use]
+    pub fn ordering_edges(&self) -> &[OrderingEdge] {
+        &self.ordering_edges
     }
 
     /// This node's [trigger rule](TriggerRule) (T0.4 / T11). A node with any data
@@ -486,6 +506,7 @@ impl Flow {
             policy,
             DurableWitness::Absent,
             TriggerRule::AllSucceeded,
+            &[],
         )
     }
 
@@ -518,6 +539,7 @@ impl Flow {
             policy.durable(true),
             DurableWitness::Present,
             TriggerRule::AllSucceeded,
+            &[],
         )
     }
 
@@ -546,6 +568,7 @@ impl Flow {
             NodePolicy::new(),
             DurableWitness::Absent,
             TriggerRule::AllSucceeded,
+            &[],
         )
     }
 
@@ -579,6 +602,76 @@ impl Flow {
             policy,
             DurableWitness::Absent,
             trigger_rule,
+            &[],
+        )
+    }
+
+    /// Register a **consume-nothing** node under `name` attached **only by
+    /// ordering edges** (C4 / T50) — it runs *after* each `ordering_upstreams`
+    /// node without consuming any value, and receives nothing.
+    ///
+    /// This is the cleanup-after-publish / cache-warm-before-read shape: reach for
+    /// an ordering edge (over a [data dependency](Flow::register)) when a task's
+    /// *effect* rather than its *value* matters to this node (arch.md `### C4`).
+    /// The upstreams are type-erased [`OrderingHandle`]s
+    /// ([`Handle::ordering`](crate::handle::Handle::ordering)), so ordering
+    /// upstreams of different value types can be mixed. The node keeps the default
+    /// `all-succeeded` rule (so a failed/skipped ordering upstream propagates to
+    /// it) — use
+    /// [`register_source_ordered_after_with_trigger`](Flow::register_source_ordered_after_with_trigger)
+    /// for a cleanup node that must run regardless (`all-terminal`).
+    #[must_use]
+    pub fn register_source_ordered_after<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        ordering_upstreams: &[OrderingHandle],
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            NodePolicy::new(),
+            DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
+            ordering_upstreams,
+        )
+    }
+
+    /// Register a **consume-nothing** node under `name` attached only by ordering
+    /// edges, with an explicit [`NodePolicy`] and a
+    /// [trigger rule](TriggerRule) (C4 / T50) — the ordering-edge counterpart of
+    /// [`register_source_with_trigger`](Flow::register_source_with_trigger).
+    ///
+    /// A non-default rule (`all-terminal` / `any-failed`) is expressible here
+    /// because the node consumes nothing (arch.md Vocabulary; C4): the motivating
+    /// case is a cleanup / notify node ordered after the work it guards that must
+    /// run even when that work failed (`all-terminal`) or that fires precisely when
+    /// it failed (`any-failed`). Ordering edges do not weaken this — a
+    /// data-consuming node still has no way to set a non-default rule.
+    #[must_use]
+    pub fn register_source_ordered_after_with_trigger<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        ordering_upstreams: &[OrderingHandle],
+        policy: NodePolicy,
+        trigger_rule: TriggerRule,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy,
+            DurableWitness::Absent,
+            trigger_rule,
+            ordering_upstreams,
         )
     }
 
@@ -589,7 +682,14 @@ impl Flow {
     /// [`Present`](DurableWitness::Present) only when the caller proved
     /// `T::Output: DurableOutput` ([`register_source_durable`](Flow::register_source_durable));
     /// the trigger rule is `all-succeeded` for every registrar except
-    /// [`register_source_with_trigger`](Flow::register_source_with_trigger).
+    /// [`register_source_with_trigger`](Flow::register_source_with_trigger). The
+    /// `ordering` slice adds C4 ordering edges (empty for a non-ordered node).
+    //
+    // The many parameters are the full, orthogonal set of registration facets
+    // (name, task, group, policy, durable witness, trigger rule, ordering edges);
+    // each public registrar forwards a fixed subset. Bundling them into a struct
+    // would only relocate the argument list without simplifying the delegation.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     fn register_source_in_group_with<T>(
         &mut self,
@@ -599,6 +699,7 @@ impl Flow {
         policy: NodePolicy,
         durable_witness: DurableWitness,
         trigger_rule: TriggerRule,
+        ordering: &[OrderingHandle],
     ) -> Handle<T::Output>
     where
         T: Task<Input = ()>,
@@ -608,15 +709,18 @@ impl Flow {
         // registration (C2). A source consumes nothing, so the binding's
         // consume-nothing typestate is where a non-default trigger rule is
         // legitimately expressible (C4 / Vocabulary); a default source keeps
-        // `AllSucceeded`.
-        let handle: Handle<T::Output> = NodeBinding::consuming_nothing(&name)
+        // `AllSucceeded`. Ordering edges (C4 / T50) declared here deliver no value,
+        // so the node stays consume-nothing and the trigger rule remains settable.
+        let (handle, registered): (Handle<T::Output>, _) = NodeBinding::consuming_nothing(&name)
             .trigger_rule(trigger_rule)
-            .finish::<T::Output>();
+            .ordered_after(ordering)
+            .finish_node::<T::Output>();
         let node = PipelineNode {
             id: handle.id(),
             name: name.clone(),
             group: group.map(Into::into),
             edges: Vec::new(),
+            ordering_edges: registered.ordering_edges().to_vec(),
             trigger_rule,
             policy,
             declared_class: T::EXECUTION_CLASS,
@@ -681,6 +785,7 @@ impl Flow {
             None::<String>,
             policy,
             DurableWitness::Absent,
+            &[],
         )
     }
 
@@ -712,6 +817,42 @@ impl Flow {
             None::<String>,
             policy.durable(true),
             DurableWitness::Present,
+            &[],
+        )
+    }
+
+    /// Register a **data-dependent** node under `name` that **also** carries
+    /// additional **ordering edges** (C4 / T50): it consumes `deps`' value **and**
+    /// runs *after* each `ordering_upstreams` node, without consuming a value from
+    /// the ordering upstreams.
+    ///
+    /// This is the "both kinds on one node" shape (arch.md §142): the body sees the
+    /// bound `deps` value, and the extra ordering edges only sequence the node
+    /// after side-effect upstreams whose *effect* it depends on. The node stays
+    /// locked to `all-succeeded` (C3) — adding an ordering edge does **not** unlock
+    /// a non-default rule on a data-consuming node (the typestate offers no
+    /// `trigger_rule` method once a data dependency is bound). Pass an empty
+    /// `ordering_upstreams` slice for a plain data node.
+    #[must_use]
+    pub fn register_ordered_after<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        ordering_upstreams: &[OrderingHandle],
+    ) -> Handle<T::Output>
+    where
+        T: Task,
+        D: Deps<Inputs = T::Input>,
+    {
+        self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            None::<String>,
+            NodePolicy::new(),
+            DurableWitness::Absent,
+            ordering_upstreams,
         )
     }
 
@@ -739,13 +880,18 @@ impl Flow {
             group,
             NodePolicy::new(),
             DurableWitness::Absent,
+            &[],
         )
     }
 
     /// Register a **data-dependent** node under `name`, in an optional group, with
-    /// an explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness)
-    /// — the full data-node-registration surface the other data registrars
-    /// delegate to.
+    /// an explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness),
+    /// plus any C4 `ordering` edges — the full data-node-registration surface the
+    /// other data registrars delegate to.
+    //
+    // The many parameters are the full, orthogonal set of registration facets;
+    // each public registrar forwards a fixed subset (see the source counterpart).
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     fn register_in_group_with<T, D>(
         &mut self,
@@ -755,25 +901,31 @@ impl Flow {
         group: Option<impl Into<String>>,
         policy: NodePolicy,
         durable_witness: DurableWitness,
+        ordering: &[OrderingHandle],
     ) -> Handle<T::Output>
     where
         T: Task,
         D: Deps<Inputs = T::Input>,
     {
         let name = name.into();
-        // Drive the T11 binding seam: it records the edges (in input order) and
+        // Drive the T11 binding seam: it records the data edges (in input order),
+        // any additional ordering edges (C4 / T50 — value-less "run after"), and
         // the trigger rule, and mints the output handle. We copy the recorded
         // structure into the pipeline node, adding the identity name, the
         // group-label slot, and the assembly-validation policy seam this ticket
-        // owns.
+        // owns. Adding ordering edges does NOT unlock a non-default rule: a
+        // data-dependent node stays `all-succeeded` (the typestate has no
+        // `trigger_rule` method).
         let (handle, node) = NodeBinding::consuming_nothing(&name)
             .depends_on::<T, D>(task, deps)
+            .ordered_after(ordering)
             .finish::<T::Output>();
         let pipeline_node = PipelineNode {
             id: node.id(),
             name: name.clone(),
             group: group.map(Into::into),
             edges: node.data_edges().to_vec(),
+            ordering_edges: node.ordering_edges().to_vec(),
             trigger_rule: node.trigger_rule(),
             policy,
             declared_class: T::EXECUTION_CLASS,
@@ -817,6 +969,43 @@ impl Flow {
             policy,
             DurableWitness::Absent,
             TriggerRule::AllSucceeded,
+            &[],
+        );
+        self.attach_stable_names::<T>(handle.id());
+        handle
+    }
+
+    /// Register a **consume-nothing**, stable-name-aware node under `name` attached
+    /// only by **ordering edges** (C4 / T50), capturing its
+    /// [stable names](StableTypeNames) for the C20 graph artifact.
+    ///
+    /// The ordering-edge, graph-emittable counterpart of
+    /// [`register_source_named`](Flow::register_source_named): the node runs *after*
+    /// each `ordering_upstreams` node without consuming its value, and its ordering
+    /// edges are recorded distinctly in the graph artifact (kind `ordering`, no
+    /// carried type) and feed the structural fingerprint (C21). It keeps the default
+    /// `all-succeeded` rule.
+    #[must_use]
+    pub fn register_source_named_ordered_after<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        ordering_upstreams: &[OrderingHandle],
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName,
+        T::Output: StableName,
+    {
+        let handle = self.register_source_in_group_with::<T>(
+            name,
+            task,
+            group,
+            policy,
+            DurableWitness::Absent,
+            TriggerRule::AllSucceeded,
+            ordering_upstreams,
         );
         self.attach_stable_names::<T>(handle.id());
         handle
@@ -855,6 +1044,47 @@ impl Flow {
             group,
             policy,
             DurableWitness::Absent,
+            &[],
+        );
+        self.attach_stable_names_with_inputs::<T, T::Input>(handle.id());
+        handle
+    }
+
+    /// Register a **data-dependent**, stable-name-aware node under `name` that
+    /// **also** carries additional **ordering edges** (C4 / T50), binding `deps`
+    /// and capturing the node's [stable names](StableTypeNames) for the C20 graph
+    /// artifact.
+    ///
+    /// The "both kinds on one node" (arch.md §142), graph-emittable counterpart of
+    /// [`register_named`](Flow::register_named): the body sees the bound `deps`
+    /// value, the extra `ordering_upstreams` only sequence the node after
+    /// side-effect upstreams. The data edges carry their stable type names and the
+    /// ordering edges carry none — both recorded distinctly in the artifact. Stays
+    /// `all-succeeded` (C3). Pass an empty slice for a plain named data node.
+    #[must_use]
+    pub fn register_named_ordered_after<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        deps: D,
+        ordering_upstreams: &[OrderingHandle],
+        group: Option<impl Into<String>>,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task + StableName,
+        T::Input: StableInputNames,
+        T::Output: StableName,
+        D: Deps<Inputs = T::Input>,
+    {
+        let handle = self.register_in_group_with::<T, D>(
+            name,
+            task,
+            deps,
+            group,
+            policy,
+            DurableWitness::Absent,
+            ordering_upstreams,
         );
         self.attach_stable_names_with_inputs::<T, T::Input>(handle.id());
         handle

@@ -68,6 +68,20 @@ impl Task for LoadSchema {
     }
 }
 
+/// A single-input task consuming `Rows` and producing `Report` — the data-edge
+/// half of the ordering-edge emission fixture.
+struct BuildReportOne;
+impl StableName for BuildReportOne {
+    const STABLE_NAME: &'static str = "BuildReportOne";
+}
+impl Task for BuildReportOne {
+    type Input = Rows;
+    type Output = Report;
+    async fn run(&mut self, _c: &RunContext, _i: Rows) -> Result<Report, TaskError> {
+        Ok(Report)
+    }
+}
+
 /// A two-input task consuming `(Rows, Schema)` and producing `Report`.
 struct BuildReport;
 impl StableName for BuildReport {
@@ -329,6 +343,114 @@ fn data_edges_are_tagged_and_carry_the_stable_type_name() {
 
     // Every edge is a data edge here (no ordering edges yet — T50).
     assert!(edges.iter().all(|e| e["kind"] == "data"));
+}
+
+/// A sourceless effect-only task (consumes nothing, produces `()`) with an
+/// author-declared stable name — the cleanup/notify shape an ordering edge orders.
+struct Publish;
+impl StableName for Publish {
+    const STABLE_NAME: &'static str = "publish-task";
+}
+impl Task for Publish {
+    type Input = ();
+    type Output = ();
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<(), TaskError> {
+        Ok(())
+    }
+}
+
+/// **Ordering edges recorded distinctly (C20 / C4).** A pipeline with one data
+/// edge and one ordering edge into distinct downstream nodes emits both: the data
+/// edge tagged `data` carrying its stable type name; the ordering edge tagged
+/// `ordering` with NO `type_name` field. The artifact still validates against the
+/// schema and repeat emission is byte-identical.
+#[test]
+fn ordering_edges_are_recorded_distinctly_from_data_edges() {
+    let pipeline = {
+        let mut flow = Flow::new();
+        // A data edge: load -> report (via a producer of Rows).
+        let rows = flow.register_source_named::<LoadRows>(
+            "load",
+            &LoadRows,
+            None::<String>,
+            NodePolicy::new(),
+        );
+        // A side-effect node the cleanup will only be ordered after.
+        let publish = flow.register_source_named::<Publish>(
+            "publish",
+            &Publish,
+            None::<String>,
+            NodePolicy::new(),
+        );
+        // A data-dependent node consuming `rows`.
+        let _report = flow.register_named_ordered_after::<BuildReportOne, _>(
+            "report",
+            &BuildReportOne,
+            rows,
+            &[],
+            None::<String>,
+            NodePolicy::new(),
+        );
+        // An ordering-only cleanup node ordered after `publish`, receives no value.
+        let _cleanup = flow.register_source_named_ordered_after::<Publish>(
+            "cleanup",
+            &Publish,
+            &[publish.ordering()],
+            None::<String>,
+            NodePolicy::new(),
+        );
+        flow.finish()
+    };
+
+    let a = emit(&pipeline, GEN_A);
+    let b = emit(&pipeline, GEN_A);
+    assert_eq!(
+        a, b,
+        "repeat emission with ordering edges is byte-identical"
+    );
+
+    let artifact = parse(&a);
+    let edges = artifact["edges"].as_array().unwrap();
+
+    let data_edge = edges
+        .iter()
+        .find(|e| e["kind"] == "data")
+        .expect("one data edge present");
+    assert_eq!(data_edge["from"], "load");
+    assert_eq!(data_edge["to"], "report");
+    assert_eq!(
+        data_edge["type_name"], "Rows",
+        "a data edge carries its stable carried-type name"
+    );
+
+    let ordering_edge = edges
+        .iter()
+        .find(|e| e["kind"] == "ordering")
+        .expect("one ordering edge present");
+    assert_eq!(ordering_edge["from"], "publish");
+    assert_eq!(ordering_edge["to"], "cleanup");
+    assert!(
+        ordering_edge.get("type_name").is_none(),
+        "an ordering edge carries no type-name field"
+    );
+
+    // The cleanup node's dependency list names its ordering upstream.
+    let cleanup = artifact["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "cleanup")
+        .unwrap();
+    assert_eq!(
+        cleanup["dependencies"],
+        serde_json::json!(["publish"]),
+        "an ordering upstream appears in the dependency list"
+    );
+    assert_eq!(
+        cleanup["input_type_names"],
+        serde_json::json!([]),
+        "an ordering-only node demands no input value"
+    );
 }
 
 /// **Stable declared names, never `type_name` as identity (C20 / C21).** Recorded

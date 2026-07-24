@@ -88,7 +88,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::binding::{DataEdge, ReceiveMode, TriggerRule};
+use crate::binding::{DataEdge, OrderingEdge, ReceiveMode, TriggerRule};
 use crate::execution::{Backoff, RetryConfig};
 use crate::flow::{Pipeline, PipelineNode};
 use crate::handle::NodeId;
@@ -793,9 +793,11 @@ impl std::error::Error for AssemblyError {}
 /// The **structural fingerprint** covers the node set — each node's identity name
 /// **and** its author-declared stable task / input / output type names — the edge
 /// set (each data edge's endpoints, position, kind, and **carried type stable
-/// name**), and per-node trigger rules. These are the shape-determining inputs
-/// that gate resume (C27); a structural change (node add/remove/rename, rewire,
-/// carried-type change, trigger-rule change) moves it. The **policy hash** covers
+/// name**; each **ordering** edge's endpoints and kind, with no carried type —
+/// C4 / T50), and per-node trigger rules. These are the shape-determining inputs
+/// that gate resume (C27); a structural change (node add/remove/rename, rewire, add
+/// or remove an ordering edge, carried-type change, trigger-rule change) moves it.
+/// The **policy hash** covers
 /// the residual effective-policy values (retries, backoff, timeout, cost,
 /// effective class, retention, durability). Group labels (C6) and everything
 /// environmental — timestamps, hostnames, compiler/tool versions, generation
@@ -1281,7 +1283,15 @@ fn precompute_execution_order(pipeline: &Pipeline) -> Vec<NodeId> {
     let mut forward: BTreeMap<String, Vec<String>> =
         names.iter().map(|n| (n.clone(), Vec::new())).collect();
     for node in pipeline.nodes() {
-        let mut ups: Vec<NodeId> = node.data_edges().iter().map(DataEdge::upstream).collect();
+        // A node runs after BOTH its data upstreams and its ordering upstreams
+        // (C4 / T50): an ordering edge sequences without a value, but it still
+        // constrains topological order. Combine both, deduplicated.
+        let mut ups: Vec<NodeId> = node
+            .data_edges()
+            .iter()
+            .map(DataEdge::upstream)
+            .chain(node.ordering_edges().iter().map(OrderingEdge::upstream))
+            .collect();
         ups.sort_by_key(|id| id.sort_key());
         ups.dedup();
         for up in ups {
@@ -1384,8 +1394,10 @@ fn canonical_encoding(pipeline: &Pipeline) -> Vec<u8> {
 
 /// The structural encoding (T0.7 §3): the node set — each node's identity name
 /// **and** its author-declared stable task / input / output type names — the edge
-/// set (with each data edge's carried type stable name and kind), and per-node
-/// trigger rules. This is exactly the resume-gating shape (C27) and nothing else:
+/// set (each **data** edge with its carried type stable name and kind, each
+/// **ordering** edge (C4 / T50) with its endpoints and kind but no carried type),
+/// and per-node trigger rules. This is exactly the resume-gating shape (C27) and
+/// nothing else:
 /// no policy value, no group label, no environmental input. Nodes and edges are
 /// emitted in a total, registration-order-independent order (node name; edge
 /// `(consumer, position, producer)`), so two assemblies of the same source yield
@@ -1450,13 +1462,42 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
         push_framed(&mut out, b'c', consumer.as_bytes());
         push_framed(&mut out, b'p', producer.as_bytes());
         out.extend_from_slice(&position.to_le_bytes());
-        // Edge kind: data (the only kind recorded today — T50 adds ordering).
+        // Edge kind: data. Ordering edges (C4 / T50) are encoded distinctly in the
+        // separate section below, so a data edge's byte shape is unchanged.
         out.push(b'd');
         // Carried type stable name, present-or-absent framed distinctly.
         match carried {
             Some(name) => push_framed(&mut out, b'y', name.as_bytes()),
             None => push_framed(&mut out, b'Y', &[]),
         }
+    }
+    // Ordering-edge set (C4 / T50), ordered by (consumer name, producer name) — a
+    // total, order-independent key. An ordering edge is part of the graph SHAPE
+    // (arch.md §143), so it feeds the structural fingerprint: adding or removing
+    // one moves it, and a resume notices. It carries NO position and NO carried
+    // type (it sequences without a value), and its kind byte `O` differs from a
+    // data edge's `d`, so a data and an ordering edge between the same pair never
+    // collide. This section is appended only for edges that exist, so a graph with
+    // NO ordering edges produces byte-identical structural bytes to before T50 —
+    // no accidental fingerprint churn.
+    let mut ordering: Vec<(String, String)> = Vec::new();
+    for node in pipeline.nodes() {
+        for edge in node.ordering_edges() {
+            let producer = pipeline.node(edge.upstream()).map_or_else(
+                || format!("{:?}", edge.upstream()),
+                |n| n.name().to_string(),
+            );
+            ordering.push((node.name().to_string(), producer));
+        }
+    }
+    ordering.sort();
+    ordering.dedup();
+    for (consumer, producer) in ordering {
+        push_framed(&mut out, b'c', consumer.as_bytes());
+        push_framed(&mut out, b'p', producer.as_bytes());
+        // Edge kind: ordering — distinct from data's `d`. No position, no carried
+        // type (an ordering edge carries no value).
+        out.push(b'O');
     }
     out
 }

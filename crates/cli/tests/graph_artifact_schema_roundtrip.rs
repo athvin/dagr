@@ -161,6 +161,147 @@ fn emitted_artifact_validates_against_the_published_schema() {
     );
 }
 
+/// A sourceless effect-only task with a stable name — the ordering-edge upstream.
+struct Publish;
+impl StableName for Publish {
+    const STABLE_NAME: &'static str = "publish-task";
+}
+impl Task for Publish {
+    type Input = ();
+    type Output = ();
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<(), TaskError> {
+        Ok(())
+    }
+}
+
+/// A pipeline carrying both a data edge and an ordering edge (T50 / C4).
+fn ordering_pipeline() -> Pipeline {
+    let mut flow = Flow::new();
+    let rows = flow.register_source_named::<LoadRows>(
+        "load",
+        &LoadRows,
+        None::<String>,
+        NodePolicy::new(),
+    );
+    let publish = flow.register_source_named::<Publish>(
+        "publish",
+        &Publish,
+        None::<String>,
+        NodePolicy::new(),
+    );
+    let _report = flow.register_named_ordered_after::<BuildReportOne, _>(
+        "report",
+        &BuildReportOne,
+        rows,
+        &[],
+        None::<String>,
+        NodePolicy::new(),
+    );
+    let _cleanup = flow.register_source_named_ordered_after::<Publish>(
+        "cleanup",
+        &Publish,
+        &[publish.ordering()],
+        None::<String>,
+        NodePolicy::new(),
+    );
+    flow.finish()
+}
+
+/// A single-input `Rows -> Report` task for the ordering-edge fixture's data edge.
+struct BuildReportOne;
+impl StableName for BuildReportOne {
+    const STABLE_NAME: &'static str = "BuildReportOne";
+}
+impl Task for BuildReportOne {
+    type Input = Rows;
+    type Output = Report;
+    async fn run(&mut self, _c: &RunContext, _i: Rows) -> Result<Report, TaskError> {
+        Ok(Report)
+    }
+}
+
+/// **A real ordering-edge graph validates against the published schema (C20 / C4).**
+/// The emitted artifact — carrying a `data` edge with a `type_name` and an
+/// `ordering` edge without one — validates cleanly against
+/// `schemas/graph/v1.schema.json`, and a corrupted copy is rejected.
+#[test]
+fn ordering_edge_artifact_validates_against_the_published_schema() {
+    let out = emit_graph(
+        &ordering_pipeline(),
+        "ordering-pipeline",
+        "2026-07-23T00:00:00Z",
+        &provenance(),
+    )
+    .expect("ordering fixture emits");
+    let artifact: Value = serde_json::from_str(&out).expect("valid JSON");
+
+    validate_value(ArtifactKind::Graph, GRAPH_SCHEMA_MAJOR, &artifact)
+        .expect("a real ordering-edge artifact validates against the published schema");
+
+    // The ordering edge is present and carries no type_name — still schema-valid.
+    let ordering = artifact["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "ordering")
+        .expect("ordering edge present");
+    assert!(ordering.get("type_name").is_none());
+
+    // Corrupt the ordering edge: drop its `kind`. Rejected (kind is required).
+    let mut corrupt = artifact.clone();
+    let edges = corrupt["edges"].as_array_mut().unwrap();
+    let idx = edges.iter().position(|e| e["kind"] == "ordering").unwrap();
+    edges[idx].as_object_mut().unwrap().remove("kind");
+    assert!(
+        validate_value(ArtifactKind::Graph, GRAPH_SCHEMA_MAJOR, &corrupt).is_err(),
+        "an edge missing its kind is rejected"
+    );
+}
+
+/// **A real emitted ordering-edge graph renders distinctly in both formats (C24).**
+/// Feeding a real emitted artifact (with one data and one ordering edge) through
+/// the renderer produces DOT and Mermaid in which the two edge kinds carry disjoint
+/// documented styling — the data edge solid/labelled, the ordering edge dashed.
+#[test]
+fn ordering_edge_artifact_renders_distinctly() {
+    let out = emit_graph(
+        &ordering_pipeline(),
+        "ordering-pipeline",
+        "2026-07-23T00:00:00Z",
+        &provenance(),
+    )
+    .expect("ordering fixture emits");
+    let art = dagr_render::GraphArtifact::from_json_str(&out)
+        .expect("the emitted artifact parses for the renderer");
+
+    let dot = dagr_render::render_dot(&art);
+    // The data edge (load -> report) is solid; the ordering edge (publish ->
+    // cleanup) is dashed. Both endpoints appear.
+    assert!(
+        dot.lines()
+            .any(|l| l.contains("\"load\" -> \"report\"") && l.contains("style=solid")),
+        "the data edge renders solid in DOT"
+    );
+    assert!(
+        dot.lines()
+            .any(|l| l.contains("\"publish\" -> \"cleanup\"") && l.contains("style=dashed")),
+        "the ordering edge renders dashed in DOT"
+    );
+
+    let mmd = dagr_render::render_mermaid(&art);
+    // The ordering link is the dashed Mermaid form `-.->`; the data link solid.
+    assert!(
+        mmd.lines()
+            .any(|l| l.contains("-.->") && l.contains("cleanup")),
+        "the ordering edge renders as a dashed Mermaid link"
+    );
+    assert!(
+        mmd.lines()
+            .any(|l| l.contains("report") && l.contains("-->") && !l.contains("-.->")),
+        "the data edge renders as a solid Mermaid link"
+    );
+}
+
 /// **The graph verb's output validates against the published schema (C20 / C26).**
 /// What the verb writes to a sink is itself a schema-valid artifact.
 #[test]
