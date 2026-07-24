@@ -27,10 +27,35 @@ path = "src/lib.rs"
 name = "dagr"
 path = "src/main.rs"
 
+# --- Schema-validation forward (T39/T40), OFF by default ---------------------
+# The graph-artifact round-trip test (`tests/graph_artifact_schema_roundtrip.rs`)
+# validates a REAL emitted artifact against the published
+# `schemas/graph/v1.schema.json` via the T39 helper (`dagr_artifact::schema`).
+# That helper — and its CI-/dev-scoped `jsonschema` dependency (T4 ADR 017 §4) —
+# sit behind dagr-artifact's `schema-validation` feature (default OFF). This cli
+# feature FORWARDS to it, so the validator is pulled ONLY when a caller (CI's
+# dedicated step, mirroring T39's) turns it on; the shipped binary and the bare
+# `cargo test --workspace` never activate it, which keeps `cargo deny` from seeing
+# `jsonschema`'s permissive-but-unlisted transitive licences (no deny.toml change).
+[features]
+schema-validation = ["dagr-artifact/schema-validation"]
+
 [dependencies]
 dagr-core = { path = "../core" }
 dagr-artifact = { path = "../artifact" }
 dagr-render = { path = "../render" }
+
+# serde_json — the T4-sanctioned (017) runtime serialization stack. The C20
+# graph-artifact emitter (T40, `src/graph.rs`) builds the artifact as a
+# `serde_json::Value` and serializes it through dagr-artifact's shared T4 §6
+# canonicalizer (`dagr_artifact::canonical`). serde_json is the ADR's named
+# runtime writer ("The runtime writers depend only on `serde` + `serde_json`");
+# it is MIT, already resolved in the tree via dagr-artifact, and adds no new
+# advisory/license surface. It moves from a dev-dependency to a direct dependency
+# because the emitter is production code, not a test. The `jsonschema` validator
+# stays CI-/dev-scoped (behind dagr-artifact's `schema-validation` feature),
+# enabled only by the round-trip tests — the emitter itself never pulls it.
+serde_json = "1"
 
 # tokio — the async runtime the T2 ADR (004) commits to. The M1 run-loop driver
 # (T24) needs exactly two capabilities beyond bare futures, so the feature set is
@@ -71,14 +96,6 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 rayon = "1"
 
 [dev-dependencies]
-# The driver tests parse the event stream the driver wrote (the T24 test-plan
-# requirement: assert against the actual sink output, not internal state). The
-# stream is JSONL, so the tests read records as `serde_json::Value`s via the
-# writer's tolerant reader. serde_json is already the T4-sanctioned runtime
-# serialization stack (MIT, already on the allow-list via dagr-artifact); it is a
-# dev-dependency only — the driver itself pulls in no new serialization crate.
-serde_json = "1"
-
 # libc — T36 (046) only. The C16 signal test proves the *end-to-end* OS-signal
 # path without killing the test-runner by `fork`ing a controlled child that
 # `raise`s SIGTERM/SIGINT at ITSELF and asserting the child took the cancellation
