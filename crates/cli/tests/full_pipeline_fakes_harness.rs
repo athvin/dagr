@@ -105,7 +105,11 @@ fn runs_the_real_scheduler_not_a_stub() {
     assert_eq!(artifact.overall_outcome(), "succeeded");
     for node in ["a", "b", "c", "d"] {
         assert_eq!(
-            artifact.attempts().iter().filter(|r| r.node() == node).count(),
+            artifact
+                .attempts()
+                .iter()
+                .filter(|r| r.node() == node)
+                .count(),
             1,
             "the folded artifact carries exactly one attempt for `{node}`"
         );
@@ -234,7 +238,11 @@ fn scripted_permanent_failure_propagates_through_the_real_policy() {
 
     // Every node has exactly one terminal state, including the ones that never ran.
     for node in ["a", "b", "notify", "unrelated"] {
-        assert_eq!(run.terminal_count(node), 1, "`{node}` has one terminal state");
+        assert_eq!(
+            run.terminal_count(node),
+            1,
+            "`{node}` has one terminal state"
+        );
     }
 }
 
@@ -277,7 +285,11 @@ fn scripted_retry_then_succeed() {
         .filter(|r| r.node() == "flaky")
         .map(dagr_artifact::fold::AttemptRecord::attempt_number)
         .collect();
-    assert_eq!(attempts, vec![1, 2], "attempt number increments across the retry");
+    assert_eq!(
+        attempts,
+        vec![1, 2],
+        "attempt number increments across the retry"
+    );
 
     // The downstream data consumer ran after the recovery.
     assert_eq!(
@@ -305,7 +317,12 @@ fn scripted_deliberate_skip() {
         .node("consumer", &["decide"], Outcome::succeed())
         // An all-terminal contingency ordered after `decide`: satisfiable despite
         // the skip (it fires once `decide` is terminal in any state).
-        .contingency("cleanup", &["decide"], TriggerRule::AllTerminal, Outcome::succeed())
+        .contingency(
+            "cleanup",
+            &["decide"],
+            TriggerRule::AllTerminal,
+            Outcome::succeed(),
+        )
         .run();
 
     assert_eq!(
@@ -365,7 +382,11 @@ fn completes_in_seconds_budget_enforced() {
         .run();
     let elapsed = start.elapsed();
 
-    assert_eq!(run.overall_outcome(), "succeeded", "the fixture flow succeeds");
+    assert_eq!(
+        run.overall_outcome(),
+        "succeeded",
+        "the fixture flow succeeds"
+    );
     assert!(
         elapsed < BUDGET,
         "the full-pipeline fake run completed in {elapsed:?}, over the \
@@ -393,7 +414,12 @@ fn interpretive_determinism_is_the_t65_replay_surface() {
             .data_interval("2026-07-24T00:00:00Z", "2026-07-25T00:00:00Z")
             .source("a", Outcome::fail_then_succeed(1))
             .node("b", &["a"], Outcome::succeed())
-            .contingency("guard", &["a"], TriggerRule::AllTerminal, Outcome::succeed())
+            .contingency(
+                "guard",
+                &["a"],
+                TriggerRule::AllTerminal,
+                Outcome::succeed(),
+            )
             .source("skipper", Outcome::skip())
             .run()
     };
@@ -437,7 +463,10 @@ fn await_bound_tasks_use_only_the_provided_runtime() {
         .run();
 
     assert_eq!(run.overall_outcome(), "succeeded");
-    assert_eq!(run.terminal_state("awaiter"), Some(TerminalState::Succeeded));
+    assert_eq!(
+        run.terminal_state("awaiter"),
+        Some(TerminalState::Succeeded)
+    );
     assert_eq!(run.terminal_state("next"), Some(TerminalState::Succeeded));
 }
 

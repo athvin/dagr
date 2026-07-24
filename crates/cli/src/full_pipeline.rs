@@ -588,8 +588,7 @@ impl FullPipelineTest {
         // --- Fold the recorded stream into the C22 run artifact (the graph roster
         // gives never-ran nodes their propagated terminal state in the artifact).
         let stream = sink.bytes();
-        let node_roster: Vec<String> =
-            pipeline.nodes().map(|n| n.name().to_string()).collect();
+        let node_roster: Vec<String> = pipeline.nodes().map(|n| n.name().to_string()).collect();
         let artifact = fold_stream(&stream, &node_roster)
             .expect("the harness-recorded stream folds into a run artifact");
 
@@ -707,9 +706,9 @@ fn register_node(
 ) -> dagr_core::handle::Handle<u64> {
     let policy = NodePolicy::new().working_memory(spec.outcome.working_memory);
     let lookup = |up: &str| {
-        *handles.get(up).unwrap_or_else(|| {
-            panic!("node `{}` references unknown upstream `{up}`", spec.name)
-        })
+        *handles
+            .get(up)
+            .unwrap_or_else(|| panic!("node `{}` references unknown upstream `{up}`", spec.name))
     };
     match spec.data_upstreams.len() {
         0 if spec.ordering_upstreams.is_empty() => {
@@ -955,10 +954,10 @@ fn normalize_volatile(value: &mut serde_json::Value) {
     }
     // The summary's timing fields are likewise clock-derived.
     if value.get("summary").is_some_and(Value::is_object) {
-        value.as_object_mut().unwrap().insert(
-            "summary".into(),
-            Value::from("<normalized>"),
-        );
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("summary".into(), Value::from("<normalized>"));
     }
     // The fold-reader block carries no interpretive content; blank its volatile
     // interrupted mirror is unnecessary (deterministic), leave it as is.
@@ -1086,7 +1085,11 @@ impl ScriptedAdapter {
     /// context, then return `result`. A probe whose fake is absent turns a scripted
     /// success into a permanent failure, so the "receives the fake by type"
     /// scenario is a real assertion.
-    fn probe_then(&self, ctx: &RunContext, result: Result<u64, TaskError>) -> Result<u64, TaskError> {
+    fn probe_then(
+        &self,
+        ctx: &RunContext,
+        result: Result<u64, TaskError>,
+    ) -> Result<u64, TaskError> {
         if let Some(probe) = &self.resource_probe {
             if !probe(ctx.resources()) {
                 return Err(TaskError::permanent(
