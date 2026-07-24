@@ -200,6 +200,16 @@ jobs:
           DAGR_REQUIRE_RENDER_TOOLS: "1"
           DAGR_MERMAID_PARSE_DIR: ${{ runner.temp }}/mermaid-parse
         run: cargo test -p dagr-render --test reference_tools
+      # The M3 gate demo (T49) renders the run-overlaid diagram from artifacts
+      # alone; its overlay scenario feeds the OVERLAID DOT/Mermaid through the same
+      # reference tools under the same mandatory env, so the M3 done-when's
+      # "rendered diagram is reviewable" clause is enforced in CI (arch.md C24 line
+      # 520 / M3). Absent locally it skips like the render suite above.
+      - name: M3 demo overlay accepted by their reference tools (C24 / T49)
+        env:
+          DAGR_REQUIRE_RENDER_TOOLS: "1"
+          DAGR_MERMAID_PARSE_DIR: ${{ runner.temp }}/mermaid-parse
+        run: cargo test -p dagr-cli --test m3_demo_explain_a_run overlay_renders_from_artifacts_only_and_is_structurally_sound
 
   # --- Rustdoc-on-public-items lint (Documentation) --------------------------
   rustdoc:
