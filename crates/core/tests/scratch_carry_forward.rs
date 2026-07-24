@@ -89,7 +89,14 @@ fn store_for(base: &Path, pipeline: &str, run: &str, node: &str) -> ScratchStore
 /// Seed a node's **retained prior-run scratch** by writing a key/value directly
 /// through its prior-run store handle (a non-succeeded node's scratch is retained
 /// on disk, T54a — the write leaves it there, no success-hook deletion).
-fn seed_prior_scratch(base: &Path, pipeline: &str, prior_run: &str, node: &str, key: &[u8], value: &[u8]) {
+fn seed_prior_scratch(
+    base: &Path,
+    pipeline: &str,
+    prior_run: &str,
+    node: &str,
+    key: &[u8],
+    value: &[u8],
+) {
     let prior = store_for(base, pipeline, prior_run, node);
     prior.put(key, value).expect("seed prior retained scratch");
 }
@@ -97,7 +104,13 @@ fn seed_prior_scratch(base: &Path, pipeline: &str, prior_run: &str, node: &str, 
 /// Carry one re-executing node's retained prior scratch forward into the resumed
 /// run's namespace — the operation under test (T54b). A thin wrapper over the new
 /// [`ScratchStore::carry_forward`] API so each test reads at the resume level.
-fn carry_forward(base: &Path, pipeline: &str, prior_run: &str, resumed_run: &str, node: &str) -> Result<(), dagr_core::scratch::ScratchError> {
+fn carry_forward(
+    base: &Path,
+    pipeline: &str,
+    prior_run: &str,
+    resumed_run: &str,
+    node: &str,
+) -> Result<(), dagr_core::scratch::ScratchError> {
     ScratchStore::carry_forward(
         base,
         &PipelineId::new(pipeline),
@@ -127,13 +140,23 @@ const RESUMED: &str = "run-resumed";
 #[test]
 fn a_re_executing_node_sees_the_prior_runs_scratch_value() {
     let base = TempBase::new("sees-prior");
-    seed_prior_scratch(base.path(), PIPE, PRIOR, "node-a", b"cursor", b"high-water-42");
+    seed_prior_scratch(
+        base.path(),
+        PIPE,
+        PRIOR,
+        "node-a",
+        b"cursor",
+        b"high-water-42",
+    );
 
     carry_forward(base.path(), PIPE, PRIOR, RESUMED, "node-a").expect("carry forward node-a");
 
     let resumed = store_for(base.path(), PIPE, RESUMED, "node-a");
     assert_eq!(
-        resumed.get(b"cursor").expect("read resumed scratch").as_deref(),
+        resumed
+            .get(b"cursor")
+            .expect("read resumed scratch")
+            .as_deref(),
         Some(&b"high-water-42"[..]),
         "the re-executing node reads the exact prior-run bytes through the ordinary C18 context"
     );
@@ -159,7 +182,10 @@ fn the_value_arrives_in_the_resumed_namespace_not_the_prior_one() {
     carry_forward(base.path(), PIPE, PRIOR, RESUMED, "node-a").expect("carry forward");
 
     let resumed = store_for(base.path(), PIPE, RESUMED, "node-a");
-    let resumed_ns = resumed.namespace_dir().expect("resumed handle is wired").to_path_buf();
+    let resumed_ns = resumed
+        .namespace_dir()
+        .expect("resumed handle is wired")
+        .to_path_buf();
     // The resumed namespace is under the RESUMED run id, and the file is there.
     assert!(
         resumed_ns.starts_with(base.path().join(PIPE).join(RESUMED)),
@@ -191,7 +217,14 @@ fn the_value_arrives_in_the_resumed_namespace_not_the_prior_one() {
 #[test]
 fn a_continued_node_resumes_from_its_checkpoint_not_from_zero() {
     let base = TempBase::new("continue");
-    seed_prior_scratch(base.path(), PIPE, PRIOR, "worker", b"high-water", b"finished-item-K");
+    seed_prior_scratch(
+        base.path(),
+        PIPE,
+        PRIOR,
+        "worker",
+        b"high-water",
+        b"finished-item-K",
+    );
 
     carry_forward(base.path(), PIPE, PRIOR, RESUMED, "worker").expect("carry forward worker");
 
@@ -222,11 +255,19 @@ fn a_satisfied_from_prior_node_has_nothing_carried_forward() {
     let base = TempBase::new("satisfied");
     // The satisfied node DID leave retained prior scratch, but it is not in the
     // re-execution set, so the driver does not carry it forward.
-    seed_prior_scratch(base.path(), PIPE, PRIOR, "satisfied-node", b"k", b"leftover");
+    seed_prior_scratch(
+        base.path(),
+        PIPE,
+        PRIOR,
+        "satisfied-node",
+        b"k",
+        b"leftover",
+    );
 
     // Only a re-executing node is carried; the satisfied node is deliberately not.
     seed_prior_scratch(base.path(), PIPE, PRIOR, "reexec-node", b"k", b"carried");
-    carry_forward(base.path(), PIPE, PRIOR, RESUMED, "reexec-node").expect("carry the re-exec node");
+    carry_forward(base.path(), PIPE, PRIOR, RESUMED, "reexec-node")
+        .expect("carry the re-exec node");
 
     let satisfied = store_for(base.path(), PIPE, RESUMED, "satisfied-node");
     assert!(
@@ -305,7 +346,10 @@ fn cross_node_isolation_survives_the_copy() {
     // which one reaches the other's carried-forward scratch.
     let a_dir = a.namespace_dir().expect("A wired");
     let b_dir = b.namespace_dir().expect("B wired");
-    assert_ne!(a_dir, b_dir, "the two nodes resolve to disjoint resumed namespaces");
+    assert_ne!(
+        a_dir, b_dir,
+        "the two nodes resolve to disjoint resumed namespaces"
+    );
 }
 
 // ===========================================================================
@@ -358,7 +402,14 @@ fn only_re_executing_nodes_with_prior_scratch_are_copied() {
     let base = TempBase::new("only-reexec");
     seed_prior_scratch(base.path(), PIPE, PRIOR, "reexec-wrote", b"k", b"carried");
     // reexec-empty ended non-succeeded but wrote no scratch.
-    seed_prior_scratch(base.path(), PIPE, PRIOR, "satisfied-wrote", b"k", b"leftover");
+    seed_prior_scratch(
+        base.path(),
+        PIPE,
+        PRIOR,
+        "satisfied-wrote",
+        b"k",
+        b"leftover",
+    );
 
     // The driver carries only the re-execution set: {reexec-wrote, reexec-empty}.
     carry_forward(base.path(), PIPE, PRIOR, RESUMED, "reexec-wrote").expect("carry reexec-wrote");
@@ -396,7 +447,10 @@ fn all_of_a_nodes_retained_keys_are_carried_forward() {
 
     let resumed = store_for(base.path(), PIPE, RESUMED, "node-a");
     assert_eq!(resumed.get(b"cursor").unwrap().as_deref(), Some(&b"42"[..]));
-    assert_eq!(resumed.get(b"stage").unwrap().as_deref(), Some(&b"reduce"[..]));
+    assert_eq!(
+        resumed.get(b"stage").unwrap().as_deref(),
+        Some(&b"reduce"[..])
+    );
     assert_eq!(
         resumed.get(b"").unwrap().as_deref(),
         Some(&b"empty-key-value"[..]),

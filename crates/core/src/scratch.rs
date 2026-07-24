@@ -225,12 +225,9 @@ impl ScratchStore {
     /// the filesystem (a write creates the directory lazily).
     #[must_use]
     pub fn for_node(base: &Path, pipeline: &PipelineId, run: &RunId, node: NodeId) -> Self {
-        let dir = base
-            .join(path_segment(pipeline.as_str()))
-            .join(path_segment(run.as_str()))
-            .join(SCRATCH_DIR_NAME)
-            .join(node_segment(node));
-        Self { dir: Some(dir) }
+        Self {
+            dir: Some(namespace_path(base, pipeline, run, node)),
+        }
     }
 
     /// The honestly-unwired store a `RunContext` carries when it was built with no
@@ -375,6 +372,147 @@ impl ScratchStore {
             }),
         }
     }
+
+    /// **Resume scratch carry-forward** (arch.md `### C18`, line 391; C27 / T54b):
+    /// copy **one node's retained scratch** from the linked `prior` run's namespace
+    /// into the `resumed` run's namespace, under the same run-store `base`, so a
+    /// re-executing node **continues from its checkpoint** rather than starting over.
+    ///
+    /// This is the scratch half of resume. The resume core (C27 / T58) computes the
+    /// re-execution set — the nodes it does *not* mark `satisfied-from-prior` — and
+    /// the driver calls this **once per node in that set**, before the node is
+    /// admitted. The re-executing node then reads its checkpoint through the
+    /// ordinary [`get`](Self::get) context API, with no awareness that a copy
+    /// happened and **no route to the prior run's directory**: the value is written
+    /// under the resumed run id's own per-node namespace
+    /// (`<base>/<pipeline>/<resumed>/scratch/<node>/`), preserving the T53/T54a
+    /// per-run/per-node namespacing.
+    ///
+    /// # Copy, not move — the prior run is retained
+    ///
+    /// The prior run's scratch is **retained** (T54a: a non-succeeded node's scratch
+    /// is not deleted at run end) and is reclaimed only by prune (C26). Carry-forward
+    /// **copies** it and never consumes it: after this call the prior namespace still
+    /// holds every value it did.
+    ///
+    /// # Isolation is preserved by construction
+    ///
+    /// The source and destination namespaces are both derived from **this same
+    /// `node`**'s opaque identity fingerprint, so a node's carried-forward scratch
+    /// lands only in its own resumed namespace — one node can never receive another's
+    /// (the C18 isolation criterion, enforced not conventional). Copying one node
+    /// reads and writes **only** that node's two directories.
+    ///
+    /// # Missing prior scratch is a clean empty carry, not an error
+    ///
+    /// A re-executing node whose prior scratch is **absent** (it succeeded — so its
+    /// scratch was deleted — or simply never wrote any) is an **empty** carry:
+    /// nothing is copied, no resumed namespace is created, and this returns `Ok(())`.
+    /// The resumed node then reads an empty namespace and proceeds normally. Absence
+    /// of prior scratch is never a resume failure.
+    ///
+    /// # Guard boundary
+    ///
+    /// This performs no resumability check of its own — it presupposes the prior
+    /// run's store survived. A resume whose store is gone is refused up front by the
+    /// C27 gate (T58) and never reaches carry-forward, so this never fabricates a
+    /// missing prior directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScratchError::Io`] — which converts to a **retry-eligible**
+    /// [`TaskError`] (C4; arch.md line 393) — if reading a prior value or writing it
+    /// into the resumed namespace fails at the store level. The failure is the
+    /// affected node's alone; it is neither a silent skip nor a whole-resume abort.
+    pub fn carry_forward(
+        base: &Path,
+        pipeline: &PipelineId,
+        prior: &RunId,
+        resumed: &RunId,
+        node: NodeId,
+    ) -> Result<(), ScratchError> {
+        let prior_dir = namespace_path(base, pipeline, prior, node);
+        let resumed_dir = namespace_path(base, pipeline, resumed, node);
+
+        // Read the prior node's retained namespace. An ABSENT prior namespace is a
+        // clean empty carry (the node succeeded, or never wrote any scratch) — not a
+        // fault; nothing to copy, nothing to create.
+        let entries = match std::fs::read_dir(&prior_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(ScratchError::Io {
+                    op: ScratchOp::Read,
+                    source,
+                });
+            }
+        };
+
+        for entry in entries {
+            let entry = entry.map_err(|source| ScratchError::Io {
+                op: ScratchOp::Read,
+                source,
+            })?;
+            let file_name = entry.file_name();
+            // Skip any leftover write-temp debris (`.<name>.tmp.<pid>.<n>`) so a
+            // crashed prior write never becomes a carried-forward value; a value
+            // file is the atomically-renamed final name (a hex-encoded key), never a
+            // dotfile. This mirrors the atomic-write discipline `put` uses.
+            if is_write_temp(&file_name) {
+                continue;
+            }
+            let src = entry.path();
+            // A value file is a regular file; ignore anything that is not (the
+            // namespace holds only value files — this is belt-and-suspenders).
+            let is_file = entry
+                .file_type()
+                .map_err(|source| ScratchError::Io {
+                    op: ScratchOp::Read,
+                    source,
+                })?
+                .is_file();
+            if !is_file {
+                continue;
+            }
+
+            // Read the prior value, then write it into the resumed namespace through
+            // the same crash-safe atomic discipline `put` uses (create-dir-lazily,
+            // write-temp, fsync, rename, fsync-dir). The destination file name is the
+            // SAME encoded-key file name — identity-preserving, so the resumed node
+            // reads it back under the identical key.
+            let value = std::fs::read(&src).map_err(|source| ScratchError::Io {
+                op: ScratchOp::Read,
+                source,
+            })?;
+            let dest = resumed_dir.join(&file_name);
+            atomic_write(&resumed_dir, &dest, &value).map_err(|source| ScratchError::Io {
+                op: ScratchOp::Write,
+                source,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Is this directory entry a write-temp file left by [`atomic_write`]
+/// (`.<final>.tmp.<pid>.<counter>`)? Value files are the atomically-renamed final
+/// names (hex-encoded keys, never a leading dot), so a leading-dot `.tmp.` name is
+/// crashed-write debris that carry-forward must not promote into a resumed value.
+fn is_write_temp(file_name: &std::ffi::OsStr) -> bool {
+    file_name
+        .to_str()
+        .is_some_and(|s| s.starts_with('.') && s.contains(".tmp."))
+}
+
+/// Resolve the on-disk namespace directory for one node under one run
+/// (`<base>/<pipeline>/<run-id>/scratch/<node>/`, T0.6 §3, §9). A pure path
+/// computation shared by [`ScratchStore::for_node`] and
+/// [`ScratchStore::carry_forward`]; it touches no filesystem.
+fn namespace_path(base: &Path, pipeline: &PipelineId, run: &RunId, node: NodeId) -> PathBuf {
+    base.join(path_segment(pipeline.as_str()))
+        .join(path_segment(run.as_str()))
+        .join(SCRATCH_DIR_NAME)
+        .join(node_segment(node))
 }
 
 /// Derive a stable, filesystem-safe segment for a node's namespace from its
