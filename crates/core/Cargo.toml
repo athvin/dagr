@@ -24,5 +24,17 @@ path = "src/lib.rs"
 
 [dependencies]
 
+[features]
+# The C28 single-task test kit (ticket T60) — a shipped testing utility
+# downstream test code calls to exercise ONE task in isolation with a hand-built
+# RunContext (C8) and fake resources (C9). Enabled by default so the kit is part
+# of the default `--workspace` test/clippy/doc surface (and its behavioral tests
+# run under `cargo test --workspace`), but factored behind its own feature so a
+# production build can `default-features = false` to exclude it. It adds NO
+# dependency and NO production runtime behavior — it is inert constructor/driver
+# code reachable only when test code calls it.
+default = ["test-kit"]
+test-kit = []
+
 [lints]
 workspace = true
