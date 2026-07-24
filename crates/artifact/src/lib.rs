@@ -15,14 +15,17 @@
 //! **event-stream writer** in [`event_stream`]. The published versioned schemas
 //! (T39) and their validation helper live in the `schema` module — compiled only
 //! when the `schema-validation` feature is enabled, since its `jsonschema`
-//! dependency is CI-/dev-scoped (T4 ADR 017 §4). The graph artifact emitter
-//! (C20 / T40) and run artifact fold (C22 / T42) still land later.
+//! dependency is CI-/dev-scoped (T4 ADR 017 §4). The C22 **run-artifact fold**
+//! — the standalone reader that folds a C19 event stream into a run artifact —
+//! lives in the [`fold`] module (T42). The graph artifact emitter (C20 / T40)
+//! lands elsewhere.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
 pub mod canonical;
 pub mod event_stream;
+pub mod fold;
 
 /// The T39 published-artifact-schema validation helper (arch.md C19/C20/C22).
 ///
