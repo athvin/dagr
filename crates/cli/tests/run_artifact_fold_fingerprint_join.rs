@@ -52,8 +52,13 @@ fn build_pipeline() -> Pipeline {
 fn run_artifact_structural_fingerprint_matches_graph_artifact() {
     let pipeline = build_pipeline();
     let provenance = BuildProvenance::embedded();
-    let graph_json = emit_graph(&pipeline, "example-pipeline", "2026-07-23T00:00:00Z", &provenance)
-        .expect("emit graph");
+    let graph_json = emit_graph(
+        &pipeline,
+        "example-pipeline",
+        "2026-07-23T00:00:00Z",
+        &provenance,
+    )
+    .expect("emit graph");
     let graph: Value = serde_json::from_str(&graph_json).expect("graph is JSON");
     let graph_fp = graph["header"]["fingerprint_structural"]
         .as_str()
@@ -104,8 +109,7 @@ fn run_artifact_structural_fingerprint_matches_graph_artifact() {
         out.push('\n');
     }
 
-    let run_art =
-        fold_stream(out.as_bytes(), &["load".to_string()]).expect("fold");
+    let run_art = fold_stream(out.as_bytes(), &["load".to_string()]).expect("fold");
     let run_fp = run_art
         .header_fingerprint_structural()
         .expect("folded run artifact carries a structural fingerprint");

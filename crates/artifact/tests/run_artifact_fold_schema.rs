@@ -100,7 +100,10 @@ fn full_run_stream() -> Vec<u8> {
                 ("cost_measured", json!({ "memory_bytes": 900 })),
                 ("retained", json!(true)),
                 ("slot_residency", json!(2)),
-                ("durable_reference", json!({ "storage_key": "file:///runs/example/load/output" })),
+                (
+                    "durable_reference",
+                    json!({ "storage_key": "file:///runs/example/load/output" }),
+                ),
             ],
         ),
         with(
@@ -112,24 +115,36 @@ fn full_run_stream() -> Vec<u8> {
             &[
                 ("node", json!("sink")),
                 ("state", json!("satisfied-from-prior")),
-                ("satisfied_from_run", json!("018f0000-0000-7000-8000-000000000001")),
+                (
+                    "satisfied_from_run",
+                    json!("018f0000-0000-7000-8000-000000000001"),
+                ),
             ],
         ),
-        with(env(9, 2000, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(9, 2000, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ])
 }
 
 #[test]
 fn folded_full_run_validates_against_published_schema() {
-    let art = fold_stream(&full_run_stream(), &["load".to_string(), "sink".to_string()])
-        .expect("fold");
+    let art = fold_stream(
+        &full_run_stream(),
+        &["load".to_string(), "sink".to_string()],
+    )
+    .expect("fold");
     let value = art.to_value();
     validate_value(ArtifactKind::Run, 1, &value)
         .unwrap_or_else(|e| panic!("REAL folded run artifact must validate: {e}"));
 
     // The fold-reader declaration is additive and validates (unknown fields
     // ignored, T0.10).
-    assert!(value.get("fold_reader").is_some(), "fold declares its reader version");
+    assert!(
+        value.get("fold_reader").is_some(),
+        "fold declares its reader version"
+    );
 
     // Teeth: a corrupted copy (non-integer phase duration) is rejected.
     let mut bad = value.clone();

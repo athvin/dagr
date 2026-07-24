@@ -116,7 +116,10 @@ fn phases_sum_exactly() {
             env(5, 1600, "node-terminal"),
             &[("node", json!("a")), ("state", json!("succeeded"))],
         ),
-        with(env(6, 1600, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(6, 1600, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
 
     let art = fold_stream(&recs, &["a".to_string()]).expect("fold succeeds");
@@ -127,7 +130,10 @@ fn phases_sum_exactly() {
     let total = attempts[0].total_elapsed_ns();
     assert_eq!(sum, total, "phases sum bit-exactly to the attempt total");
     // Total is the offset delta from attempt-started (600) to terminal (1600).
-    assert_eq!(total, 1000, "total = terminal offset - attempt-started offset");
+    assert_eq!(
+        total, 1000,
+        "total = terminal offset - attempt-started offset"
+    );
     // No wall-clock arithmetic: the wall stamps are all identical strings, so a
     // wall-based computation would give 0 — the offsets give the real number.
 }
@@ -137,7 +143,11 @@ fn one_record_per_attempt_not_per_node() {
     // Node fails twice then succeeds on attempt 3.
     let mut recs = vec![run_started(0, 0, start_header())];
     let mut seq = 1;
-    for (attempt, status, off) in [(1u32, "failed", 1000u64), (2, "failed", 2000), (3, "succeeded", 3000)] {
+    for (attempt, status, off) in [
+        (1u32, "failed", 1000u64),
+        (2, "failed", 2000),
+        (3, "succeeded", 3000),
+    ] {
         recs.push(with(
             env(seq, off - 500, "attempt-started"),
             &[("node", json!("a")), ("attempt", json!(attempt))],
@@ -151,11 +161,18 @@ fn one_record_per_attempt_not_per_node() {
         &[("node", json!("a")), ("state", json!("succeeded"))],
     ));
     seq += 1;
-    recs.push(with(env(seq, 3000, "run-finished"), &[("outcome", json!("succeeded"))]));
+    recs.push(with(
+        env(seq, 3000, "run-finished"),
+        &[("outcome", json!("succeeded"))],
+    ));
 
     let art = fold_stream(&stream(&recs), &["a".to_string()]).expect("fold");
     let a: Vec<_> = art.attempts().iter().filter(|r| r.node() == "a").collect();
-    assert_eq!(a.len(), 3, "three attempt records, not one collapsed record");
+    assert_eq!(
+        a.len(),
+        3,
+        "three attempt records, not one collapsed record"
+    );
     assert_eq!(a[0].attempt_number(), 1);
     assert_eq!(a[1].attempt_number(), 2);
     assert_eq!(a[2].attempt_number(), 3);
@@ -191,7 +208,10 @@ fn never_ran_nodes_covered() {
             env(5, 1000, "node-terminal"),
             &[("node", json!("b")), ("state", json!("upstream-failed"))],
         ),
-        with(env(6, 1000, "run-finished"), &[("outcome", json!("failed"))]),
+        with(
+            env(6, 1000, "run-finished"),
+            &[("outcome", json!("failed"))],
+        ),
     ]);
     let nodes = ["a", "b", "c", "s"].map(String::from);
     let art = fold_stream(&recs, &nodes).expect("fold");
@@ -243,15 +263,27 @@ fn structured_error_and_message_preserved() {
     let art = fold_stream(&recs, &["a".to_string()]).expect("fold");
     let rec = &art.attempts()[0];
     assert_eq!(rec.message(), Some("boom while loading"));
-    assert_eq!(rec.error(), Some(&err), "structured error reproduced unmodified");
+    assert_eq!(
+        rec.error(),
+        Some(&err),
+        "structured error reproduced unmodified"
+    );
 }
 
 #[test]
 fn metrics_reach_the_artifact_unmodified() {
-    let metrics = json!({ "rows_read": 1000, "bytes_scanned": 4096, "dagr.peak_memory_bytes": 2048 });
+    let metrics =
+        json!({ "rows_read": 1000, "bytes_scanned": 4096, "dagr.peak_memory_bytes": 2048 });
     let recs = stream(&[
         run_started(0, 0, start_header()),
-        attempt_outcome(1, 1000, "a", 1, "succeeded", &[("metrics", metrics.clone())]),
+        attempt_outcome(
+            1,
+            1000,
+            "a",
+            1,
+            "succeeded",
+            &[("metrics", metrics.clone())],
+        ),
         with(
             env(2, 1000, "node-terminal"),
             &[("node", json!("a")), ("state", json!("succeeded"))],
@@ -277,7 +309,10 @@ fn declared_vs_measured_cost_juxtaposed() {
             "a",
             1,
             "succeeded",
-            &[("cost_declared", declared.clone()), ("cost_measured", measured.clone())],
+            &[
+                ("cost_declared", declared.clone()),
+                ("cost_measured", measured.clone()),
+            ],
         ),
         with(
             env(2, 1000, "node-terminal"),
@@ -292,10 +327,18 @@ fn declared_vs_measured_cost_juxtaposed() {
 
 #[test]
 fn durable_reference_recorded() {
-    let dref = json!({ "storage_key": "file:///runs/example/a/output", "content_hash": "blake3:abcd" });
+    let dref =
+        json!({ "storage_key": "file:///runs/example/a/output", "content_hash": "blake3:abcd" });
     let recs = stream(&[
         run_started(0, 0, start_header()),
-        attempt_outcome(1, 1000, "a", 1, "succeeded", &[("durable_reference", dref.clone())]),
+        attempt_outcome(
+            1,
+            1000,
+            "a",
+            1,
+            "succeeded",
+            &[("durable_reference", dref.clone())],
+        ),
         with(
             env(2, 1000, "node-terminal"),
             &[("node", json!("a")), ("state", json!("succeeded"))],
@@ -310,7 +353,11 @@ fn durable_reference_recorded() {
     let a = art.attempts().iter().find(|r| r.node() == "a").unwrap();
     let b = art.attempts().iter().find(|r| r.node() == "b").unwrap();
     assert_eq!(a.durable_reference(), Some(&dref));
-    assert_eq!(b.durable_reference(), None, "non-durable node has no reference");
+    assert_eq!(
+        b.durable_reference(),
+        None,
+        "non-durable node has no reference"
+    );
 }
 
 #[test]
@@ -322,10 +369,16 @@ fn satisfied_from_prior_carries_originating_run_id() {
             &[
                 ("node", json!("a")),
                 ("state", json!("satisfied-from-prior")),
-                ("satisfied_from_run", json!("018f0000-0000-7000-8000-000000000001")),
+                (
+                    "satisfied_from_run",
+                    json!("018f0000-0000-7000-8000-000000000001"),
+                ),
             ],
         ),
-        with(env(2, 0, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(2, 0, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &["a".to_string()]).expect("fold");
     let rec = &art.attempts()[0];
@@ -342,7 +395,10 @@ fn allowlist_positive() {
     header["captured_environment"] = json!({ "DAGR_REGION": "us-east-1", "DAGR_TIER": "prod" });
     let recs = stream(&[
         run_started(0, 0, header),
-        with(env(1, 0, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(1, 0, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &[]).expect("fold");
     assert_eq!(
@@ -368,7 +424,10 @@ fn allowlist_negative_planted_sentinel() {
     header["parameters"] = json!({ "region": "us-east-1" });
     let recs = stream(&[
         run_started(0, 0, header),
-        with(env(1, 0, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(1, 0, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &[]).expect("fold");
     let serialized = art.to_canonical_json();
@@ -377,7 +436,10 @@ fn allowlist_negative_planted_sentinel() {
         !serialized.contains(SENTINEL),
         "no environment value outside the declared allowlist survives the fold"
     );
-    assert_eq!(art.header_captured_environment(), &json!({ "DAGR_REGION": "us-east-1" }));
+    assert_eq!(
+        art.header_captured_environment(),
+        &json!({ "DAGR_REGION": "us-east-1" })
+    );
 }
 
 #[test]
@@ -402,7 +464,11 @@ fn header_complete_from_run_started_alone() {
     assert!(art.header_parameters().get("date").is_some());
     assert!(art.header_data_interval().is_some());
     // Only overall outcome / summary reflect truncation.
-    assert_eq!(art.overall_outcome(), "cancelled", "truncated run has no run-finished → interrupted-class outcome");
+    assert_eq!(
+        art.overall_outcome(),
+        "cancelled",
+        "truncated run has no run-finished → interrupted-class outcome"
+    );
     assert!(art.is_interrupted(), "no run-finished ⇒ interrupted");
 }
 
@@ -427,10 +493,15 @@ fn interrupted_marking_on_truncation() {
     let art = fold_stream(&bytes, &["a".to_string()]).expect("fold tolerates one partial");
     assert!(art.is_interrupted(), "no run-finished ⇒ interrupted");
     assert!(
-        art.attempts().iter().any(|r| r.node() == "a" && r.status() == "succeeded"),
+        art.attempts()
+            .iter()
+            .any(|r| r.node() == "a" && r.status() == "succeeded"),
         "everything up to the crash is included"
     );
-    assert!(art.trailing_partial_discarded(), "the single trailing partial was discarded");
+    assert!(
+        art.trailing_partial_discarded(),
+        "the single trailing partial was discarded"
+    );
 }
 
 #[test]
@@ -463,7 +534,13 @@ fn assembly_failed_variant() {
             env(1, 0, "run-finished"),
             &[
                 ("outcome", json!("assembly-failed")),
-                ("errors", json!(["node `a` duplicates node `a`", "node `b` lacks the durability contract"])),
+                (
+                    "errors",
+                    json!([
+                        "node `a` duplicates node `a`",
+                        "node `b` lacks the durability contract"
+                    ]),
+                ),
             ],
         ),
     ]);
@@ -471,7 +548,11 @@ fn assembly_failed_variant() {
     assert_eq!(art.overall_outcome(), "assembly-failed");
     assert_eq!(art.attempts().len(), 0, "zero attempts");
     assert_eq!(art.errors().len(), 2, "the full error list is present");
-    assert_eq!(art.header_fingerprint_structural(), None, "no fingerprint (assembly did not succeed)");
+    assert_eq!(
+        art.header_fingerprint_structural(),
+        None,
+        "no fingerprint (assembly did not succeed)"
+    );
 }
 
 #[test]
@@ -489,7 +570,11 @@ fn bootstrap_failed_variant() {
     ]);
     let art = fold_stream(&recs, &[]).expect("fold");
     assert_eq!(art.overall_outcome(), "bootstrap-failed");
-    assert_ne!(art.overall_outcome(), "assembly-failed", "distinct from assembly-failed");
+    assert_ne!(
+        art.overall_outcome(),
+        "assembly-failed",
+        "distinct from assembly-failed"
+    );
     assert_eq!(art.attempts().len(), 0);
     assert_eq!(art.errors().len(), 1);
     assert_eq!(
@@ -514,11 +599,17 @@ fn summary_retained_values() {
             env(4, 2000, "node-terminal"),
             &[("node", json!("u")), ("state", json!("succeeded"))],
         ),
-        with(env(5, 2000, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(5, 2000, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &["r".to_string(), "u".to_string()]).expect("fold");
     let retained = art.summary_retained_values();
-    assert!(retained.contains(&"r".to_string()), "R is retained at run end");
+    assert!(
+        retained.contains(&"r".to_string()),
+        "R is retained at run end"
+    );
     assert!(!retained.contains(&"u".to_string()), "U was released");
 }
 
@@ -526,25 +617,54 @@ fn summary_retained_values() {
 fn summary_peak_slot_residency() {
     let recs = stream(&[
         run_started(0, 0, start_header()),
-        attempt_outcome(1, 1000, "a", 1, "succeeded", &[("slot_residency", json!(3))]),
+        attempt_outcome(
+            1,
+            1000,
+            "a",
+            1,
+            "succeeded",
+            &[("slot_residency", json!(3))],
+        ),
         with(
             env(2, 1000, "node-terminal"),
             &[("node", json!("a")), ("state", json!("succeeded"))],
         ),
-        attempt_outcome(3, 2000, "b", 1, "succeeded", &[("slot_residency", json!(7))]),
+        attempt_outcome(
+            3,
+            2000,
+            "b",
+            1,
+            "succeeded",
+            &[("slot_residency", json!(7))],
+        ),
         with(
             env(4, 2000, "node-terminal"),
             &[("node", json!("b")), ("state", json!("succeeded"))],
         ),
-        attempt_outcome(5, 3000, "c", 1, "succeeded", &[("slot_residency", json!(5))]),
+        attempt_outcome(
+            5,
+            3000,
+            "c",
+            1,
+            "succeeded",
+            &[("slot_residency", json!(5))],
+        ),
         with(
             env(6, 3000, "node-terminal"),
             &[("node", json!("c")), ("state", json!("succeeded"))],
         ),
-        with(env(7, 3000, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(7, 3000, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
-    let art = fold_stream(&recs, &["a".to_string(), "b".to_string(), "c".to_string()]).expect("fold");
-    assert_eq!(art.summary_peak_slot_residency(), 7, "peak measured slot residency");
+    let art =
+        fold_stream(&recs, &["a".to_string(), "b".to_string(), "c".to_string()]).expect("fold");
+    assert_eq!(
+        art.summary_peak_slot_residency(),
+        7,
+        "peak measured slot residency"
+    );
 }
 
 #[test]
@@ -573,7 +693,10 @@ fn summary_zombie_pinned_time_and_capacity() {
                 ("pinned_capacity", json!(2048)),
             ],
         ),
-        with(env(5, 4000, "run-finished"), &[("outcome", json!("failed"))]),
+        with(
+            env(5, 4000, "run-finished"),
+            &[("outcome", json!("failed"))],
+        ),
     ]);
     let art = fold_stream(&recs, &["slow".to_string()]).expect("fold");
     assert_eq!(
@@ -588,7 +711,11 @@ fn summary_zombie_pinned_time_and_capacity() {
     );
     // The node's terminal state stays timed-out (no second terminal state).
     let slow = art.attempts().iter().find(|r| r.node() == "slow").unwrap();
-    assert_eq!(slow.status(), "timed-out", "the zombie does not add a second terminal state");
+    assert_eq!(
+        slow.status(),
+        "timed-out",
+        "the zombie does not add a second terminal state"
+    );
 }
 
 #[test]
@@ -599,7 +726,10 @@ fn no_run_access_required() {
     header["parameters"] = json!({ "store_path": "/nonexistent/run/store/does-not-exist" });
     let recs = stream(&[
         run_started(0, 0, header),
-        with(env(1, 0, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(1, 0, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &[]).expect("fold reads only the given bytes");
     assert_eq!(art.overall_outcome(), "succeeded");
@@ -609,17 +739,31 @@ fn no_run_access_required() {
 fn determinism() {
     let recs = stream(&[
         run_started(0, 0, start_header()),
-        attempt_outcome(1, 1000, "a", 1, "failed", &[("metrics", json!({ "z": 1, "a": 2 }))]),
+        attempt_outcome(
+            1,
+            1000,
+            "a",
+            1,
+            "failed",
+            &[("metrics", json!({ "z": 1, "a": 2 }))],
+        ),
         attempt_outcome(2, 2000, "a", 2, "succeeded", &[]),
         with(
             env(3, 2000, "node-terminal"),
             &[("node", json!("a")), ("state", json!("succeeded"))],
         ),
-        with(env(4, 2000, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(4, 2000, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let a = fold_stream(&recs, &["a".to_string()]).expect("fold");
     let b = fold_stream(&recs, &["a".to_string()]).expect("fold");
-    assert_eq!(a.to_canonical_json(), b.to_canonical_json(), "folding the same stream twice is identical");
+    assert_eq!(
+        a.to_canonical_json(),
+        b.to_canonical_json(),
+        "folding the same stream twice is identical"
+    );
 }
 
 #[test]
@@ -628,7 +772,10 @@ fn fold_declares_reader_version_and_accepted_stream_versions() {
     // reader version — recorded on the produced artifact.
     let recs = stream(&[
         run_started(0, 0, start_header()),
-        with(env(1, 0, "run-finished"), &[("outcome", json!("succeeded"))]),
+        with(
+            env(1, 0, "run-finished"),
+            &[("outcome", json!("succeeded"))],
+        ),
     ]);
     let art = fold_stream(&recs, &[]).expect("fold");
     assert_eq!(art.fold_reader_version(), FOLD_READER_VERSION);
@@ -637,7 +784,10 @@ fn fold_declares_reader_version_and_accepted_stream_versions() {
         "declares it reads dagr.event-stream@1"
     );
     let json = art.to_canonical_json();
-    assert!(json.contains("fold_reader"), "the reader declaration is serialized onto the artifact");
+    assert!(
+        json.contains("fold_reader"),
+        "the reader declaration is serialized onto the artifact"
+    );
 }
 
 #[test]
@@ -651,7 +801,10 @@ fn corrupt_nonfinal_record_is_a_fold_error() {
         &[("outcome", json!("succeeded"))],
     )]));
     let err = fold_stream(&bytes, &[]).unwrap_err();
-    assert!(matches!(err, FoldError::CorruptRecord { .. }), "got {err:?}");
+    assert!(
+        matches!(err, FoldError::CorruptRecord { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]

@@ -698,7 +698,11 @@ fn build_attempt_record(
     started_at: &BTreeMap<String, u64>,
     prev_terminal_at: &BTreeMap<String, u64>,
 ) -> AttemptRecord {
-    let attempt = rec.get("attempt").and_then(Value::as_u64).unwrap_or(1) as u32;
+    let attempt = rec
+        .get("attempt")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .unwrap_or(1);
     let status = rec
         .get("status")
         .and_then(Value::as_str)
