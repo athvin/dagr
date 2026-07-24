@@ -522,17 +522,14 @@ impl Walk {
             .iter()
             .map(|rec| {
                 let kind = rec
-                    .get("event")
+                    .get("kind")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                let body = rec.get("body");
-                let node = body
-                    .and_then(|b| b.get("node"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                let state = body
-                    .and_then(|b| b.get("state"))
+                // The per-kind payload is spread top-level now (no `body`).
+                let node = rec.get("node").and_then(|v| v.as_str()).map(str::to_string);
+                let state = rec
+                    .get("state")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
                 let offset_ns = rec
@@ -732,16 +729,19 @@ fn m1_three_node_chain_with_retry_is_the_done_when() {
             "node-ready",
             "node-admitted",
             "attempt-started",
-            "attempt-failed", // the genuine retryable first-attempt failure
-            "attempt-failed", // the backoff-phase marker (no C19 `backoff` event)
+            "attempt-failed",  // the genuine retryable first-attempt failure
+            "attempt-outcome", // that attempt's single rich outcome record (l.331)
+            "attempt-failed",  // the backoff-phase marker (no C19 `backoff` event)
             "node-admitted",
             "attempt-started",
             "attempt-succeeded",
+            "attempt-outcome", // the successful attempt's outcome record
             "node-terminal",
         ],
         "transform's ordered transition sequence: ready, then a failed attempt \
-         cycle (failure + backoff marker), then a successful attempt cycle, then \
-         terminal"
+         cycle (failure + its attempt-outcome + backoff marker), then a successful \
+         attempt cycle (success + its attempt-outcome), then terminal — every \
+         attempt produces exactly one attempt-outcome record (arch.md l.331)"
     );
 }
 
@@ -756,7 +756,7 @@ fn run_started_fully_identifies_the_run() {
     let stream = read_records(&bytes).expect("parses");
     let first = stream.records.first().expect("at least one record");
     assert_eq!(
-        first.get("event").and_then(|v| v.as_str()),
+        first.get("kind").and_then(|v| v.as_str()),
         Some("run-started"),
         "the first record is run-started"
     );
@@ -768,23 +768,23 @@ fn run_started_fully_identifies_the_run() {
         first.get("schema_version").is_some(),
         "run-started carries the schema version"
     );
-    let body = first.get("body").expect("run-started body");
+    let header = first.get("header").expect("run-started header");
     assert_eq!(
-        body.get("pipeline").and_then(|v| v.as_str()),
+        header.get("pipeline").and_then(|v| v.as_str()),
         Some("m1-three-node-chain"),
         "run-started carries the pipeline identity"
     );
     assert!(
-        body.get("fingerprint_structural").is_some(),
+        header.get("fingerprint_structural").is_some(),
         "run-started carries the structural fingerprint (assembly succeeded)"
     );
     assert!(
-        body.get("fingerprint_policy").is_some(),
+        header.get("fingerprint_policy").is_some(),
         "run-started carries the policy hash"
     );
     // The overall outcome and summary are NOT in the run-started header.
     assert!(
-        body.get("outcome").is_none(),
+        header.get("overall_outcome").is_none(),
         "no overall outcome at start (that is run-finished's)"
     );
 }

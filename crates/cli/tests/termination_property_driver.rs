@@ -334,7 +334,7 @@ fn count_run_finished(bytes: &[u8]) -> usize {
     stream
         .records
         .iter()
-        .filter(|r| r.get("event").and_then(|v| v.as_str()) == Some("run-finished"))
+        .filter(|r| r.get("kind").and_then(|v| v.as_str()) == Some("run-finished"))
         .count()
 }
 
@@ -343,7 +343,7 @@ fn last_event(bytes: &[u8]) -> Option<String> {
     stream
         .records
         .last()
-        .and_then(|r| r.get("event").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|r| r.get("kind").and_then(|v| v.as_str()).map(str::to_string))
 }
 
 fn is_taxonomy(state: TerminalState) -> bool {

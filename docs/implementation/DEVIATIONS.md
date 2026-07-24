@@ -118,3 +118,64 @@ prefer no `deny.toml` change. Consistent with the already-merged T14/T29 stand-i
 fallback and named its trigger, and the deviation is recorded at the public
 surface and here. Adopting a different function later is an algorithm-version bump
 (T0.7 §7).
+
+---
+
+## 2026-07-23 · PREREQUISITE fix — T19 event-stream writer never conformed to the T39-published event-stream@1 schema
+
+**Quoted DoD line.** T19 (029): *"Each record is one compact JSON object per
+line … carrying the T0.6 §7 header"*, and arch.md l.331 (normative): *"Every
+attempt produces exactly one attempt-outcome record in the event stream
+(alongside its per-transition events)."*
+
+**Deviation (a defect, now reconciled).** The C19 `EventStreamWriter`
+(`crates/artifact/src/event_stream.rs`, T19) shipped a wire form that **diverged
+from the ratified published schema** `schemas/event-stream/v1.schema.json`
+(T39/050): a real writer stream could not be validated against, nor folded
+(C22/T42) from — violating end-to-end C19↔C22. The schema is the ratified
+contract, so the reconciliation is writer→schema (the schema is unchanged). The
+divergences fixed in the writer's wire output:
+
+- discriminator key `"event"` → `"kind"`.
+- per-kind payload nested under `"body"` → **spread top-level** (`header` /
+  `node` / `attempt` / `status` / `state` / `outcome` per the schema's per-kind
+  shapes).
+- `wall`: integer Unix-millis → **RFC3339 string** (schema types `wall` a
+  non-empty string). The writer's time seam changed `fn() -> u64` → `fn() ->
+  String`; the monotonic `offset_ns` stays the authoritative integer.
+- header field names/shapes: `captured_env` → `captured_environment`;
+  `resumed_from` → `resume_lineage` (an `{run_id}` object, `object|null`); added
+  `run_id` and `fingerprint_algorithm_version`; `data_interval` emitted as a
+  `{start,end}` **object** (not a `[start,end]` array). The schema requires the
+  two fingerprint fields on **every** `run-started` header, so the assembly-failed
+  path (no fingerprints) records a documented `"unavailable"` sentinel
+  (`FINGERPRINT_UNAVAILABLE`) that the C22 fold reads as absent.
+- added the single rich **`attempt-outcome`** record per attempt, kept
+  **alongside** the per-transition `attempt-succeeded`/`attempt-failed` events
+  (arch.md l.331). Its field names/status-tokens/worker `"<pool>#<thread>"`
+  format satisfy **both** the schema and the T42 fold's reader
+  (`node`/`attempt`/`status`/`worker`/`message`/`error`/`metrics`/`cost_declared`/
+  `cost_measured`/`durable_reference`/`satisfied_from_run`/`originating_node`).
+- `zombie-at-exit` now carries `{node, attempt}` (schema-required; the fold keys
+  pinned-time accounting off `(node, attempt)`).
+
+**Live caller.** The T24 run-loop driver (`crates/cli/src/driver.rs`) now emits
+one `attempt-outcome` at each attempt's completion (one per attempt for a retried
+node), from the terminal state + attempt number it already has. **Execution
+behavior is unchanged** — only what is recorded to the stream changed.
+
+**Guarantees added.** A writer→schema round-trip test drives a real writer
+producing every record kind and validates each emitted line against the published
+schema (it fails if the writer diverges again). The T39 event-stream corpus
+fixtures (`tests/fixtures/corpus/event-stream/v1/*.json`) are now **generated from
+real writer output**, so they double as a writer-conformance golden while staying
+schema-valid (the `fixture_corpus_round_trip` walker stays green).
+
+**Rationale / no new deps.** `dagr-core` stays dependency-free; the writer stays
+on `serde_json` + `uuid` (the RFC3339 conversion is a dependency-free
+`SystemTime`→civil-date computation — no `chrono`/`time`). No `deny.toml`/`audit`
+change.
+
+**Operator decision.** A prerequisite production fix on a dedicated branch
+(`fix/reconcile-event-stream-writer-schema`), not a numbered ticket; recorded here
+because it corrects a shipped T19 defect against the ratified T39 contract.

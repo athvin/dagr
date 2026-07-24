@@ -354,15 +354,11 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
         .iter()
         .map(|rec| {
             let kind = rec
-                .get("event")
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let node = rec
-                .get("body")
-                .and_then(|b| b.get("node"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            let node = rec.get("node").and_then(|v| v.as_str()).map(str::to_string);
             (kind, node)
         })
         .collect()
@@ -371,14 +367,10 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
 fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
     let stream = read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        let is_terminal = rec.get("event").and_then(|v| v.as_str()) == Some("node-terminal");
-        let this_node = rec
-            .get("body")
-            .and_then(|b| b.get("node"))
-            .and_then(|v| v.as_str());
+        let is_terminal = rec.get("kind").and_then(|v| v.as_str()) == Some("node-terminal");
+        let this_node = rec.get("node").and_then(|v| v.as_str());
         if is_terminal && this_node == Some(node) {
-            rec.get("body")
-                .and_then(|b| b.get("state"))
+            rec.get("state")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         } else {
@@ -390,9 +382,8 @@ fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
 fn finished_outcome(bytes: &[u8]) -> Option<String> {
     let stream = read_records(bytes).expect("stream parses");
     stream.records.iter().find_map(|rec| {
-        if rec.get("event").and_then(|v| v.as_str()) == Some("run-finished") {
-            rec.get("body")
-                .and_then(|b| b.get("outcome"))
+        if rec.get("kind").and_then(|v| v.as_str()) == Some("run-finished") {
+            rec.get("outcome")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         } else {

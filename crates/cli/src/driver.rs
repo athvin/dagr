@@ -83,8 +83,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{
-    Event, EventSink, EventStreamWriter, MonotonicClock, RunOutcome, RunStartedHeader,
-    TerminalState as WireTerminalState,
+    AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunOutcome,
+    RunStartedHeader, TerminalState as WireTerminalState, FINGERPRINT_ALGORITHM_VERSION,
 };
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
 use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
@@ -830,6 +830,15 @@ impl AttemptEventSink for BufferingSink {
 /// or a task runtime that could not be built); a sink fault is absorbed and
 /// surfaced through the returned report's outcome, never a panic.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the driver is one linear bootstrap-then-drive sequence (mint identity, \
+              open the stream, record the run-started header, run the assembly/bootstrap \
+              fail-fast checks, drive the loop, finalize shutdown); its early-return \
+              failure paths each record a full run-started/run-finished pair, so splitting \
+              them would scatter the single ordered narrative the record-before-act \
+              contract (arch.md C19) depends on"
+)]
 pub fn drive<S, C>(
     config: &RunConfig,
     pipeline_name: &str,
@@ -874,6 +883,7 @@ where
                 pipeline: pipeline_name.to_string(),
                 fingerprint_structural: None,
                 fingerprint_policy: None,
+                fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
                 parameters: config.parameters.clone(),
                 data_interval: config.data_interval.clone(),
                 captured_env,
@@ -912,6 +922,7 @@ where
         pipeline: pipeline_name.to_string(),
         fingerprint_structural: Some(format!("{:016x}", fp.structural())),
         fingerprint_policy: Some(format!("{:016x}", fp.policy())),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
         parameters: config.parameters.clone(),
         data_interval: config.data_interval.clone(),
         captured_env,
@@ -1177,7 +1188,10 @@ where
 
     let runners = Arc::new(Mutex::new(runners));
     let mut terminal_states: BTreeMap<String, TerminalState> = BTreeMap::new();
-    let mut zombie_candidates: Vec<String> = Vec::new();
+    // Zombie candidates, each paired with the 1-based attempt number whose thread
+    // was left behind (the `zombie-at-exit` record keys pinned-time accounting off
+    // `(node, attempt)`; C14 / C22 fold).
+    let mut zombie_candidates: Vec<(String, u32)> = Vec::new();
     // The run-scoped cancellation token (C16 / T35): the driver owns it, each
     // admitted attempt observes a per-attempt child (threaded into its
     // `RunContext`), and the cancellation core flips it so every in-flight attempt
@@ -1388,8 +1402,8 @@ where
             if !draining {
                 tokio::time::sleep(grace).await;
             }
-            for node in &zombie_candidates {
-                let _ = writer.zombie_at_exit(node);
+            for (node, attempt) in &zombie_candidates {
+                let _ = writer.zombie_at_exit(node, *attempt);
             }
         }
     });
@@ -1457,7 +1471,7 @@ fn record_attempt_outcome<S, C>(
     draining: bool,
     writer: &mut EventStreamWriter<S, C>,
     terminal_states: &mut BTreeMap<String, TerminalState>,
-    zombie_candidates: &mut Vec<String>,
+    zombie_candidates: &mut Vec<(String, u32)>,
 ) -> TerminalState
 where
     S: EventSink,
@@ -1469,20 +1483,91 @@ where
     } else {
         done.state
     };
+    // Drain the buffered per-transition events, and — alongside each attempt's
+    // CLOSING outcome event — emit the single rich `attempt-outcome` record for
+    // that attempt (arch.md l.331: "Every attempt produces exactly one
+    // attempt-outcome record … alongside its per-transition events"). A retried
+    // node buffers several attempts, so this emits one outcome record per attempt,
+    // each just before the (shared) node-terminal. The record carries the
+    // attempt's status/number/panic-message the driver has; cost/metrics/worker
+    // are not yet measured at M1/M2 (the C22 fold defaults each absent field).
+    // This records what happened; it changes no execution behavior.
+    //
+    // On a drain-cancel reclassify the raw buffered node-terminal is suppressed
+    // and one authoritative `cancelled` outcome + terminal are emitted instead.
+    let mut last_attempt = 1;
     for ev in &done.events {
         if reclassified && matches!(ev, AttemptEvent::NodeTerminal { .. }) {
             continue;
         }
         let _ = write_attempt_event(writer, ev);
+        if !reclassified {
+            if let Some(record) = closing_outcome_record(&done.node, ev) {
+                last_attempt = record.attempt;
+                let _ = writer.attempt_outcome(record);
+            }
+        }
+    }
+    if reclassified {
+        // The whole node is being torn down: one authoritative cancelled outcome.
+        let attempt = attempt_number_of(&done.events);
+        last_attempt = attempt;
+        let _ = writer.attempt_outcome(AttemptOutcomeRecord::new(
+            &done.node,
+            attempt,
+            wire_terminal(TerminalState::Cancelled).as_str(),
+        ));
     }
     record_terminal(&done.node, recorded_state, terminal_states);
     if reclassified {
         let _ = writer.node_terminal(&done.node, wire_terminal(recorded_state));
     }
     if is_zombie_candidate(recorded_state) {
-        zombie_candidates.push(done.node.clone());
+        zombie_candidates.push((done.node.clone(), last_attempt));
     }
     recorded_state
+}
+
+/// If `ev` is an attempt's **closing** outcome event (succeeded / failed /
+/// timed-out / panicked — not the mid-cycle backoff marker or the node-terminal),
+/// build the single `attempt-outcome` record for that attempt: its node, status
+/// (the normative kebab-case token the fold reads), attempt number, and — for a
+/// panic — the captured message. The richer fold fields (metrics, cost, worker,
+/// durable reference) are not measured at M1/M2, so they are left absent (the
+/// fold defaults each). Returns `None` for a non-closing event.
+fn closing_outcome_record(node: &str, ev: &AttemptEvent) -> Option<AttemptOutcomeRecord> {
+    let (attempt, status, message) = match ev {
+        AttemptEvent::AttemptSucceeded { attempt, .. } => (*attempt, "succeeded", None),
+        AttemptEvent::AttemptFailed { attempt, .. } => (*attempt, "failed", None),
+        AttemptEvent::AttemptTimedOut { attempt, .. } => (*attempt, "timed-out", None),
+        AttemptEvent::AttemptPanicked {
+            attempt, message, ..
+        } => (*attempt, "failed", Some(message.clone())),
+        // The backoff marker is a phase, not an attempt outcome; node-terminal is
+        // the node's decided state, not an attempt-outcome record.
+        _ => return None,
+    };
+    let mut record = AttemptOutcomeRecord::new(node, attempt, status);
+    record.message = message;
+    Some(record)
+}
+
+/// The 1-based attempt number the buffered events name (the last-seen
+/// attempt-numbered event), defaulting to 1 for a never-numbered outcome.
+fn attempt_number_of(events: &[AttemptEvent]) -> u32 {
+    events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            AttemptEvent::AttemptStarted { attempt, .. }
+            | AttemptEvent::AttemptSucceeded { attempt, .. }
+            | AttemptEvent::AttemptFailed { attempt, .. }
+            | AttemptEvent::AttemptTimedOut { attempt, .. }
+            | AttemptEvent::AttemptPanicked { attempt, .. }
+            | AttemptEvent::BackoffStarted { attempt, .. } => Some(*attempt),
+            _ => None,
+        })
+        .unwrap_or(1)
 }
 
 /// Record every attempt still in flight past the cancellation grace as `abandoned`
@@ -1495,7 +1580,7 @@ fn abandon_leftover<S, C>(
     live: &LiveSet,
     writer: &mut EventStreamWriter<S, C>,
     terminal_states: &mut BTreeMap<String, TerminalState>,
-    zombie_candidates: &mut Vec<String>,
+    zombie_candidates: &mut Vec<(String, u32)>,
 ) where
     S: EventSink,
     C: MonotonicClock,
@@ -1510,7 +1595,10 @@ fn abandon_leftover<S, C>(
         if !terminal_states.contains_key(&node) {
             record_terminal(&node, TerminalState::Abandoned, terminal_states);
             let _ = writer.node_terminal(&node, wire_terminal(TerminalState::Abandoned));
-            zombie_candidates.push(node);
+            // The M1 driver has no permit ledger to name the leftover attempt's
+            // number (that is T31); a leftover attempt is attempt 1 in M1's
+            // no-retry-past-abandonment model.
+            zombie_candidates.push((node, 1));
         }
     }
 }
@@ -1904,7 +1992,7 @@ fn apply_decisions<S, C>(
     stopping: bool,
     draining: bool,
     terminal_states: &mut BTreeMap<String, TerminalState>,
-    zombie_candidates: &mut Vec<String>,
+    zombie_candidates: &mut Vec<(String, u32)>,
     pending: &mut std::collections::VecDeque<String>,
     in_flight: &mut usize,
 ) where
@@ -1937,7 +2025,9 @@ fn apply_decisions<S, C>(
                     let _ = writer.node_terminal(&name, wire_terminal(*state));
                     record_terminal(&name, *state, terminal_states);
                     if is_zombie_candidate(*state) {
-                        zombie_candidates.push(name);
+                        // A propagated-terminal node never executed an attempt;
+                        // attempt 1 is the conservative attribution.
+                        zombie_candidates.push((name, 1));
                     }
                 }
             }

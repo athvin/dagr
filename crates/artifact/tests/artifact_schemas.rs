@@ -638,6 +638,191 @@ fn fixture_corpus_round_trip() {
         .unwrap_or_else(|e| panic!("corpus round-trip failed: {e}\nCORPUS_DIR={CORPUS_DIR}"));
 }
 
+// === writer → schema round-trip (C19 ↔ the published schema) ==============
+//
+// The missing end-to-end guarantee: a REAL `EventStreamWriter` (T19) must emit
+// records that validate against the published event-stream schema (T39) it is
+// contracted to. Before this reconciliation the writer emitted a divergent wire
+// form (`event`/`body`, integer `wall`, `captured_env`, an array `data_interval`,
+// and no `attempt-outcome`), so a real writer stream could not be folded (C22 /
+// T42). This test drives the writer to produce **every** record kind and
+// validates EACH emitted line — it FAILS if the writer ever diverges from the
+// schema again.
+
+use std::io;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use dagr_artifact::event_stream::{
+    read_records, AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunId,
+    RunOutcome, RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+};
+
+/// An in-memory sink capturing every appended line in order.
+#[derive(Clone, Default)]
+struct VecSink {
+    lines: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+impl EventSink for VecSink {
+    fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
+        self.lines.lock().unwrap().push(line.to_vec());
+        Ok(())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A monotonic clock returning distinct, non-decreasing offsets.
+#[derive(Default)]
+struct TickClock {
+    n: std::sync::atomic::AtomicU64,
+}
+impl MonotonicClock for TickClock {
+    fn elapsed_ns(&self) -> u64 {
+        self.n.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// A fixed RFC3339 wall stamp so the record bytes are deterministic (T4 §6).
+fn fixed_wall() -> String {
+    "2026-07-23T00:00:00.000Z".to_string()
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one non-vacuous end-to-end guarantee: it drives a real writer through \
+              EVERY record kind (a full run-started header, each per-transition event, \
+              the rich attempt-outcome, zombie-at-exit, run-finished) plus the \
+              assembly-failed variant, and validates each emitted line — splitting it \
+              would fragment the single writer-conformance narrative"
+)]
+fn writer_output_validates_against_published_schema_for_every_kind() {
+    let sink = VecSink::default();
+    let mut w = EventStreamWriter::new(
+        sink.clone(),
+        TickClock::default(),
+        RunId::from_operator("018f4a1e-6c2a-7b3d-9e10-0123456789ab"),
+        "example-pipeline",
+    )
+    .with_wall_clock(fixed_wall);
+
+    // run-started with a full assembly-succeeded header (both fingerprints, a
+    // data interval, captured env, resume lineage).
+    let mut params = std::collections::BTreeMap::new();
+    params.insert("date".to_string(), "2026-07-23".to_string());
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("REGION".to_string(), "us-east-1".to_string());
+    w.run_started(RunStartedHeader {
+        pipeline: "example-pipeline".to_string(),
+        fingerprint_structural: Some("blake3:aaaa".to_string()),
+        fingerprint_policy: Some("blake3:bbbb".to_string()),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
+        parameters: params,
+        data_interval: Some([
+            "2026-07-23T00:00:00Z".to_string(),
+            "2026-07-24T00:00:00Z".to_string(),
+        ]),
+        captured_env: env,
+        resumed_from: Some("018f4a1e-0000-7b3d-9e10-0123456789ab".to_string()),
+    })
+    .unwrap();
+    w.node_ready("n").unwrap();
+    w.node_admitted("n").unwrap();
+    w.attempt_started("n", 1).unwrap();
+    w.attempt_succeeded("n", 1).unwrap();
+    w.attempt_failed("n", 1).unwrap();
+    // The rich attempt-outcome carrying every fold field.
+    let mut outcome = AttemptOutcomeRecord::new("n", 1, "succeeded");
+    outcome.worker = Some("compute#3".to_string());
+    outcome.message = Some("ok".to_string());
+    outcome.metrics = Some(json!({ "rows_read": 42 }));
+    outcome.cost_declared = Some(json!({ "memory_bytes": 1024 }));
+    outcome.cost_measured = Some(json!({ "memory_bytes": 900 }));
+    outcome.durable_reference = Some(json!({ "storage_key": "s3://bucket/n/output" }));
+    w.attempt_outcome(outcome).unwrap();
+    // A minimal attempt-outcome (the M1/M2 driver's shape: node/attempt/status).
+    w.attempt_outcome(AttemptOutcomeRecord::new("n", 1, "succeeded"))
+        .unwrap();
+    w.node_terminal("n", TerminalState::Succeeded).unwrap();
+    w.zombie_at_exit("n", 1).unwrap();
+    w.run_finished(RunOutcome::Succeeded).unwrap();
+    w.finish().unwrap();
+
+    let lines = sink.lines.lock().unwrap().clone();
+    // The kinds present must cover the whole closed vocabulary (non-vacuous: a
+    // writer that emitted nothing, or omitted a kind, fails here).
+    let mut kinds: Vec<String> = Vec::new();
+    for line in &lines {
+        let value: Value = serde_json::from_slice(line).expect("record parses as JSON");
+        // EACH emitted record validates against the published schema.
+        assert_valid(ArtifactKind::EventStream, 1, &value);
+        kinds.push(
+            value
+                .get("kind")
+                .and_then(Value::as_str)
+                .expect("record carries a `kind` discriminator")
+                .to_string(),
+        );
+    }
+    for expected in [
+        "run-started",
+        "node-ready",
+        "node-admitted",
+        "attempt-started",
+        "attempt-succeeded",
+        "attempt-failed",
+        "attempt-outcome",
+        "node-terminal",
+        "zombie-at-exit",
+        "run-finished",
+    ] {
+        assert!(
+            kinds.iter().any(|k| k == expected),
+            "the writer must emit a `{expected}` record; emitted kinds: {kinds:?}"
+        );
+    }
+
+    // The assembly-failed path still emits a schema-valid two-record stream: the
+    // fingerprint fields are present (the schema requires them) as the sentinel.
+    let sink2 = VecSink::default();
+    let mut w2 = EventStreamWriter::new(
+        sink2.clone(),
+        TickClock::default(),
+        RunId::from_operator("018f4a1e-6c2a-7b3d-9e10-fedcba987654"),
+        "example-pipeline",
+    )
+    .with_wall_clock(fixed_wall);
+    w2.run_started(RunStartedHeader {
+        pipeline: "example-pipeline".to_string(),
+        fingerprint_structural: None,
+        fingerprint_policy: None,
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
+        parameters: std::collections::BTreeMap::new(),
+        data_interval: None,
+        captured_env: std::collections::BTreeMap::new(),
+        resumed_from: None,
+    })
+    .unwrap();
+    w2.run_finished(RunOutcome::AssemblyFailed).unwrap();
+    let lines2 = sink2.lines.lock().unwrap().clone();
+    assert_eq!(lines2.len(), 2, "assembly-failed is a two-record stream");
+    for line in &lines2 {
+        let value: Value = serde_json::from_slice(line).unwrap();
+        assert_valid(ArtifactKind::EventStream, 1, &value);
+    }
+
+    // The whole stream is readable by the tolerant reader (the fold's front door).
+    let mut bytes: Vec<u8> = Vec::new();
+    for line in &lines {
+        bytes.extend_from_slice(line);
+    }
+    let parsed = read_records(&bytes).expect("the writer's stream reads back");
+    assert_eq!(parsed.records.len(), lines.len());
+    assert!(!parsed.trailing_partial_discarded);
+}
+
 #[test]
 fn invalid_input_rejected_with_a_usable_error() {
     // A deliberately malformed artifact (schema-version field missing entirely
@@ -654,4 +839,132 @@ fn invalid_input_rejected_with_a_usable_error() {
         text.contains("graph") && text.contains("schema_version"),
         "error must name the artifact kind and the failing reason, got: {text}"
     );
+}
+
+// === writer-generated corpus fixtures (T39 corpus ← real writer) ==========
+//
+// The event-stream corpus fixtures (tests/fixtures/corpus/event-stream/v1/*.json)
+// are generated from REAL `EventStreamWriter` output, so they double as a
+// writer-conformance golden: if the writer's wire form ever drifts from the
+// checked-in fixtures, `event_stream_corpus_matches_real_writer_output` fails —
+// and `fixture_corpus_round_trip` (above) still proves every fixture is
+// schema-valid. Regenerate with:
+//   cargo test -p dagr-artifact --features schema-validation --test artifact_schemas \
+//       regenerate_event_stream_corpus -- --ignored
+
+/// The canonical corpus records, as `(fixture-file-stem, one canonical JSON
+/// line)` — every one produced by a REAL writer through the capturing sink, with
+/// a fixed wall stamp and a manual clock so the bytes are deterministic. One
+/// representative fixture per interesting record kind (run-started with a full
+/// header, the rich attempt-outcome, and zombie-at-exit).
+fn writer_corpus_records() -> Vec<(String, Vec<u8>)> {
+    let sink = VecSink::default();
+    let mut w = EventStreamWriter::new(
+        sink.clone(),
+        TickClock::default(),
+        RunId::from_operator("018f4a1e-6c2a-7b3d-9e10-0123456789ab"),
+        "example-pipeline",
+    )
+    .with_wall_clock(fixed_wall);
+
+    let mut params = std::collections::BTreeMap::new();
+    params.insert("date".to_string(), "2026-07-23".to_string());
+
+    // 0: run-started (full assembly-succeeded header).
+    w.run_started(RunStartedHeader {
+        pipeline: "example-pipeline".to_string(),
+        fingerprint_structural: Some(
+            "blake3:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        ),
+        fingerprint_policy: Some(
+            "blake3:2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+        ),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
+        parameters: params,
+        data_interval: Some([
+            "2026-07-23T00:00:00Z".to_string(),
+            "2026-07-24T00:00:00Z".to_string(),
+        ]),
+        captured_env: std::collections::BTreeMap::new(),
+        resumed_from: None,
+    })
+    .unwrap();
+    // 1: attempt-outcome (the fold's richest input).
+    let mut outcome = AttemptOutcomeRecord::new("load", 1, "succeeded");
+    outcome.worker = Some("compute#3".to_string());
+    outcome.message = Some("ok".to_string());
+    outcome.metrics = Some(json!({ "rows_read": 42 }));
+    outcome.cost_declared = Some(json!({ "memory_bytes": 1024 }));
+    outcome.cost_measured = Some(json!({ "memory_bytes": 900 }));
+    w.attempt_outcome(outcome).unwrap();
+    // 2: zombie-at-exit.
+    let _ = w.emit_event(&Event::ZombieAtExit {
+        node: "slow-node".to_string(),
+        attempt: 1,
+    });
+
+    let lines = sink.lines.lock().unwrap().clone();
+    vec![
+        ("run-started".to_string(), lines[0].clone()),
+        ("attempt-outcome".to_string(), lines[1].clone()),
+        ("zombie-at-exit".to_string(), lines[2].clone()),
+    ]
+}
+
+/// The corpus directory for event-stream v1 fixtures.
+fn event_stream_corpus_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(CORPUS_DIR)
+        .join("event-stream")
+        .join("v1")
+}
+
+/// Pretty-print a canonical record line as multi-line JSON (2-space indent) so a
+/// checked-in fixture is human-readable; content is byte-equal in value.
+fn pretty(line: &[u8]) -> Vec<u8> {
+    let v: Value = serde_json::from_slice(line).expect("record parses");
+    let mut s = serde_json::to_vec_pretty(&v).expect("pretty prints");
+    s.push(b'\n');
+    s
+}
+
+#[test]
+#[ignore = "regenerates the checked-in event-stream corpus from real writer output"]
+fn regenerate_event_stream_corpus() {
+    let dir = event_stream_corpus_dir();
+    std::fs::create_dir_all(&dir).expect("corpus dir");
+    for (stem, line) in writer_corpus_records() {
+        let path = dir.join(format!("{stem}.json"));
+        std::fs::write(&path, pretty(&line)).expect("write fixture");
+        // Each regenerated fixture is schema-valid.
+        let v: Value = serde_json::from_slice(&line).unwrap();
+        assert_valid(ArtifactKind::EventStream, 1, &v);
+    }
+}
+
+#[test]
+fn event_stream_corpus_matches_real_writer_output() {
+    // The checked-in corpus is a writer-conformance golden: each fixture equals
+    // (by JSON value) what a real writer emits for that record today. A drift in
+    // the writer's wire form fails here — regenerate with the ignored test.
+    let dir = event_stream_corpus_dir();
+    for (stem, line) in writer_corpus_records() {
+        let path = dir.join(format!("{stem}.json"));
+        let on_disk = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("corpus fixture {} missing: {e}", path.display()));
+        let disk_value: Value = serde_json::from_slice(&on_disk)
+            .unwrap_or_else(|e| panic!("corpus fixture {} is not JSON: {e}", path.display()));
+        let writer_value: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(
+            disk_value,
+            writer_value,
+            "corpus fixture {} drifted from real writer output — regenerate the \
+             event-stream corpus (cargo test … regenerate_event_stream_corpus -- --ignored)",
+            path.display()
+        );
+    }
 }

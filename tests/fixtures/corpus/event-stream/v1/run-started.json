@@ -1,19 +1,24 @@
 {
-  "schema_version": "dagr.event-stream@1",
-  "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
-  "seq": 0,
-  "wall": "2026-07-23T00:00:00.000Z",
-  "offset_ns": 0,
-  "kind": "run-started",
   "header": {
-    "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
-    "pipeline": "example-pipeline",
-    "fingerprint_structural": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
-    "fingerprint_policy": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
-    "fingerprint_algorithm_version": 1,
-    "parameters": { "date": "2026-07-23" },
-    "data_interval": { "start": "2026-07-23T00:00:00Z", "end": "2026-07-24T00:00:00Z" },
     "captured_environment": {},
-    "resume_lineage": null
-  }
+    "data_interval": {
+      "end": "2026-07-24T00:00:00Z",
+      "start": "2026-07-23T00:00:00Z"
+    },
+    "fingerprint_algorithm_version": 1,
+    "fingerprint_policy": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+    "fingerprint_structural": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "parameters": {
+      "date": "2026-07-23"
+    },
+    "pipeline": "example-pipeline",
+    "resume_lineage": null,
+    "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab"
+  },
+  "kind": "run-started",
+  "offset_ns": 0,
+  "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+  "schema_version": "dagr.event-stream@1",
+  "seq": 0,
+  "wall": "2026-07-23T00:00:00.000Z"
 }

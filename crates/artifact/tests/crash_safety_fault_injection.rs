@@ -56,9 +56,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dagr_artifact::event_stream::{
-    read_records, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, SinkFault, TerminalState, EVENTS_FILE_NAME, EVENT_STREAM_SCHEMA_VERSION,
-    EVENT_STREAM_UNWRITABLE,
+    read_records, AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId,
+    RunOutcome, RunStartedHeader, SinkFault, TerminalState, EVENTS_FILE_NAME,
+    EVENT_STREAM_SCHEMA_VERSION, EVENT_STREAM_UNWRITABLE, FINGERPRINT_ALGORITHM_VERSION,
 };
 
 // ===========================================================================
@@ -294,6 +294,7 @@ fn fixture_header() -> RunStartedHeader {
         pipeline: "fixture-pipeline".to_string(),
         fingerprint_structural: Some("blake3:1111".to_string()),
         fingerprint_policy: Some("blake3:2222".to_string()),
+        fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
         parameters: params,
         data_interval: Some(["2026-07-22".to_string(), "2026-07-23".to_string()]),
         captured_env: env,
@@ -324,12 +325,18 @@ fn drive_fixture<S: EventSink>(w: &mut EventStreamWriter<S, TickClock>) -> usize
         w.node_admitted(node).unwrap();
         w.attempt_started(node, 1).unwrap();
         w.attempt_succeeded(node, 1).unwrap();
+        // The single rich attempt-outcome record, alongside the per-transition
+        // attempt-succeeded event (arch.md l.331) — what a real run now emits.
+        w.attempt_outcome(AttemptOutcomeRecord::new(node, 1, "succeeded"))
+            .unwrap();
         w.node_terminal(node, TerminalState::Succeeded).unwrap();
     }
     w.run_finished(RunOutcome::Succeeded).unwrap();
     w.finish().unwrap();
-    // 1 run-started + 3*(ready,admitted,started,succeeded,terminal) + run-finished.
-    1 + 3 * 5 + 1
+    // 1 run-started
+    //   + 3*(ready, admitted, started, succeeded, attempt-outcome, terminal)
+    //   + run-finished.
+    1 + 3 * 6 + 1
 }
 
 /// Produce the exact bytes a completed fixture run leaves on disk (through a
@@ -414,7 +421,7 @@ fn abrupt_kill_at_a_random_point_yields_a_valid_prefix() {
         // At most one trailing partial is discarded — never more; every complete
         // record parses. `read_records` reports the single discard via its flag.
         assert!(
-            parsed.records.len() <= 22,
+            parsed.records.len() <= 20,
             "trial {trial} at cut={cut}: no more records than the full run"
         );
         // The surviving complete records are a gapless prefix of the run.
@@ -542,7 +549,7 @@ fn a_one_record_stream_still_identifies_its_run() {
 
     let rec = &one.records[0];
     assert_eq!(
-        rec.get("event").and_then(serde_json::Value::as_str),
+        rec.get("kind").and_then(serde_json::Value::as_str),
         Some("run-started"),
         "the sole record is the run-started event"
     );
@@ -551,25 +558,38 @@ fn a_one_record_stream_still_identifies_its_run() {
         Some(run_id),
         "the run is identified from the one record alone"
     );
-    let body = rec
-        .get("body")
+    let header = rec
+        .get("header")
         .and_then(serde_json::Value::as_object)
         .unwrap();
     // Every header field known at start is present (C19: full artifact header).
-    for field in ["pipeline", "parameters", "captured_env", "data_interval"] {
-        assert!(body.contains_key(field), "run-started carries {field}");
+    // The captured environment is `captured_environment` in the published schema.
+    for field in [
+        "pipeline",
+        "parameters",
+        "captured_environment",
+        "data_interval",
+    ] {
+        assert!(header.contains_key(field), "run-started carries {field}");
     }
-    assert_eq!(body["pipeline"], serde_json::json!("fixture-pipeline"));
+    assert_eq!(header["pipeline"], serde_json::json!("fixture-pipeline"));
     assert_eq!(
-        body["fingerprint_structural"],
+        header["fingerprint_structural"],
         serde_json::json!("blake3:1111"),
         "structural fingerprint (assembly succeeded) is in the header"
     );
-    assert_eq!(body["fingerprint_policy"], serde_json::json!("blake3:2222"));
-    assert_eq!(body["resumed_from"], serde_json::json!("run-prior-0000"));
+    assert_eq!(
+        header["fingerprint_policy"],
+        serde_json::json!("blake3:2222")
+    );
+    // Resume lineage is an object carrying the originating run id (schema field).
+    assert_eq!(
+        header["resume_lineage"],
+        serde_json::json!({ "run_id": "run-prior-0000" })
+    );
     // No overall outcome/summary at start — those exist only at run end.
     assert!(
-        !body.contains_key("outcome"),
+        !header.contains_key("overall_outcome"),
         "no outcome in the start header"
     );
 
@@ -806,11 +826,11 @@ fn run_failure_is_not_masked_by_self_inflicted_cancellation() {
     let parsed = read_records(&sink.bytes()).unwrap();
     let finished = parsed.records.last().unwrap();
     assert_eq!(
-        finished.get("event").and_then(serde_json::Value::as_str),
+        finished.get("kind").and_then(serde_json::Value::as_str),
         Some("run-finished")
     );
     assert_eq!(
-        finished["body"]["outcome"],
+        finished["outcome"],
         serde_json::json!("failed"),
         "a genuine node failure yields `failed`, distinct from the sink-fault `cancelled`"
     );
