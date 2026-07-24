@@ -159,6 +159,51 @@ jobs:
       - name: cargo deny check
         run: cargo deny check
 
+  # --- Cross-toolchain fingerprint stability (C21 / SL4a, T41) ---------------
+  # The executable form of C21's "two builds of unchanged source, on different
+  # toolchains, produce the same structural fingerprint and policy hash" (T0.7
+  # §5). Builds and runs the `fingerprint_fixture` example (a fixed pipeline whose
+  # two version-prefixed fingerprint strings it prints) under the **pinned**
+  # toolchain AND a **second** toolchain (current stable), then diffs the two
+  # outputs byte-for-byte. Any divergence fails the job — the C21 cross-toolchain
+  # guarantee is testable precisely because every hashed input is author-declared.
+  cross-toolchain-fingerprint:
+    name: cross-toolchain-fingerprint
+    runs-on: ubuntu-latest
+    # Override the workspace RUSTFLAGS='-D warnings': the second toolchain may
+    # introduce lints the code is not obligated to be clean under (clippy/fmt on
+    # the pinned toolchain are the lint gate). This job only checks fingerprint
+    # byte-equality across toolchains, not lint-cleanliness on stable.
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # Toolchain 1: the pinned channel from rust-toolchain.toml (honoured
+      # automatically by rustup on `cargo run` in the repo).
+      - name: Fingerprint under the pinned toolchain
+        run: |
+          cargo run --quiet -p dagr-cli --example fingerprint_fixture > fp-pinned.txt
+          echo "pinned toolchain fingerprints:"; cat fp-pinned.txt
+      # Toolchain 2: a DIFFERENT channel. `+stable` overrides the pinned channel
+      # for this one invocation, so the example is built and run by a second
+      # rustc. (On the runner's default image `stable` differs from the pinned
+      # 1.95.0; if they ever coincide the diff still passes — equal is equal.)
+      - name: Install a second toolchain (stable)
+        run: rustup toolchain install stable --profile minimal
+      - name: Fingerprint under the second toolchain
+        run: |
+          cargo +stable run --quiet -p dagr-cli --example fingerprint_fixture > fp-stable.txt
+          echo "second toolchain fingerprints:"; cat fp-stable.txt
+      # The load-bearing assertion: byte-identical across the two toolchains.
+      - name: Compare — the fingerprints MUST be byte-identical across toolchains
+        run: |
+          if ! diff -u fp-pinned.txt fp-stable.txt; then
+            echo "::error::C21 cross-toolchain fingerprint divergence — the two toolchains produced different fingerprints for unchanged source"
+            exit 1
+          fi
+          echo "OK: fingerprints are byte-identical across toolchains (C21 / SL4a)"
+
   # --- Acceptance-criteria coverage matrix (system criterion 8) --------------
   # Verifies that every machine-classed criterion in the partition is bound to
   # an existing test (or an explicitly-deferred `unmapped` placeholder) in the

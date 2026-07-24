@@ -68,3 +68,53 @@ which is untouched).
 
 **Operator decision.** Traces to the arch.md C12 acceptance criterion and the
 T32 ticket DoD, which the loop implements autonomously.
+
+---
+
+## 2026-07-23 · 052 (T41) — fingerprint hash function is FNV-1a, not BLAKE3
+
+**Affected decision.** The T0.7 ADR
+(`docs/implementation/013-T0.7-stable-name-and-fingerprint-adr.md`) §6 names
+**BLAKE3** as the v1 fingerprint hash function: *"A single named hash function.
+Both hashes use one cryptographic hash function, named once here: BLAKE3 … a
+pure-Rust implementation, which keeps the core crate's dependency set minimal."*
+T41 implements the T0.7 composition, so it inherits that naming; T41's own DoD
+requires cross-toolchain-identical hashes but does not itself name the function.
+
+**Deviation.** Algorithm **v1 uses FNV-1a** — the dependency-free digest already
+in the tree (`dagr_core::handle::NodeId`, the T40 build script) — not BLAKE3. The
+digest is computed in `dagr_core::assembly`, exposed through
+`Pipeline::fingerprint()` / `FingerprintSlot`, and written into the graph header
+as a version-prefixed `fnv1a-64:v1:<hex>` string. `dagr-core` stays
+dependency-free and `deny.toml` is unchanged.
+
+**Rationale — the ADR's own anticipated reopen condition, not a local
+work-around.** T0.7 §Consequences "Reopen condition" states: *"if BLAKE3 proves
+unavailable under the pinned MSRV or the supply-chain policy — the contract
+reopens here … rather than being worked around locally."* Adding `blake3` is
+**unavailable under dagr's supply-chain policy**. `deny.toml` allows the **MIT**
+license only (plus `Unicode-3.0` for one build tool). Verified via `cargo
+metadata` for `blake3 = { version = "1", default-features = false }`: `blake3` is
+`CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception` (no MIT option); its
+transitive `arrayref` is single-licensed **BSD-2-Clause** (cannot resolve to
+MIT); `constant_time_eq` is `CC0-1.0 OR MIT-0 OR Apache-2.0` (MIT-0, not MIT).
+Admitting BLAKE3 would require widening the MIT-only allow-list to Apache-2.0 +
+BSD-2-Clause + CC0-1.0/MIT-0 — a reviewed loosening of the supply-chain gate — and
+pull a `cc` build-time C-toolchain dependency (absent the `pure` feature).
+
+FNV-1a satisfies **every** C21 property the ADR's guarantee rests on: pure
+integer arithmetic, no float/locale/platform dependence, so identical
+author-declared inputs yield byte-identical digests on any machine or toolchain
+(the two-toolchain CI job asserts this). Collision resistance is weaker than a
+256-bit cryptographic hash, but the fingerprint is a **shape-identity** for
+resume/diff gating (C27/C28), not a security primitive; the weaker guarantee is
+documented on `FingerprintSlot`, and a stronger hash remains available later as an
+**algorithm-version bump** (the mechanism T0.7 §7 provides for exactly this).
+
+**Operator decision.** Traces to the merged `deny.toml` MIT-only license policy
+(T7 / 006) and the standing constraint to keep `dagr-core` dependency-free and
+prefer no `deny.toml` change. Consistent with the already-merged T14/T29 stand-in
+(FNV-1a, BLAKE3 pending). Not a spec conflict: the ADR pre-authorized this
+fallback and named its trigger, and the deviation is recorded at the public
+surface and here. Adopting a different function later is an algorithm-version bump
+(T0.7 §7).
