@@ -39,8 +39,8 @@ use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOu
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::RunContext;
-use dagr_core::TaskError;
 use dagr_core::task::Task;
+use dagr_core::TaskError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -100,7 +100,9 @@ impl Task for FlakyTransform {
     type Output = u64;
     async fn run(&mut self, c: &RunContext, input: u64) -> Result<u64, TaskError> {
         if c.attempt() == 1 {
-            Err(TaskError::retryable("transient hiccup on the first attempt"))
+            Err(TaskError::retryable(
+                "transient hiccup on the first attempt",
+            ))
         } else {
             Ok(input * 2)
         }
@@ -252,8 +254,14 @@ fn chain_runs_source_transform_sink_end_to_end() {
     // The middle node retried exactly once (two attempts) — retries work.
     assert_eq!(count(&bytes, "attempt-started", TRANSFORM), 2);
     assert_eq!(count(&bytes, "attempt-succeeded", TRANSFORM), 1);
-    assert_eq!(kinds(&bytes).first().map(String::as_str), Some("run-started"));
-    assert_eq!(kinds(&bytes).last().map(String::as_str), Some("run-finished"));
+    assert_eq!(
+        kinds(&bytes).first().map(String::as_str),
+        Some("run-started")
+    );
+    assert_eq!(
+        kinds(&bytes).last().map(String::as_str),
+        Some("run-finished")
+    );
 }
 
 /// **Fidelity.** The auto-adapter path produces the SAME ordered event-stream
@@ -360,7 +368,7 @@ fn permanent_failure_propagates_downstream() {
 /// **A scratch-touching node runs through the adapter (T63 wiring intact).** A
 /// single-attempt node writes to and reads back its real per-node durable scratch
 /// namespace under the run store — proving the adapter builds a `NodeRunner` that
-/// works with the driver's real per-attempt context (scratch_root threaded
+/// works with the driver's real per-attempt context (`scratch_root` threaded
 /// through). Uses a PRIVATE temp dir for the run store.
 #[test]
 fn a_scratch_touching_node_runs_through_the_adapter() {
@@ -412,4 +420,74 @@ fn a_scratch_touching_node_runs_through_the_adapter() {
     );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// **Genericity across a type boundary.** The adapter is generic over `Task`
+/// `Input`/`Output`, so a chain whose nodes carry **distinct** value types
+/// (`u64 → String → usize`) must flow each value through the generic edge-downcast
+/// unchanged. This crosses a real type boundary (unlike the all-`u64` chain), so a
+/// type-confusion in the erased slot downcast — which would still *compile* — is
+/// caught by the observable value at the end.
+#[test]
+fn distinct_input_and_output_types_flow_through_the_adapter() {
+    struct MakeNumber;
+    impl Task for MakeNumber {
+        type Input = ();
+        type Output = u64;
+        async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+            Ok(7)
+        }
+    }
+    /// `u64 → String`: renders its input as text (a different Output type).
+    struct Render;
+    impl Task for Render {
+        type Input = u64;
+        type Output = String;
+        async fn run(&mut self, _c: &RunContext, input: u64) -> Result<String, TaskError> {
+            Ok(format!("value={input}"))
+        }
+    }
+    /// `String → usize`: consumes the `String` (proving the `String` edge
+    /// round-tripped through the erased slot) and yields its byte length.
+    struct Measure;
+    impl Task for Measure {
+        type Input = String;
+        type Output = usize;
+        async fn run(&mut self, _c: &RunContext, input: String) -> Result<usize, TaskError> {
+            Ok(input.len())
+        }
+    }
+
+    let mut flow = RunnableFlow::new();
+    let number = flow.register_source("number", MakeNumber);
+    let rendered = flow.register::<Render, _>("render", Render, number);
+    let measured = flow.register::<Measure, _>("measure", Measure, rendered.clone_on_read());
+
+    let mem = MemorySink::default();
+    let report = flow
+        .run(
+            "run-a-flow-types",
+            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-types"),
+            mem.clone(),
+            TickClock::default(),
+        )
+        .expect("assembles and runs");
+
+    let bytes = mem.bytes();
+    assert_eq!(report.outcome(), RunOutcome::Succeeded, "the run succeeds");
+    for node in ["number", "render", "measure"] {
+        assert_eq!(terminal_of(&bytes, node), "succeeded", "`{node}` succeeded");
+    }
+    // The `String` produced by `render` crossed the erased slot boundary intact:
+    // `"value=7"` has 7 bytes, so `measure` reads back exactly that length.
+    assert_eq!(
+        report.output(rendered),
+        Some("value=7".to_string()),
+        "the String value flowed through the generic adapter unchanged"
+    );
+    assert_eq!(
+        report.output(measured),
+        Some("value=7".len()),
+        "the downstream node consumed the String and produced its length"
+    );
 }

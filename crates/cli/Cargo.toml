@@ -27,6 +27,15 @@ path = "src/lib.rs"
 name = "dagr"
 path = "src/main.rs"
 
+# The run-a-Flow ergonomics reference driver (ADR 081): runs a real Flow of real
+# Tasks through the one-call `RunnableFlow::run` seam — no hand-written NodeRunner.
+# It composes only the public library (`dagr_cli::run_flow` + the real `drive`
+# loop), adds no dependency, and ships as the demonstration that a task author runs
+# a flow without scheduler plumbing (arch.md C1).
+[[bin]]
+name = "dagr-run-a-flow-demo"
+path = "src/bin/dagr-run-a-flow-demo.rs"
+
 # The M4 gate demo run/resume harness (T63) — test-support scaffolding the
 # `m4_demo_kill_resume_review` integration test launches and kills. It depends on
 # the `test-kit`-gated `dagr_cli::t63_demo` reference pipeline, so it is gated behind
