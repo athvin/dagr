@@ -312,6 +312,62 @@ fn carried_type_changed() -> Pipeline {
     flow.finish()
 }
 
+/// A four-node pipeline with **two** `Rows` producers (`rows`, `rows_alt`) both
+/// present, `schema`, and a `report` consuming `(Rows, Schema)`. `report`'s first
+/// input is wired to whichever `Rows` producer `first_rows` names, so the golden and
+/// the rewired variant share an **identical node set** — only one data edge's `from`
+/// endpoint moves between the two existing producers (a pure rewire).
+fn two_rows_producers(first_rows: &str) -> Pipeline {
+    let mut flow = Flow::new();
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
+    let rows_alt = flow.register_source_named::<MakeRows>(
+        "rows_alt",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
+    let schema = flow.register_source_named::<MakeSchema>(
+        "schema",
+        &MakeSchema,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
+    // Redirect `report`'s first (Rows) input to the chosen existing producer; the
+    // node SET is unchanged across the two choices — only the edge endpoint moves.
+    let chosen_rows = match first_rows {
+        "rows" => rows,
+        "rows_alt" => rows_alt,
+        other => panic!("unknown Rows producer `{other}`"),
+    };
+    let _report = flow.register_named::<BuildReport, _>(
+        "report",
+        &BuildReport,
+        (chosen_rows, schema),
+        Some("publish"),
+        NodePolicy::new(),
+    );
+    flow.finish()
+}
+
+/// Baseline with `report` moved from its `publish` group to the **existing**
+/// `ingest` group (where `rows` and `schema` already live) — a move **between two
+/// existing groups**, distinct from the group-*rename* fixture ([`regrouped`], which
+/// moves `report` into a brand-new `landing` group). The node set and wiring are
+/// unchanged; only `report`'s group facet moves to a group that already exists.
+fn moved_between_groups() -> Pipeline {
+    // `rows`/`schema` stay in `ingest`; `report` moves OUT of `publish` and INTO the
+    // pre-existing `ingest` group (so all three named nodes land in `ingest`).
+    baseline(|name| match name {
+        "rows" | "schema" | "report" => Some("ingest"),
+        _ => None,
+    })
+}
+
 fn snapshot(pipeline: &Pipeline) -> StructureSnapshot {
     StructureSnapshot::from_pipeline(pipeline, "example-pipeline")
         .expect("baseline pipeline snapshots")
@@ -467,6 +523,123 @@ fn carried_type_change_fails_with_a_diff() {
     assert!(
         report.contains("edge") || report.contains("Rows") || report.contains("Schema"),
         "the diff reports the carried-type change on the rows→report edge: {report}"
+    );
+    let _ = std::fs::remove_file(&fixture);
+}
+
+/// **Rewiring an edge fails with a diff naming the removed and added edge.**
+/// Redirecting one existing data edge to a **different existing endpoint** — the
+/// node set is *unchanged* (no node added or removed), only `report`'s first input
+/// moves from producer `rows` to producer `rows_alt` — fails the assertion. Because
+/// the edge key is `from -kind-> to [carried-type]`, a pure endpoint change reads as
+/// exactly one edge **removed** (`rows -data-> report`) and one edge **added**
+/// (`rows_alt -data-> report`), each carrying its type + kind. The test is
+/// **non-vacuous**: it also asserts NO node is reported added/removed, so it proves a
+/// true rewire distinct from an add/remove and would fail if the snapshot ignored an
+/// edge's endpoint (arch.md C28 · "rewired", line 595; Test plan §34).
+#[test]
+fn rewiring_an_edge_fails_naming_removed_and_added_edge() {
+    // Golden: `report`'s Rows input comes from `rows`.
+    let fixture = bless_to_temp(&two_rows_producers("rows"), "rewire");
+    // Variant: the SAME node set, but `report`'s Rows input is redirected to the
+    // other existing producer `rows_alt` — a pure edge rewire.
+    let err = assert_structure(
+        &two_rows_producers("rows_alt"),
+        "example-pipeline",
+        &fixture,
+    )
+    .expect_err("rewiring an existing edge to a different existing endpoint must fail");
+    let StructureAssertError::Mismatch(diff) = err else {
+        panic!("an edge rewire is a structural mismatch");
+    };
+    let report = diff.to_string();
+
+    // The removed edge names the old producer→consumer with its kind + carried type.
+    assert!(
+        report.contains("removed edge")
+            && report.contains("`rows`")
+            && report.contains("-data->")
+            && report.contains("`report`")
+            && report.contains("Rows"),
+        "the diff names the REMOVED edge `rows` -data-> `report` carrying `Rows`: {report}"
+    );
+    // The added edge names the new producer with its kind + carried type.
+    assert!(
+        report.contains("added edge")
+            && report.contains("`rows_alt`")
+            && report.contains("-data->")
+            && report.contains("`report`")
+            && report.contains("Rows"),
+        "the diff names the ADDED edge `rows_alt` -data-> `report` carrying `Rows`: {report}"
+    );
+    // NON-VACUOUS: it is a *pure* rewire — no node is added or removed. Were the
+    // snapshot to ignore an edge's endpoint, this diff would be empty and the
+    // assertion above would not have failed; and this guards the rewire from being
+    // mistaken for (or implemented as) an add/remove.
+    assert!(
+        !report.contains("added node") && !report.contains("removed node"),
+        "a pure rewire must report NO node added/removed (distinct from add/remove): {report}"
+    );
+
+    // Companion: the node set really is identical across the two structures — the
+    // only difference is the one moved edge (so the diff carries exactly one removed
+    // and one added edge, and no node add/remove).
+    let golden = snapshot(&two_rows_producers("rows"));
+    let variant = snapshot(&two_rows_producers("rows_alt"));
+    let structural = variant.diff(&golden);
+    assert!(
+        !structural.is_empty(),
+        "the rewire is a real structural difference (non-empty diff)"
+    );
+    let _ = std::fs::remove_file(&fixture);
+}
+
+/// **Moving a node between two existing groups is review-visible yet
+/// fingerprint-neutral.** Moving `report` from its `publish` group into the
+/// **existing** `ingest` group (where `rows`/`schema` already live) — distinct from
+/// the group-*rename* test, whose destination group is brand-new — fails the
+/// structure assertion, and the diff reports `report`'s group facet change. As a
+/// companion check, BOTH the structural fingerprint and the policy hash are
+/// unchanged, because group is fingerprint-neutral (C6 / C21; T51). (Test plan §42.)
+#[test]
+fn moving_a_node_between_existing_groups_is_visible_but_fingerprint_neutral() {
+    let fixture = bless_to_temp(&baseline(base_groups), "move-groups");
+    let err = assert_structure(&moved_between_groups(), "example-pipeline", &fixture)
+        .expect_err("moving a node between groups must fail the structure assertion");
+    let StructureAssertError::Mismatch(diff) = err else {
+        panic!("a between-groups move is a structural-snapshot mismatch");
+    };
+    let report = diff.to_string();
+    // The diff names the moved node and its group-facet change (publish → ingest).
+    assert!(
+        report.contains("report")
+            && report.contains("group")
+            && report.contains("publish")
+            && report.contains("ingest"),
+        "the diff reports `report`'s group facet moving publish -> ingest: {report}"
+    );
+    // The move is a pure regroup: no node and no edge is added/removed.
+    assert!(
+        !report.contains("added node")
+            && !report.contains("removed node")
+            && !report.contains("added edge")
+            && !report.contains("removed edge"),
+        "moving a node between groups changes only the group facet, not the topology: {report}"
+    );
+
+    // Companion (T51 / C21): a between-groups move is fingerprint-neutral — BOTH
+    // hashes are unchanged.
+    let base_fp = snapshot(&baseline(base_groups));
+    let moved_fp = snapshot(&moved_between_groups());
+    assert_eq!(
+        base_fp.structural_fingerprint(),
+        moved_fp.structural_fingerprint(),
+        "moving a node between existing groups must not move the structural fingerprint (C21)"
+    );
+    assert_eq!(
+        base_fp.policy_fingerprint(),
+        moved_fp.policy_fingerprint(),
+        "moving a node between existing groups must not move the policy hash (C21)"
     );
     let _ = std::fs::remove_file(&fixture);
 }
