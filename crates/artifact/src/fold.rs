@@ -290,14 +290,38 @@ impl AttemptRecord {
     }
 }
 
-/// The run summary the fold assembles from the fields the stream supplies (C22).
+/// The run summary the fold assembles (C22). Its two headline numbers —
+/// [`total_elapsed_ns`](Self::total_elapsed_ns) and
+/// [`critical_path_ns`](Self::critical_path_ns) — together answer whether the run
+/// was limited by its dependency **structure** or by its **resources** (arch.md
+/// `### C22 · Run artifact`).
 ///
-/// The critical-path/structure-vs-resource enrichment is **T43**; this fold
-/// wires only the fields the stream already carries — total elapsed, peak
-/// measured slot residency, retained values, and the abandoned-work-pinned time
-/// and capacity. `critical_path_ns` is populated with the total elapsed as a
-/// conservative lower bound the fold *can* derive from the stream; the true
-/// dependency-aware critical path is T43's.
+/// **`total_elapsed_ns`** is the authoritative monotonic wall of the run: the
+/// maximum event `offset_ns` seen minus the run-start offset (`0`). It is
+/// computed from monotonic offsets **only**, never from the informational `wall`
+/// stamps.
+///
+/// **`critical_path_ns`** (C22 · T43) is the longest **dependency-respecting**
+/// chain of node **executing** contributions. Precisely what it INCLUDES and
+/// EXCLUDES — fixed by `docs/adr/0001-critical-path-definition.md`:
+///
+/// - **INCLUDES** each node's `executing` phase, **summed across all of that
+///   node's attempts** (retries collapse by summing executing — retries are real
+///   re-work on the path).
+/// - **EXCLUDES** ready-wait, permit-wait, and backoff (queueing/idle time is a
+///   *resource* limitation, not dependency structure — counting it would collapse
+///   the structure-vs-resource discrimination).
+/// - **EXCLUDES** abandoned-but-running (zombie) overrun: a node's contribution
+///   ends at its terminal offset; the pinned overrun is reported only in
+///   [`abandoned_pinned_time_ns`](Self::abandoned_pinned_time_ns), never merged
+///   into the path.
+/// - A never-ran (propagated-terminal) node contributes `0` but is still
+///   traversed.
+///
+/// See [`assemble_summary`] for the pure timing-derived longest-path computation
+/// (the fold reconstructs dependency predecessors from `node-ready`/terminal
+/// offsets — it needs no explicit edge list, so the number stays a pure function
+/// of the artifact bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
     total_elapsed_ns: u64,
@@ -995,15 +1019,10 @@ fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary
         }
     }
 
-    // Critical-path *lower bound* the fold can derive without dependency
-    // structure: the longest single attempt total, capped at the run's total
-    // elapsed. The true dependency-aware critical path is T43.
-    let longest_attempt = attempts
-        .iter()
-        .map(AttemptRecord::total_elapsed_ns)
-        .max()
-        .unwrap_or(0);
-    let critical_path_ns = longest_attempt.min(total_elapsed_ns);
+    // Critical-path time (C22 · T43): the longest dependency-respecting chain of
+    // node executing contributions, reconstructed from monotonic offsets alone
+    // (no edge list). See [`critical_path_ns`] and the ADR.
+    let critical_path_ns = critical_path_ns(records, attempts);
 
     RunSummary {
         total_elapsed_ns,
@@ -1013,4 +1032,138 @@ fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary
         abandoned_pinned_time_ns,
         abandoned_pinned_capacity,
     }
+}
+
+/// Compute the **critical-path time** — the longest dependency-respecting chain
+/// of node **executing** contributions (C22 · T43), fixed by
+/// `docs/adr/0001-critical-path-definition.md`.
+///
+/// The fold has **no explicit dependency-edge list**; it reconstructs the
+/// dependency partial order from the stream's monotonic timing, because a node's
+/// `node-ready` record is emitted the instant all of its upstreams reach a
+/// terminal state (arch.md C11). The computation is therefore a pure function of
+/// the artifact bytes — no store, no live graph, no I/O:
+///
+/// 1. **Contribution** `c(v)` — the `executing` phase **summed across all of `v`'s
+///    attempts** (retries collapse). Ready-wait, permit-wait, backoff, and zombie
+///    overrun are excluded (they are not in the `executing` phase). A never-ran
+///    node has no attempts ⇒ `c(v) = 0`.
+/// 2. **Predecessors** — a node `u` may precede `v` on the path iff `u` reached a
+///    terminal state at an offset `≤ v`'s `node-ready` offset (`u` was complete
+///    when `v` became ready, the necessary condition for a dependency).
+/// 3. **Longest path** — `cp(v) = base(v) + c(v)` where
+///    `base(v) = max over qualifying predecessors u of cp(u)` (`0` for a source
+///    with no qualifying predecessor). Critical-path time is `max_v cp(v)`.
+///
+/// **Determinism / ties.** Nodes are processed in ascending `node-ready` offset
+/// (ties broken by node name — a `BTreeMap` key order), so a node's predecessors
+/// are always resolved before it; equal `cp(u)` predecessors are interchangeable,
+/// so ties never affect the result. Folding the same stream twice yields the
+/// identical number.
+///
+/// **Bound.** Because the timing-predecessor relation admits *any* earlier-
+/// completed node as a possible predecessor, the result is an upper bound on the
+/// true dependency chain — it can only over-attribute (never under). For the
+/// canonical shapes (chains, diamonds, independent siblings) it is exact.
+fn critical_path_ns(records: &[Value], attempts: &[AttemptRecord]) -> u64 {
+    // Per-node executing contribution = sum of the `executing` phase across all of
+    // that node's attempts (retries collapse; never-ran nodes contribute 0).
+    let mut contribution: BTreeMap<String, u64> = BTreeMap::new();
+    for a in attempts {
+        let exec = a
+            .phase_durations_ns
+            .get(PHASE_EXECUTING)
+            .copied()
+            .unwrap_or(0);
+        *contribution.entry(a.node.clone()).or_insert(0) += exec;
+    }
+
+    // Per-node readiness offset: when the node became ready (its slowest upstream
+    // reached terminal). Earliest such record per node.
+    let mut ready_at: BTreeMap<String, u64> = BTreeMap::new();
+    // Per-node terminal offset: when the node itself reached a terminal state.
+    // The `node-terminal` record is authoritative; fall back to the node's last
+    // attempt-outcome offset when the stream carried no explicit terminal.
+    let mut terminal_at: BTreeMap<String, u64> = BTreeMap::new();
+    for rec in records {
+        let Some(kind) = kind_of(rec) else { continue };
+        let Some(node) = rec.get("node").and_then(Value::as_str) else {
+            continue;
+        };
+        let off = offset_of(rec);
+        match kind {
+            "node-ready" => {
+                ready_at
+                    .entry(node.to_string())
+                    .and_modify(|o| *o = (*o).min(off))
+                    .or_insert(off);
+            }
+            "node-terminal" => {
+                terminal_at.insert(node.to_string(), off);
+            }
+            "attempt-outcome" => {
+                // Fallback terminal (a stream that omits node-terminal): the
+                // latest attempt-outcome offset for the node.
+                terminal_at
+                    .entry(node.to_string())
+                    .and_modify(|o| *o = (*o).max(off))
+                    .or_insert(off);
+            }
+            _ => {}
+        }
+    }
+
+    // Every node with a contribution, a readiness offset, or a terminal is a
+    // vertex. A node with no node-ready record (e.g. a never-ran propagated node,
+    // or a source that recorded no readiness) is treated as ready at its terminal
+    // offset, or at 0 when it has neither — so it starts a fresh chain.
+    let mut nodes: BTreeMap<String, ()> = BTreeMap::new();
+    for n in contribution.keys() {
+        nodes.insert(n.clone(), ());
+    }
+    for n in ready_at.keys() {
+        nodes.insert(n.clone(), ());
+    }
+    for n in terminal_at.keys() {
+        nodes.insert(n.clone(), ());
+    }
+
+    let ready_of = |n: &str| -> u64 {
+        ready_at
+            .get(n)
+            .copied()
+            .or_else(|| terminal_at.get(n).copied())
+            .unwrap_or(0)
+    };
+
+    // Forward pass in ascending readiness order (BTreeMap breaks ties by name), so
+    // every node's qualifying predecessors are resolved before it.
+    let mut order: Vec<String> = nodes.keys().cloned().collect();
+    order.sort_by(|x, y| ready_of(x).cmp(&ready_of(y)).then_with(|| x.cmp(y)));
+
+    let mut cp: BTreeMap<String, u64> = BTreeMap::new();
+    let mut best = 0u64;
+    for v in &order {
+        let ready_v = ready_of(v);
+        // base(v) = max cp(u) over predecessors u terminal at/before v became
+        // ready (u ≠ v). u must already be resolved (its readiness ≤ v's, since a
+        // terminal ≥ its own readiness and terminal(u) ≤ ready(v) ⇒ ready(u) ≤
+        // ready(v), so the ascending order guarantees it).
+        let mut base = 0u64;
+        for (u, &cp_u) in &cp {
+            if u == v {
+                continue;
+            }
+            if let Some(&term_u) = terminal_at.get(u) {
+                if term_u <= ready_v {
+                    base = base.max(cp_u);
+                }
+            }
+        }
+        let c_v = contribution.get(v).copied().unwrap_or(0);
+        let cp_v = base + c_v;
+        cp.insert(v.clone(), cp_v);
+        best = best.max(cp_v);
+    }
+    best
 }
