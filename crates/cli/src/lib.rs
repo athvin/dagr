@@ -28,11 +28,15 @@ pub mod driver;
 pub mod graph;
 pub mod logging;
 pub mod signals;
+pub mod structure_snapshot;
 pub mod temp;
 
 pub use graph::{
     emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
     GRAPH_SCHEMA_VERSION,
+};
+pub use structure_snapshot::{
+    assert_structure, bless_structure, StructureAssertError, StructureDiff, StructureSnapshot,
 };
 
 #[cfg(test)]

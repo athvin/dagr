@@ -136,8 +136,12 @@ fn test_provenance() -> BuildProvenance {
 /// `ingest`) feeding a two-input `report` node (in `publish`).
 fn baseline(group_of: impl Fn(&str) -> Option<&'static str>) -> Pipeline {
     let mut flow = Flow::new();
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, group_of("rows"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        group_of("rows"),
+        NodePolicy::new(),
+    );
     let schema = flow.register_source_named::<MakeSchema>(
         "schema",
         &MakeSchema,
@@ -172,8 +176,12 @@ fn baseline_reordered() -> Pipeline {
         Some("ingest"),
         NodePolicy::new(),
     );
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, Some("ingest"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
     let _report = flow.register_named::<BuildReport, _>(
         "report",
         &BuildReport,
@@ -187,8 +195,12 @@ fn baseline_reordered() -> Pipeline {
 /// Baseline + one extra node (`digest`) consuming `report` (with its edge).
 fn added_node() -> Pipeline {
     let mut flow = Flow::new();
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, Some("ingest"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
     let schema = flow.register_source_named::<MakeSchema>(
         "schema",
         &MakeSchema,
@@ -215,8 +227,12 @@ fn added_node() -> Pipeline {
 /// Baseline with `report`'s node **renamed** to `summary`, wiring unchanged.
 fn renamed_node() -> Pipeline {
     let mut flow = Flow::new();
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, Some("ingest"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
     let schema = flow.register_source_named::<MakeSchema>(
         "schema",
         &MakeSchema,
@@ -237,8 +253,12 @@ fn renamed_node() -> Pipeline {
 /// unchanged, only an effective-policy field differs.
 fn policy_changed() -> Pipeline {
     let mut flow = Flow::new();
-    let rows =
-        flow.register_source_named::<MakeRows>("rows", &MakeRows, Some("ingest"), NodePolicy::new());
+    let rows = flow.register_source_named::<MakeRows>(
+        "rows",
+        &MakeRows,
+        Some("ingest"),
+        NodePolicy::new(),
+    );
     let schema = flow.register_source_named::<MakeSchema>(
         "schema",
         &MakeSchema,
@@ -341,7 +361,11 @@ fn rebuild_does_not_fail() {
         &baseline(base_groups),
         "example-pipeline",
         "2999-01-01T00:00:00Z",
-        &BuildProvenance::new("9.9.9", "ffffffffffffffffffffffffffffffffffffffff", "fnv1a-64:ffffffffffffffff"),
+        &BuildProvenance::new(
+            "9.9.9",
+            "ffffffffffffffffffffffffffffffffffffffff",
+            "fnv1a-64:ffffffffffffffff",
+        ),
     )
     .unwrap()
     .to_canonical_string();
@@ -374,7 +398,7 @@ fn adding_a_node_fails_with_a_diff() {
         "the diff names the added node `digest`: {report}"
     );
     assert!(
-        report.contains("added") || report.contains("+"),
+        report.contains("added") || report.contains('+'),
         "the diff marks `digest` as added: {report}"
     );
     // No unrelated node is reported as changed.
@@ -398,7 +422,7 @@ fn removing_a_node_fails_with_a_diff() {
     };
     let report = diff.to_string();
     assert!(
-        report.contains("digest") && (report.contains("removed") || report.contains("-")),
+        report.contains("digest") && (report.contains("removed") || report.contains('-')),
         "the diff names `digest` as removed: {report}"
     );
     let _ = std::fs::remove_file(&fixture);
@@ -619,7 +643,10 @@ fn no_pipeline_writes_its_own_harness() {
 #[test]
 fn missing_fixture_is_an_io_error_not_a_mismatch() {
     let mut path = std::env::temp_dir();
-    path.push(format!("dagr-t61-absent-{}.snapshot.json", std::process::id()));
+    path.push(format!(
+        "dagr-t61-absent-{}.snapshot.json",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&path);
     let err = assert_structure(&baseline(base_groups), "example-pipeline", &path)
         .expect_err("a missing fixture is an error");
