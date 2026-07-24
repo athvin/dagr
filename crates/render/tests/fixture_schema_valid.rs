@@ -2,7 +2,7 @@
 //! artifact. Written first, TDD.
 //!
 //! The renderer reads a graph artifact conforming to the published C20/T39
-//! schema (arch.md C24; the T46 DoD). This proves the checked-in 30-node fixture
+//! schema (arch.md C24; the T46 `DoD`). This proves the checked-in 30-node fixture
 //! this ticket renders is itself schema-valid — it validates against
 //! `schemas/graph/v1.schema.json` via the published T39 helper
 //! (`dagr_artifact::schema::validate_value`) — and, for teeth, that a corrupted

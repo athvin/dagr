@@ -18,10 +18,10 @@
 //! `fixture_schema_valid.rs`, gated behind the `schema-validation` feature so the
 //! CI-/dev-scoped `jsonschema` validator is pulled only by CI's dedicated step.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use dagr_render::{render_dot, render_mermaid, GraphArtifact, RenderError};
+use dagr_render::{render_dot, render_mermaid, EdgeKind, GraphArtifact, Node, RenderError};
 
 // === Fixture loading =========================================================
 
@@ -114,8 +114,9 @@ fn mermaid_node_labels(mmd: &str) -> Vec<String> {
     let mut seen = Vec::new();
     for l in mmd.lines() {
         let l = l.trim();
-        // A node declaration line: `id["LABEL"]` with no arrow.
-        if l.contains("-->") || l.contains("-.->") {
+        // A node declaration line: `id["LABEL"]` with no arrow. Exclude subgraph
+        // headers (`subgraph group_x["title"]`), which also carry `["..."]`.
+        if l.contains("-->") || l.contains("-.->") || l.starts_with("subgraph ") {
             continue;
         }
         if let Some(open) = l.find("[\"") {
@@ -143,7 +144,7 @@ fn every_node_appears_in_dot() {
 
     let declared: Vec<String> = dot_node_labels(&dot);
     let declared_set: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
-    let expected: BTreeSet<&str> = art.nodes().iter().map(|n| n.name()).collect();
+    let expected: BTreeSet<&str> = art.nodes().iter().map(Node::name).collect();
 
     assert_eq!(
         declared.len(),
@@ -165,7 +166,7 @@ fn every_node_appears_in_mermaid() {
 
     let declared = mermaid_node_labels(&mmd);
     let declared_set: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
-    let expected: BTreeSet<&str> = art.nodes().iter().map(|n| n.name()).collect();
+    let expected: BTreeSet<&str> = art.nodes().iter().map(Node::name).collect();
 
     assert_eq!(
         declared.len(),
@@ -231,10 +232,10 @@ fn data_and_ordering_edges_styled_distinctly_in_dot() {
     let mut ordering_pairs = BTreeSet::new();
     for e in art.edges() {
         match e.kind() {
-            dagr_render::EdgeKind::Data => {
+            EdgeKind::Data => {
                 data_pairs.insert((e.from().to_string(), e.to().to_string()));
             }
-            dagr_render::EdgeKind::Ordering => {
+            EdgeKind::Ordering => {
                 ordering_pairs.insert((e.from().to_string(), e.to().to_string()));
             }
         }
@@ -286,7 +287,10 @@ fn data_and_ordering_edges_styled_distinctly_in_dot() {
         .filter(|(_, t, _)| t == "publish_05")
         .filter(|(f, t, _)| ordering_pairs.contains(&(f.clone(), t.clone())))
         .collect();
-    assert!(!p5_data.is_empty(), "publish_05 must have a data edge in DOT");
+    assert!(
+        !p5_data.is_empty(),
+        "publish_05 must have a data edge in DOT"
+    );
     assert!(
         !p5_ord.is_empty(),
         "publish_05 must have an ordering edge in DOT"
@@ -306,12 +310,12 @@ fn data_and_ordering_edges_styled_distinctly_in_mermaid() {
     let data_count = art
         .edges()
         .iter()
-        .filter(|e| e.kind() == dagr_render::EdgeKind::Data)
+        .filter(|e| e.kind() == EdgeKind::Data)
         .count();
     let ordering_count = art
         .edges()
         .iter()
-        .filter(|e| e.kind() == dagr_render::EdgeKind::Ordering)
+        .filter(|e| e.kind() == EdgeKind::Ordering)
         .count();
 
     // Documented Mermaid forms: data edges are SOLID (`-->`, possibly labelled);
@@ -343,7 +347,10 @@ fn data_and_ordering_edges_styled_distinctly_in_mermaid() {
         p5_dashed,
         "publish_05 must have a dashed ordering link in Mermaid"
     );
-    assert!(p5_solid, "publish_05 must have a solid data link in Mermaid");
+    assert!(
+        p5_solid,
+        "publish_05 must have a solid data link in Mermaid"
+    );
 }
 
 /// **Carried type name on data edges.** Each data edge is labelled with the
@@ -357,14 +364,12 @@ fn data_edges_labelled_with_carried_type_ordering_unlabelled() {
 
     for e in art.edges() {
         match e.kind() {
-            dagr_render::EdgeKind::Data => {
+            EdgeKind::Data => {
                 let ty = e.type_name().expect("data edge carries a type name");
                 // DOT: the data edge line carries `label="<ty>"`.
                 let dot_line = dot
                     .lines()
-                    .find(|l| {
-                        l.contains(&format!("\"{}\" -> \"{}\"", e.from(), e.to()))
-                    })
+                    .find(|l| l.contains(&format!("\"{}\" -> \"{}\"", e.from(), e.to())))
                     .unwrap_or_else(|| panic!("DOT missing data edge {}->{}", e.from(), e.to()));
                 assert!(
                     dot_line.contains(&format!("label=\"{ty}\"")),
@@ -375,9 +380,7 @@ fn data_edges_labelled_with_carried_type_ordering_unlabelled() {
                 // Mermaid: the link carries the type text.
                 let mmd_line = mmd
                     .lines()
-                    .find(|l| {
-                        l.contains(&format!("{} --", e.from())) && l.contains(e.to())
-                    })
+                    .find(|l| l.contains(&format!("{} --", e.from())) && l.contains(e.to()))
                     .unwrap_or_else(|| {
                         panic!("Mermaid missing data edge {}->{}", e.from(), e.to())
                     });
@@ -388,7 +391,7 @@ fn data_edges_labelled_with_carried_type_ordering_unlabelled() {
                     e.to()
                 );
             }
-            dagr_render::EdgeKind::Ordering => {
+            EdgeKind::Ordering => {
                 assert!(
                     e.type_name().is_none(),
                     "an ordering edge carries no type name"
@@ -397,7 +400,9 @@ fn data_edges_labelled_with_carried_type_ordering_unlabelled() {
                 let dot_line = dot
                     .lines()
                     .find(|l| l.contains(&format!("\"{}\" -> \"{}\"", e.from(), e.to())))
-                    .unwrap_or_else(|| panic!("DOT missing ordering edge {}->{}", e.from(), e.to()));
+                    .unwrap_or_else(|| {
+                        panic!("DOT missing ordering edge {}->{}", e.from(), e.to())
+                    });
                 assert!(
                     !dot_line.contains("label="),
                     "DOT ordering edge {}->{} must carry no label: {dot_line}",
@@ -418,7 +423,7 @@ fn groups_render_as_clusters_in_dot() {
     let dot = render_dot(&art);
 
     // Expected group → member set from the artifact.
-    let mut groups: std::collections::BTreeMap<String, BTreeSet<String>> = Default::default();
+    let mut groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut ungrouped: BTreeSet<String> = BTreeSet::new();
     for n in art.nodes() {
         if n.group().is_empty() {
@@ -439,8 +444,7 @@ fn groups_render_as_clusters_in_dot() {
     let mut depth: usize = 0;
     let mut max_depth: usize = 0;
     let mut current_cluster: Vec<String> = Vec::new();
-    let mut cluster_members: std::collections::BTreeMap<String, BTreeSet<String>> =
-        Default::default();
+    let mut cluster_members: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut nodes_in_a_cluster: BTreeSet<String> = BTreeSet::new();
 
     for raw in dot.lines() {
@@ -498,7 +502,7 @@ fn groups_render_as_clusters_in_mermaid() {
     let art = thirty_node();
     let mmd = render_mermaid(&art);
 
-    let mut groups: std::collections::BTreeMap<String, BTreeSet<String>> = Default::default();
+    let mut groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut ungrouped: BTreeSet<String> = BTreeSet::new();
     for n in art.nodes() {
         if n.group().is_empty() {
@@ -516,7 +520,7 @@ fn groups_render_as_clusters_in_mermaid() {
     let mut depth: usize = 0;
     let mut max_depth: usize = 0;
     let mut stack: Vec<String> = Vec::new();
-    let mut members: std::collections::BTreeMap<String, BTreeSet<String>> = Default::default();
+    let mut members: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut nodes_in_a_subgraph: BTreeSet<String> = BTreeSet::new();
 
     for raw in mmd.lines() {
@@ -635,17 +639,18 @@ fn renders_a_real_t40_emitted_artifact_with_no_producing_binary() {
 fn rejects_a_schema_invalid_artifact() {
     let raw = std::fs::read_to_string(fixture_path("schema-invalid.graph.json"))
         .expect("invalid fixture readable");
-    let err = GraphArtifact::from_json_str(&raw)
-        .expect_err("a schema-invalid artifact must be rejected");
-    match err {
-        RenderError::Malformed(msg) => {
-            assert!(
-                msg.contains("output_type_name"),
-                "the diagnostic must name the missing field, got: {msg}"
-            );
-        }
-        other => panic!("expected a Malformed diagnostic, got {other:?}"),
-    }
+    let err =
+        GraphArtifact::from_json_str(&raw).expect_err("a schema-invalid artifact must be rejected");
+    let RenderError::Malformed(msg) = &err;
+    assert!(
+        msg.contains("output_type_name"),
+        "the diagnostic must name the missing field, got: {msg}"
+    );
+    // The Display form also frames it as a schema failure, naming the schema.
+    assert!(
+        err.to_string().contains("schemas/graph/v1.schema.json"),
+        "the rendered diagnostic should reference the published schema"
+    );
 }
 
 /// **Stable declared names only.** A node whose informational `type_name` debug

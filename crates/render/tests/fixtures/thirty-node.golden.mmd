@@ -1,0 +1,73 @@
+%% Rendered by dagr-render (C24) from a graph artifact.
+%% Data edges: solid, labelled with the carried type. Ordering edges: dashed, unlabelled.
+flowchart TB
+  subgraph group_ingest["ingest"]
+    ingest_01["ingest_01"]
+    ingest_02["ingest_02"]
+    ingest_03["ingest_03"]
+    ingest_04["ingest_04"]
+    ingest_05["ingest_05"]
+    ingest_06["ingest_06"]
+  end
+  subgraph group_publish["publish"]
+    publish_01["publish_01"]
+    publish_02["publish_02"]
+    publish_03["publish_03"]
+    publish_04["publish_04"]
+    publish_05["publish_05"]
+    publish_06["publish_06"]
+  end
+  subgraph group_report["report"]
+    report_archive["report_archive"]
+    report_audit["report_audit"]
+    report_index["report_index"]
+    report_metrics["report_metrics"]
+    report_render["report_render"]
+    report_summary["report_summary"]
+  end
+  subgraph group_transform["transform"]
+    transform_01["transform_01"]
+    transform_02["transform_02"]
+    transform_03["transform_03"]
+    transform_04["transform_04"]
+    transform_05["transform_05"]
+    transform_06["transform_06"]
+    transform_07["transform_07"]
+    transform_08["transform_08"]
+    transform_09["transform_09"]
+    transform_10["transform_10"]
+  end
+  cleanup["cleanup"]
+  heartbeat["heartbeat"]
+  ingest_01 -- "Raw1" --> transform_01
+  ingest_02 -- "Raw2" --> transform_02
+  ingest_03 -- "Raw3" --> transform_03
+  ingest_04 -- "Raw4" --> transform_04
+  ingest_05 -- "Raw5" --> transform_05
+  ingest_06 -- "Raw6" --> transform_06
+  publish_01 -- "Published01" --> publish_05
+  publish_02 -- "Published02" --> publish_05
+  publish_03 -.-> publish_05
+  publish_04 -.-> publish_06
+  publish_05 -.-> publish_06
+  publish_05 -- "PublishedAgg" --> report_metrics
+  publish_06 -.-> report_render
+  report_archive -.-> cleanup
+  report_audit -- "AuditLog" --> report_summary
+  report_metrics -- "Metrics" --> report_render
+  report_metrics -- "Metrics" --> report_summary
+  report_render -- "ReportDoc" --> report_archive
+  report_render -- "ReportDoc" --> report_audit
+  report_render -- "ReportDoc" --> report_index
+  transform_01 -- "Clean1" --> transform_07
+  transform_01 -- "Clean1" --> transform_10
+  transform_02 -- "Clean2" --> transform_07
+  transform_03 -- "Clean3" --> transform_08
+  transform_04 -- "Clean4" --> transform_08
+  transform_04 -- "Clean4" --> transform_10
+  transform_05 -- "Clean5" --> transform_09
+  transform_06 -- "Clean6" --> transform_09
+  transform_07 -- "Merged07" --> publish_01
+  transform_08 -- "Merged08" --> publish_02
+  transform_09 -- "Merged09" --> publish_03
+  transform_10 -- "Merged10" --> publish_04
