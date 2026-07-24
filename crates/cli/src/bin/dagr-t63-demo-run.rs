@@ -5,7 +5,7 @@
 //! The M4 done-when — *"a pipeline killed mid-run resumes and skips completed
 //! durable work"* (arch.md Build order) — is proven end-to-end **through the shipped
 //! `drive()` loop**, not at node grain. This binary is the run under kill and the
-//! resume that follows: it assembles the [reference pipeline](dagr_cli::t63_demo), a
+//! resume that follows: it assembles the reference pipeline (`dagr_cli::t63_demo`), a
 //! real durable stage boundary + a scratch-checkpointing node + a teardown, and
 //! drives it through the **real** T24 driver against a real on-disk event stream. The
 //! integration test (`crates/cli/tests/m4_demo_kill_resume_review.rs`) launches it,
@@ -15,9 +15,9 @@
 //! It composes **already-merged** M4 machinery through the shipped seams (adds no
 //! engine capability): the C18 scratch store and the driver's T63 scratch wiring, the
 //! C27 durable-output contract, the real `drive()` loop, the real C27
-//! [`resume_verb`](dagr_cli::contract::resume_verb), and the T54b
-//! [`carry_forward`](dagr_core::scratch::ScratchStore::carry_forward). It ships in no
-//! released binary; it is checked-in scaffolding.
+//! `resume_verb` (`dagr_cli::contract`), and the T54b
+//! `ScratchStore::carry_forward` (`dagr_core::scratch`). It ships in no released
+//! binary; it is checked-in scaffolding.
 //!
 //! # Determinism contract (no fixed sleeps)
 //!
@@ -175,38 +175,45 @@ fn run_mode(base: &str, run_id: &str, marker: &str) -> ExitCode {
 
 // === resume mode: real resume_verb + carry-forward + drive the must-run set ===
 
+/// Read the prior run's artifact bytes for resume. A prior *resumed* run left a
+/// complete, lineage-linked `run.json` (folded stream + resume-verb overlay); resume
+/// that directly so multi-generation lineage carries the original root. The original
+/// *killed* run has only its surviving `events.jsonl` — fold it (the
+/// crashed/interrupted-run path a resume reads, the real fold).
+fn read_prior_artifact(base: &str, prior: &str, node_roster: &[String]) -> io::Result<Vec<u8>> {
+    if let Ok(bytes) = std::fs::read(run_artifact_path(base, prior)) {
+        return Ok(bytes);
+    }
+    let stream = std::fs::read(stream_path(base, prior))?;
+    fold_stream(&stream, node_roster)
+        .map(|a| a.to_canonical_json().into_bytes())
+        .map_err(|e| io::Error::other(format!("fold prior stream: {e}")))
+}
+
 /// Resume the killed run through the **real** `resume_verb`, carry scratch forward
 /// for the must-run set, drive the must-run subset through the real `drive()` loop
 /// with the satisfied-from-prior nodes pre-seeded and the demanded durable producer
 /// rehydrated into its consumer's slot, then write the resumed artifact and a JSON
 /// result the test asserts on.
+#[allow(
+    clippy::too_many_lines,
+    reason = "resume_mode is one linear sequence — read prior, run the real resume verb, \
+              carry scratch forward, build the must-run subset, drive it, write the resumed \
+              artifact, emit the result — whose steps share the plan and would only be \
+              obscured by fragmenting across functions"
+)]
 fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCode {
     let pipeline = assemble(base_groups, ConsumerFrom::Expensive);
 
     let node_roster: Vec<String> = pipeline.nodes().map(|n| n.name().to_string()).collect();
 
-    // (1) Read the prior run's artifact bytes. A prior *resumed* run left a complete,
-    //     lineage-linked `run.json` (folded stream + resume-verb overlay); resume that
-    //     directly so multi-generation lineage carries the original root. The original
-    //     *killed* run has only its surviving `events.jsonl` — fold it (the
-    //     crashed/interrupted-run path a resume reads, the real fold).
-    let prior_bytes = match std::fs::read(run_artifact_path(base, prior)) {
+    // (1) Read the prior run's artifact bytes (a prior resumed `run.json`, or the
+    //     killed run's folded stream — see `read_prior_artifact`).
+    let prior_bytes = match read_prior_artifact(base, prior, &node_roster) {
         Ok(bytes) => bytes,
-        Err(_) => {
-            let prior_stream = match std::fs::read(stream_path(base, prior)) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    eprintln!("cannot read prior run: {e}");
-                    return ExitCode::from(2);
-                }
-            };
-            match fold_stream(&prior_stream, &node_roster) {
-                Ok(a) => a.to_canonical_json().into_bytes(),
-                Err(e) => {
-                    eprintln!("cannot fold prior stream: {e}");
-                    return ExitCode::from(2);
-                }
-            }
+        Err(e) => {
+            eprintln!("cannot read prior run: {e}");
+            return ExitCode::from(2);
         }
     };
 
@@ -273,8 +280,7 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
         .map(|n| (n.clone(), plan.rehydrate().get(n).cloned()))
         .collect();
 
-    let consumer_capture: dagr_cli::t63_demo::ConsumerCapture =
-        Arc::new(Mutex::new(None));
+    let consumer_capture: dagr_cli::t63_demo::ConsumerCapture = Arc::new(Mutex::new(None));
     let (run_plan, _ordering) = build_runner_set(
         &pipeline,
         ConsumerFrom::Expensive,
@@ -322,7 +328,8 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
     //     the resume-verb header's lineage + tool version + the durable references it
     //     copied forward — so a second-generation resume reads a self-contained,
     //     lineage-correct prior artifact (the multi-generation carry-forward).
-    let resumed_run_json = complete_resumed_artifact(&capture.bytes(), &node_roster, &resumed_artifact);
+    let resumed_run_json =
+        complete_resumed_artifact(&capture.bytes(), &node_roster, &resumed_artifact);
     let artifact_path = run_artifact_path(base, new);
     if let Some(parent) = artifact_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -449,7 +456,9 @@ fn complete_resumed_artifact(
     // artifact is lineage-correct and gate-comparable for a next-generation resume.
     if let (Some(out_header), Some(rv_header)) = (
         out.get_mut("header").and_then(|h| h.as_object_mut()),
-        resume_verb_artifact.get("header").and_then(|h| h.as_object()),
+        resume_verb_artifact
+            .get("header")
+            .and_then(|h| h.as_object()),
     ) {
         for field in [
             "resume_lineage",
@@ -471,7 +480,9 @@ fn complete_resumed_artifact(
     // node-terminal, but the reference lives in the resume-verb record).
     if let (Some(out_attempts), Some(rv_attempts)) = (
         out.get_mut("attempts").and_then(|a| a.as_array_mut()),
-        resume_verb_artifact.get("attempts").and_then(|a| a.as_array()),
+        resume_verb_artifact
+            .get("attempts")
+            .and_then(|a| a.as_array()),
     ) {
         for rv in rv_attempts {
             let (Some(node), Some(dref)) = (

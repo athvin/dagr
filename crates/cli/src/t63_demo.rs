@@ -320,8 +320,12 @@ pub fn assemble(
     );
 
     // The teardown covering the `inmem` producer (C17).
-    let _teardown =
-        flow.register_teardown_named("teardown", &Teardown, &[inmem.ordering()], NodePolicy::new());
+    let _teardown = flow.register_teardown_named(
+        "teardown",
+        &Teardown,
+        &[inmem.ordering()],
+        NodePolicy::new(),
+    );
 
     flow.finish()
 }
@@ -438,12 +442,6 @@ where
     }
 }
 
-/// A type-erased output slot handle, so the builder can pre-fill a rehydrated slot.
-enum SlotHandle {
-    Blob(Arc<Slot<Blob>>),
-    Unit(Arc<Slot<Unit>>),
-}
-
 /// The knobs one demo `drive()` run needs beyond the assembled pipeline — the
 /// checkpoint hold/marker (first run), the satisfied-from-prior `omit` set + the
 /// rehydrated `prefill` slots (resume), and the optional consumer capture.
@@ -462,202 +460,198 @@ pub struct DemoRun<'a> {
     pub consumer_capture: Option<ConsumerCapture>,
 }
 
+/// The slots the demo's nodes write to, keyed by name — Blob-output producers and
+/// Unit-output effect nodes, built with each node's real consumer count.
+struct DemoSlots {
+    expensive: Arc<Slot<Blob>>,
+    inmem: Arc<Slot<Blob>>,
+    consumer: Arc<Slot<Blob>>,
+    checkpoint: Arc<Slot<Unit>>,
+    publish: Arc<Slot<Unit>>,
+    cleanup: Arc<Slot<Unit>>,
+    teardown: Arc<Slot<Unit>>,
+}
+
+impl DemoSlots {
+    /// Build every node's slot. `demanded` is the producer the consumer reads (so it
+    /// carries one consumer for its residency count) when the consumer is present.
+    fn new(demanded: &str, consumer_present: bool) -> Self {
+        let ledger = ResidencyLedger::new();
+        let blob = |name: &str, consumers: u32| {
+            Arc::new(Slot::new(
+                NodeId::from_name(name),
+                name,
+                consumers,
+                false,
+                0,
+                Arc::clone(&ledger),
+            ))
+        };
+        let unit = |name: &str| {
+            Arc::new(Slot::new(
+                NodeId::from_name(name),
+                name,
+                0,
+                false,
+                0,
+                Arc::clone(&ledger),
+            ))
+        };
+        let demand = |name: &str| u32::from(name == demanded && consumer_present);
+        Self {
+            expensive: blob("expensive", demand("expensive")),
+            inmem: blob("inmem", demand("inmem")),
+            consumer: blob("consumer", 0),
+            checkpoint: unit("checkpoint"),
+            publish: unit("publish"),
+            cleanup: unit("cleanup"),
+            teardown: unit("teardown"),
+        }
+    }
+}
+
 /// Build the demo's runner map + ordering map for `drive()` over the assembled
 /// pipeline. See [`DemoRun`] for the per-run knobs.
+///
+/// # Panics
+///
+/// Panics on a demo-authoring error only: a rehydrated producer slot that is somehow
+/// already filled — a mistake in the demo's own wiring, surfaced loudly.
 #[must_use]
 pub fn build_runner_set(
     pipeline: &Pipeline,
     consumer_from: ConsumerFrom,
     run: &DemoRun<'_>,
 ) -> (RunPlan, BTreeMap<String, Vec<String>>) {
-    let hold_checkpoint = run.hold_checkpoint;
-    let ready_marker = &run.ready_marker;
     let omit: &[&str] = run.omit;
-    let prefill: &BTreeMap<String, Blob> = run.prefill;
-    let consumer_capture = &run.consumer_capture;
-    let ledger = ResidencyLedger::new();
-
-    // Consumer count per producer (for the residency ledger) — `consumer` reads one.
+    let include = |name: &str| !omit.contains(&name);
     let demanded = match consumer_from {
         ConsumerFrom::Expensive => "expensive",
         ConsumerFrom::InMemory => "inmem",
     };
-    let consumers_of = |node: &str| -> u32 {
-        u32::from(node == demanded && !omit.contains(&"consumer"))
-    };
-
-    let blob_slot = |name: &str| {
-        Arc::new(Slot::new(
-            NodeId::from_name(name),
-            name,
-            consumers_of(name),
-            false,
-            0,
-            Arc::clone(&ledger),
-        ))
-    };
-    let unit_slot = |name: &str| {
-        Arc::new(Slot::new(
-            NodeId::from_name(name),
-            name,
-            0,
-            false,
-            0,
-            Arc::clone(&ledger),
-        ))
-    };
-
-    let mut slots: BTreeMap<String, SlotHandle> = BTreeMap::new();
-    slots.insert("expensive".into(), SlotHandle::Blob(blob_slot("expensive")));
-    slots.insert("inmem".into(), SlotHandle::Blob(blob_slot("inmem")));
-    slots.insert("consumer".into(), SlotHandle::Blob(blob_slot("consumer")));
-    slots.insert("checkpoint".into(), SlotHandle::Unit(unit_slot("checkpoint")));
-    slots.insert("publish".into(), SlotHandle::Unit(unit_slot("publish")));
-    slots.insert("cleanup".into(), SlotHandle::Unit(unit_slot("cleanup")));
+    let s = DemoSlots::new(demanded, include("consumer"));
 
     // Pre-fill any rehydrated producer slot so a re-running consumer reads the
     // rehydrated value WITHOUT the producer re-executing (the resume seam).
-    for (node, value) in prefill {
-        if let Some(SlotHandle::Blob(slot)) = slots.get(node) {
-            slot.fill(value.clone())
-                .expect("a rehydrated producer slot fills exactly once");
-        }
+    for (node, value) in run.prefill {
+        let slot = match node.as_str() {
+            "expensive" => &s.expensive,
+            "inmem" => &s.inmem,
+            _ => continue,
+        };
+        slot.fill(value.clone())
+            .expect("a rehydrated producer slot fills exactly once");
     }
-
-    let blob_ref = |name: &str| match slots.get(name) {
-        Some(SlotHandle::Blob(s)) => s.shared_ref(),
-        _ => panic!("`{name}` is not a Blob slot"),
-    };
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    let include = |name: &str| !omit.contains(&name);
-
-    if include("expensive") {
-        let SlotHandle::Blob(slot) = &slots["expensive"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "expensive".into(),
-            Box::new(SourceRunner {
-                name: "expensive".into(),
-                task: Some(Expensive),
-                slot: Arc::clone(slot),
-                // The durable reference the driver records (T63 seam) — the value the
-                // stage boundary serializes.
-                durable_reference: Some(Blob(STAGE_VALUE.to_string()).serialize_reference()),
-            }),
-        );
-    }
-    if include("inmem") {
-        let SlotHandle::Blob(slot) = &slots["inmem"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "inmem".into(),
-            Box::new(SourceRunner {
-                name: "inmem".into(),
-                task: Some(InMemory),
-                slot: Arc::clone(slot),
-                durable_reference: None,
-            }),
-        );
-    }
-    if include("checkpoint") {
-        let SlotHandle::Unit(slot) = &slots["checkpoint"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "checkpoint".into(),
-            Box::new(SourceRunner {
-                name: "checkpoint".into(),
-                task: Some(Checkpoint {
-                    ready_marker: ready_marker.clone(),
-                    hold: hold_checkpoint,
-                }),
-                slot: Arc::clone(slot),
-                durable_reference: None,
-            }),
-        );
-    }
-    if include("consumer") {
-        let SlotHandle::Blob(slot) = &slots["consumer"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "consumer".into(),
-            Box::new(MapRunner {
-                name: "consumer".into(),
-                task: Some(Consumer {
-                    received: consumer_capture.clone(),
-                }),
-                upstream: blob_ref(demanded),
-                slot: Arc::clone(slot),
-            }),
-        );
-    }
-    if include("publish") {
-        let SlotHandle::Unit(slot) = &slots["publish"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "publish".into(),
-            Box::new(SourceRunner {
-                name: "publish".into(),
-                task: Some(Effect),
-                slot: Arc::clone(slot),
-                durable_reference: None,
-            }),
-        );
-    }
-    if include("cleanup") {
-        let SlotHandle::Unit(slot) = &slots["cleanup"] else {
-            unreachable!()
-        };
-        runners.insert(
-            "cleanup".into(),
-            Box::new(SourceRunner {
-                name: "cleanup".into(),
-                task: Some(Effect),
-                slot: Arc::clone(slot),
-                durable_reference: None,
-            }),
-        );
-    }
-    // The teardown runner is always present (the driver runs it in the teardown
-    // phase regardless of the must-run subset).
-    let teardown_slot = unit_slot("teardown");
-    runners.insert(
-        "teardown".into(),
-        Box::new(SourceRunner {
-            name: "teardown".into(),
-            task: Some(Teardown),
-            slot: teardown_slot,
-            durable_reference: None,
-        }),
-    );
-
-    // Run-level ordering upstreams (the driver seeds the readiness tracker with
-    // these for consume-nothing nodes; a data node's upstreams come from its edges).
-    // Only include ordering for nodes present in this run.
-    let mut ordering: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let add_ordering = |ordering: &mut BTreeMap<String, Vec<String>>, node: &str, ups: &[&str]| {
-        if include(node) {
-            let present: Vec<String> = ups
-                .iter()
-                .filter(|u| include(u))
-                .map(|u| (*u).to_string())
-                .collect();
-            if !present.is_empty() {
-                ordering.insert(node.to_string(), present);
-            }
+    let mut add = |name: &str, runner: Box<dyn NodeRunner>| {
+        if include(name) {
+            runners.insert(name.to_string(), runner);
         }
     };
-    add_ordering(&mut ordering, "checkpoint", &["expensive"]);
-    add_ordering(&mut ordering, "consumer", &["checkpoint"]);
-    add_ordering(&mut ordering, "cleanup", &["publish", "checkpoint"]);
+    add(
+        "expensive",
+        blob_source("expensive", Expensive, Arc::clone(&s.expensive), true),
+    );
+    add(
+        "inmem",
+        blob_source("inmem", InMemory, Arc::clone(&s.inmem), false),
+    );
+    add(
+        "publish",
+        unit_source("publish", Effect, Arc::clone(&s.publish)),
+    );
+    add(
+        "cleanup",
+        unit_source("cleanup", Effect, Arc::clone(&s.cleanup)),
+    );
+    add(
+        "checkpoint",
+        unit_source(
+            "checkpoint",
+            Checkpoint {
+                ready_marker: run.ready_marker.clone(),
+                hold: run.hold_checkpoint,
+            },
+            Arc::clone(&s.checkpoint),
+        ),
+    );
+    let upstream = if demanded == "inmem" {
+        s.inmem.shared_ref()
+    } else {
+        s.expensive.shared_ref()
+    };
+    add(
+        "consumer",
+        Box::new(MapRunner {
+            name: "consumer".into(),
+            task: Some(Consumer {
+                received: run.consumer_capture.clone(),
+            }),
+            upstream,
+            slot: Arc::clone(&s.consumer),
+        }),
+    );
+    // The teardown runner is always present (the driver runs it in the teardown
+    // phase regardless of the must-run subset), so it is inserted unconditionally.
+    runners.insert(
+        "teardown".into(),
+        unit_source("teardown", Teardown, Arc::clone(&s.teardown)),
+    );
 
+    let ordering = build_ordering(&include);
     (
         RunPlan::with_ordering(pipeline.clone(), runners, ordering.clone()),
         ordering,
     )
+}
+
+/// A Blob-output source runner; `durable` records the [`Expensive`] reference (T63).
+fn blob_source<T>(name: &str, task: T, slot: Arc<Slot<Blob>>, durable: bool) -> Box<dyn NodeRunner>
+where
+    T: Task<Input = (), Output = Blob> + Send + 'static,
+{
+    Box::new(SourceRunner {
+        name: name.to_string(),
+        task: Some(task),
+        slot,
+        durable_reference: durable.then(|| Blob(STAGE_VALUE.to_string()).serialize_reference()),
+    })
+}
+
+/// A Unit-output (effect / checkpoint / teardown) source runner — never durable.
+fn unit_source<T>(name: &str, task: T, slot: Arc<Slot<Unit>>) -> Box<dyn NodeRunner>
+where
+    T: Task<Input = (), Output = Unit> + Send + 'static,
+{
+    Box::new(SourceRunner {
+        name: name.to_string(),
+        task: Some(task),
+        slot,
+        durable_reference: None,
+    })
+}
+
+/// The run-level ordering upstreams the driver seeds into the readiness tracker for
+/// the demo's consume-nothing / effect nodes — only for nodes present in this run.
+fn build_ordering(include: &impl Fn(&str) -> bool) -> BTreeMap<String, Vec<String>> {
+    let mut ordering: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (node, ups) in [
+        ("checkpoint", &["expensive"][..]),
+        ("consumer", &["checkpoint"][..]),
+        ("cleanup", &["publish", "checkpoint"][..]),
+    ] {
+        if !include(node) {
+            continue;
+        }
+        let present: Vec<String> = ups
+            .iter()
+            .filter(|u| include(u))
+            .map(|u| (*u).to_string())
+            .collect();
+        if !present.is_empty() {
+            ordering.insert(node.to_string(), present);
+        }
+    }
+    ordering
 }

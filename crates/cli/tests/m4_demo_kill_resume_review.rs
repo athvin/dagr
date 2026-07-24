@@ -180,9 +180,9 @@ fn terminal_of(records: &[Value], node: &str) -> Option<String> {
 /// interrupted, resumable artifact — with the durable stage boundary's reference
 /// recorded.** The demo runs the real pipeline through the shipped `drive()` loop;
 /// once `expensive` (durable) succeeded and `checkpoint` wrote its scratch, it is
-/// SIGKILLed. The surviving stream is gapless, folds without error, is marked
-/// interrupted, records `expensive`'s durable reference, and the run directory is
-/// intact (so the run is resumable).
+/// killed with `SIGKILL`. The surviving stream is gapless, folds without error, is
+/// marked interrupted, records `expensive`'s durable reference, and the run directory
+/// is intact (so the run is resumable).
 #[test]
 fn kill_mid_run_flushes_a_complete_resumable_artifact() {
     let base = TempBase::new("kill");
@@ -208,7 +208,11 @@ fn kill_mid_run_flushes_a_complete_resumable_artifact() {
     let expensive_ref = records.iter().find_map(|r| {
         (r.get("kind").and_then(Value::as_str) == Some("attempt-outcome")
             && r.get("node").and_then(Value::as_str) == Some("expensive"))
-        .then(|| r.get("durable_reference").and_then(Value::as_str).map(str::to_string))
+        .then(|| {
+            r.get("durable_reference")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .flatten()
     });
     assert_eq!(
@@ -261,6 +265,13 @@ fn kill_mid_run_flushes_a_complete_resumable_artifact() {
 /// and completes successfully — the M4 done-when, end-to-end through the shipped
 /// driver.**
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "this is the single end-to-end M4 done-when assertion — one killed run resumed \
+              once, then every C17/C18/C27 outcome checked against what the shipped driver \
+              actually did; splitting it would re-run the (process-spawning) kill several times \
+              and scatter the one coherent picture"
+)]
 fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
     let base = TempBase::new("resume");
     let _stream = launch_kill_and_read(&base, "run-killed");
@@ -361,10 +372,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
         satisfied.contains(&"publish"),
         "the ordering-only publish is satisfied-from-prior even though it is not durable"
     );
-    assert!(
-        must_run.contains(&"cleanup"),
-        "the cleanup node re-runs"
-    );
+    assert!(must_run.contains(&"cleanup"), "the cleanup node re-runs");
     assert_eq!(
         terminals["cleanup"].as_str(),
         Some("Succeeded"),
@@ -509,8 +517,12 @@ fn a_group_rename_is_review_visible_but_fingerprint_neutral() {
         }
     };
 
-    let err = assert_structure(&assemble(renamed, ConsumerFrom::Expensive), PIPELINE, &fixture)
-        .expect_err("a group rename must fail the structure test (review-visible)");
+    let err = assert_structure(
+        &assemble(renamed, ConsumerFrom::Expensive),
+        PIPELINE,
+        &fixture,
+    )
+    .expect_err("a group rename must fail the structure test (review-visible)");
     let StructureAssertError::Mismatch(diff) = err else {
         panic!("a group rename is a structural-snapshot mismatch");
     };
