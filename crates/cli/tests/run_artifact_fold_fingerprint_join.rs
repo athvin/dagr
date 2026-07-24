@@ -16,7 +16,7 @@ use dagr_artifact::fold::fold_stream;
 use dagr_cli::graph::{emit_graph, BuildProvenance};
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
-use dagr_core::{Flow, Pipeline, TaskError};
+use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
 use serde_json::{json, Value};
 
 struct Rows;
@@ -39,7 +39,12 @@ impl Task for LoadRows {
 
 fn build_pipeline() -> Pipeline {
     let mut flow = Flow::new();
-    let _load = flow.register_source("load", &LoadRows);
+    let _load = flow.register_source_named::<LoadRows>(
+        "load",
+        &LoadRows,
+        None::<String>,
+        NodePolicy::new(),
+    );
     flow.finish()
 }
 

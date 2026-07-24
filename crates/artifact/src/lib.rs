@@ -24,6 +24,11 @@
 pub mod canonical;
 pub mod event_stream;
 
+/// The C22 run-artifact **fold** (arch.md C22 / T42): the standalone reader that
+/// folds a C19 event stream into a run artifact, needing no run store, no live
+/// graph, and no network. See [`fold::fold_stream`].
+pub mod fold;
+
 /// The T39 published-artifact-schema validation helper (arch.md C19/C20/C22).
 ///
 /// Behind the `schema-validation` cargo feature (default OFF) because its
