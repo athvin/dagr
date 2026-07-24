@@ -32,6 +32,8 @@ pub mod logging;
 pub mod scale_bench;
 pub mod signals;
 pub mod structure_snapshot;
+#[cfg(feature = "test-kit")]
+pub mod t63_demo;
 pub mod temp;
 
 pub use graph::{
