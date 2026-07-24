@@ -99,6 +99,7 @@ use dagr_core::handle::NodeId;
 use dagr_core::limits::detect_capacities;
 use dagr_core::readiness::{Decision, ReadinessTracker};
 use dagr_core::task::ExecutionClass;
+use tracing::Instrument;
 
 use crate::dispatch::{Dispatcher, Surface};
 
@@ -851,6 +852,15 @@ where
     S: EventSink + 'static,
     C: MonotonicClock + 'static,
 {
+    // --- Bootstrap: install the single process-global tracing subscriber (C25 /
+    // T45) once, before anything runs, so every framework/attempt line beneath it
+    // is formatted and attributable. Idempotent and coexistence-safe: a repeat
+    // call or a pre-existing subscriber (e.g. a test harness's) is a no-op, never
+    // a panic. The output mode (structured default / human) is read from the
+    // DAGR_LOG_FORMAT env var (arch.md C25). This is the developer/operator
+    // observability layer, distinct from the C19 event stream opened just below.
+    let _ = crate::logging::init_tracing();
+
     // --- Bootstrap: mint identity, open the stream BEFORE assembly is acted on.
     let run_id = config.resolve_run_id();
     let run_id_str = run_id.as_str().to_string();
@@ -1956,7 +1966,14 @@ where
             .cancellation(attempt_signal)
             .temp_dir(temp_dir)
             .build();
-        let state = runner.run(&ctx, &mut sink).await;
+        // (C25 / T45) Open the attempt span — run/node/attempt identity — and
+        // instrument the attempt future with it, so every line the task or a
+        // third-party library it calls emits beneath this future carries that
+        // identity across `.await` points and is attributable without timestamp
+        // correlation. This attaches to (does not compete with) the C14 attempt
+        // lifecycle; its identity is read off the C8 context's dep-free `LogSpan`.
+        let span = crate::logging::attempt_span_from(ctx.span(), &name_owned);
+        let state = runner.run(&ctx, &mut sink).instrument(span).await;
         // Release the C12 permit at the attempt's terminal state (its working
         // memory + thread cost returns to the pools) BEFORE reporting done, so the
         // loop sees freed capacity when it re-offers the pending waiters. An

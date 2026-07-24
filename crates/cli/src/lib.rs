@@ -25,6 +25,7 @@
 pub(crate) mod dispatch;
 pub mod driver;
 pub mod graph;
+pub mod logging;
 pub mod signals;
 pub mod temp;
 

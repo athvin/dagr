@@ -393,17 +393,18 @@ fn installing_the_global_subscriber_is_idempotent_and_coexists() {
 #[test]
 fn an_async_attempt_future_inherits_the_span_across_awaits() {
     let buf = CaptureBuf::default();
-    let fut = async {
-        tracing::info!("before await");
-        yield_once().await;
-        // A line emitted AFTER an await point still carries the span fields,
-        // proving the span follows the future across suspensions (the driver
-        // instruments the attempt future, not just the synchronous prologue).
-        third_party_library_emits_a_line();
-    }
-    .instrument(attempt_span("run-async", "await-node", 3));
-
     with_default(structured_subscriber(buf.clone()), || {
+        // The span is created (and its fields recorded) beneath the active
+        // subscriber, exactly as the driver opens it around each attempt.
+        let fut = async {
+            tracing::info!("before await");
+            yield_once().await;
+            // A line emitted AFTER an await point still carries the span fields,
+            // proving the span follows the future across suspensions (the driver
+            // instruments the attempt future, not just the synchronous prologue).
+            third_party_library_emits_a_line();
+        }
+        .instrument(attempt_span("run-async", "await-node", 3));
         futures_block_on(fut);
     });
 
