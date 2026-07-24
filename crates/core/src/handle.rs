@@ -128,6 +128,19 @@ impl NodeId {
     pub(crate) fn sort_key(self) -> u64 {
         self.0
     }
+
+    /// The opaque inner fingerprint, exposed **crate-internally only** so the
+    /// durable scratch store (C18 / T53) can derive a stable, filesystem-safe
+    /// per-node namespace segment from it. Two distinct nodes yield distinct
+    /// fingerprints, so their scratch namespaces cannot collide; the same name
+    /// always yields the same fingerprint, so a node's scratch is reachable across
+    /// its own attempts. It is **not** a public route back to a name or a handle —
+    /// identity stays opaque (C2); the value is only ever rendered as an opaque hex
+    /// directory name that reveals nothing about the node's declared name.
+    #[must_use]
+    pub(crate) fn namespace_fingerprint(self) -> u64 {
+        self.0
+    }
 }
 
 /// A typed claim on a value that does not exist yet (arch.md `### C2 · Handle`).
