@@ -158,15 +158,24 @@ fn plan(pipeline: &Pipeline, prior: &PriorRun) -> Result<ResumePlan, ResumeRefus
 #[test]
 fn structural_fingerprint_mismatch_refuses() {
     let pipeline = durable_chain();
-    let mut prior = prior_for(&pipeline, &[("produce", TerminalState::Succeeded, Some("r"))]);
+    let mut prior = prior_for(
+        &pipeline,
+        &[("produce", TerminalState::Succeeded, Some("r"))],
+    );
     // A node was rewired/renamed since the prior run: the structural fingerprint
     // no longer matches.
     prior.structural_fingerprint ^= 0xDEAD_BEEF;
 
     let refusal = plan(&pipeline, &prior).expect_err("a changed graph cannot be resumed");
     match refusal {
-        ResumeRefusal::StructuralMismatch { prior: p, current: c } => {
-            assert_ne!(p, c, "the diff shows the two differing structural fingerprints");
+        ResumeRefusal::StructuralMismatch {
+            prior: p,
+            current: c,
+        } => {
+            assert_ne!(
+                p, c,
+                "the diff shows the two differing structural fingerprints"
+            );
             assert_eq!(c, pipeline.fingerprint().structural());
         }
         other => panic!("expected a structural-mismatch refusal, got {other:?}"),
@@ -179,7 +188,10 @@ fn structural_fingerprint_mismatch_refuses() {
 #[test]
 fn algorithm_version_mismatch_is_a_distinct_refusal() {
     let pipeline = durable_chain();
-    let mut prior = prior_for(&pipeline, &[("produce", TerminalState::Succeeded, Some("r"))]);
+    let mut prior = prior_for(
+        &pipeline,
+        &[("produce", TerminalState::Succeeded, Some("r"))],
+    );
     prior.algorithm_version += 1; // a different, incomparable algorithm version
 
     let refusal = plan(&pipeline, &prior).expect_err("an incomparable algorithm cannot compare");
@@ -195,7 +207,10 @@ fn algorithm_version_mismatch_is_a_distinct_refusal() {
 #[test]
 fn tool_version_mismatch_is_a_distinct_refusal() {
     let pipeline = durable_chain();
-    let prior = prior_for(&pipeline, &[("produce", TerminalState::Succeeded, Some("r"))]);
+    let prior = prior_for(
+        &pipeline,
+        &[("produce", TerminalState::Succeeded, Some("r"))],
+    );
     // This binary is a different tool version than the prior run recorded.
     let refusal = plan_resume(&pipeline, &prior, "dagr@2", present)
         .expect_err("v1 makes no cross-tool-version resume promise");
@@ -211,7 +226,10 @@ fn tool_version_mismatch_is_a_distinct_refusal() {
 #[test]
 fn policy_only_change_proceeds_with_a_diff() {
     let pipeline = durable_chain();
-    let mut prior = prior_for(&pipeline, &[("produce", TerminalState::Succeeded, Some("r"))]);
+    let mut prior = prior_for(
+        &pipeline,
+        &[("produce", TerminalState::Succeeded, Some("r"))],
+    );
     prior.policy_hash ^= 0x1234; // a raised timeout, say — policy differs, structure does not
 
     let plan = plan(&pipeline, &prior).expect("a policy-only change proceeds, never refuses");
@@ -267,7 +285,10 @@ fn dangling_durable_reference_fails_the_plan() {
     match refusal {
         ResumeRefusal::DanglingReference { node, reference } => {
             assert_eq!(node, "produce");
-            assert_eq!(reference, "gone/ref", "the refusal names the offending reference");
+            assert_eq!(
+                reference, "gone/ref",
+                "the refusal names the offending reference"
+            );
         }
         other => panic!("expected a dangling-reference refusal, got {other:?}"),
     }
@@ -333,7 +354,10 @@ fn non_succeeded_node_is_in_the_seed() {
         ],
     );
     let plan = plan(&pipeline, &prior).expect("proceeds");
-    assert!(plan.seed().contains("consume"), "the failed node seeds the plan");
+    assert!(
+        plan.seed().contains("consume"),
+        "the failed node seeds the plan"
+    );
     assert!(plan.must_run().contains("consume"), "and re-executes");
 }
 
@@ -352,9 +376,14 @@ fn durable_success_is_satisfied_and_rehydrated_on_demand() {
         ],
     );
     let plan = plan(&pipeline, &prior).expect("proceeds");
-    assert!(!plan.must_run().contains("produce"), "the durable producer does not re-run");
+    assert!(
+        !plan.must_run().contains("produce"),
+        "the durable producer does not re-run"
+    );
     assert_eq!(
-        plan.satisfied_from_prior().get("produce").map(String::as_str),
+        plan.satisfied_from_prior()
+            .get("produce")
+            .map(String::as_str),
         Some("run-A"),
         "it is satisfied-from-prior carrying its originating run identity"
     );
@@ -437,7 +466,10 @@ fn demanded_in_memory_producer_cascades_upstream() {
     );
     let plan = plan(&pipeline, &prior).expect("proceeds");
     for n in ["a", "b", "c"] {
-        assert!(plan.must_run().contains(n), "{n} re-runs (demand cascaded upward)");
+        assert!(
+            plan.must_run().contains(n),
+            "{n} re-runs (demand cascaded upward)"
+        );
     }
     assert!(
         plan.satisfied_from_prior().is_empty(),
@@ -471,7 +503,10 @@ fn downward_closure_re_runs_reachable_successors() {
         plan.must_run().contains("c"),
         "the successor downstream of the seed re-runs (downward closure)"
     );
-    assert!(!plan.must_run().contains("a"), "the durable upstream is satisfied + rehydrated");
+    assert!(
+        !plan.must_run().contains("a"),
+        "the durable upstream is satisfied + rehydrated"
+    );
     assert_eq!(plan.rehydrate().get("a").map(String::as_str), Some("a/out"));
 }
 
@@ -551,7 +586,9 @@ fn satisfied_nodes_carry_their_originating_run_identity() {
     prior.nodes.get_mut("produce").unwrap().originating_run = "run-ROOT".to_string();
     let plan = plan(&pipeline, &prior).expect("proceeds");
     assert_eq!(
-        plan.satisfied_from_prior().get("produce").map(String::as_str),
+        plan.satisfied_from_prior()
+            .get("produce")
+            .map(String::as_str),
         Some("run-ROOT"),
         "the originating run identity is carried forward across generations"
     );

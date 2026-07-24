@@ -4,7 +4,7 @@
 //! # What this module owns
 //!
 //! Given a prior run's per-node terminal states and recorded durable references,
-//! and this binary's assembled [`Pipeline`](crate::flow::Pipeline), [`plan_resume`]
+//! and this binary's assembled [`Pipeline`], [`plan_resume`]
 //! computes a **demand-driven re-execution plan** — or refuses. It is the heart
 //! of resume: the machinery that lets a killed or half-finished run continue
 //! instead of repeating expensive work.
@@ -355,139 +355,11 @@ where
         current: fingerprint.policy(),
     });
 
-    // --- Build the graph adjacency the algorithm reads -----------------------
-    // For each node: its data-input producer names (the values it DEMANDS) and its
-    // full upstream set (data + ordering — what a downward closure follows).
-    let mut data_inputs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut all_upstreams: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut is_durable: BTreeMap<String, bool> = BTreeMap::new();
-    let mut node_names: BTreeSet<String> = BTreeSet::new();
-    for node in pipeline.nodes() {
-        let name = node.name().to_string();
-        node_names.insert(name.clone());
-        is_durable.insert(name.clone(), node.policy().is_durable());
-        let mut inputs = Vec::new();
-        for edge in node.data_edges() {
-            if let Some(producer) = pipeline.node(edge.upstream()) {
-                inputs.push(producer.name().to_string());
-            }
-        }
-        let mut ups = inputs.clone();
-        for edge in node.ordering_edges() {
-            if let Some(producer) = pipeline.node(edge.upstream()) {
-                ups.push(producer.name().to_string());
-            }
-        }
-        data_inputs.insert(name.clone(), inputs);
-        all_upstreams.insert(name, ups);
-    }
-
-    // --- Step 1: the must-run seed ------------------------------------------
-    // A node whose prior terminal was not `succeeded`, a teardown-covered node, or
-    // a pipeline node the prior run never recorded.
-    let teardown_covered: BTreeSet<String> = pipeline
-        .teardown_covered_nodes()
-        .into_values()
-        .flatten()
-        .collect();
-    let mut seed: BTreeSet<String> = BTreeSet::new();
-    for name in &node_names {
-        let prior_state = prior.nodes.get(name).map(|n| n.terminal);
-        let not_succeeded = prior_state != Some(TerminalState::Succeeded);
-        if not_succeeded || teardown_covered.contains(name) {
-            seed.insert(name.clone());
-        }
-    }
-
-    // --- Steps 2 + 3 to a joint fixpoint ------------------------------------
-    // must_run starts at the seed. Repeatedly: close downward (any node whose
-    // upstream re-runs, re-runs) and resolve demand upward (a re-running node
-    // demands its data inputs; a non-durable demanded producer joins must_run).
-    // Both grow must_run monotonically, so iterating to a fixpoint terminates.
-    let mut must_run = seed.clone();
-    let mut rehydrate: BTreeMap<String, String> = BTreeMap::new();
-    loop {
-        let before = must_run.len();
-
-        // Downward closure: a node re-runs if any upstream (data or ordering) is
-        // in must_run.
-        for (name, ups) in &all_upstreams {
-            if must_run.contains(name) {
-                continue;
-            }
-            if ups.iter().any(|u| must_run.contains(u)) {
-                must_run.insert(name.clone());
-            }
-        }
-
-        // Upward demand: every re-running node demands its data-input producers.
-        let demanders: Vec<String> = must_run.iter().cloned().collect();
-        for consumer in demanders {
-            let Some(inputs) = data_inputs.get(&consumer) else {
-                continue;
-            };
-            for producer in inputs.clone() {
-                if must_run.contains(&producer) {
-                    continue; // already re-running; nothing to rehydrate
-                }
-                // Only a PRIOR SUCCESS can be carried forward / rehydrated. A
-                // non-succeeded producer is already in the seed (hence must_run),
-                // so reaching here means the producer succeeded before.
-                let durable_ref = prior
-                    .nodes
-                    .get(&producer)
-                    .filter(|p| p.terminal == TerminalState::Succeeded)
-                    .and_then(|p| p.durable_reference.clone())
-                    .filter(|_| is_durable.get(&producer).copied().unwrap_or(false));
-
-                match durable_ref {
-                    Some(reference) => {
-                        // A demanded durable producer: existence-probe it. A
-                        // definite absence fails the plan up front (dangling).
-                        match probe(&producer, &reference) {
-                            ReferenceExistence::Absent => {
-                                return Err(ResumeRefusal::DanglingReference {
-                                    node: producer,
-                                    reference,
-                                });
-                            }
-                            ReferenceExistence::Present
-                            | ReferenceExistence::CannotDetermine => {
-                                rehydrate.insert(producer, reference);
-                            }
-                        }
-                    }
-                    None => {
-                        // A demanded NON-durable (in-memory) producer cannot be
-                        // rehydrated: it joins the must-run set and cascades its own
-                        // demands on the next iteration. If it was previously slated
-                        // for rehydration, that no longer applies.
-                        rehydrate.remove(&producer);
-                        must_run.insert(producer);
-                    }
-                }
-            }
-        }
-
-        if must_run.len() == before {
-            break; // fixpoint: nothing new joined must_run
-        }
-    }
-
-    // --- Satisfied-from-prior marking ---------------------------------------
-    // Every prior success left outside the must-run set is satisfied-from-prior —
-    // durable or not — carrying its originating run identity.
-    let mut satisfied_from_prior: BTreeMap<String, String> = BTreeMap::new();
-    for name in &node_names {
-        if must_run.contains(name) {
-            continue;
-        }
-        if let Some(prior_node) = prior.nodes.get(name) {
-            if prior_node.terminal == TerminalState::Succeeded {
-                satisfied_from_prior.insert(name.clone(), prior_node.originating_run.clone());
-            }
-        }
-    }
+    // --- The demand-driven algorithm ----------------------------------------
+    let graph = Graph::of(pipeline);
+    let seed = compute_seed(pipeline, prior, &graph);
+    let (must_run, rehydrate) = resolve_demand(prior, &graph, &seed, &probe)?;
+    let satisfied_from_prior = mark_satisfied_from_prior(prior, &graph, &must_run);
 
     Ok(ResumePlan {
         seed,
@@ -496,4 +368,164 @@ where
         rehydrate,
         policy_diff,
     })
+}
+
+/// The graph adjacency the demand algorithm reads, resolved from the assembled
+/// pipeline once: per-node data-input producers (the values a node DEMANDS), full
+/// upstream set (data + ordering — what a downward closure follows), and the
+/// durability flag.
+struct Graph {
+    node_names: BTreeSet<String>,
+    data_inputs: BTreeMap<String, Vec<String>>,
+    all_upstreams: BTreeMap<String, Vec<String>>,
+    is_durable: BTreeMap<String, bool>,
+}
+
+impl Graph {
+    fn of(pipeline: &Pipeline) -> Self {
+        let mut node_names = BTreeSet::new();
+        let mut data_inputs = BTreeMap::new();
+        let mut all_upstreams = BTreeMap::new();
+        let mut is_durable = BTreeMap::new();
+        for node in pipeline.nodes() {
+            let name = node.name().to_string();
+            node_names.insert(name.clone());
+            is_durable.insert(name.clone(), node.policy().is_durable());
+            let mut inputs = Vec::new();
+            for edge in node.data_edges() {
+                if let Some(producer) = pipeline.node(edge.upstream()) {
+                    inputs.push(producer.name().to_string());
+                }
+            }
+            let mut ups = inputs.clone();
+            for edge in node.ordering_edges() {
+                if let Some(producer) = pipeline.node(edge.upstream()) {
+                    ups.push(producer.name().to_string());
+                }
+            }
+            data_inputs.insert(name.clone(), inputs);
+            all_upstreams.insert(name, ups);
+        }
+        Self {
+            node_names,
+            data_inputs,
+            all_upstreams,
+            is_durable,
+        }
+    }
+}
+
+/// Step 1 — the must-run seed: every node whose prior terminal was not
+/// `succeeded`, plus every teardown-covered node (its output may have been
+/// destroyed), plus any pipeline node the prior run never recorded.
+fn compute_seed(pipeline: &Pipeline, prior: &PriorRun, graph: &Graph) -> BTreeSet<String> {
+    let teardown_covered: BTreeSet<String> = pipeline
+        .teardown_covered_nodes()
+        .into_values()
+        .flatten()
+        .collect();
+    let mut seed = BTreeSet::new();
+    for name in &graph.node_names {
+        let succeeded = prior.nodes.get(name).map(|n| n.terminal) == Some(TerminalState::Succeeded);
+        if !succeeded || teardown_covered.contains(name) {
+            seed.insert(name.clone());
+        }
+    }
+    seed
+}
+
+/// Steps 2 + 3 to a joint fixpoint — close the seed downward (any node whose
+/// upstream re-runs, re-runs) and resolve demand upward (a re-running node demands
+/// its data inputs; a demanded durable producer with an intact reference is
+/// rehydrated, a demanded in-memory producer joins the must-run set and cascades).
+/// Both grow `must_run` monotonically, so the fixpoint terminates.
+///
+/// # Errors
+/// A demanded durable reference that probes [`Absent`](ReferenceExistence::Absent)
+/// is a dangling reference and fails the plan up front.
+fn resolve_demand<P>(
+    prior: &PriorRun,
+    graph: &Graph,
+    seed: &BTreeSet<String>,
+    probe: &P,
+) -> Result<(BTreeSet<String>, BTreeMap<String, String>), ResumeRefusal>
+where
+    P: Fn(&str, &str) -> ReferenceExistence,
+{
+    let mut must_run = seed.clone();
+    let mut rehydrate: BTreeMap<String, String> = BTreeMap::new();
+    loop {
+        let before = must_run.len();
+
+        // Downward closure.
+        for (name, ups) in &graph.all_upstreams {
+            if !must_run.contains(name) && ups.iter().any(|u| must_run.contains(u)) {
+                must_run.insert(name.clone());
+            }
+        }
+
+        // Upward demand.
+        let demanders: Vec<String> = must_run.iter().cloned().collect();
+        for consumer in demanders {
+            let Some(inputs) = graph.data_inputs.get(&consumer) else {
+                continue;
+            };
+            for producer in inputs.clone() {
+                if must_run.contains(&producer) {
+                    continue; // already re-running; nothing to rehydrate
+                }
+                // A non-succeeded producer is already in the seed, so reaching here
+                // means the producer succeeded before — carry it forward.
+                let durable_ref = prior
+                    .nodes
+                    .get(&producer)
+                    .filter(|p| p.terminal == TerminalState::Succeeded)
+                    .and_then(|p| p.durable_reference.clone())
+                    .filter(|_| graph.is_durable.get(&producer).copied().unwrap_or(false));
+
+                if let Some(reference) = durable_ref {
+                    // A demanded durable producer: existence-probe it; a definite
+                    // absence fails the plan up front (dangling).
+                    if probe(&producer, &reference) == ReferenceExistence::Absent {
+                        return Err(ResumeRefusal::DanglingReference {
+                            node: producer,
+                            reference,
+                        });
+                    }
+                    rehydrate.insert(producer, reference);
+                } else {
+                    // A demanded in-memory producer cannot be rehydrated: it joins
+                    // the must-run set and cascades its own demands next iteration.
+                    rehydrate.remove(&producer);
+                    must_run.insert(producer);
+                }
+            }
+        }
+
+        if must_run.len() == before {
+            break; // fixpoint: nothing new joined must_run
+        }
+    }
+    Ok((must_run, rehydrate))
+}
+
+/// Every prior success left outside the must-run set is satisfied-from-prior —
+/// durable or not — mapped to its originating run identity.
+fn mark_satisfied_from_prior(
+    prior: &PriorRun,
+    graph: &Graph,
+    must_run: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let mut satisfied = BTreeMap::new();
+    for name in &graph.node_names {
+        if must_run.contains(name) {
+            continue;
+        }
+        if let Some(prior_node) = prior.nodes.get(name) {
+            if prior_node.terminal == TerminalState::Succeeded {
+                satisfied.insert(name.clone(), prior_node.originating_run.clone());
+            }
+        }
+    }
+    satisfied
 }

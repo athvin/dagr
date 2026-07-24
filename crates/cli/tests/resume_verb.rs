@@ -71,7 +71,7 @@ fn prior_artifact(
     run_id: &str,
     params: &[(&str, &str)],
     interval: Option<[&str; 2]>,
-    resume_lineage: Value,
+    resume_lineage: &Value,
     attempts: &[(&str, &str, Option<&str>)],
 ) -> Value {
     let fp = pipeline.fingerprint();
@@ -106,7 +106,7 @@ fn prior_artifact(
             "parameters": params_obj,
             "data_interval": interval.map_or(Value::Null, |[s, e]| json!({ "start": s, "end": e })),
             "captured_environment": {},
-            "resume_lineage": resume_lineage,
+            "resume_lineage": resume_lineage.clone(),
             "overall_outcome": "failed",
         },
         "attempts": attempts,
@@ -129,9 +129,9 @@ fn opts(run_id: &str) -> ResumeOptions {
     }
 }
 
-fn run(pipeline: &Pipeline, prior: &Value, options: ResumeOptions) -> ResumeOutcome {
+fn run(pipeline: &Pipeline, prior: &Value, options: &ResumeOptions) -> ResumeOutcome {
     let bytes = serde_json::to_vec(prior).unwrap();
-    resume_verb(pipeline, &bytes, &options, present)
+    resume_verb(pipeline, &bytes, options, present)
 }
 
 // ===========================================================================
@@ -146,13 +146,16 @@ fn missing_run_store_is_refused_up_front() {
         "run-A",
         &[],
         None,
-        Value::Null,
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
     let mut options = opts("run-B");
     options.store_present = false; // the prior run's store is gone
 
-    let outcome = run(&pipeline, &prior, options);
+    let outcome = run(&pipeline, &prior, &options);
     match outcome {
         ResumeOutcome::Refused { code, message } => {
             assert_eq!(code, ExitCode::ResumeRefusal);
@@ -161,7 +164,9 @@ fn missing_run_store_is_refused_up_front() {
                 "the refusal says the store is gone: {message}"
             );
         }
-        other => panic!("expected a store-gone refusal, got {other:?}"),
+        ResumeOutcome::Resumed { artifact, .. } => {
+            panic!("expected a store-gone refusal, got a resumed artifact: {artifact}")
+        }
     }
 }
 
@@ -178,12 +183,12 @@ fn structural_mismatch_refuses_with_the_refusal_code_and_prints_the_diff() {
         "run-A",
         &[],
         None,
-        Value::Null,
+        &Value::Null,
         &[("produce", "succeeded", Some("produce/out"))],
     );
     prior["header"]["fingerprint_structural"] = json!("fnv:0000000000000000");
 
-    let outcome = run(&pipeline, &prior, opts("run-B"));
+    let outcome = run(&pipeline, &prior, &opts("run-B"));
     match outcome {
         ResumeOutcome::Refused { code, message } => {
             assert_eq!(code, ExitCode::ResumeRefusal);
@@ -192,7 +197,9 @@ fn structural_mismatch_refuses_with_the_refusal_code_and_prints_the_diff() {
                 "prints the structural diff: {message}"
             );
         }
-        other => panic!("expected a structural-mismatch refusal, got {other:?}"),
+        ResumeOutcome::Resumed { artifact, .. } => {
+            panic!("expected a structural-mismatch refusal, got a resumed artifact: {artifact}")
+        }
     }
 }
 
@@ -208,10 +215,13 @@ fn parameters_and_interval_are_derived_from_the_prior_artifact() {
         "run-A",
         &[("region", "eu")],
         Some(["2026-07-01", "2026-07-02"]),
-        Value::Null,
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
-    let outcome = run(&pipeline, &prior, opts("run-B"));
+    let outcome = run(&pipeline, &prior, &opts("run-B"));
     let artifact = outcome.expect_resumed();
     assert_eq!(
         artifact["header"]["parameters"]["region"],
@@ -233,21 +243,32 @@ fn a_conflicting_parameter_without_force_refuses_with_a_diff() {
         "run-A",
         &[("region", "eu")],
         None,
-        Value::Null,
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
     let mut options = opts("run-B");
     options
         .param_overrides
         .insert("region".to_string(), "us".to_string()); // conflicts with prior "eu"
 
-    match run(&pipeline, &prior, options) {
+    match run(&pipeline, &prior, &options) {
         ResumeOutcome::Refused { code, message } => {
             assert_eq!(code, ExitCode::ResumeRefusal);
-            assert!(message.contains("region"), "the diff names the conflicting parameter: {message}");
-            assert!(message.contains("eu") && message.contains("us"), "and both values: {message}");
+            assert!(
+                message.contains("region"),
+                "the diff names the conflicting parameter: {message}"
+            );
+            assert!(
+                message.contains("eu") && message.contains("us"),
+                "and both values: {message}"
+            );
         }
-        other => panic!("expected a parameter-conflict refusal, got {other:?}"),
+        ResumeOutcome::Resumed { artifact, .. } => {
+            panic!("expected a parameter-conflict refusal, got a resumed artifact: {artifact}")
+        }
     }
 }
 
@@ -259,8 +280,11 @@ fn force_overrides_a_conflicting_parameter_and_records_it() {
         "run-A",
         &[("region", "eu")],
         None,
-        Value::Null,
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
     let mut options = opts("run-B");
     options.force = true;
@@ -268,7 +292,7 @@ fn force_overrides_a_conflicting_parameter_and_records_it() {
         .param_overrides
         .insert("region".to_string(), "us".to_string());
 
-    let artifact = run(&pipeline, &prior, options).expect_resumed();
+    let artifact = run(&pipeline, &prior, &options).expect_resumed();
     assert_eq!(
         artifact["header"]["parameters"]["region"],
         json!("us"),
@@ -293,13 +317,13 @@ fn a_durable_success_is_recorded_satisfied_from_prior_with_origin_and_ref_copied
         "run-A",
         &[],
         None,
-        Value::Null,
+        &Value::Null,
         &[
             ("produce", "succeeded", Some("produce/out")),
             ("consume", "failed", None),
         ],
     );
-    let artifact = run(&pipeline, &prior, opts("run-B")).expect_resumed();
+    let artifact = run(&pipeline, &prior, &opts("run-B")).expect_resumed();
 
     let produce = attempt_for(&artifact, "produce");
     assert_eq!(
@@ -328,12 +352,19 @@ fn the_resumed_artifact_links_parent_and_lineage_root() {
         "run-A",
         &[],
         None,
-        Value::Null, // run-A is the original (not itself a resume)
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &Value::Null, // run-A is the original (not itself a resume)
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
-    let artifact = run(&pipeline, &prior, opts("run-B")).expect_resumed();
+    let artifact = run(&pipeline, &prior, &opts("run-B")).expect_resumed();
     let lineage = &artifact["header"]["resume_lineage"];
-    assert_eq!(lineage["parent_run_id"], json!("run-A"), "immediate parent is the prior run");
+    assert_eq!(
+        lineage["parent_run_id"],
+        json!("run-A"),
+        "immediate parent is the prior run"
+    );
     assert_eq!(
         lineage["lineage_root_run_id"],
         json!("run-A"),
@@ -351,12 +382,19 @@ fn multi_generation_lineage_keeps_the_original_root() {
         "run-A",
         &[],
         None,
-        json!({ "parent_run_id": "run-ROOT", "lineage_root_run_id": "run-ROOT" }),
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "failed", None)],
+        &json!({ "parent_run_id": "run-ROOT", "lineage_root_run_id": "run-ROOT" }),
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
     );
-    let artifact = run(&pipeline, &prior, opts("run-B")).expect_resumed();
+    let artifact = run(&pipeline, &prior, &opts("run-B")).expect_resumed();
     let lineage = &artifact["header"]["resume_lineage"];
-    assert_eq!(lineage["parent_run_id"], json!("run-A"), "immediate parent is the prior resumed run");
+    assert_eq!(
+        lineage["parent_run_id"],
+        json!("run-A"),
+        "immediate parent is the prior resumed run"
+    );
     assert_eq!(
         lineage["lineage_root_run_id"],
         json!("run-ROOT"),
@@ -376,10 +414,13 @@ fn full_success_resume_is_a_noop_success() {
         "run-A",
         &[],
         None,
-        Value::Null,
-        &[("produce", "succeeded", Some("produce/out")), ("consume", "succeeded", None)],
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "succeeded", None),
+        ],
     );
-    let outcome = run(&pipeline, &prior, opts("run-B"));
+    let outcome = run(&pipeline, &prior, &opts("run-B"));
     // A no-op resume completes successfully and re-runs nothing.
     let artifact = outcome.expect_resumed();
     for node in ["produce", "consume"] {
@@ -389,6 +430,33 @@ fn full_success_resume_is_a_noop_success() {
             "{node} is satisfied-from-prior on a full-success resume"
         );
     }
+}
+
+// ===========================================================================
+// Determinism — resume is a pure function of its inputs.
+// ===========================================================================
+
+#[test]
+fn resume_is_deterministic() {
+    let pipeline = durable_chain();
+    let prior = prior_artifact(
+        &pipeline,
+        "run-A",
+        &[("region", "eu")],
+        Some(["2026-07-01", "2026-07-02"]),
+        &Value::Null,
+        &[
+            ("produce", "succeeded", Some("produce/out")),
+            ("consume", "failed", None),
+        ],
+    );
+    let a = run(&pipeline, &prior, &opts("run-B")).expect_resumed();
+    let b = run(&pipeline, &prior, &opts("run-B")).expect_resumed();
+    assert_eq!(
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap(),
+        "resuming the same prior twice yields a byte-identical artifact"
+    );
 }
 
 // === helpers ===============================================================
@@ -402,11 +470,17 @@ fn attempt_for<'a>(artifact: &'a Value, node: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("attempt for {node} present"))
 }
 
-impl ResumeOutcome {
+/// A local test extension: unwrap a resumed artifact or panic.
+trait ExpectResumed {
+    fn expect_resumed(self) -> Value;
+}
+impl ExpectResumed for ResumeOutcome {
     fn expect_resumed(self) -> Value {
         match self {
             ResumeOutcome::Resumed { artifact, .. } => artifact,
-            other => panic!("expected a resumed artifact, got {other:?}"),
+            ResumeOutcome::Refused { code, message } => {
+                panic!("expected a resumed artifact, got refusal {code:?}: {message}")
+            }
         }
     }
 }
