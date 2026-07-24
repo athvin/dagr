@@ -125,6 +125,67 @@ jobs:
       - name: graph-artifact schema round-trip (T40)
         run: cargo test -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
 
+  # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
+  # arch.md C24 line 520: "both output formats are accepted by their reference
+  # tools in CI: `dot` parses; Mermaid's parser accepts." This job installs the
+  # two reference tools — Graphviz (`dot`) and **Mermaid's own parser**
+  # (`mermaid.parse()` from the `mermaid` library, run browserless under Node) —
+  # and runs the renderer's reference-tool gate over a REAL rendered 30-node
+  # fixture. `DAGR_REQUIRE_RENDER_TOOLS=1` makes an absent tool a HARD FAILURE
+  # here (locally, an absent tool skips so `cargo test --workspace` stays green
+  # on a dev machine without Graphviz/Node), so the gate is mandatory exactly
+  # where the ticket requires it. The gate has teeth: the same tests feed each
+  # tool a deliberately-malformed diagram and assert it is rejected. It also runs
+  # the `schema-validation`-gated fixture check, proving the checked-in 30-node
+  # fixture validates against schemas/graph/v1.schema.json.
+  #
+  # The DoD requires "Mermaid's PARSER accepts" (057 DoD; arch.md C24 line 520),
+  # NOT SVG rendering — so we do NOT use the `mmdc` CLI, which launches headless
+  # Chromium via puppeteer (no Chromium deps / `--no-sandbox` in CI → the browser
+  # cannot launch → the gate failed for infra reasons, not renderer reasons).
+  # Instead we install the `mermaid` library plus `jsdom` (a browserless DOM) at
+  # PINNED versions into a scratch project and point `DAGR_MERMAID_PARSE_DIR` at
+  # it; the test calls `mermaid.parse()` directly. This removes all Chromium
+  # fragility from every future PR while checking the exact arch-required
+  # guarantee.
+  render-reference-tools:
+    name: render-reference-tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Graphviz (the `dot` reference tool)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          dot -V
+      # Install Mermaid's parser browserless: the `mermaid` library (whose
+      # `mermaid.parse()` IS Mermaid's parser) + `jsdom` (a DOM so the library's
+      # DOM/DOMPurify needs are met without a browser). Pinned versions — the
+      # reviewer flagged an unpinned install as a reliability risk. Installed
+      # LOCALLY into a scratch dir (not `-g`) because Node resolves the parse
+      # helper's bare ESM imports against a co-located `node_modules`; the test
+      # writes its helper into $DAGR_MERMAID_PARSE_DIR for exactly this reason.
+      - name: "Install Mermaid's parser (browserless: mermaid + jsdom, pinned)"
+        run: |
+          mkdir -p "${RUNNER_TEMP}/mermaid-parse"
+          cd "${RUNNER_TEMP}/mermaid-parse"
+          npm install --no-audit --no-fund mermaid@11.16.0 jsdom@25.0.1
+          node -e "console.log('mermaid', require('mermaid/package.json').version, '| jsdom', require('jsdom/package.json').version)"
+      # The 30-node render fixture validates against the published graph schema
+      # (T39 helper, behind the CI-/dev-scoped `schema-validation` feature).
+      - name: render fixture schema-validity (T46)
+        run: cargo test -p dagr-render --features schema-validation --test fixture_schema_valid
+      # `dot` parses the rendered DOT and Mermaid's parser accepts the rendered
+      # Mermaid (browserless); malformed inputs are rejected (teeth). Mandatory:
+      # DAGR_REQUIRE_RENDER_TOOLS. DAGR_MERMAID_PARSE_DIR is the scratch project
+      # whose node_modules the parse helper resolves against.
+      - name: DOT + Mermaid accepted by their reference tools (C24)
+        env:
+          DAGR_REQUIRE_RENDER_TOOLS: "1"
+          DAGR_MERMAID_PARSE_DIR: ${{ runner.temp }}/mermaid-parse
+        run: cargo test -p dagr-render --test reference_tools
+
   # --- Rustdoc-on-public-items lint (Documentation) --------------------------
   rustdoc:
     name: rustdoc

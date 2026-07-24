@@ -1,0 +1,80 @@
+// Rendered by dagr-render (C24) from a graph artifact.
+// Data edges: solid, labelled with the carried type. Ordering edges: dashed, unlabelled.
+digraph pipeline {
+  rankdir=TB;
+  node [shape=box];
+  subgraph "cluster_ingest" {
+    label="ingest";
+    "ingest_01" [label="ingest_01"];
+    "ingest_02" [label="ingest_02"];
+    "ingest_03" [label="ingest_03"];
+    "ingest_04" [label="ingest_04"];
+    "ingest_05" [label="ingest_05"];
+    "ingest_06" [label="ingest_06"];
+  }
+  subgraph "cluster_publish" {
+    label="publish";
+    "publish_01" [label="publish_01"];
+    "publish_02" [label="publish_02"];
+    "publish_03" [label="publish_03"];
+    "publish_04" [label="publish_04"];
+    "publish_05" [label="publish_05"];
+    "publish_06" [label="publish_06"];
+  }
+  subgraph "cluster_report" {
+    label="report";
+    "report_archive" [label="report_archive"];
+    "report_audit" [label="report_audit"];
+    "report_index" [label="report_index"];
+    "report_metrics" [label="report_metrics"];
+    "report_render" [label="report_render"];
+    "report_summary" [label="report_summary"];
+  }
+  subgraph "cluster_transform" {
+    label="transform";
+    "transform_01" [label="transform_01"];
+    "transform_02" [label="transform_02"];
+    "transform_03" [label="transform_03"];
+    "transform_04" [label="transform_04"];
+    "transform_05" [label="transform_05"];
+    "transform_06" [label="transform_06"];
+    "transform_07" [label="transform_07"];
+    "transform_08" [label="transform_08"];
+    "transform_09" [label="transform_09"];
+    "transform_10" [label="transform_10"];
+  }
+  "cleanup" [label="cleanup"];
+  "heartbeat" [label="heartbeat"];
+  "ingest_01" -> "transform_01" [style=solid, arrowhead=normal, label="Raw1"];
+  "ingest_02" -> "transform_02" [style=solid, arrowhead=normal, label="Raw2"];
+  "ingest_03" -> "transform_03" [style=solid, arrowhead=normal, label="Raw3"];
+  "ingest_04" -> "transform_04" [style=solid, arrowhead=normal, label="Raw4"];
+  "ingest_05" -> "transform_05" [style=solid, arrowhead=normal, label="Raw5"];
+  "ingest_06" -> "transform_06" [style=solid, arrowhead=normal, label="Raw6"];
+  "publish_01" -> "publish_05" [style=solid, arrowhead=normal, label="Published01"];
+  "publish_02" -> "publish_05" [style=solid, arrowhead=normal, label="Published02"];
+  "publish_03" -> "publish_05" [style=dashed, arrowhead=empty];
+  "publish_04" -> "publish_06" [style=dashed, arrowhead=empty];
+  "publish_05" -> "publish_06" [style=dashed, arrowhead=empty];
+  "publish_05" -> "report_metrics" [style=solid, arrowhead=normal, label="PublishedAgg"];
+  "publish_06" -> "report_render" [style=dashed, arrowhead=empty];
+  "report_archive" -> "cleanup" [style=dashed, arrowhead=empty];
+  "report_audit" -> "report_summary" [style=solid, arrowhead=normal, label="AuditLog"];
+  "report_metrics" -> "report_render" [style=solid, arrowhead=normal, label="Metrics"];
+  "report_metrics" -> "report_summary" [style=solid, arrowhead=normal, label="Metrics"];
+  "report_render" -> "report_archive" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "report_render" -> "report_audit" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "report_render" -> "report_index" [style=solid, arrowhead=normal, label="ReportDoc"];
+  "transform_01" -> "transform_07" [style=solid, arrowhead=normal, label="Clean1"];
+  "transform_01" -> "transform_10" [style=solid, arrowhead=normal, label="Clean1"];
+  "transform_02" -> "transform_07" [style=solid, arrowhead=normal, label="Clean2"];
+  "transform_03" -> "transform_08" [style=solid, arrowhead=normal, label="Clean3"];
+  "transform_04" -> "transform_08" [style=solid, arrowhead=normal, label="Clean4"];
+  "transform_04" -> "transform_10" [style=solid, arrowhead=normal, label="Clean4"];
+  "transform_05" -> "transform_09" [style=solid, arrowhead=normal, label="Clean5"];
+  "transform_06" -> "transform_09" [style=solid, arrowhead=normal, label="Clean6"];
+  "transform_07" -> "publish_01" [style=solid, arrowhead=normal, label="Merged07"];
+  "transform_08" -> "publish_02" [style=solid, arrowhead=normal, label="Merged08"];
+  "transform_09" -> "publish_03" [style=solid, arrowhead=normal, label="Merged09"];
+  "transform_10" -> "publish_04" [style=solid, arrowhead=normal, label="Merged10"];
+}

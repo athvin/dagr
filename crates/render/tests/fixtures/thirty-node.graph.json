@@ -1,0 +1,1323 @@
+{
+  "header": {
+    "schema_version": "dagr.graph@1",
+    "tool_version": "0.0.0",
+    "generated_at": "2026-07-24T00:00:00Z",
+    "pipeline": "thirty-node-demo",
+    "build_provenance": {
+      "tool_version": "0.0.0",
+      "git_commit": "0123456789abcdef0123456789abcdef01234567",
+      "lockfile_hash": "fnv1a-64:0011223344556677"
+    },
+    "fingerprint_structural": "fnv1a-64:v1:0000000000000001",
+    "fingerprint_policy": "fnv1a-64:v1:0000000000000002",
+    "fingerprint_algorithm_version": 1
+  },
+  "nodes": [
+    {
+      "name": "cleanup",
+      "group": "",
+      "task_name": "CleanupTask",
+      "input_type_names": [],
+      "output_type_name": "unit",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-terminal",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "heartbeat",
+      "group": "",
+      "task_name": "HeartbeatTask",
+      "input_type_names": [],
+      "output_type_name": "Heartbeat",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_01",
+      "group": "ingest",
+      "task_name": "IngestTask1",
+      "input_type_names": [],
+      "output_type_name": "Raw1",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_02",
+      "group": "ingest",
+      "task_name": "IngestTask2",
+      "input_type_names": [],
+      "output_type_name": "Raw2",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_03",
+      "group": "ingest",
+      "task_name": "IngestTask3",
+      "input_type_names": [],
+      "output_type_name": "Raw3",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_04",
+      "group": "ingest",
+      "task_name": "IngestTask4",
+      "input_type_names": [],
+      "output_type_name": "Raw4",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_05",
+      "group": "ingest",
+      "task_name": "IngestTask5",
+      "input_type_names": [],
+      "output_type_name": "Raw5",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "ingest_06",
+      "group": "ingest",
+      "task_name": "IngestTask6",
+      "input_type_names": [],
+      "output_type_name": "Raw6",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 2,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 4096,
+          "output_residency_bytes": 1024,
+          "blocking_threads": 0,
+          "compute_threads": 2
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "publish_01",
+      "group": "publish",
+      "task_name": "PublishTask01",
+      "input_type_names": [
+        "Merged07"
+      ],
+      "output_type_name": "Published01",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 3,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 8192,
+          "output_residency_bytes": 2048,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_07"
+      ]
+    },
+    {
+      "name": "publish_02",
+      "group": "publish",
+      "task_name": "PublishTask02",
+      "input_type_names": [
+        "Merged08"
+      ],
+      "output_type_name": "Published02",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 3,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 8192,
+          "output_residency_bytes": 2048,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_08"
+      ]
+    },
+    {
+      "name": "publish_03",
+      "group": "publish",
+      "task_name": "PublishTask03",
+      "input_type_names": [
+        "Merged09"
+      ],
+      "output_type_name": "Published03",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 3,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 8192,
+          "output_residency_bytes": 2048,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_09"
+      ]
+    },
+    {
+      "name": "publish_04",
+      "group": "publish",
+      "task_name": "PublishTask04",
+      "input_type_names": [
+        "Merged10"
+      ],
+      "output_type_name": "Published04",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 3,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 8192,
+          "output_residency_bytes": 2048,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_10"
+      ]
+    },
+    {
+      "name": "publish_05",
+      "group": "publish",
+      "task_name": "AggregatePublishTask",
+      "input_type_names": [
+        "Published01",
+        "Published02"
+      ],
+      "output_type_name": "PublishedAgg",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "publish_01",
+        "publish_02"
+      ]
+    },
+    {
+      "name": "publish_06",
+      "group": "publish",
+      "task_name": "NotifyTask",
+      "input_type_names": [],
+      "output_type_name": "unit",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-terminal",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": []
+    },
+    {
+      "name": "report_archive",
+      "group": "report",
+      "task_name": "ArchiveTask",
+      "input_type_names": [
+        "ReportDoc"
+      ],
+      "output_type_name": "Archive",
+      "execution_class": "blocking",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 1,
+          "compute_threads": 0
+        },
+        "execution_class": "blocking",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": true
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "report_render"
+      ]
+    },
+    {
+      "name": "report_audit",
+      "group": "report",
+      "task_name": "AuditTask",
+      "input_type_names": [
+        "ReportDoc"
+      ],
+      "output_type_name": "AuditLog",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "report_render"
+      ]
+    },
+    {
+      "name": "report_index",
+      "group": "report",
+      "task_name": "IndexTask",
+      "input_type_names": [
+        "ReportDoc"
+      ],
+      "output_type_name": "SearchIndex",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "report_render"
+      ]
+    },
+    {
+      "name": "report_metrics",
+      "group": "report",
+      "task_name": "MetricsTask",
+      "input_type_names": [
+        "PublishedAgg"
+      ],
+      "output_type_name": "Metrics",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "publish_05"
+      ]
+    },
+    {
+      "name": "report_render",
+      "group": "report",
+      "task_name": "RenderReportTask",
+      "input_type_names": [
+        "Metrics"
+      ],
+      "output_type_name": "ReportDoc",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "report_metrics"
+      ]
+    },
+    {
+      "name": "report_summary",
+      "group": "report",
+      "task_name": "SummaryTask",
+      "input_type_names": [
+        "Metrics",
+        "AuditLog"
+      ],
+      "output_type_name": "Summary",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "report_audit",
+        "report_metrics"
+      ]
+    },
+    {
+      "name": "transform_01",
+      "group": "transform",
+      "task_name": "TransformTask1",
+      "input_type_names": [
+        "Raw1"
+      ],
+      "output_type_name": "Clean1",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_01"
+      ]
+    },
+    {
+      "name": "transform_02",
+      "group": "transform",
+      "task_name": "TransformTask2",
+      "input_type_names": [
+        "Raw2"
+      ],
+      "output_type_name": "Clean2",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_02"
+      ]
+    },
+    {
+      "name": "transform_03",
+      "group": "transform",
+      "task_name": "TransformTask3",
+      "input_type_names": [
+        "Raw3"
+      ],
+      "output_type_name": "Clean3",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_03"
+      ]
+    },
+    {
+      "name": "transform_04",
+      "group": "transform",
+      "task_name": "TransformTask4",
+      "input_type_names": [
+        "Raw4"
+      ],
+      "output_type_name": "Clean4",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_04"
+      ]
+    },
+    {
+      "name": "transform_05",
+      "group": "transform",
+      "task_name": "TransformTask5",
+      "input_type_names": [
+        "Raw5"
+      ],
+      "output_type_name": "Clean5",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_05"
+      ]
+    },
+    {
+      "name": "transform_06",
+      "group": "transform",
+      "task_name": "TransformTask6",
+      "input_type_names": [
+        "Raw6"
+      ],
+      "output_type_name": "Clean6",
+      "execution_class": "compute",
+      "policy": {
+        "retries": 1,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 2048,
+          "output_residency_bytes": 512,
+          "blocking_threads": 0,
+          "compute_threads": 1
+        },
+        "execution_class": "compute",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "ingest_06"
+      ]
+    },
+    {
+      "name": "transform_07",
+      "group": "transform",
+      "task_name": "MergeTask07",
+      "input_type_names": [
+        "Clean1",
+        "Clean2"
+      ],
+      "output_type_name": "Merged07",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_01",
+        "transform_02"
+      ]
+    },
+    {
+      "name": "transform_08",
+      "group": "transform",
+      "task_name": "MergeTask08",
+      "input_type_names": [
+        "Clean3",
+        "Clean4"
+      ],
+      "output_type_name": "Merged08",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_03",
+        "transform_04"
+      ]
+    },
+    {
+      "name": "transform_09",
+      "group": "transform",
+      "task_name": "MergeTask09",
+      "input_type_names": [
+        "Clean5",
+        "Clean6"
+      ],
+      "output_type_name": "Merged09",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_05",
+        "transform_06"
+      ]
+    },
+    {
+      "name": "transform_10",
+      "group": "transform",
+      "task_name": "MergeTask10",
+      "input_type_names": [
+        "Clean1",
+        "Clean4"
+      ],
+      "output_type_name": "Merged10",
+      "execution_class": "await-bound",
+      "policy": {
+        "retries": 0,
+        "backoff": {
+          "base_ms": 100,
+          "factor_bits": 4611686018427387904,
+          "cap_ms": 18446744073709551615
+        },
+        "timeout_ms": null,
+        "cost": {
+          "working_memory_bytes": 0,
+          "output_residency_bytes": 0,
+          "blocking_threads": 0,
+          "compute_threads": 0
+        },
+        "execution_class": "await-bound",
+        "trigger_rule": "all-succeeded",
+        "retained": false,
+        "durable": false
+      },
+      "resources": {
+        "working_memory_bytes": 0,
+        "output_residency_bytes": 0,
+        "blocking_threads": 0,
+        "compute_threads": 0
+      },
+      "dependencies": [
+        "transform_01",
+        "transform_04"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "ingest_01",
+      "to": "transform_01",
+      "kind": "data",
+      "type_name": "Raw1"
+    },
+    {
+      "from": "ingest_02",
+      "to": "transform_02",
+      "kind": "data",
+      "type_name": "Raw2"
+    },
+    {
+      "from": "ingest_03",
+      "to": "transform_03",
+      "kind": "data",
+      "type_name": "Raw3"
+    },
+    {
+      "from": "ingest_04",
+      "to": "transform_04",
+      "kind": "data",
+      "type_name": "Raw4"
+    },
+    {
+      "from": "ingest_05",
+      "to": "transform_05",
+      "kind": "data",
+      "type_name": "Raw5"
+    },
+    {
+      "from": "ingest_06",
+      "to": "transform_06",
+      "kind": "data",
+      "type_name": "Raw6"
+    },
+    {
+      "from": "publish_01",
+      "to": "publish_05",
+      "kind": "data",
+      "type_name": "Published01"
+    },
+    {
+      "from": "publish_02",
+      "to": "publish_05",
+      "kind": "data",
+      "type_name": "Published02"
+    },
+    {
+      "from": "publish_03",
+      "to": "publish_05",
+      "kind": "ordering"
+    },
+    {
+      "from": "publish_04",
+      "to": "publish_06",
+      "kind": "ordering"
+    },
+    {
+      "from": "publish_05",
+      "to": "publish_06",
+      "kind": "ordering"
+    },
+    {
+      "from": "publish_05",
+      "to": "report_metrics",
+      "kind": "data",
+      "type_name": "PublishedAgg"
+    },
+    {
+      "from": "publish_06",
+      "to": "report_render",
+      "kind": "ordering"
+    },
+    {
+      "from": "report_archive",
+      "to": "cleanup",
+      "kind": "ordering"
+    },
+    {
+      "from": "report_audit",
+      "to": "report_summary",
+      "kind": "data",
+      "type_name": "AuditLog"
+    },
+    {
+      "from": "report_metrics",
+      "to": "report_render",
+      "kind": "data",
+      "type_name": "Metrics"
+    },
+    {
+      "from": "report_metrics",
+      "to": "report_summary",
+      "kind": "data",
+      "type_name": "Metrics"
+    },
+    {
+      "from": "report_render",
+      "to": "report_archive",
+      "kind": "data",
+      "type_name": "ReportDoc"
+    },
+    {
+      "from": "report_render",
+      "to": "report_audit",
+      "kind": "data",
+      "type_name": "ReportDoc"
+    },
+    {
+      "from": "report_render",
+      "to": "report_index",
+      "kind": "data",
+      "type_name": "ReportDoc"
+    },
+    {
+      "from": "transform_01",
+      "to": "transform_07",
+      "kind": "data",
+      "type_name": "Clean1"
+    },
+    {
+      "from": "transform_01",
+      "to": "transform_10",
+      "kind": "data",
+      "type_name": "Clean1"
+    },
+    {
+      "from": "transform_02",
+      "to": "transform_07",
+      "kind": "data",
+      "type_name": "Clean2"
+    },
+    {
+      "from": "transform_03",
+      "to": "transform_08",
+      "kind": "data",
+      "type_name": "Clean3"
+    },
+    {
+      "from": "transform_04",
+      "to": "transform_08",
+      "kind": "data",
+      "type_name": "Clean4"
+    },
+    {
+      "from": "transform_04",
+      "to": "transform_10",
+      "kind": "data",
+      "type_name": "Clean4"
+    },
+    {
+      "from": "transform_05",
+      "to": "transform_09",
+      "kind": "data",
+      "type_name": "Clean5"
+    },
+    {
+      "from": "transform_06",
+      "to": "transform_09",
+      "kind": "data",
+      "type_name": "Clean6"
+    },
+    {
+      "from": "transform_07",
+      "to": "publish_01",
+      "kind": "data",
+      "type_name": "Merged07"
+    },
+    {
+      "from": "transform_08",
+      "to": "publish_02",
+      "kind": "data",
+      "type_name": "Merged08"
+    },
+    {
+      "from": "transform_09",
+      "to": "publish_03",
+      "kind": "data",
+      "type_name": "Merged09"
+    },
+    {
+      "from": "transform_10",
+      "to": "publish_04",
+      "kind": "data",
+      "type_name": "Merged10"
+    }
+  ]
+}

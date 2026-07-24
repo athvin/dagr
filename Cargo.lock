@@ -140,6 +140,8 @@ name = "dagr-render"
 version = "0.0.0"
 dependencies = [
  "dagr-artifact",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

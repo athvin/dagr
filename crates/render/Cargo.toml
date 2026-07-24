@@ -13,8 +13,8 @@
 #     "rendering requires no access to the binary that produced the artifacts"
 #     is enforced by the crate graph, not by discipline.
 # The standalone `bin` target below proves the renderer builds and links with no
-# access to core or cli. DOT/Mermaid emission and golden-file tests are C24's
-# own implementation ticket (T46/T47), out of scope here; this is a placeholder.
+# access to core or cli. DOT/Mermaid emission and golden-file tests land in this
+# crate's own tickets (T46 base renderer; T47 run overlay).
 [package]
 name = "dagr-render"
 version.workspace = true
@@ -34,8 +34,34 @@ path = "src/lib.rs"
 name = "dagr-render"
 path = "src/main.rs"
 
+# --- Schema-validation forward (T46), OFF by default -------------------------
+# The 30-node golden fixture this ticket checks in is a schema-valid C20 graph
+# artifact. Its schema-validity is proven by a `schema-validation`-gated test
+# that runs the published T39 helper (`dagr_artifact::schema`) over the fixture,
+# mirroring T40's round-trip. That helper — and its CI-/dev-scoped `jsonschema`
+# dependency (T4 ADR 017 §4) — sit behind dagr-artifact's `schema-validation`
+# feature (default OFF); this render feature FORWARDS to it, so the validator is
+# pulled ONLY by CI's dedicated step, never by the shipped renderer binary or the
+# bare `cargo test --workspace`. No deny.toml change (the runtime renderer never
+# links `jsonschema`).
+[features]
+schema-validation = ["dagr-artifact/schema-validation"]
+
 [dependencies]
 dagr-artifact = { path = "../artifact" }
+
+# serde + serde_json — the T4-sanctioned (017) serialization stack, already
+# resolved in the tree via dagr-artifact (serde_json) and its schema helper
+# (serde_derive), both MIT under the MIT-only deny.toml, so they add NO new
+# advisory/license surface and NO deny.toml change. The renderer READS a
+# published C20 graph artifact: it deserializes the artifact JSON into typed
+# structs, and that structural parse is what rejects a schema-invalid artifact
+# (a required field removed → a named deserialization error) before any diagram
+# source is produced (arch.md C24 "reject … with a clear diagnostic"). The
+# renderer never re-serializes the artifact; it only reads it. serde is a direct
+# dependency here (not merely transitive) because the derive is production code.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints]
 workspace = true
