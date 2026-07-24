@@ -152,4 +152,73 @@ mod schema {
         let attempt = &value["attempts"][0];
         assert_eq!(&attempt["metrics"], &metrics);
     }
+
+    /// A metric value is schema-typed `number` (not `integer`), and its Rust type
+    /// is `f64` (arch.md C23), so a NON-INTEGER value is type- and schema-legal.
+    /// canonical.rs is documented "integers only", and every OTHER fold/schema test
+    /// uses integer-valued metrics only — so this proves the one untested case:
+    /// a non-integer f64 metric serializes through the PRODUCTION canonical JSON
+    /// path (`to_canonical_json`) BYTE-STABLY across independent repeats, and the
+    /// folded artifact still VALIDATES against the unmodified run schema.
+    #[test]
+    fn non_integer_metric_values_serialize_byte_stably_and_validate() {
+        // Genuinely non-integer f64 values, chosen to expose any float-format
+        // nondeterminism if it existed: a simple fraction, the f64 NEAREST
+        // 1.0/3.0 (a non-terminating decimal with no exact binary representation —
+        // ryu vs. any locale/precision-dependent formatter would diverge here), and
+        // a large-magnitude fractional value.
+        let one_third = 1.0_f64 / 3.0_f64;
+        let metrics = json!({
+            "rows_read": 42,                          // integer stays integer
+            "dagr.phase.executing_ns": 100,           // integer framework metric
+            "task.selectivity_ratio": 0.5,            // exact-binary fraction
+            "task.mean_rows_per_group": one_third,    // non-terminating decimal
+            "dagr.cost.usd_estimate": 12_345.678_9,   // large-magnitude fractional
+        });
+        let bytes = stream_with_metrics(&metrics);
+
+        // Two fully independent folds + serializations of the SAME input, each via
+        // the production canonical path used by the artifact emitter.
+        let first = fold_stream(&bytes, &["collector".to_string()])
+            .expect("folds")
+            .to_canonical_json();
+        let second = fold_stream(&bytes, &["collector".to_string()])
+            .expect("folds")
+            .to_canonical_json();
+        assert_eq!(
+            first, second,
+            "non-integer metric values must serialize byte-identically across \
+             independent folds (canonical JSON determinism, C19/C20)"
+        );
+
+        // Non-vacuous: the emitted bytes actually carry the non-integer values in
+        // their expected ryu form — so the byte-identity above is over a document
+        // that genuinely exercises float formatting, not an accidentally-empty map.
+        assert!(
+            first.contains("0.5"),
+            "the exact-binary fraction is present in the canonical bytes: {first}"
+        );
+        assert!(
+            first.contains("0.3333333333333333"),
+            "the non-terminating 1/3 value is present in its deterministic \
+             ryu form in the canonical bytes: {first}"
+        );
+        assert!(
+            first.contains("12345.6789"),
+            "the large-magnitude fractional value is present in the canonical \
+             bytes: {first}"
+        );
+
+        // And the non-integer-metric artifact still validates against the
+        // unmodified schemas/run/v1.schema.json (metrics is `number`, not
+        // `integer`, so a fractional value is schema-legal).
+        let value = fold_stream(&bytes, &["collector".to_string()])
+            .expect("folds")
+            .to_value();
+        validate_value(ArtifactKind::Run, 1, &value).expect(
+            "the non-integer-metric folded artifact validates against \
+             schemas/run/v1.schema.json",
+        );
+        assert_eq!(&value["attempts"][0]["metrics"], &metrics);
+    }
 }
