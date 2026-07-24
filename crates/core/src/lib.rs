@@ -272,7 +272,7 @@ pub mod task;
 
 pub use assembly::{
     AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, EffectivePolicy,
-    FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning,
+    FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning, FINGERPRINT_ALGORITHM_VERSION,
 };
 pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, ReceiveMode, RegisteredNode,

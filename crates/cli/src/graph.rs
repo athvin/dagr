@@ -20,9 +20,10 @@
 //! **dependency list**. For **every edge**: its **kind** (data vs ordering) and,
 //! for a data edge, the **stable name of the carried type**. The versioned
 //! **header** carries the schema version, tool version, generation time, pipeline
-//! identity, the reserved structural-fingerprint / policy-hash / algorithm-version
-//! slots (their *values* are T41's; this ticket carries the slots), and **build
-//! provenance** (tool version, git commit, lockfile hash) embedded at build time.
+//! identity, the **computed C21 fingerprints** — the structural fingerprint, the
+//! policy hash (each a version-prefixed string, [`format_fingerprint_structural`]),
+//! and the algorithm version (T41) — and **build provenance** (tool version, git
+//! commit, lockfile hash) embedded at build time.
 //!
 //! Emission runs from **pure assembly** — no credentials, no network, no database,
 //! no run store, no parameters (C7 / C20). That empty-environment guarantee is why
@@ -49,21 +50,36 @@
 //! [generation-time field](GENERATED_AT_FIELD) is the **only** field allowed to
 //! vary; [`mask_generated_at`] blanks it for a byte-identity comparison.
 //!
-//! # Scope (T40)
+//! # Fingerprints (C21 / T41)
 //!
-//! This module **emits** the C20 artifact only. It computes **no** fingerprint
-//! (the header carries reserved placeholder slots; the real hashes are T41), folds
-//! **no** event stream (T42), renders **no** diagram (T46), and adds **no**
-//! ordering-edge authoring surface (T50 — it serializes whatever ordering edges
-//! the assembled graph already carries, which is none today). None of its output
-//! is a runtime outcome — it describes **structure only**.
+//! The header's two hashes are the **computed** C21 fingerprints, obtained from
+//! `dagr-core`'s public reuse surface ([`Pipeline::fingerprint`](dagr_core::Pipeline::fingerprint))
+//! — this emitter never re-derives the composition. Each is written as a
+//! self-describing, version-prefixed string
+//! (`fnv1a-64:v<version>:<hex>`), and the [algorithm
+//! version](dagr_core::FINGERPRINT_ALGORITHM_VERSION) is also carried as its own
+//! header integer. Because every hashed input is author-declared, the two hashes
+//! are **identical across machines and toolchains** for unchanged source and are
+//! **unaffected** by the generation time or the build provenance (T0.7 §5) — the
+//! byte-identity guarantee above therefore extends to the fingerprint fields.
+//!
+//! # Scope (T40 / T41)
+//!
+//! This module **emits** the C20 artifact and populates its C21 fingerprint slot
+//! (T41). It folds **no** event stream (T42), renders **no** diagram (T46), and
+//! adds **no** ordering-edge authoring surface (T50 — it serializes whatever
+//! ordering edges the assembled graph already carries, which is none today). None
+//! of its output is a runtime outcome — it describes **structure only**.
 
 use std::fmt;
 
 use dagr_core::binding::EdgeKind;
 use dagr_core::flow::{Pipeline, PipelineNode};
 use dagr_core::task::ExecutionClass;
-use dagr_core::{is_well_formed, EffectivePolicy, TriggerRule, UNIT_STABLE_NAME};
+use dagr_core::{
+    is_well_formed, EffectivePolicy, FingerprintSlot, TriggerRule, FINGERPRINT_ALGORITHM_VERSION,
+    UNIT_STABLE_NAME,
+};
 use serde_json::{json, Map, Value};
 
 /// The self-identifying schema version this emitter targets (T4 §3; matches
@@ -80,22 +96,14 @@ pub const GRAPH_SCHEMA_MAJOR: u32 = 1;
 /// and the tests all name the same field.
 pub const GENERATED_AT_FIELD: &str = "generated_at";
 
-/// The reserved **structural-fingerprint** header slot value emitted by this
-/// ticket. The real structural fingerprint (C21) is T41's; this ticket **carries
-/// the slot** with a schema-valid, version-prefixed placeholder so the header
-/// shape is complete and downstream readers see a populated field. It is never a
-/// real hash and must never be treated as one.
-pub const RESERVED_FINGERPRINT_STRUCTURAL: &str = "reserved-t41:structural";
-
-/// The reserved **policy-hash** header slot value emitted by this ticket. Real
-/// value is T41's; see [`RESERVED_FINGERPRINT_STRUCTURAL`].
-pub const RESERVED_FINGERPRINT_POLICY: &str = "reserved-t41:policy";
-
-/// The reserved **fingerprint algorithm version** emitted by this ticket. The
-/// algorithm-versioning policy is T0.10's and the concrete algorithm is T41's;
-/// this ticket carries the slot with the schema's minimum valid value (`1`) as a
-/// reserved placeholder.
-pub const RESERVED_FINGERPRINT_ALGORITHM_VERSION: u64 = 1;
+/// The prefix marking a computed C21 fingerprint string in the graph header: the
+/// hash-family tag `fnv1a-64` (matching the [build-provenance lockfile-hash
+/// convention](BuildProvenance) and the [`NodeId`](dagr_core::NodeId) digest
+/// family), so the string is self-describing and a future algorithm change is
+/// visible in the value. The full form is
+/// `fnv1a-64:v<algorithm_version>:<16-hex-digits>` (see
+/// [`format_fingerprint_structural`]).
+pub const FINGERPRINT_HASH_FAMILY: &str = "fnv1a-64";
 
 /// **Build provenance** embedded into the pipeline binary at build time (arch.md
 /// C20; "Stability · Supply chain"): tool version, git commit SHA, and lockfile
@@ -315,7 +323,12 @@ pub fn build_artifact(
     generated_at: &str,
     provenance: &BuildProvenance,
 ) -> Result<Value, GraphEmitError> {
-    let header = build_header(pipeline_name, generated_at, provenance);
+    // The C21 fingerprint (T41) is computed once from the assembled pipeline
+    // through dagr-core's public reuse surface — this emitter never re-derives the
+    // composition, and the same digests reach the run artifact (C22) and resume
+    // (C27) from the same place.
+    let fingerprint = pipeline.fingerprint();
+    let header = build_header(pipeline_name, generated_at, provenance, &fingerprint);
 
     // Nodes in deterministic, registration-order-independent order. `Pipeline`
     // already iterates by identity name (a total, stable key), which is exactly
@@ -348,9 +361,16 @@ pub fn mask_generated_at(mut artifact: Value) -> Value {
     artifact
 }
 
-/// Build the versioned header (C20). Everything but `generated_at` is fixed per
-/// binary.
-fn build_header(pipeline_name: &str, generated_at: &str, provenance: &BuildProvenance) -> Value {
+/// Build the versioned header (C20 / C21). Everything but `generated_at` is fixed
+/// per binary; the two fingerprints depend only on author-declared inputs, so
+/// they too are identical across emissions from any machine or toolchain (T0.7
+/// §5).
+fn build_header(
+    pipeline_name: &str,
+    generated_at: &str,
+    provenance: &BuildProvenance,
+    fingerprint: &FingerprintSlot,
+) -> Value {
     json!({
         "schema_version": GRAPH_SCHEMA_VERSION,
         "tool_version": provenance.tool_version(),
@@ -361,12 +381,41 @@ fn build_header(pipeline_name: &str, generated_at: &str, provenance: &BuildProve
             "git_commit": provenance.git_commit(),
             "lockfile_hash": provenance.lockfile_hash(),
         },
-        // The fingerprint slots are RESERVED here (T40 carries them); the real
-        // structural fingerprint, policy hash, and algorithm version are T41's.
-        "fingerprint_structural": RESERVED_FINGERPRINT_STRUCTURAL,
-        "fingerprint_policy": RESERVED_FINGERPRINT_POLICY,
-        "fingerprint_algorithm_version": RESERVED_FINGERPRINT_ALGORITHM_VERSION,
+        // The COMPUTED C21 fingerprints (T41): the structural fingerprint, the
+        // policy hash (each a self-describing, version-prefixed string), and the
+        // algorithm version. Every input is author-declared, so these exclude
+        // generation time, provenance, and everything else environmental (T0.7 §5).
+        "fingerprint_structural": format_fingerprint_structural(fingerprint),
+        "fingerprint_policy": format_fingerprint_policy(fingerprint),
+        "fingerprint_algorithm_version": fingerprint.algorithm_version(),
     })
+}
+
+/// Format the **structural fingerprint** header string from a computed
+/// [`FingerprintSlot`] — `fnv1a-64:v<algorithm_version>:<16-hex-digits>` (C21 /
+/// T41). The `v<version>` segment carries the [algorithm
+/// version](dagr_core::FINGERPRINT_ALGORITHM_VERSION) inside the value as well as
+/// in the dedicated header integer, so a version mismatch is legible from the
+/// string alone. Exposed so a consumer (a test, the run artifact C22, resume C27)
+/// can reproduce the exact header value from a slot without re-deriving the
+/// composition.
+#[must_use]
+pub fn format_fingerprint_structural(slot: &FingerprintSlot) -> String {
+    format_digest(slot.algorithm_version(), slot.structural())
+}
+
+/// Format the **policy-hash** header string from a computed [`FingerprintSlot`]
+/// (same shape as [`format_fingerprint_structural`]).
+#[must_use]
+pub fn format_fingerprint_policy(slot: &FingerprintSlot) -> String {
+    format_digest(slot.algorithm_version(), slot.policy())
+}
+
+/// The self-describing, version-prefixed digest string
+/// `fnv1a-64:v<version>:<16-hex-digits>`. Lower-hex, zero-padded to the full
+/// 64-bit width so the string is fixed-length and byte-stable.
+fn format_digest(algorithm_version: u64, digest: u64) -> String {
+    format!("{FINGERPRINT_HASH_FAMILY}:v{algorithm_version}:{digest:016x}")
 }
 
 /// Build one node's artifact object (C20): identity name, group, stable
@@ -579,7 +628,7 @@ fn duration_ms(d: std::time::Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-// A compile-time cross-check that the reserved algorithm-version placeholder is
-// non-zero (the schema requires `fingerprint_algorithm_version >= 1`). A future
-// accidental zero is then a build error, not a validation failure at emit time.
-const _: () = assert!(RESERVED_FINGERPRINT_ALGORITHM_VERSION >= 1);
+// A compile-time cross-check that the computed algorithm version is non-zero (the
+// schema requires `fingerprint_algorithm_version >= 1`). A future accidental zero
+// is then a build error, not a validation failure at emit time.
+const _: () = assert!(FINGERPRINT_ALGORITHM_VERSION >= 1);

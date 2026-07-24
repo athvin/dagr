@@ -27,7 +27,7 @@
 use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::{RunContext, Task};
 use dagr_core::{
-    Flow, FingerprintSlot, NodePolicy, Pipeline, TaskError, FINGERPRINT_ALGORITHM_VERSION,
+    FingerprintSlot, Flow, NodePolicy, Pipeline, TaskError, FINGERPRINT_ALGORITHM_VERSION,
 };
 
 // === Fixture value types (author-declared stable names) =====================
@@ -132,7 +132,7 @@ impl Task for BuildFromAltRows {
 
 // === Helpers ================================================================
 
-fn fp(pipeline: Pipeline) -> FingerprintSlot {
+fn fp(pipeline: &Pipeline) -> FingerprintSlot {
     pipeline.assemble().expect("assembles").fingerprint()
 }
 
@@ -156,19 +156,19 @@ fn baseline() -> Pipeline {
 /// future intentional algorithm change is caught by a failing test.
 #[test]
 fn algorithm_version_is_declared_and_carried() {
-    assert!(
-        FINGERPRINT_ALGORITHM_VERSION >= 1,
-        "the fingerprint algorithm version must be >= 1"
-    );
-    let slot = fp(baseline());
+    // Pin the current version: a non-zero, schema-valid identifier, currently v1.
+    // A deliberate algorithm bump must update this assertion, catching a silent
+    // change (T0.7 §7 / C21). Compared through the runtime slot value so the
+    // constant is not treated as a compile-time-constant assertion.
+    let slot = fp(&baseline());
     assert_eq!(
         slot.algorithm_version(),
         FINGERPRINT_ALGORITHM_VERSION,
         "the slot carries the declared algorithm version"
     );
-    // Pin the current version so an intentional algorithm bump fails loudly here.
     assert_eq!(
-        FINGERPRINT_ALGORITHM_VERSION, 1,
+        slot.algorithm_version(),
+        1,
         "algorithm v1; a deliberate bump must update this assertion"
     );
 }
@@ -179,7 +179,7 @@ fn algorithm_version_is_declared_and_carried() {
 /// the structural fingerprint. The structural fp covers stable names (T0.7 §3).
 #[test]
 fn a_stable_task_name_change_moves_the_structural_fingerprint() {
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     let mut f = Flow::new();
     let rows = f.register_source_named("rows", &MakeRowsRenamed, None::<String>, NodePolicy::new());
@@ -190,7 +190,7 @@ fn a_stable_task_name_change_moves_the_structural_fingerprint() {
         None::<String>,
         NodePolicy::new(),
     );
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -203,7 +203,7 @@ fn a_stable_task_name_change_moves_the_structural_fingerprint() {
 /// value type flowing along the edge) moves the structural fingerprint (T0.7 §3).
 #[test]
 fn a_carried_type_change_moves_the_structural_fingerprint() {
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     // Same two-node shape, but the edge carries `AltRows` instead of `Rows`.
     let mut f = Flow::new();
@@ -215,7 +215,7 @@ fn a_carried_type_change_moves_the_structural_fingerprint() {
         None::<String>,
         NodePolicy::new(),
     );
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -229,7 +229,7 @@ fn a_carried_type_change_moves_the_structural_fingerprint() {
 /// Adding a node moves the structural fingerprint.
 #[test]
 fn adding_a_node_moves_the_structural_fingerprint() {
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     let mut f = Flow::new();
     let rows = f.register_source_named("rows", &MakeRows, None::<String>, NodePolicy::new());
@@ -242,7 +242,7 @@ fn adding_a_node_moves_the_structural_fingerprint() {
     );
     // Extra disconnected source.
     let _ = f.register_source_named("schema", &MakeSchema, None::<String>, NodePolicy::new());
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -255,11 +255,11 @@ fn adding_a_node_moves_the_structural_fingerprint() {
 #[test]
 fn removing_a_node_moves_the_structural_fingerprint() {
     // The two-node baseline vs a single-node flow.
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     let mut f = Flow::new();
     let _ = f.register_source_named("rows", &MakeRows, None::<String>, NodePolicy::new());
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -271,7 +271,7 @@ fn removing_a_node_moves_the_structural_fingerprint() {
 /// Renaming a node's **identity name** moves the structural fingerprint.
 #[test]
 fn renaming_a_node_identity_moves_the_structural_fingerprint() {
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     let mut f = Flow::new();
     let rows = f.register_source_named("rows", &MakeRows, None::<String>, NodePolicy::new());
@@ -283,7 +283,7 @@ fn renaming_a_node_identity_moves_the_structural_fingerprint() {
         None::<String>,
         NodePolicy::new(),
     );
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -296,7 +296,7 @@ fn renaming_a_node_identity_moves_the_structural_fingerprint() {
 #[test]
 fn rewiring_an_edge_moves_the_structural_fingerprint() {
     // Baseline: report depends on `rows`.
-    let base = fp(baseline());
+    let base = fp(&baseline());
 
     // Variant: an intervening `Rows` producer under a different name is the one
     // the report consumes, so the edge endpoint changes.
@@ -310,7 +310,7 @@ fn rewiring_an_edge_moves_the_structural_fingerprint() {
         None::<String>,
         NodePolicy::new(),
     );
-    let variant = fp(f.finish());
+    let variant = fp(&f.finish());
 
     assert_ne!(
         base.structural(),
@@ -335,7 +335,7 @@ fn registration_order_does_not_change_either_hash() {
         None::<String>,
         NodePolicy::new(),
     );
-    let fp_a = fp(a.finish());
+    let fp_a = fp(&a.finish());
 
     // Order B: register an extra source first, wire the consumer, in a different
     // interleaving. The *set* of nodes/edges is identical to a superset control;
@@ -344,7 +344,8 @@ fn registration_order_does_not_change_either_hash() {
     // has a forced order, add an extra independent source to both to permit a
     // genuine reordering, keeping the sets equal.
     let mut b = Flow::new();
-    let _extra_b = b.register_source_named("schema", &MakeSchema, None::<String>, NodePolicy::new());
+    let _extra_b =
+        b.register_source_named("schema", &MakeSchema, None::<String>, NodePolicy::new());
     let rows_b = b.register_source_named("rows", &MakeRows, None::<String>, NodePolicy::new());
     let _ = b.register_named(
         "report",
@@ -353,7 +354,7 @@ fn registration_order_does_not_change_either_hash() {
         None::<String>,
         NodePolicy::new(),
     );
-    let fp_b = fp(b.finish());
+    let fp_b = fp(&b.finish());
 
     // The extra `schema` node makes b structurally different from a; the point of
     // THIS test is registration-order independence for the SAME set, so build a
@@ -369,7 +370,7 @@ fn registration_order_does_not_change_either_hash() {
     );
     let _extra_a2 =
         a2.register_source_named("schema", &MakeSchema, None::<String>, NodePolicy::new());
-    let fp_a2 = fp(a2.finish());
+    let fp_a2 = fp(&a2.finish());
 
     assert_eq!(
         fp_a2.structural(),
@@ -391,7 +392,7 @@ fn registration_order_does_not_change_either_hash() {
 fn repeated_computation_is_deterministic() {
     let mut first: Option<FingerprintSlot> = None;
     for _ in 0..64 {
-        let slot = fp(baseline());
+        let slot = fp(&baseline());
         match &first {
             None => first = Some(slot),
             Some(f) => {
@@ -415,7 +416,10 @@ fn pipeline_fingerprint_equals_the_assembled_slot() {
     let pipeline = baseline();
     let via_pipeline = pipeline.fingerprint();
     let via_artifact = pipeline.assemble().expect("assembles").fingerprint();
-    assert_eq!(via_pipeline, via_artifact, "same digests via either surface");
+    assert_eq!(
+        via_pipeline, via_artifact,
+        "same digests via either surface"
+    );
 }
 
 /// Silence the unused-import lint when `StableInputNames` is only needed to bound

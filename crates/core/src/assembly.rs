@@ -57,16 +57,18 @@
 //!
 //! # The fingerprint slot vs the fingerprint algorithm
 //!
-//! This module **populates** the fingerprint slot using the T0.7 field
-//! composition (structural fingerprint over the node set / edge set / trigger
-//! rules; policy hash over the residual effective-policy values) and a
-//! deterministic, registration-order-independent canonical byte encoding — enough
-//! to make "assemble twice → byte-identical artifact" true. The **artifact schema
-//! and renderers** (C20 / T40) and the **BLAKE3-v1 hash algorithm and its
-//! versioning** (C21 / T41) are downstream; this module does not own them (T14
-//! Out of scope). The digest here is a dependency-free, deterministic hash (the
-//! same FNV-1a family the name-derived [`NodeId`] already uses), which T41
-//! replaces with the versioned BLAKE3-v1 algorithm.
+//! This module **computes** the C21 fingerprint slot using the T0.7 field
+//! composition — the structural fingerprint over the node set (identity names
+//! **and** author-declared stable task / input / output type names), the edge set
+//! (with each data edge's carried type stable name and kind), and trigger rules;
+//! the policy hash over the residual effective-policy values — over a
+//! deterministic, registration-order-independent canonical byte encoding, stamped
+//! with the [`FINGERPRINT_ALGORITHM_VERSION`] (C21 / T41). The **artifact schema
+//! and renderers** (C20 / T40) live downstream. The digest is the dependency-free,
+//! deterministic FNV-1a the name-derived [`NodeId`] already uses; T0.7 §6 named
+//! BLAKE3, but its reopen condition anticipated the MIT-only supply-chain policy
+//! ruling BLAKE3 out (see [`FingerprintSlot`]), so **algorithm v1 is FNV-1a** —
+//! which satisfies every C21 determinism / cross-toolchain requirement.
 //!
 //! # The full C5 node-policy value (T29)
 //!
@@ -79,9 +81,9 @@
 //! group label (C6) are policy-adjacent knobs carried on the node rather than in
 //! this value; the resolved [`EffectivePolicy`] — the complete, defaults-written-out
 //! view — surfaces them alongside the policy fields and is what reaches the graph
-//! artifact (arch.md C5). The concrete artifact *schema* / renderers (T40) and the
-//! BLAKE3-v1 hash *algorithm* (T41) remain downstream; this module resolves the
-//! effective policy and feeds the right inputs into the fingerprint slot.
+//! artifact (arch.md C5). The concrete artifact *schema* / renderers (T40) remain
+//! downstream; this module resolves the effective policy and feeds the right
+//! inputs into the C21 fingerprint slot (T41).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -91,6 +93,23 @@ use crate::execution::{Backoff, RetryConfig};
 use crate::flow::{Pipeline, PipelineNode};
 use crate::handle::NodeId;
 use crate::task::ExecutionClass;
+
+/// The **fingerprint algorithm version** (arch.md C21; T0.7 §7 / T0.10).
+///
+/// Both graph hashes are stamped with this identifier so a later reader (resume,
+/// C27; the structure-assertion API, C28) can distinguish a genuine topology
+/// difference from **"cannot compare"** — a fingerprint produced by a different
+/// algorithm version. Changing the canonical byte encoding, the structural /
+/// policy field split, or the hash function is an **algorithm-version bump**
+/// (T0.7 §7): it changes what the digest *means*, so this constant must move with
+/// it, and the change is a deliberate, reviewed act — never a silent swap.
+///
+/// **v1** is the composition fixed by T0.7 (structural fingerprint over the node
+/// set + stable type names + edge set with carried types + trigger rules; policy
+/// hash over the residual effective policy) computed with the dependency-free
+/// FNV-1a digest this module carries (see [`FingerprintSlot`] for the hash-choice
+/// note).
+pub const FINGERPRINT_ALGORITHM_VERSION: u64 = 1;
 
 /// The **durable-output reference contract** a node's output type must implement
 /// to be marked durable (arch.md C27; T0.8 ADR §4).
@@ -767,29 +786,69 @@ impl std::fmt::Display for AssemblyError {
 
 impl std::error::Error for AssemblyError {}
 
-/// The **fingerprint slot** frozen into an [`AssemblyArtifact`] — the structural
-/// fingerprint and the policy hash (arch.md C21; T0.7 ADR §3–§4).
+/// The **fingerprint slot** — the C21 graph fingerprint: the structural
+/// fingerprint and the policy hash (arch.md `### C21 · Graph fingerprint`; T0.7
+/// ADR §§3–7), each stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
 ///
-/// The **structural fingerprint** covers the node set (by name), the edge set
-/// (upstream/downstream/kind), and per-node trigger rules — the shape-determining
-/// inputs that gate resume (C27). The **policy hash** covers the residual
-/// effective-policy values (retries, cost, effective class, retention,
-/// durability). Group labels and everything environmental are in **neither**
-/// (C6). Both are computed over a deterministic, registration-order-independent
-/// canonical encoding, so assembling the same pipeline twice yields identical
-/// values.
+/// The **structural fingerprint** covers the node set — each node's identity name
+/// **and** its author-declared stable task / input / output type names — the edge
+/// set (each data edge's endpoints, position, kind, and **carried type stable
+/// name**), and per-node trigger rules. These are the shape-determining inputs
+/// that gate resume (C27); a structural change (node add/remove/rename, rewire,
+/// carried-type change, trigger-rule change) moves it. The **policy hash** covers
+/// the residual effective-policy values (retries, backoff, timeout, cost,
+/// effective class, retention, durability). Group labels (C6) and everything
+/// environmental — timestamps, hostnames, compiler/tool versions, generation
+/// time, git commit, lockfile hash — are in **neither** hash (T0.7 §5). Both are
+/// computed over a deterministic, registration-order-independent canonical byte
+/// encoding, so assembling the same source twice — on any machine or toolchain —
+/// yields identical digests, because every hashed input is author-declared.
 ///
-/// The concrete **BLAKE3-v1 algorithm and its versioning** are T41's (C21); this
-/// slot holds a deterministic dependency-free digest T41 supersedes.
+/// # Limitation — internal-logic changes are not detected (C21)
+///
+/// The fingerprint is composed from author-declared names, edges, trigger rules,
+/// and policy — **never** from a task's function body. **Changing a task's
+/// internal logic without changing its interface (its stable name, input/output
+/// types, edges, trigger rule, and policy) does NOT change the fingerprint.**
+/// This is a real limitation with no cheap fix in a compiled language, and it is
+/// deliberate: an automatic content hash of task bodies silently under-detects
+/// (inlining, monomorphization, and dependency bumps perturb the bytes without a
+/// semantic change) and lies about what it covers. Where node-level change
+/// detection is genuinely needed, the honest answer is a **hand-maintained
+/// version marker on the task** (a version constant that *is* part of the
+/// declared interface and therefore *does* move the fingerprint) — visible,
+/// reviewable, obviously manual. This note is surfaced again for the readers that
+/// meet it: the resume verb (C27, T58) and the structure-assertion API (C28,
+/// T61).
+///
+/// # Hash function — dependency-free FNV-1a (algorithm v1)
+///
+/// The T0.7 ADR §6 named BLAKE3 as the v1 hash function; its §Consequences reopen
+/// condition anticipated that BLAKE3 might prove **unavailable under the
+/// supply-chain policy**, in which case the choice is revisited rather than
+/// worked around locally. That is the case here: dagr's `deny.toml` allows the
+/// **MIT** license only, and `blake3` and its transitive dependencies
+/// (`arrayref` is BSD-2-Clause; `blake3` / `constant_time_eq` offer only
+/// CC0-1.0 / Apache-2.0 / MIT-0) cannot resolve to MIT and pull a `cc` build-time
+/// C dependency. So **algorithm v1 uses FNV-1a** — the dependency-free digest
+/// already in the tree ([`crate::handle::NodeId`], the T40 build script), which
+/// satisfies every C21 requirement (determinism, cross-toolchain byte-identity,
+/// and the change/no-change matrix) because it is pure integer arithmetic with no
+/// float, locale, or platform dependence. The deviation from the ADR's BLAKE3
+/// naming is recorded in `docs/implementation/DEVIATIONS.md`; adopting a
+/// different hash later is an [algorithm-version](FINGERPRINT_ALGORITHM_VERSION)
+/// bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FingerprintSlot {
     structural: u64,
     policy: u64,
+    algorithm_version: u64,
 }
 
 impl FingerprintSlot {
-    /// The **structural fingerprint** digest (node set, edge set, trigger rules —
-    /// T0.7 §3). Gates resume (C27); a structural change moves it.
+    /// The **structural fingerprint** digest (node set + stable type names, edge
+    /// set + carried types, trigger rules — T0.7 §3). Gates resume (C27); a
+    /// structural change moves it.
     #[must_use]
     pub fn structural(&self) -> u64 {
         self.structural
@@ -801,6 +860,15 @@ impl FingerprintSlot {
     #[must_use]
     pub fn policy(&self) -> u64 {
         self.policy
+    }
+
+    /// The **algorithm version** these digests were computed under
+    /// ([`FINGERPRINT_ALGORITHM_VERSION`]). Carried alongside the hashes wherever
+    /// they appear so a later reader distinguishes "cannot compare" (a version
+    /// mismatch) from a genuine topology difference (T0.7 §7 / C21).
+    #[must_use]
+    pub fn algorithm_version(&self) -> u64 {
+        self.algorithm_version
     }
 }
 
@@ -926,6 +994,27 @@ impl Pipeline {
     /// conflict, or a nonzero teardown cost.
     pub fn assemble(&self) -> Result<AssemblyArtifact, AssemblyError> {
         assemble(self)
+    }
+
+    /// The C21 graph [fingerprint](FingerprintSlot) — the structural fingerprint,
+    /// the policy hash, and the [algorithm version](FINGERPRINT_ALGORITHM_VERSION)
+    /// — computed directly from this pipeline (arch.md `### C21 · Graph
+    /// fingerprint`; T0.7 §§3–7).
+    ///
+    /// This is the **reuse surface** downstream consumers bind against without
+    /// reaching into internals: the graph-artifact emitter (C20 / T40), the run
+    /// artifact (C22 / T42), and resume (C27 / T58) all read the same digests from
+    /// here rather than re-deriving the composition. It matches the slot
+    /// [`AssemblyArtifact::fingerprint`] carries — assembling and reading the slot,
+    /// or calling this directly, yield identical values.
+    ///
+    /// Computation is **pure** (T0.7 §8): it needs no credentials, no network, and
+    /// no run store — every hashed input is author-declared and available from the
+    /// assembled pipeline. Unlike [`assemble`](Pipeline::assemble) it performs no
+    /// validation; a caller that needs the validated artifact assembles.
+    #[must_use]
+    pub fn fingerprint(&self) -> FingerprintSlot {
+        compute_fingerprint(self)
     }
 }
 
@@ -1293,35 +1382,81 @@ fn canonical_encoding(pipeline: &Pipeline) -> Vec<u8> {
     out
 }
 
-/// The structural encoding (T0.7 §3): node set (by name), edge set, trigger
-/// rules — the resume-gating shape. Nodes and edges are emitted in name order.
+/// The structural encoding (T0.7 §3): the node set — each node's identity name
+/// **and** its author-declared stable task / input / output type names — the edge
+/// set (with each data edge's carried type stable name and kind), and per-node
+/// trigger rules. This is exactly the resume-gating shape (C27) and nothing else:
+/// no policy value, no group label, no environmental input. Nodes and edges are
+/// emitted in a total, registration-order-independent order (node name; edge
+/// `(consumer, position, producer)`), so two assemblies of the same source yield
+/// identical bytes.
 fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     // Node set, ordered by name (pipeline.nodes() is already name-ordered).
     for node in pipeline.nodes() {
         push_framed(&mut out, b'n', node.name().as_bytes());
+        // Author-declared stable type names (T0.7 §3): the stable task name and
+        // the stable input/output type names are part of the resume-gating shape,
+        // so renaming a stable name — even with the Rust interface unchanged —
+        // moves the structural fingerprint. A node registered through a type-erased
+        // registrar carries none; its absence is framed distinctly (empty frames)
+        // from a present-but-empty name so the two never collide.
+        match node.stable_names() {
+            Some(names) => {
+                push_framed(&mut out, b't', names.task().as_bytes());
+                for input in names.inputs() {
+                    push_framed(&mut out, b'i', input.as_bytes());
+                }
+                // A terminator frames the end of the (variable-length) input list
+                // so two different input splits can never serialize alike.
+                push_framed(&mut out, b'I', &[]);
+                push_framed(&mut out, b'o', names.output().as_bytes());
+            }
+            None => {
+                // Distinct marker: this node declared no stable names.
+                push_framed(&mut out, b'T', &[]);
+            }
+        }
         // Trigger rule is shape (T0.7 §3), so it lives in the structural half.
         push_framed(&mut out, b'r', &[trigger_rule_code(node)]);
     }
     // Edge set, ordered by (consumer name, position) — a total, order-independent
-    // key. Each edge frames (consumer, producer name, position, kind).
-    let mut edges: Vec<(String, u64, String)> = Vec::new();
+    // key. Each edge frames (consumer, producer name, position, kind, carried
+    // type stable name). The carried type is the producer's declared stable output
+    // name — the stable name of the value type flowing along the edge (T0.7 §3) —
+    // so changing a data edge's carried type moves the structural fingerprint.
+    let mut edges: Vec<(String, u64, String, Option<String>)> = Vec::new();
     for node in pipeline.nodes() {
         for edge in node.data_edges() {
-            let producer = pipeline.node(edge.upstream()).map_or_else(
-                || format!("{:?}", edge.upstream()),
-                |n| n.name().to_string(),
+            let (producer, carried) = pipeline.node(edge.upstream()).map_or_else(
+                || (format!("{:?}", edge.upstream()), None),
+                |n| {
+                    (
+                        n.name().to_string(),
+                        n.stable_names().map(|s| s.output().to_string()),
+                    )
+                },
             );
-            edges.push((node.name().to_string(), edge.position() as u64, producer));
+            edges.push((
+                node.name().to_string(),
+                edge.position() as u64,
+                producer,
+                carried,
+            ));
         }
     }
     edges.sort();
-    for (consumer, position, producer) in edges {
+    for (consumer, position, producer, carried) in edges {
         push_framed(&mut out, b'c', consumer.as_bytes());
         push_framed(&mut out, b'p', producer.as_bytes());
         out.extend_from_slice(&position.to_le_bytes());
         // Edge kind: data (the only kind recorded today — T50 adds ordering).
         out.push(b'd');
+        // Carried type stable name, present-or-absent framed distinctly.
+        match carried {
+            Some(name) => push_framed(&mut out, b'y', name.as_bytes()),
+            None => push_framed(&mut out, b'Y', &[]),
+        }
     }
     out
 }
@@ -1393,13 +1528,18 @@ fn env_allowlist_encoding(pipeline: &Pipeline) -> Vec<u8> {
     out
 }
 
-/// Compute both fingerprint digests over the canonical structural/policy
-/// encodings (T0.7 §3–§6). BLAKE3-v1 is T41's; FNV-1a is the deterministic
-/// dependency-free stand-in.
-fn compute_fingerprint(pipeline: &Pipeline) -> FingerprintSlot {
+/// Compute the C21 [`FingerprintSlot`] over the canonical structural / policy
+/// encodings (T0.7 §§3–7), stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
+///
+/// Algorithm v1 uses the dependency-free FNV-1a digest (see [`FingerprintSlot`]
+/// for the hash-choice note). The encodings are total and
+/// registration-order-independent, so the same source yields the same digests on
+/// any machine or toolchain.
+pub(crate) fn compute_fingerprint(pipeline: &Pipeline) -> FingerprintSlot {
     FingerprintSlot {
         structural: fnv1a(&structural_encoding(pipeline)),
         policy: fnv1a(&policy_encoding(pipeline)),
+        algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
     }
 }
 

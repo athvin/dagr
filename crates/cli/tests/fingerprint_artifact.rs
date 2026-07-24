@@ -126,7 +126,10 @@ fn header_carries_the_computed_fingerprints_equal_to_the_flow() {
     );
 
     // The reserved placeholders are gone.
-    assert_ne!(h["fingerprint_structural"], Value::from("reserved-t41:structural"));
+    assert_ne!(
+        h["fingerprint_structural"],
+        Value::from("reserved-t41:structural")
+    );
     assert_ne!(h["fingerprint_policy"], Value::from("reserved-t41:policy"));
     assert_ne!(
         h["fingerprint_structural"], h["fingerprint_policy"],
@@ -193,7 +196,7 @@ fn environmental_inputs_do_not_change_the_fingerprints() {
 fn header_fingerprint_fields_are_schema_shaped() {
     let pipeline = fixture_pipeline();
     let h = header(&pipeline, GEN_A, &provenance_a());
-    assert!(h["fingerprint_structural"].as_str().unwrap().len() >= 1);
-    assert!(h["fingerprint_policy"].as_str().unwrap().len() >= 1);
+    assert!(!h["fingerprint_structural"].as_str().unwrap().is_empty());
+    assert!(!h["fingerprint_policy"].as_str().unwrap().is_empty());
     assert!(h["fingerprint_algorithm_version"].as_u64().unwrap() >= 1);
 }
