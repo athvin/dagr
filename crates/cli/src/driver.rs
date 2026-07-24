@@ -1408,12 +1408,16 @@ where
                 durable_reference.clone(),
             );
             let _ = writer.attempt_outcome(record);
-            record_terminal(node, TerminalState::SatisfiedFromPrior, &mut terminal_states);
+            record_terminal(
+                node,
+                TerminalState::SatisfiedFromPrior,
+                &mut terminal_states,
+            );
             let _ = writer.node_terminal(node, wire_terminal(TerminalState::SatisfiedFromPrior));
             // Cascade: a satisfied producer's dependents in the must-run set can now
             // become ready (success-like upstream).
-            let decisions = tracker
-                .notify_terminal(NodeId::from_name(node), TerminalState::SatisfiedFromPrior);
+            let decisions =
+                tracker.notify_terminal(NodeId::from_name(node), TerminalState::SatisfiedFromPrior);
             apply_decisions(
                 &actx,
                 &decisions,

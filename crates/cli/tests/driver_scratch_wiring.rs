@@ -320,11 +320,7 @@ fn a_no_scratch_run_is_byte_identical() {
         "a no-scratch run's event stream is byte-identical (the scratch wiring is invisible)"
     );
     // And the no-scratch run left no scratch subtree behind.
-    let scratch_dir = base
-        .base()
-        .join(PIPE)
-        .join("fixed-run")
-        .join("scratch");
+    let scratch_dir = base.base().join(PIPE).join("fixed-run").join("scratch");
     assert!(
         !scratch_dir.exists(),
         "a run that writes no scratch creates no scratch namespace"
