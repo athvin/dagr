@@ -390,6 +390,66 @@ impl NodeRunner for LeaseConsumerRunner {
     }
 }
 
+/// The **charge-then-release residency probe** runner (GAP 2 / `DoD` #11 non-vacuity).
+/// A node that succeeds while the run is stopping cleanly and, inside its own
+/// attempt, exercises the full C10 residency lifecycle against the **shared** run
+/// ledger: it fills an internal producer slot declaring `RESIDENCY` bytes (charging
+/// the ledger — the ledger's peak rises above zero during this run), opens a **real**
+/// [`ConsumerLease`] on it and reads (holding the value live), runs its own success
+/// attempt, then drops the lease — the genuine closure-return release gate — so the
+/// residency returns to zero by run end. Doing charge-then-release atomically inside
+/// one succeeding node makes the clean-stop residency proof deterministic (immune to
+/// how the stop schedules any other node), while still driving the exact `Slot::fill`
+/// + `ConsumerLease` mechanics the driver's admission ledger folds.
+struct ResidencyProbeRunner {
+    name: String,
+    ledger: Arc<ResidencyLedger>,
+}
+impl ResidencyProbeRunner {
+    fn boxed(name: &str, ledger: Arc<ResidencyLedger>) -> Box<dyn NodeRunner> {
+        Box::new(Self {
+            name: name.to_string(),
+            ledger,
+        })
+    }
+}
+impl NodeRunner for ResidencyProbeRunner {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn run<'a>(
+        &'a mut self,
+        ctx: &'a RunContext,
+        sink: &'a mut (dyn AttemptEventSink + Send),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TerminalState> + Send + 'a>> {
+        let name = self.name.clone();
+        // An internal producer slot on the SHARED ledger, one consumer, declaring
+        // `RESIDENCY` bytes. Filling it charges the shared ledger (peak rises);
+        // dropping the sole consumer's lease after it returns releases it to zero.
+        let producer = slot_on::<u64>("residency-probe-inner", 1, RESIDENCY, &self.ledger);
+        producer
+            .fill(1)
+            .expect("the probe's producer slot fills once");
+        // Open a real lease and read (the C10 consume path); the lease lives until the
+        // attempt returns, then drops — releasing the shared ledger back to zero.
+        let lease = producer.shared_ref().enter();
+        let _ = lease.read();
+        // The node's own output slot (no residency, no consumers) — its attempt just
+        // succeeds so the node has a clean succeeded terminal in the stream.
+        let out = slot_on::<u64>(&name, 0, 0, &self.ledger);
+        let mut task = Succeeds;
+        Box::pin(async move {
+            let state = run_attempt_caught(&mut task, &name, ctx, &out, sink)
+                .await
+                .terminal_state();
+            // Release the charged residency now that the consuming closure has
+            // returned (the second, zombie-critical half of the C10 release gate).
+            drop(lease);
+            state
+        })
+    }
+}
+
 // ===========================================================================
 // Slot helpers over ONE shared residency ledger (the observable release seam)
 // ===========================================================================
@@ -433,6 +493,12 @@ struct CleanStop {
     report: dagr_cli::driver::RunReport,
     bytes: Vec<u8>,
     ledger_current_at_end: u64,
+    /// The **peak** counted residency the shared ledger observed at any instant
+    /// during the clean-stop run — the high-water charge. Nonzero proves something
+    /// was actually charged on the clean-stop path (the non-vacuity half of the
+    /// charge-then-release proof), so `ledger_current_at_end == 0` is a genuine
+    /// *release*, not a ledger that was never charged.
+    ledger_peak_at_end: u64,
     temp_dir: PathBuf,
     wrote_temp: Option<PathBuf>,
 }
@@ -510,6 +576,21 @@ fn build_runners(
         "cleanup".into(),
         SourceRunner::boxed("cleanup", Succeeds, slot_on::<u64>("cleanup", 0, 0, ledger)),
     );
+
+    // --- The charge-then-release probe ON the clean-stop path (GAP 2 / DoD #11
+    // non-vacuity). One node unrelated to the induced failure, so it runs to
+    // completion *while the run is stopping cleanly*. Its runner charges the **same
+    // shared ledger** (fills an internal residency slot declaring `RESIDENCY` bytes,
+    // raising the ledger's peak above zero during this run) and then releases it (a
+    // **real** [`ConsumerLease`] opened, read, and dropped — the genuine C10
+    // closure-return release gate), all inside its own successful attempt. Doing the
+    // whole charge-then-release atomically inside one succeeding node makes the proof
+    // immune to the stop's scheduling of any second node, while still exercising the
+    // exact `Slot::fill` + `ConsumerLease` residency mechanics the driver relies on.
+    runners.insert(
+        "residency-probe".into(),
+        ResidencyProbeRunner::boxed("residency-probe", Arc::clone(ledger)),
+    );
     runners
 }
 
@@ -546,6 +627,12 @@ fn drive_clean_stop() -> CleanStop {
         NodePolicy::new(),
         TriggerRule::AllTerminal,
     );
+    // The charge-then-release residency probe (GAP 2): one source, unrelated to
+    // `failing`, that succeeds *while the run is stopping cleanly*. Its runner does
+    // the whole charge-then-release against the shared ledger inside its own attempt
+    // (fill a residency slot, then lease+read+drop it) — so the proof is atomic and
+    // does not depend on the stop's scheduling of a second node.
+    let _residency_probe = flow.register_source("residency-probe", &Succeeds);
     let pipeline: Pipeline = flow.finish();
     pipeline.assemble().expect("clean-stop pipeline assembles");
 
@@ -584,6 +671,7 @@ fn drive_clean_stop() -> CleanStop {
         report,
         bytes: sink.bytes(),
         ledger_current_at_end: ledger.current(),
+        ledger_peak_at_end: ledger.peak(),
         temp_dir,
         wrote_temp,
     }
@@ -649,8 +737,11 @@ fn count(recs: &[Rec], kind: &str, node: &str) -> usize {
         .count()
 }
 
-/// Every node that could ever run in the fixture (the full graph).
-const ALL_NODES: [&str; 7] = [
+/// Every node that could ever run in the fixture (the full graph). Includes the
+/// `residency-probe` node that proves the shared ledger charges-then-releases on the
+/// clean-stop path (GAP 2); like every other node it must have exactly one terminal
+/// state and exactly one attempt-outcome per attempt.
+const ALL_NODES: [&str; 8] = [
     "failing",
     "data-dependent",
     "sibling",
@@ -658,6 +749,7 @@ const ALL_NODES: [&str; 7] = [
     "downstream-default",
     "contingency",
     "cleanup",
+    "residency-probe",
 ];
 
 // ===========================================================================
@@ -792,8 +884,24 @@ fn all_permits_released_nothing_left_charged() {
     // The run terminated with a definite outcome (it did not hang).
     assert_eq!(run.report.outcome, RunOutcome::Failed);
 
-    // The observable output-residency ledger is back to zero: no slot lease leaked
-    // on any path taken by the clean stop.
+    // --- Non-vacuity ON the clean-stop path (GAP 2 / DoD #11): prove the shared
+    // ledger genuinely *charged* something during this run before asserting it
+    // released to zero. The `residency-producer`/`residency-consumer` pair succeeded
+    // while the run was stopping cleanly, so the shared ledger's peak rose to at
+    // least the producer's declared residency. Without this, `current() == 0` could
+    // pass on a ledger that was never charged — the near-vacuous gap this closes.
+    assert!(
+        run.ledger_peak_at_end >= RESIDENCY,
+        "the shared residency ledger must have been charged during the clean-stop run \
+         (peak {} must reach the declared residency {RESIDENCY}) — proving current()==0 is a \
+         genuine release, not an uncharged ledger",
+        run.ledger_peak_at_end,
+    );
+
+    // …and now the observable output-residency ledger is back to zero: every charged
+    // residency was released on the paths the clean stop took (success on the
+    // residency pair, failure/propagation/cancellation elsewhere) — no slot lease
+    // leaked.
     assert_eq!(
         run.ledger_current_at_end, 0,
         "no output residency is left charged after the clean-stop run"

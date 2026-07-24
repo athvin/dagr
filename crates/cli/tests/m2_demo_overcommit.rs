@@ -81,14 +81,14 @@ use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
-use dagr_core::admission::PoolCapacities;
+use dagr_core::admission::{Pool, PoolCapacities, PoolCost};
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
+use dagr_core::{detect_capacities, TaskError};
 
 // ===========================================================================
 // Fixed demo knobs (pinned → deterministic on any runner)
@@ -560,6 +560,26 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
     let pipeline: Pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
+    // The pinned pool the driver bootstraps against.
+    let capacities = PoolCapacities::new().memory(M);
+
+    // Reconstruct EXACTLY the `(node, cost)` input the driver feeds its bootstrap
+    // capacity check — `PoolCost::from_cost_vector(node.policy().cost())` over every
+    // pipeline node — so we can, after the drive confirms `BootstrapFailed`, invoke
+    // the SAME production `detect_capacities` the driver calls and assert on the REAL
+    // bootstrap-failure artifact it produces (see the DoD #4 assertions below). This
+    // is not an invented message: it is the identical function, capacities, and node
+    // costs the driver's own bootstrap check ran (crate `dagr-cli` `driver::drive`).
+    let node_costs: Vec<(String, PoolCost)> = pipeline
+        .nodes()
+        .map(|n| {
+            (
+                n.name().to_string(),
+                PoolCost::from_cost_vector(n.policy().cost()),
+            )
+        })
+        .collect();
+
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "oversized".into(),
@@ -572,7 +592,7 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t38-oversized").capacities(PoolCapacities::new().memory(M)),
+        &RunConfig::new("/tmp/dagr-t38-oversized").capacities(capacities),
         "m2-oversized",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -614,6 +634,53 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
         finished_outcome(&sink.bytes()).as_deref(),
         Some("bootstrap-failed"),
         "the wire outcome names bootstrap-failed, distinct from assembly-failed"
+    );
+
+    // --- DoD #4 (literal clause): the bootstrap failure NAMES the offending node
+    // AND the pool. The node/pool identity does not travel on the C19 stream (the
+    // `run-finished` body carries only `{ "outcome": "bootstrap-failed" }`) nor on
+    // the `RunReport`; the driver surfaces it by rendering the very
+    // `CapacityBootstrapFailure` that `detect_capacities` returns (driver::drive:
+    // `eprintln!("{failure}")`). So we assert on the REAL artifact by calling that
+    // same production function over the identical capacities + node costs the driver
+    // bootstrapped with — the offending run genuinely produced this failure.
+    let failure = detect_capacities(&capacities, &node_costs)
+        .expect_err("the oversized node must make the production bootstrap check fail");
+
+    // The failure names the offending node AND the pool it overran — structured,
+    // non-string proof over the artifact's own accessors (`CapacityError::node` /
+    // `::pool`). Non-vacuous: this bites the moment the artifact stops carrying the
+    // offending node id or the pool it overran.
+    assert!(
+        failure
+            .errors()
+            .iter()
+            .any(|e| e.node() == "oversized" && e.pool() == Pool::Memory),
+        "the bootstrap-failure artifact names the offending node `oversized` and the Memory pool \
+         it overran; got {:?}",
+        failure.errors(),
+    );
+    // The `fits` node is under capacity, so the failure must NOT name it — proving
+    // the naming is the OFFENDING node specifically, not every node blindly.
+    assert!(
+        !failure.errors().iter().any(|e| e.node() == "fits"),
+        "the under-capacity `fits` node must not appear in the bootstrap failure; got {:?}",
+        failure.errors(),
+    );
+
+    // The human-facing message the driver renders to stderr (`Display`) literally
+    // carries both the offending node's identifier AND the pool's name — the exact
+    // "message naming the offending node and pool" DoD #4 requires. Asserting on the
+    // rendered text keeps the human-readable surface honest too, and is non-vacuous:
+    // drop the node id or the pool from the `Display` impl and this fails.
+    let message = failure.to_string();
+    assert!(
+        message.contains("oversized"),
+        "the bootstrap-failure message names the offending node `oversized`: {message:?}"
+    );
+    assert!(
+        message.contains("Memory"),
+        "the bootstrap-failure message names the Memory pool: {message:?}"
     );
 }
 
