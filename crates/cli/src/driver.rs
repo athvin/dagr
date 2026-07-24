@@ -2104,10 +2104,7 @@ fn node_name(pipeline: &Pipeline, id: NodeId) -> Option<String> {
 /// back for the post-loop [teardown phase](run_teardown_phase). A pipeline with no
 /// teardown node yields the full set plus an empty teardown map — so the loop is
 /// byte-identical to the pre-teardown driver.
-fn partition_teardown_runners(
-    pipeline: &Pipeline,
-    runners: RunnerMap,
-) -> (RunnerMap, RunnerMap) {
+fn partition_teardown_runners(pipeline: &Pipeline, runners: RunnerMap) -> (RunnerMap, RunnerMap) {
     let is_teardown = |name: &str| {
         pipeline
             .node(NodeId::from_name(name))
