@@ -25,7 +25,7 @@
 //! <base>/<pipeline>/<run-id>/scratch/<node>/
 //! ```
 //!
-//! The `<node>` segment is derived from the node's opaque [`NodeId`](crate::handle::NodeId)
+//! The `<node>` segment is derived from the node's opaque [`NodeId`]
 //! (a stable hex fingerprint), so two distinct nodes resolve to **distinct**
 //! directories and cannot collide, while the same node under two different runs
 //! resolves under two different `<run-id>` directories and cannot collide either.
@@ -69,7 +69,7 @@
 //!
 //! Any read or write failure caused by the underlying store surfaces as a
 //! [`ScratchError::Io`], which converts to a **retry-eligible**
-//! [`TaskError`](crate::error::TaskError) — disk trouble is transient more often
+//! [`TaskError`] — disk trouble is transient more often
 //! than not, so the node's retry budget absorbs it. This is **distinct** from the
 //! "absent key" outcome, which is `Ok(None)` and **not** a failure.
 //!
@@ -248,7 +248,7 @@ impl ScratchStore {
     /// # Errors
     ///
     /// Returns [`ScratchError::Io`] (which converts to a **retry-eligible**
-    /// [`TaskError`](crate::error::TaskError), C4) if the underlying store fails to
+    /// [`TaskError`], C4) if the underlying store fails to
     /// read an existing value. A **missing** key is **not** an error — it is
     /// `Ok(None)`.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ScratchError> {
@@ -284,7 +284,7 @@ impl ScratchStore {
     /// # Errors
     ///
     /// Returns [`ScratchError::Io`] (which converts to a **retry-eligible**
-    /// [`TaskError`](crate::error::TaskError), C4) if the underlying store cannot
+    /// [`TaskError`], C4) if the underlying store cannot
     /// persist the value — an unwritable namespace, a full disk. Never a permanent
     /// failure and never a panic.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<(), ScratchError> {
