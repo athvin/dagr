@@ -17,7 +17,7 @@
 //! scenarios) is byte-for-byte identical across the two binaries; node-specific
 //! scenarios run against the binary that legitimately carries that node.
 //!
-//! # Coverage (keyed to the C26 exit-code table + the DoD)
+//! # Coverage (keyed to the C26 exit-code table + the `DoD`)
 //!
 //! - Verb parity: `graph`/`validate`/`render` accept the same verbs and flag
 //!   namespace and produce the same-shaped output across both binaries; the verb
@@ -217,7 +217,11 @@ fn graph_validate_render_behave_identically_across_pipelines() {
 
         // validate → success, no problems, no store opened/written.
         let v = run(bin, &["validate"]);
-        assert_eq!(code(&v), SUCCESS, "validate on a healthy graph exits success");
+        assert_eq!(
+            code(&v),
+            SUCCESS,
+            "validate on a healthy graph exits success"
+        );
         assert!(
             !stdout(&v).to_lowercase().contains("problem"),
             "a clean validate reports no problems"
@@ -412,7 +416,11 @@ fn assembly_failure_exits_three_and_writes_an_assembly_failed_artifact() {
             "1",
         ],
     );
-    assert_eq!(code(&out), ASSEMBLY_FAILURE, "assembly failure has its own code");
+    assert_eq!(
+        code(&out),
+        ASSEMBLY_FAILURE,
+        "assembly failure has its own code"
+    );
     let run_json = read_json(&run_dir(&base, ALPHA_PIPELINE, "a1").join("run.json"));
     assert_eq!(
         run_json["header"]["overall_outcome"].as_str(),
@@ -536,11 +544,20 @@ fn the_cancellation_code_is_distinct_in_the_table() {
 fn every_exit_code_table_entry_has_a_scenario() {
     // The C26 table: (code, the scenario in this file that exercises it).
     let table: &[(i32, &str)] = &[
-        (SUCCESS, "success_normal_run_exits_zero_and_writes_a_completed_artifact / skip_only"),
+        (
+            SUCCESS,
+            "success_normal_run_exits_zero_and_writes_a_completed_artifact / skip_only",
+        ),
         (RUN_FAILURE, "run_failure_exits_one / stop_on_first_failure"),
-        (INVALID_USAGE, "an_unknown_verb_is_invalid_usage / collision / bad flag"),
+        (
+            INVALID_USAGE,
+            "an_unknown_verb_is_invalid_usage / collision / bad flag",
+        ),
         (ASSEMBLY_FAILURE, "assembly_failure_exits_three"),
-        (BOOTSTRAP_FAILURE, "bootstrap_failure_exits_four / invalid_parameter"),
+        (
+            BOOTSTRAP_FAILURE,
+            "bootstrap_failure_exits_four / invalid_parameter",
+        ),
         (CANCELLED, "the_cancellation_code_is_distinct_in_the_table"),
         (RESUME_REFUSAL, "resume_stub / non_durable_replay_refusal"),
         (SINK_FAILURE, "sink_failure_exits_seven"),
@@ -549,7 +566,10 @@ fn every_exit_code_table_entry_has_a_scenario() {
     // causes — a new code without a row fails here).
     let mut seen = std::collections::BTreeSet::new();
     for (c, _why) in table {
-        assert!(seen.insert(*c), "code {c} appears twice in the scenario table");
+        assert!(
+            seen.insert(*c),
+            "code {c} appears twice in the scenario table"
+        );
     }
     assert_eq!(
         seen,
@@ -787,7 +807,11 @@ fn single_node_replay_refused_on_a_non_durable_input_names_it() {
             "1",
         ],
     );
-    assert_eq!(code(&prior), SUCCESS, "the non-durable prior run is produced");
+    assert_eq!(
+        code(&prior),
+        SUCCESS,
+        "the non-durable prior run is produced"
+    );
     let prior_dir = run_dir(&base, ALPHA_PIPELINE, "prior");
 
     let refuse = run(
