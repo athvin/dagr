@@ -83,7 +83,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **054** · [T43 — C22: run summary and critical path](054-T43-run-summary-and-critical-path.md) · S · feature — after T42
 - [x] **055** · [T44 — C23: node metrics](055-T44-node-metrics.md) · M · feature — after T16, T42
 - [x] **056** · [T45 — C25: logging and tracing integration](056-T45-logging-and-tracing-integration.md) · M · feature — after T20, T30
-- [ ] **057** · [T46 — C24: diagram renderer](057-T46-diagram-renderer.md) · M · feature — after T40
+- [x] **057** · [T46 — C24: diagram renderer](057-T46-diagram-renderer.md) · M · feature — after T40
 - [ ] **058** · [T47 — C24: run-overlay rendering](058-T47-run-overlay-rendering.md) · S · feature — after T42, T46
 - [ ] **059** · [T48 — Artifact validation and compatibility CI](059-T48-artifact-validation-compatibility-ci.md) · M · feature — after T7, T40, T42, T0.10
 - [ ] **060** · [T68 — Crashed-run finalize path](060-T68-crashed-run-finalize-path.md) · S · feature (tests) — after T42
