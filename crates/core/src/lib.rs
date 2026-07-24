@@ -276,8 +276,8 @@ pub use assembly::{
     FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning, FINGERPRINT_ALGORITHM_VERSION,
 };
 pub use binding::{
-    BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, ReceiveMode, RegisteredNode,
-    Shared, TriggerRule, MAX_INPUT_ARITY,
+    BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, OrderingEdge, OrderingHandle,
+    ReceiveMode, RegisteredNode, Shared, TriggerRule, MAX_INPUT_ARITY,
 };
 pub use context::{
     surface_requirements, BootstrapFailure, BootstrapOutcome, CancellationOrigin,

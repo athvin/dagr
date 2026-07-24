@@ -175,9 +175,19 @@ pub enum ReceiveMode {
 /// The kind of a recorded dependency edge — kept distinct so ordering edges
 /// (C4 / T50) can be recorded separately from data edges (arch.md §143).
 ///
-/// This ticket records only [`Data`](EdgeKind::Data) edges. The enum is
-/// `#[non_exhaustive]` so T50 can add an `Ordering` variant without a breaking
-/// change.
+/// The enum is `#[non_exhaustive]` so a future edge kind can be added without a
+/// breaking change.
+///
+/// # Which edge to reach for
+///
+/// - A [`Data`](EdgeKind::Data) edge carries a **typed value**: the downstream
+///   consumes the upstream's output, so a data edge implies both ordering *and*
+///   that the upstream succeeded (no value exists otherwise — arch.md §119).
+/// - An [`Ordering`](EdgeKind::Ordering) edge carries **no value** — it
+///   constrains *sequence only* ("run after"). Reach for it when a task's
+///   *effect* rather than its *value* matters downstream: cleanup after publish,
+///   cache-warm before read (arch.md `### C4`). An ordering-only node receives
+///   nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EdgeKind {
@@ -185,6 +195,13 @@ pub enum EdgeKind {
     /// value. Implies both ordering *and* that the upstream must have succeeded
     /// (if it didn't, there is no value — arch.md §119).
     Data,
+    /// An **ordering** dependency (C4 / T50): the downstream runs *after* the
+    /// upstream but consumes **no** value — sequence only. Unlike a data edge it
+    /// does **not** imply the upstream succeeded; under the default
+    /// `all-succeeded` rule a failed or skipped ordering upstream propagates to
+    /// the downstream exactly as a data upstream would, and an `all-terminal`
+    /// downstream runs regardless (arch.md §138).
+    Ordering,
 }
 
 /// A recorded data-dependency edge from a downstream node to one upstream node
@@ -246,6 +263,96 @@ impl DataEdge {
     #[must_use]
     pub fn implies_ordering(&self) -> bool {
         true
+    }
+}
+
+/// A **type-erased ordering upstream** — an upstream node referenced by an
+/// ordering edge (C4 / T50). Obtain one from any typed [`Handle<T>`](Handle) with
+/// [`Handle::ordering`].
+///
+/// An ordering edge constrains **sequence only**, not data: it keeps the
+/// upstream's *identity* (which determines the run-after ordering) but drops the
+/// value type entirely, so mixing ordering upstreams of **different** value types
+/// on one node is legal and an ordering-only node receives **no** value (arch.md
+/// `### C4`). Like [`Handle`], it is [`Copy`], so one node's handle fans out to
+/// any number of ordering edges by reuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OrderingHandle {
+    upstream: NodeId,
+}
+
+impl OrderingHandle {
+    /// The identity of the upstream node this ordering edge references — the value
+    /// type is gone, but the identity that determines *sequence* survives.
+    #[must_use]
+    pub fn upstream(self) -> NodeId {
+        self.upstream
+    }
+}
+
+impl<T> Handle<T> {
+    /// Reference this node as an **ordering upstream** — a type-erased "run after"
+    /// with **no** value flowing (C4 / T50). The node's identity survives; its
+    /// value type `T` is dropped.
+    ///
+    /// Reach for an ordering edge (over a data edge) when a task's *effect* rather
+    /// than its *value* matters downstream — cleanup after publish, cache-warm
+    /// before read (arch.md `### C4`). Because the value type is erased, ordering
+    /// upstreams of different types can be mixed on one node, and a node attached
+    /// only by ordering edges receives nothing.
+    #[must_use]
+    pub fn ordering(self) -> OrderingHandle {
+        OrderingHandle {
+            upstream: self.id(),
+        }
+    }
+}
+
+/// A recorded **ordering-only edge** from a downstream node to one upstream node
+/// (arch.md `### C4 · Ordering dependency`).
+///
+/// Unlike a [`DataEdge`], an ordering edge carries **no value**: it constrains
+/// sequence only ("run after"), so it has no input position, no receive mode, and
+/// no carried type. It is recorded distinctly from a data edge — via its
+/// [kind](OrderingEdge::kind) — so readiness (C11) treats it as an upstream that
+/// must be terminal but delivers nothing, and the graph artifact (C20) and diagram
+/// (C24) render it distinctly. It does **not** imply upstream success: under the
+/// default `all-succeeded` rule a failed/skipped ordering upstream propagates just
+/// as a data upstream would, and an `all-terminal` downstream runs regardless
+/// (arch.md §138).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderingEdge {
+    upstream: NodeId,
+}
+
+impl OrderingEdge {
+    /// The identity of the upstream node this ordering edge sequences after.
+    #[must_use]
+    pub fn upstream(&self) -> NodeId {
+        self.upstream
+    }
+
+    /// The [kind](EdgeKind) of this edge — always [`EdgeKind::Ordering`], recorded
+    /// distinctly from data edges (C4).
+    #[must_use]
+    pub fn kind(&self) -> EdgeKind {
+        EdgeKind::Ordering
+    }
+
+    /// An ordering edge implies **ordering** (the downstream runs after the
+    /// upstream) but **not** success — the value-carrying invariant a data edge
+    /// upholds does not apply here (arch.md §138). Always `true`.
+    #[must_use]
+    pub fn implies_ordering(&self) -> bool {
+        true
+    }
+
+    /// An ordering edge does **not** imply upstream success: it carries no value,
+    /// so there is nothing that requires the upstream to have succeeded. Always
+    /// `false` — the distinction a `DataEdge` upholds as `true` (arch.md §138).
+    #[must_use]
+    pub fn implies_success(&self) -> bool {
+        false
     }
 }
 
@@ -456,6 +563,7 @@ deps_tuple!(I0 => 0, I1 => 1, I2 => 2, I3 => 3, I4 => 4, I5 => 5, I6 => 6, I7 =>
 pub struct RegisteredNode {
     id: NodeId,
     edges: Vec<DataEdge>,
+    ordering_edges: Vec<OrderingEdge>,
     trigger_rule: TriggerRule,
 }
 
@@ -471,6 +579,15 @@ impl RegisteredNode {
     #[must_use]
     pub fn data_edges(&self) -> &[DataEdge] {
         &self.edges
+    }
+
+    /// The declared **ordering** edges (C4 / T50) — the upstreams this node must
+    /// run *after* without consuming their value, in declaration order. Distinct
+    /// from [`data_edges`](RegisteredNode::data_edges); empty for a node with no
+    /// ordering dependencies.
+    #[must_use]
+    pub fn ordering_edges(&self) -> &[OrderingEdge] {
+        &self.ordering_edges
     }
 
     /// This node's trigger rule. A node with any data edge is necessarily
@@ -510,8 +627,36 @@ pub struct ConsumesData;
 pub struct NodeBinding<S> {
     name: String,
     edges: Vec<DataEdge>,
+    ordering_edges: Vec<OrderingEdge>,
     trigger_rule: TriggerRule,
     _state: PhantomData<S>,
+}
+
+impl<S> NodeBinding<S> {
+    /// Declare one or more **ordering edges** (C4 / T50): the node runs *after*
+    /// each already-registered `ordering_upstreams` node without consuming its
+    /// value.
+    ///
+    /// Available in **both** typestates: an ordering edge attaches to **any** node
+    /// (arch.md §134), so a data-dependent node ([`ConsumesData`]) may carry
+    /// additional ordering edges, and a consume-nothing node ([`ConsumesNothing`])
+    /// may be attached only by ordering edges. Crucially, adding an ordering edge
+    /// does **not** change the typestate: it neither transitions
+    /// [`ConsumesNothing`] to [`ConsumesData`] (an ordering upstream delivers no
+    /// value, so a node ordered-after-only still consumes nothing and keeps
+    /// [`trigger_rule`](NodeBinding::<ConsumesNothing>::trigger_rule)) nor unlocks
+    /// a non-default rule on a data node (which has no `trigger_rule` method to
+    /// begin with). Each upstream is a type-erased [`OrderingHandle`] — mixing
+    /// upstreams of different value types is legal. Edges accumulate in
+    /// declaration order.
+    #[must_use]
+    pub fn ordered_after(mut self, ordering_upstreams: &[OrderingHandle]) -> Self {
+        self.ordering_edges
+            .extend(ordering_upstreams.iter().map(|h| OrderingEdge {
+                upstream: h.upstream(),
+            }));
+        self
+    }
 }
 
 impl NodeBinding<ConsumesNothing> {
@@ -523,6 +668,7 @@ impl NodeBinding<ConsumesNothing> {
         Self {
             name: name.into(),
             edges: Vec::new(),
+            ordering_edges: Vec::new(),
             trigger_rule: TriggerRule::AllSucceeded,
             _state: PhantomData,
         }
@@ -565,6 +711,7 @@ impl NodeBinding<ConsumesNothing> {
         NodeBinding {
             name: self.name,
             edges,
+            ordering_edges: self.ordering_edges,
             trigger_rule: self.trigger_rule,
             _state: PhantomData,
         }
@@ -572,9 +719,32 @@ impl NodeBinding<ConsumesNothing> {
 
     /// Finalize a consume-nothing node, minting its output handle. (A
     /// data-dependent node finalizes through [`NodeBinding::<ConsumesData>::finish`].)
+    ///
+    /// A consume-nothing node may still carry **ordering** edges (declared with
+    /// [`ordered_after`](NodeBinding::ordered_after)) — they deliver no value, so
+    /// the node stays consume-nothing. Use
+    /// [`finish_node`](NodeBinding::<ConsumesNothing>::finish_node) when the
+    /// recorded [`RegisteredNode`] (its ordering edges and trigger rule) is needed.
     #[must_use]
     pub fn finish<Out>(self) -> Handle<Out> {
         Handle::for_registration(&self.name)
+    }
+
+    /// Finalize a consume-nothing node, minting its output handle **and** returning
+    /// the recorded [`RegisteredNode`] carrying any [ordering edges](RegisteredNode::ordering_edges)
+    /// and its [trigger rule](RegisteredNode::trigger_rule). Zero data edges, by
+    /// construction. Used by the flow builder (T13/T50) when a consume-nothing node
+    /// carries ordering edges the pipeline must record.
+    #[must_use]
+    pub fn finish_node<Out>(self) -> (Handle<Out>, RegisteredNode) {
+        let handle = Handle::for_registration(&self.name);
+        let node = RegisteredNode {
+            id: handle.id(),
+            edges: Vec::new(),
+            ordering_edges: self.ordering_edges,
+            trigger_rule: self.trigger_rule,
+        };
+        (handle, node)
     }
 }
 
@@ -589,6 +759,7 @@ impl NodeBinding<ConsumesData> {
         let node = RegisteredNode {
             id: handle.id(),
             edges: self.edges,
+            ordering_edges: self.ordering_edges,
             trigger_rule: self.trigger_rule,
         };
         (handle, node)
