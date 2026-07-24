@@ -73,10 +73,7 @@ fn parse_events(bytes: &[u8]) -> Vec<(String, Option<String>)> {
         .filter_map(|l| {
             let v: serde_json::Value = serde_json::from_str(l).ok()?;
             let kind = v.get("kind")?.as_str()?.to_string();
-            let node = v
-                .get("node")
-                .and_then(|n| n.as_str())
-                .map(str::to_string);
+            let node = v.get("node").and_then(|n| n.as_str()).map(str::to_string);
             Some((kind, node))
         })
         .collect()
@@ -96,11 +93,7 @@ fn terminal_of(bytes: &[u8], node: &str) -> Option<String> {
             v.get("kind").and_then(|k| k.as_str()) == Some("node-terminal")
                 && v.get("node").and_then(|n| n.as_str()) == Some(node)
         })
-        .and_then(|v| {
-            v.get("state")
-                .and_then(|s| s.as_str())
-                .map(str::to_string)
-        })
+        .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string))
 }
 
 /// The count of node-terminal records for `node` — the "exactly one terminal"
@@ -147,6 +140,17 @@ impl Task for Skips {
     }
 }
 
+/// A one-input pass-through consumer (data-dependent, always `all-succeeded`) —
+/// used to build a deterministic linear chain for the backward-compat test.
+struct PassThrough;
+impl Task for PassThrough {
+    type Input = u64;
+    type Output = u64;
+    async fn run(&mut self, _c: &RunContext, i: u64) -> Result<u64, TaskError> {
+        Ok(i)
+    }
+}
+
 /// A cooperative in-flight task cancelled mid-run: spins on its per-attempt
 /// signal and returns once it observes cancellation. It fires the external
 /// `CancelHandle` on its first poll so the run is cancelled while it is live.
@@ -169,7 +173,7 @@ impl Task for FiresCancelThenWaits {
 }
 
 /// A teardown body that records, into shared state, (1) whether it observed its
-/// signal as UNcancelled, (2) the covered terminal states it saw through its
+/// signal as un-cancelled, (2) the covered terminal states it saw through its
 /// context, keyed by covered node name, and (3) that it ran at all. Returns
 /// success. Used to prove the fresh-signal + covered-states contract.
 struct RecordingTeardown {
@@ -292,6 +296,67 @@ fn src<T: Task<Input = ()>>(name: &str, task: T) -> Box<dyn NodeRunner> {
     SourceRunner::boxed(name, task, slot_for::<T::Output>(name, 0))
 }
 
+use dagr_core::execution::run_attempt;
+
+/// A `u64 -> u64` consumer runner over the real attempt path, for the deterministic
+/// backward-compat chain. The upstream value is a fixed constant (the chain only
+/// needs a deterministic admission order, not real data routing).
+struct MapRunner {
+    name: String,
+    task: Option<PassThrough>,
+    slot: Arc<Slot<u64>>,
+}
+impl MapRunner {
+    fn boxed(
+        name: &str,
+        task: PassThrough,
+        _upstream: Arc<Slot<u64>>,
+        slot: Arc<Slot<u64>>,
+    ) -> Box<dyn NodeRunner> {
+        Box::new(Self {
+            name: name.to_string(),
+            task: Some(task),
+            slot,
+        })
+    }
+}
+impl NodeRunner for MapRunner {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn run<'a>(
+        &'a mut self,
+        ctx: &'a RunContext,
+        sink: &'a mut (dyn AttemptEventSink + Send),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TerminalState> + Send + 'a>> {
+        let name = self.name.clone();
+        let task = self.task.take().expect("runs once");
+        let slot = Arc::clone(&self.slot);
+        let mut bound = Bound {
+            inner: task,
+            input: Some(1u64),
+        };
+        Box::pin(async move {
+            run_attempt(&mut bound, &name, ctx, &slot, sink)
+                .await
+                .terminal_state()
+        })
+    }
+}
+
+struct Bound {
+    inner: PassThrough,
+    input: Option<u64>,
+}
+impl Task for Bound {
+    type Input = ();
+    type Output = u64;
+    async fn run(&mut self, ctx: &RunContext, _i: ()) -> Result<u64, TaskError> {
+        let input = self.input.take().expect("consumed once");
+        self.inner.run(ctx, input).await
+    }
+}
+
 fn cfg() -> RunConfig {
     RunConfig::new("/tmp/dagr-t52-test")
 }
@@ -307,7 +372,11 @@ fn cfg() -> RunConfig {
 fn teardown_runs_after_every_covered_terminal_class() {
     // (covered task builder, expected covered terminal). `upstream-failed` is
     // produced by a data-dependent node whose upstream fails.
-    for (label, covered_state) in [("succeeded", "succeeded"), ("failed", "failed"), ("skipped", "skipped")] {
+    for (label, covered_state) in [
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("skipped", "skipped"),
+    ] {
         let mut flow = Flow::new();
         let covered = match label {
             "succeeded" => flow.register_source("covered", &Succeeds),
@@ -332,7 +401,7 @@ fn teardown_runs_after_every_covered_terminal_class() {
         );
 
         let sink = MemorySink::default();
-        drive(
+        let _ = drive(
             &cfg(),
             "t52",
             Ok(RunPlan::new(pipeline, runners)),
@@ -372,7 +441,11 @@ fn teardown_context_exposes_covered_terminal_states() {
     let mut flow = Flow::new();
     let setup = flow.register_source("setup", &Succeeds);
     let declined = flow.register_source("declined", &Skips);
-    let _t = flow.register_teardown("cleanup", &UnitTask, &[setup.ordering(), declined.ordering()]);
+    let _t = flow.register_teardown(
+        "cleanup",
+        &UnitTask,
+        &[setup.ordering(), declined.ordering()],
+    );
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
@@ -396,7 +469,7 @@ fn teardown_context_exposes_covered_terminal_states() {
     );
 
     let sink = MemorySink::default();
-    drive(
+    let _ = drive(
         &cfg(),
         "t52",
         Ok(RunPlan::new(pipeline, runners)),
@@ -437,7 +510,10 @@ fn failing_teardown_does_not_change_run_outcome() {
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert("work".into(), src("work", Succeeds));
-    runners.insert("cleanup".into(), UnitRunner::boxed("cleanup", TeardownFails));
+    runners.insert(
+        "cleanup".into(),
+        UnitRunner::boxed("cleanup", TeardownFails),
+    );
 
     let sink = MemorySink::default();
     let report = drive(
@@ -490,8 +566,6 @@ fn one_failing_teardown_does_not_block_others() {
         "t3".into(),
         UnitRunner::boxed("t3", TeardownSucceeds { ran: ran3.clone() }),
     );
-    let pipeline_ref = &pipeline;
-    let _ = pipeline_ref;
 
     let sink = MemorySink::default();
     let report = drive(
@@ -505,9 +579,15 @@ fn one_failing_teardown_does_not_block_others() {
 
     assert!(ran1.load(Ordering::SeqCst), "t1 ran");
     assert!(ran3.load(Ordering::SeqCst), "t3 ran (after t2 failed)");
-    assert_eq!(terminal_of(&sink.bytes(), "t1").as_deref(), Some("succeeded"));
+    assert_eq!(
+        terminal_of(&sink.bytes(), "t1").as_deref(),
+        Some("succeeded")
+    );
     assert_eq!(terminal_of(&sink.bytes(), "t2").as_deref(), Some("failed"));
-    assert_eq!(terminal_of(&sink.bytes(), "t3").as_deref(), Some("succeeded"));
+    assert_eq!(
+        terminal_of(&sink.bytes(), "t3").as_deref(),
+        Some("succeeded")
+    );
     assert_eq!(report.outcome, RunOutcome::Succeeded);
 }
 
@@ -533,10 +613,7 @@ fn teardown_runs_under_cancellation_with_a_fresh_signal() {
     let saw_uncancelled = Arc::new(AtomicBool::new(false));
     let covered = Arc::new(Mutex::new(Vec::new()));
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert(
-        "work".into(),
-        src("work", FiresCancelThenWaits { handle }),
-    );
+    runners.insert("work".into(), src("work", FiresCancelThenWaits { handle }));
     runners.insert(
         "cleanup".into(),
         UnitRunner::boxed(
@@ -567,7 +644,10 @@ fn teardown_runs_under_cancellation_with_a_fresh_signal() {
         "the in-flight covered node was cancelled"
     );
     // The teardown ran, under a FRESH (uncancelled) signal, and completed.
-    assert!(ran.load(Ordering::SeqCst), "teardown ran on the cancel path");
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "teardown ran on the cancel path"
+    );
     assert!(
         saw_uncancelled.load(Ordering::SeqCst),
         "the teardown's signal is fresh and uncancelled even after a run cancel"
@@ -590,10 +670,7 @@ fn teardown_runs_under_cancellation_with_a_fresh_signal() {
 #[test]
 fn teardown_deadline_bounds_a_runaway_teardown() {
     // Default is 15s when the flag is unset.
-    assert_eq!(
-        cfg().effective_teardown_deadline(),
-        Duration::from_secs(15)
-    );
+    assert_eq!(cfg().effective_teardown_deadline(), Duration::from_secs(15));
 
     let config = cfg().teardown_deadline(Duration::from_millis(120));
     let mut flow = Flow::new();
@@ -686,7 +763,10 @@ fn teardown_bypasses_admission_under_a_saturated_pool() {
         ran.load(Ordering::SeqCst),
         "teardown ran despite the saturated pool (it bypasses admission)"
     );
-    assert_eq!(terminal_of(&sink.bytes(), "cleanup").as_deref(), Some("succeeded"));
+    assert_eq!(
+        terminal_of(&sink.bytes(), "cleanup").as_deref(),
+        Some("succeeded")
+    );
     assert_eq!(report.outcome, RunOutcome::Succeeded);
 }
 
@@ -694,20 +774,53 @@ fn teardown_bypasses_admission_under_a_saturated_pool() {
 // Backward-compat · a no-teardown pipeline is byte-identical.
 // ===========================================================================
 
-/// A pipeline with NO teardown nodes produces exactly the same event stream and
-/// terminal states as the pre-teardown driver: same terminals, same event stream
-/// bytes. This is the byte-identical backward-compat guarantee.
+/// Strip the real-time `wall` field from every record (the driver stamps it from
+/// the system clock regardless of the injected monotonic clock, so it is the one
+/// non-deterministic field). What remains — kind, node, seq, gapless monotonic
+/// `offset_ns`, status/state, fingerprints — is fully deterministic and is the
+/// stream shape the backward-compat guarantee is about.
+fn stream_shape(bytes: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .map(|mut v| {
+            if let Some(obj) = v.as_object_mut() {
+                obj.remove("wall");
+                if let Some(header) = obj.get_mut("header").and_then(|h| h.as_object_mut()) {
+                    header.remove("wall");
+                }
+            }
+            v
+        })
+        .collect()
+}
+
+/// A pipeline with NO teardown nodes produces the same event stream (modulo the
+/// real-time `wall` field), terminals, and outcome across runs, and carries **no**
+/// teardown-phase records at all. This is the backward-compat guarantee: adding the
+/// teardown phase changed nothing on the no-teardown path. A linear chain
+/// (`a -> b`) is used so the admission order is deterministic — two *independent*
+/// sources race in the M1 loop, which is pre-existing driver behaviour, not a
+/// teardown effect.
 #[test]
 fn no_teardown_pipeline_is_byte_identical() {
     let build = || {
         let mut flow = Flow::new();
-        let _a = flow.register_source("a", &Succeeds);
-        let _b = flow.register_source("b", &Succeeds);
+        let a = flow.register_source("a", &Succeeds);
+        let _b = flow.register("b", &PassThrough, a);
         let pipeline = flow.finish();
         pipeline.assemble().expect("assembles");
         let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
         runners.insert("a".into(), src("a", Succeeds));
-        runners.insert("b".into(), src("b", Succeeds));
+        runners.insert(
+            "b".into(),
+            MapRunner::boxed(
+                "b",
+                PassThrough,
+                slot_for::<u64>("a", 1),
+                slot_for::<u64>("b", 0),
+            ),
+        );
         (pipeline, runners)
     };
 
@@ -727,12 +840,21 @@ fn no_teardown_pipeline_is_byte_identical() {
 
     let (bytes1, terminals1, outcome1) = run_once();
     let (bytes2, terminals2, outcome2) = run_once();
-    assert_eq!(bytes1, bytes2, "no-teardown stream is deterministic");
+    assert_eq!(
+        stream_shape(&bytes1),
+        stream_shape(&bytes2),
+        "no-teardown stream is deterministic (modulo the real-time wall field)"
+    );
     assert_eq!(terminals1, terminals2);
     assert_eq!(outcome1, outcome2);
-    // No teardown means no teardown-phase records at all.
+    // No teardown means no teardown-phase records at all — the terminal set is
+    // exactly the two non-teardown nodes.
     let events = parse_events(&bytes1);
     assert!(!has_event(&events, "node-terminal", Some("cleanup")));
+    assert_eq!(
+        terminals1.keys().cloned().collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
     assert_eq!(outcome1, RunOutcome::Succeeded);
 }
 

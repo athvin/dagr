@@ -688,6 +688,91 @@ impl Flow {
         )
     }
 
+    /// Register a **teardown node** (C17) covering an explicit set of already-
+    /// registered upstream handles, with the conservative default policy. Equivalent
+    /// to [`register_teardown_with`](Flow::register_teardown_with) with
+    /// [`NodePolicy::new`].
+    ///
+    /// A teardown is a consume-nothing node ordered *after* the covered set, firing
+    /// on the [`all-terminal`](TriggerRule::AllTerminal) rule — so it runs *once
+    /// every covered node is terminal in any state* (`succeeded`, `failed`,
+    /// `skipped`, `cancelled`, `abandoned`, and the propagated `upstream-failed`/
+    /// `upstream-skipped` forms). Its context exposes the covered nodes' terminal
+    /// states so cleanup can no-op when setup never ran (C8). It bypasses admission
+    /// and its declared cost must be zero (assembly rejects a nonzero-cost teardown,
+    /// which is what keeps the bypass consistent with C12's capacity invariant). At
+    /// run end the driver runs it on **every** exit path — success, failure,
+    /// stop-on-first-failure, and external cancellation — under a *fresh,
+    /// uncancelled* signal with its own deadline, so a cancelled run still cleans up
+    /// after itself; a teardown's own failure is recorded but changes neither the
+    /// run's outcome nor the other teardowns.
+    ///
+    /// Because a teardown fires on the non-default `all-terminal` rule, and C3's
+    /// builder typestate makes any non-default rule inexpressible on a node that
+    /// consumes data, a teardown **can never have a data dependency** — this
+    /// registrar accepts only a consume-nothing task (`Task<Input = ()>`), so a
+    /// data-dependent teardown is a compile error, not a runtime check.
+    ///
+    /// # Resume is not affected for outputs a teardown deletes
+    ///
+    /// **Outputs that teardown deletes are not resume-safe.** On resume (C27) a node
+    /// covered by a teardown that executed in the prior run is re-executed — added
+    /// to the must-run seed and never marked `satisfied-from-prior` — because its
+    /// durable output may have been destroyed by the cleanup. Design a covered
+    /// node's output on the assumption it will be recomputed on resume, not
+    /// rehydrated.
+    #[must_use]
+    pub fn register_teardown<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        covered: &[OrderingHandle],
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        self.register_teardown_with::<T>(name, task, covered, NodePolicy::new())
+    }
+
+    /// Register a **teardown node** (C17) covering an explicit set of upstream
+    /// handles, with an explicit [`NodePolicy`] — the policy-taking counterpart of
+    /// [`register_teardown`](Flow::register_teardown).
+    ///
+    /// The teardown flag and the [`all-terminal`](TriggerRule::AllTerminal) trigger
+    /// rule are pinned by this registrar regardless of the supplied `policy`; the
+    /// policy states the *other* facets (retries, backoff, timeout, retention). A
+    /// teardown's declared cost must be zero — assembly rejects a nonzero-cost
+    /// teardown with a distinct, review-visible error naming the node, keeping the
+    /// admission bypass consistent with C12's capacity invariant.
+    ///
+    /// See [`register_teardown`](Flow::register_teardown) for the full teardown
+    /// contract and the "outputs that teardown deletes are not resume-safe" rule.
+    #[must_use]
+    pub fn register_teardown_with<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: &T,
+        covered: &[OrderingHandle],
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()>,
+    {
+        // Pin the teardown flag and the `all-terminal` rule; the covered set is the
+        // ordering upstreams the teardown is ordered after (C4 backward-reference
+        // discipline preserves the compile-time acyclicity guarantee). A nonzero
+        // cost on the supplied policy is still rejected at assembly.
+        self.register_source_in_group_with::<T>(
+            name,
+            task,
+            None::<String>,
+            policy.teardown(true),
+            DurableWitness::Absent,
+            TriggerRule::AllTerminal,
+            covered,
+        )
+    }
+
     /// Register a **source** node under `name`, in an optional group, with an
     /// explicit [`NodePolicy`], durable-contract [`witness`](DurableWitness), and
     /// [trigger rule](TriggerRule) — the full source-registration surface the other
@@ -1289,5 +1374,38 @@ impl Pipeline {
     #[must_use]
     pub fn resolve<T>(&self, handle: Handle<T>) -> Option<&PipelineNode> {
         self.node(handle.id())
+    }
+
+    /// The **teardown → covered-node-names** map (C17): for every teardown node in
+    /// the pipeline, the names of the nodes it covers (its ordering upstreams).
+    /// Empty when the pipeline has no teardown node.
+    ///
+    /// A teardown covers exactly the nodes it is ordered after (C4), so the covered
+    /// set is that node's ordering-edge upstreams resolved to names, in
+    /// deterministic name order. This is the query the driver's teardown phase reads
+    /// to inject a teardown's covered terminal states into its context (C8), and the
+    /// contribution this ticket makes to the resume algorithm (C27): every node
+    /// named here — a node covered by a teardown — joins the resume must-run seed and
+    /// is re-executed, never `satisfied-from-prior`, because a teardown that ran in
+    /// the prior run may have destroyed its durable output ("outputs that teardown
+    /// deletes are not resume-safe"). The full seed/closure/demand algorithm is T58;
+    /// this method is the fixed input it consumes.
+    #[must_use]
+    pub fn teardown_covered_nodes(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::new();
+        for node in self.nodes() {
+            if !node.policy().is_teardown() {
+                continue;
+            }
+            let mut covered: Vec<String> = node
+                .ordering_edges()
+                .iter()
+                .filter_map(|edge| self.node(edge.upstream()).map(|u| u.name().to_string()))
+                .collect();
+            covered.sort();
+            covered.dedup();
+            out.insert(node.name().to_string(), covered);
+        }
+        out
     }
 }

@@ -90,8 +90,8 @@ pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
 use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
 use dagr_core::assembly::AssemblyError;
 use dagr_core::context::{
-    CancellationOrigin, CancellationSource, PipelineId, RunContext, RunId as CoreRunId,
-    TerminalState,
+    CancellationOrigin, CancellationSource, CoveredNodeStates, PipelineId, RunContext,
+    RunId as CoreRunId, TerminalState,
 };
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
 use dagr_core::flow::{FailureMode, Pipeline};
@@ -455,6 +455,14 @@ impl RunConfig {
         self
     }
 
+    /// The **effective** teardown deadline this run will honour (the override if
+    /// set, else [`DEFAULT_TEARDOWN_DEADLINE`], 15 s; arch.md C16 / C17). Bounds each
+    /// teardown attempt run at run end under its own fresh, uncancelled signal.
+    #[must_use]
+    pub fn effective_teardown_deadline(&self) -> Duration {
+        self.teardown_deadline
+    }
+
     /// The worst-case [shutdown budget](ShutdownBudget) for this run: the effective
     /// grace + the teardown deadline + the bounded final flush. Printed at startup.
     #[must_use]
@@ -531,6 +539,10 @@ impl RunConfig {
 // ===========================================================================
 // Node runners (type-erased attempt path)
 // ===========================================================================
+
+/// A run's type-erased [node runners](NodeRunner), keyed by node name — the map
+/// the driver splits (main vs teardown, T52) and the loop/teardown phase consume.
+type RunnerMap = BTreeMap<String, Box<dyn NodeRunner>>;
 
 /// A single node's **type-erased attempt path** — what the driver spawns for an
 /// admitted node.
@@ -986,11 +998,16 @@ where
     // too-big-node bootstrap check above already rejected any node that could never
     // fit, so the loop's admission never strands a can-never-fit node here.
     let admission = AdmissionController::new(config.capacities);
-    let (outcome, terminal_states, cancellation_origin) = run_loop(
+    // Partition the runners: teardown nodes (C17 / T52) are held back from the main
+    // loop and run in a dedicated post-loop teardown phase (below). A pipeline with
+    // no teardown node splits into the full set plus an empty teardown map, so the
+    // loop and its byte-for-byte behaviour are unchanged.
+    let (main_runners, teardown_runners) = partition_teardown_runners(&pipeline, runners);
+    let (outcome, mut terminal_states, cancellation_origin) = run_loop(
         &pipeline,
         &run_id_str,
         pipeline_name,
-        runners,
+        main_runners,
         tracker,
         config.grace,
         config.failure_mode,
@@ -999,6 +1016,30 @@ where
         &config.cancel_trigger,
         &temp_dir,
         &mut writer,
+    );
+
+    // --- The teardown phase (arch.md `### C17`; T52). After the main graph reaches
+    // terminal on ANY exit path (success, failure, stop-on-first-failure, external
+    // cancellation), every teardown node still runs: under a FRESH, uncancelled
+    // signal with its own deadline, bypassing admission, with its covered nodes'
+    // terminal states in its context. A teardown's own failure is recorded but does
+    // not change the run `outcome` (already computed over non-teardown nodes only)
+    // and does not prevent the other teardowns from running. On a no-teardown
+    // pipeline this is a no-op, so the stream stays byte-identical.
+    // The covered nodes' terminal states are exactly the loop's output (teardown
+    // nodes were excluded from the loop, so this snapshot carries no teardown
+    // terminals); clone it so the phase can fold each teardown's own terminal into
+    // `terminal_states` while still reading the covered picture.
+    let covered_states = terminal_states.clone();
+    run_teardown_phase(
+        &pipeline,
+        &run_id_str,
+        teardown_runners,
+        &covered_states,
+        config.teardown_deadline,
+        &temp_dir,
+        &mut writer,
+        &mut terminal_states,
     );
 
     let _ = writer.run_finished(outcome);
@@ -2056,6 +2097,205 @@ fn apply_decisions<S, C>(
 /// pipeline.
 fn node_name(pipeline: &Pipeline, id: NodeId) -> Option<String> {
     pipeline.node(id).map(|n| n.name().to_string())
+}
+
+/// Split a run's runners into (**main**, **teardown**) sets by the C17 teardown
+/// flag (T52). The main set drives the readiness loop; the teardown set is held
+/// back for the post-loop [teardown phase](run_teardown_phase). A pipeline with no
+/// teardown node yields the full set plus an empty teardown map — so the loop is
+/// byte-identical to the pre-teardown driver.
+fn partition_teardown_runners(
+    pipeline: &Pipeline,
+    runners: RunnerMap,
+) -> (RunnerMap, RunnerMap) {
+    let is_teardown = |name: &str| {
+        pipeline
+            .node(NodeId::from_name(name))
+            .is_some_and(|n| n.policy().is_teardown())
+    };
+    let mut main = BTreeMap::new();
+    let mut teardown = BTreeMap::new();
+    for (name, runner) in runners {
+        if is_teardown(&name) {
+            teardown.insert(name, runner);
+        } else {
+            main.insert(name, runner);
+        }
+    }
+    (main, teardown)
+}
+
+/// The **teardown phase** (arch.md `### C17`; T52): run every teardown node once
+/// the main graph is terminal, on **every** exit path, and fold each teardown's
+/// own terminal into `terminal_states`.
+///
+/// Each teardown runs under a **fresh, uncancelled** [`CancellationSource`] (so a
+/// cancelled run still cleans up after itself), bounded by the operator's
+/// `teardown_deadline` (default 15 s; C16). It bypasses admission — no permit, no
+/// pool cost — so it never competes with the run it is cleaning up after. Its
+/// context exposes the terminal states of the nodes it covers (from the completed
+/// run's `covered_states`), so cleanup can no-op when setup never ran (C8).
+///
+/// Failure isolation (C17): a teardown that fails is recorded `failed`, but the
+/// run's overall `outcome` was already computed over the non-teardown nodes only,
+/// and each teardown runs independently — one teardown's failure (or its deadline
+/// being hit) never prevents the others from running. On an abrupt process kill
+/// mid-teardown, cleanup is best-effort by design (C16): the deadline bounds each
+/// attempt, and the driver proceeds rather than hanging.
+///
+/// Teardowns run in deterministic name order on a small bounded runtime, one at a
+/// time (a teardown consumes nothing and holds no capacity, so there is nothing to
+/// parallelize and serial order keeps the stream deterministic).
+#[allow(clippy::too_many_arguments)]
+fn run_teardown_phase<S, C>(
+    pipeline: &Pipeline,
+    run_id: &str,
+    mut teardown_runners: RunnerMap,
+    covered_states: &BTreeMap<String, TerminalState>,
+    teardown_deadline: Duration,
+    temp_dir: &std::path::Path,
+    writer: &mut EventStreamWriter<S, C>,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    // The teardown → covered-node-names map (name-ordered by the BTreeMap). Empty
+    // for a no-teardown pipeline, so this whole phase is a no-op then.
+    let covered = pipeline.teardown_covered_nodes();
+    if covered.is_empty() {
+        return;
+    }
+
+    // A small isolated runtime for the teardown phase — separate from the run
+    // loop's framework runtime (already dropped) and from the task surfaces (shut
+    // down). Enables timers so the per-teardown deadline can bound a runaway body.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_time()
+        .build()
+        .expect("teardown-phase runtime builds");
+
+    for (name, runner) in &covered {
+        let Some(mut runner_box) = teardown_runners.remove(name) else {
+            // A framework defect (a teardown node with no runner): decide it failed
+            // rather than skip cleanup silently, and keep going with the rest.
+            let _ = writer.node_ready(name);
+            record_terminal(name, TerminalState::Failed, terminal_states);
+            let _ = writer.node_terminal(name, wire_terminal(TerminalState::Failed));
+            continue;
+        };
+
+        // The teardown's context: its covered nodes' terminal states (C8), and a
+        // FRESH, uncancelled signal (C17) — never the run's (possibly cancelled)
+        // token. A covered node absent from `covered_states` simply is not recorded,
+        // which is exactly the "setup never ran" no-op case the teardown branches on.
+        let mut covered_view = CoveredNodeStates::new();
+        for covered_name in runner {
+            if let Some(state) = covered_states.get(covered_name) {
+                covered_view = covered_view.with(NodeId::from_name(covered_name), *state);
+            }
+        }
+        let fresh = CancellationSource::new();
+        let node_id = NodeId::from_name(name);
+        let ctx = RunContext::builder(
+            CoreRunId::new(run_id.to_string()),
+            PipelineId::new("pipeline"),
+            node_id,
+        )
+        .cancellation(fresh.signal())
+        .covered_terminal_states(covered_view)
+        .temp_dir(temp_dir.to_path_buf())
+        .build();
+
+        // Emit `node-ready` (mirroring the main loop's admit), then run the teardown
+        // attempt bounded by the teardown deadline. A teardown that does not return
+        // within its deadline is recorded `abandoned` (best-effort cleanup, C16):
+        // the deadline is the bound that guarantees the phase terminates even if a
+        // teardown body ignores cooperation.
+        let _ = writer.node_ready(name);
+        let mut sink = BufferingSink::default();
+        let state = rt.block_on(async {
+            match tokio::time::timeout(teardown_deadline, runner_box.run(&ctx, &mut sink)).await {
+                Ok(state) => state,
+                // Deadline hit: the attempt's own records may be incomplete. Record
+                // the node `abandoned` (a runaway teardown left behind past its
+                // budget) and proceed. Its buffered opening records still flush below
+                // so the stream honestly shows it started.
+                Err(_elapsed) => TerminalState::Abandoned,
+            }
+        });
+
+        // Drain the teardown attempt's buffered records and record its single
+        // terminal, exactly like the main loop's `record_attempt_outcome` for a
+        // non-drain outcome. On a deadline hit the buffered node-terminal (if any)
+        // is suppressed in favour of the authoritative `abandoned` terminal.
+        let deadline_hit = state == TerminalState::Abandoned
+            && !sink_reported_terminal(&sink, TerminalState::Abandoned);
+        let done = AttemptDone {
+            node: name.clone(),
+            state,
+            events: sink.drain(),
+        };
+        record_teardown_outcome(&done, deadline_hit, writer, terminal_states);
+    }
+}
+
+/// Whether the teardown's buffered records already carry a node-terminal for
+/// `state` — used to decide whether a deadline-imposed `abandoned` is the
+/// authoritative terminal (the body did not emit its own) or the body genuinely
+/// returned `abandoned` on its own.
+fn sink_reported_terminal(sink: &BufferingSink, _state: TerminalState) -> bool {
+    sink.records
+        .lock()
+        .expect("event buffer mutex not poisoned")
+        .iter()
+        .any(|ev| matches!(ev, AttemptEvent::NodeTerminal { .. }))
+}
+
+/// Record one teardown attempt's outcome into the stream and `terminal_states`
+/// (T52) — the teardown-phase analogue of [`record_attempt_outcome`], minus the
+/// cancellation-drain reclassification (a teardown runs under a fresh, uncancelled
+/// signal, so there is no drain to reclassify against). Drains the buffered
+/// per-transition records, emits the single `attempt-outcome` record alongside the
+/// closing outcome event, and records the node's terminal exactly once.
+///
+/// When `deadline_imposed` is set (the teardown blew its deadline and never
+/// emitted its own terminal), the buffered node-terminal is suppressed and one
+/// authoritative `abandoned` outcome + terminal is emitted instead — mirroring how
+/// the drain path substitutes an authoritative `cancelled`.
+fn record_teardown_outcome<S, C>(
+    done: &AttemptDone,
+    deadline_imposed: bool,
+    writer: &mut EventStreamWriter<S, C>,
+    terminal_states: &mut BTreeMap<String, TerminalState>,
+) where
+    S: EventSink,
+    C: MonotonicClock,
+{
+    for ev in &done.events {
+        if deadline_imposed && matches!(ev, AttemptEvent::NodeTerminal { .. }) {
+            continue;
+        }
+        let _ = write_attempt_event(writer, ev);
+        if !deadline_imposed {
+            if let Some(record) = closing_outcome_record(&done.node, ev) {
+                let _ = writer.attempt_outcome(record);
+            }
+        }
+    }
+    if deadline_imposed {
+        let attempt = attempt_number_of(&done.events);
+        let _ = writer.attempt_outcome(AttemptOutcomeRecord::new(
+            &done.node,
+            attempt,
+            wire_terminal(TerminalState::Abandoned).as_str(),
+        ));
+        record_terminal(&done.node, TerminalState::Abandoned, terminal_states);
+        let _ = writer.node_terminal(&done.node, wire_terminal(TerminalState::Abandoned));
+    } else {
+        record_terminal(&done.node, done.state, terminal_states);
+    }
 }
 
 /// Record a node's terminal state exactly once (a node's terminal state is

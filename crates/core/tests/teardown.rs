@@ -55,7 +55,11 @@ fn register_teardown_is_all_terminal_teardown_ordered_after_covered() {
     // Fires on all-terminal, so it runs after covered nodes end in ANY state.
     assert_eq!(node.trigger_rule(), TriggerRule::AllTerminal);
     // Ordered after exactly the covered nodes (backward-reference discipline, C4).
-    let covered: Vec<NodeId> = node.ordering_edges().iter().map(|e| e.upstream()).collect();
+    let covered: Vec<NodeId> = node
+        .ordering_edges()
+        .iter()
+        .map(dagr_core::binding::OrderingEdge::upstream)
+        .collect();
     assert!(covered.contains(&NodeId::from_name("setup")));
     assert!(covered.contains(&NodeId::from_name("work")));
     assert_eq!(covered.len(), 2, "covers exactly the two named nodes");
@@ -134,7 +138,9 @@ fn register_teardown_with_zero_cost_policy_assembles() {
         NodePolicy::new().retries(2),
     );
     let pipeline = flow.finish();
-    let node = pipeline.node(NodeId::from_name("cleanup")).expect("present");
+    let node = pipeline
+        .node(NodeId::from_name("cleanup"))
+        .expect("present");
     assert!(node.policy().is_teardown());
     assert_eq!(node.trigger_rule(), TriggerRule::AllTerminal);
     assert_eq!(node.policy().retry_count(), 2, "author policy is respected");
