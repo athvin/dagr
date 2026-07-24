@@ -2156,8 +2156,9 @@ where
         .temp_dir(temp_dir)
         // C18 / T63 — the run-store base, so the node's scratch resolves to its real
         // per-node namespace under the run directory (where a resume carries prior
-        // scratch forward). The store is unwired for an empty base (a hand-built
-        // no-store context, C8), so a no-scratch run is byte-identical.
+        // scratch forward). The namespace directory is created LAZILY on the first
+        // write, so a task that never touches scratch leaves no subtree and its run
+        // is byte-identical (the run store's base is always non-empty in a real run).
         .scratch_root(std::path::PathBuf::from(scratch_base))
         .build();
         // (C25 / T45) Open the attempt span — run/node/attempt identity — and
