@@ -9,8 +9,8 @@
       "git_commit": "0123456789abcdef0123456789abcdef01234567",
       "lockfile_hash": "fnv1a-64:0011223344556677"
     },
-    "fingerprint_structural": "reserved-t41:structural",
-    "fingerprint_policy": "reserved-t41:policy",
+    "fingerprint_structural": "fnv1a-64:v1:1b2c06e7f4a2672b",
+    "fingerprint_policy": "fnv1a-64:v1:3d2654f322165d2d",
     "fingerprint_algorithm_version": 1
   },
   "nodes": [
