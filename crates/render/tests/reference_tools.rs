@@ -44,6 +44,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay, RunArtifact};
 use dagr_render::{render_dot, render_mermaid, GraphArtifact};
 
 /// Whether CI has declared the reference tools mandatory. When set, an absent
@@ -63,6 +64,39 @@ fn fixture_path(name: &str) -> PathBuf {
 fn thirty_node() -> GraphArtifact {
     let raw = std::fs::read_to_string(fixture_path("thirty-node.graph.json")).unwrap();
     GraphArtifact::from_json_str(&raw).unwrap()
+}
+
+/// A run artifact covering every node of the 30-node fixture (all `succeeded`),
+/// so the overlaid diagram styles every node and can be fed to the reference
+/// tools. Built as a published-schema run artifact.
+fn thirty_node_run() -> RunArtifact {
+    let attempts: Vec<serde_json::Value> = thirty_node()
+        .nodes()
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "node": n.name(),
+                "attempt": 1,
+                "status": "succeeded",
+                "phase_durations_ns": { "executing": 1234 },
+                "worker": "worker-0",
+            })
+        })
+        .collect();
+    let v = serde_json::json!({
+        "header": {
+            "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+            "pipeline": "example-pipeline",
+            "parameters": {},
+            "data_interval": null,
+            "captured_environment": {},
+            "resume_lineage": null,
+            "overall_outcome": "succeeded"
+        },
+        "attempts": attempts,
+        "summary": null
+    });
+    RunArtifact::from_json_str(&v.to_string()).unwrap()
 }
 
 /// True if `program` (optionally with a probe arg) can be executed.
@@ -184,6 +218,58 @@ fn mermaid_reference_tool_accepts_the_rendered_mermaid() {
         !bad.accepted,
         "Mermaid's parser must reject a malformed diagram — the check has teeth; parser stderr:\n{}",
         bad.stderr
+    );
+}
+
+/// **Reference tool accepts OVERLAID DOT (CI gate, T47).** The 30-node fixture
+/// rendered with a run overlay (state colouring + duration annotations) is piped
+/// through `dot` in parse/validation mode; the overlay's styling additions must
+/// still produce a diagram `dot` accepts (arch.md C24 line 520 extended to the
+/// overlay).
+#[test]
+fn dot_reference_tool_accepts_the_overlaid_dot() {
+    if !tool_available("dot", &["-V"]) {
+        assert!(
+            !tools_required(),
+            "`dot` (Graphviz) is required in CI (DAGR_REQUIRE_RENDER_TOOLS=1) but was not found"
+        );
+        eprintln!("SKIP: `dot` (Graphviz) not installed; skipping the overlaid-DOT reference-tool gate");
+        return;
+    }
+
+    let dot = render_dot_overlay(&thirty_node(), &thirty_node_run());
+    let good = accepts_on_stdin("dot", &["-Tcanon", "-o", null_device()], &dot);
+    assert!(
+        good.accepted,
+        "`dot` must accept the overlaid DOT output; dot stderr:\n{}",
+        good.stderr
+    );
+}
+
+/// **Reference tool accepts OVERLAID Mermaid (CI gate, T47).** The 30-node
+/// fixture rendered with a run overlay (per-state `classDef`/`class` + duration
+/// annotations) is run through Mermaid's own parser browserless; the overlay's
+/// additions must still produce Mermaid the parser accepts.
+#[test]
+fn mermaid_reference_tool_accepts_the_overlaid_mermaid() {
+    let Some(parse_dir) = mermaid_parse_dir() else {
+        assert!(
+            !tools_required(),
+            "Mermaid's parser (mermaid.parse via Node) is required in CI \
+             (DAGR_REQUIRE_RENDER_TOOLS=1) but DAGR_MERMAID_PARSE_DIR/node was not usable"
+        );
+        eprintln!(
+            "SKIP: Mermaid parser not available; skipping the overlaid-Mermaid reference-tool gate"
+        );
+        return;
+    };
+
+    let mmd = render_mermaid_overlay(&thirty_node(), &thirty_node_run());
+    let good = mermaid_parser_accepts(&parse_dir, &mmd);
+    assert!(
+        good.accepted,
+        "Mermaid's parser must accept the overlaid Mermaid output; parser stderr:\n{}",
+        good.stderr
     );
 }
 

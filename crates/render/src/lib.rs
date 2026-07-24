@@ -68,6 +68,7 @@ use std::fmt;
 pub mod dot;
 pub mod mermaid;
 pub mod model;
+pub mod overlay;
 
 pub use model::{Edge, EdgeKind, GraphArtifact, Node};
 
