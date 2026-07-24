@@ -24,8 +24,14 @@
 
 pub(crate) mod dispatch;
 pub mod driver;
+pub mod graph;
 pub mod signals;
 pub mod temp;
+
+pub use graph::{
+    emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
+    GRAPH_SCHEMA_VERSION,
+};
 
 #[cfg(test)]
 mod tests {

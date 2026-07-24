@@ -557,74 +557,13 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
         envelope.insert("body".into(), body);
         let value = serde_json::Value::Object(envelope);
         let mut out = String::new();
-        canonical_write(&value, &mut out);
+        // The T4 §6 canonicalization is shared with the graph-artifact emitter
+        // (T40) so both rest on one authoritative canonicalizer (see
+        // `crate::canonical`).
+        crate::canonical::write_canonical(&value, &mut out);
         out.push('\n');
         out
     }
-}
-
-// === Canonicalization (T4 §6) =============================================
-
-/// Write a JSON value in the T4 canonical form: object keys sorted
-/// lexicographically by byte order, compact (no insignificant whitespace),
-/// integers only. This is what makes two emissions of the same record
-/// byte-identical.
-fn canonical_write(value: &serde_json::Value, out: &mut String) {
-    match value {
-        serde_json::Value::Object(map) => {
-            out.push('{');
-            // BTreeMap gives lexicographic (byte-order) key ordering.
-            let sorted: BTreeMap<&String, &serde_json::Value> = map.iter().collect();
-            for (i, (k, v)) in sorted.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_json_string(k, out);
-                out.push(':');
-                canonical_write(v, out);
-            }
-            out.push('}');
-        }
-        serde_json::Value::Array(items) => {
-            out.push('[');
-            for (i, v) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                canonical_write(v, out);
-            }
-            out.push(']');
-        }
-        serde_json::Value::String(s) => write_json_string(s, out),
-        // Booleans, integers, and null render identically to serde_json's compact
-        // form; all dagr numeric fields are integers (T4 §6), so no float
-        // formatting hazard arises.
-        other => out.push_str(&other.to_string()),
-    }
-}
-
-/// Emit a JSON string with minimal, deterministic escaping (T4 §6): escape only
-/// what JSON requires (`"`, `\`, and control chars U+0000–U+001F); non-ASCII
-/// printable characters are emitted literally as UTF-8, never `\u`-escaped.
-fn write_json_string(s: &str, out: &mut String) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                use std::fmt::Write as _;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// Map an [`Event`] to its `(wire-kind-name, body)` pair. The body is a
@@ -840,7 +779,7 @@ mod tests {
         map.insert("middle".into(), serde_json::Value::from(3));
         let value = serde_json::Value::Object(map);
         let mut out = String::new();
-        canonical_write(&value, &mut out);
+        crate::canonical::write_canonical(&value, &mut out);
         assert_eq!(out, r#"{"alpha":2,"middle":3,"zebra":1}"#);
     }
 
@@ -851,7 +790,7 @@ mod tests {
             "a": [3, 2, 1],
         });
         let mut out = String::new();
-        canonical_write(&value, &mut out);
+        crate::canonical::write_canonical(&value, &mut out);
         // Outer keys sorted (a<b), inner keys sorted (x<y), arrays preserve
         // order (arrays are ordered, not sorted), compact whitespace.
         assert_eq!(out, r#"{"a":[3,2,1],"b":{"x":2,"y":1}}"#);
@@ -860,7 +799,7 @@ mod tests {
     #[test]
     fn string_escaping_is_minimal_and_utf8() {
         let mut out = String::new();
-        write_json_string("a\"b\\c\nd\te—é", &mut out);
+        crate::canonical::write_json_string("a\"b\\c\nd\te—é", &mut out);
         // Quote/backslash/control escaped; the em dash and é stay literal UTF-8.
         assert_eq!(out, "\"a\\\"b\\\\c\\nd\\te—é\"");
     }
