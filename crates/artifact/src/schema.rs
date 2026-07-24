@@ -43,6 +43,7 @@
 
 #![cfg(feature = "schema-validation")]
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +59,7 @@ pub const SCHEMA_DIR: &str = "schemas";
 pub const CORPUS_DIR: &str = "tests/fixtures/corpus";
 
 /// The three durable artifact families dagr publishes a schema for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArtifactKind {
     /// The C19 event stream (`dagr.event-stream@N`).
     EventStream,
@@ -316,4 +317,168 @@ pub fn check_corpus() -> Result<(), SchemaValidationError> {
         }
     }
     Ok(())
+}
+
+// === T48 — the enduring compatibility gate =================================
+//
+// T39 (above) publishes and validates the schemas and seeds the corpus walker.
+// T48 turns that into the standing compatibility CI gate: a corpus that is
+// COMPLETE (a fixture per released version, so the corpus can never fall behind a
+// schema bump) and evolution that is provably ADDITIVE-ONLY (no published schema
+// closes an object, so a prior reader never rejects a newer artifact). The
+// ten-thousand-attempt scale corpus member is generated from the real producers
+// and validated by the walker above like any other fixture.
+
+/// The corpus versions present for `kind`, ascending — the `v<N>` subdirectories
+/// under `tests/fixtures/corpus/<kind>/` that contain at least one `*.json`
+/// fixture. A version directory with no fixtures does not count.
+#[must_use]
+pub fn corpus_versions(kind: ArtifactKind) -> Vec<u32> {
+    let dir = workspace_root().join(CORPUS_DIR).join(kind.dir_name());
+    let mut versions: Vec<u32> = fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let version = name.strip_prefix('v')?.parse::<u32>().ok()?;
+            // Count the version only if it holds at least one JSON fixture.
+            let has_fixture = fs::read_dir(entry.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|f| f.path().extension().is_some_and(|ext| ext == "json"));
+            has_fixture.then_some(version)
+        })
+        .collect();
+    versions.sort_unstable();
+    versions.dedup();
+    versions
+}
+
+/// Assert the corpus is COMPLETE against what is published on disk: for every
+/// **producer** artifact kind (graph, run — the two a run leaves behind), every
+/// published schema version has at least one checked-in corpus fixture.
+///
+/// This is the standing gate that fails the day a schema version is introduced
+/// without a matching new corpus member (arch.md Stability / C22 · "one artifact
+/// per released schema version, parsed in CI forever after").
+///
+/// The event stream is not a durable *artifact* a run leaves behind the way the
+/// graph and run artifacts are, but its corpus is checked the same way when
+/// fixtures are present; the completeness obligation is scoped to the producer
+/// artifacts the ticket names.
+///
+/// # Errors
+///
+/// Returns [`SchemaValidationError`] naming the first `kind@version` that is
+/// published but has no corpus fixture.
+pub fn assert_corpus_complete() -> Result<(), SchemaValidationError> {
+    let mut published: BTreeMap<ArtifactKind, Vec<u32>> = BTreeMap::new();
+    let mut present: BTreeMap<ArtifactKind, Vec<u32>> = BTreeMap::new();
+    for kind in [ArtifactKind::Graph, ArtifactKind::Run] {
+        published.insert(kind, published_schema_versions(kind));
+        present.insert(kind, corpus_versions(kind));
+    }
+    corpus_completeness_over(&published, &present)
+}
+
+/// The pure form of [`assert_corpus_complete`]: given the published versions and
+/// the corpus versions present for each kind, report the first published version
+/// with no corpus fixture. Separated so the completeness rule is unit-testable
+/// without touching the repo (T48 test plan: "a new schema version requires a new
+/// corpus fixture").
+///
+/// # Errors
+///
+/// Returns [`SchemaValidationError`] naming the first `kind@version` that is
+/// published (in `published`) but absent from `present`.
+pub fn corpus_completeness_over(
+    published: &BTreeMap<ArtifactKind, Vec<u32>>,
+    present: &BTreeMap<ArtifactKind, Vec<u32>>,
+) -> Result<(), SchemaValidationError> {
+    for (kind, versions) in published {
+        let have = present.get(kind).cloned().unwrap_or_default();
+        for version in versions {
+            if !have.contains(version) {
+                return Err(SchemaValidationError {
+                    artifact: kind.schema_version_string(*version),
+                    reason: format!(
+                        "schema version {version} is published but has no corpus fixture under \
+                         {}/{}/v{version}/ — every released schema version must have one \
+                         checked-in fixture (arch.md Stability / C22)",
+                        CORPUS_DIR,
+                        kind.dir_name(),
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Walk the published schema document for `kind`@`version` and return every path
+/// at which it VIOLATES additive-only evolution — i.e. closes an object with
+/// `additionalProperties: false` or `unevaluatedProperties: false`, which would
+/// let a reader reject a future additive field (arch.md Stability / T0.10:
+/// "evolution within a version is additive-only; readers ignore unknown fields").
+/// An empty result means the schema is additive-safe.
+///
+/// # Errors
+///
+/// Returns [`SchemaValidationError`] if the published schema cannot be read or
+/// parsed.
+pub fn schema_document_additive_violations(
+    kind: ArtifactKind,
+    version: u32,
+) -> Result<Vec<String>, SchemaValidationError> {
+    let artifact_id = kind.schema_version_string(version);
+    let path = schema_path(kind, version);
+    let bytes = fs::read(&path).map_err(|e| SchemaValidationError {
+        artifact: artifact_id.clone(),
+        reason: format!("cannot read published schema {}: {e}", path.display()),
+    })?;
+    let schema: Value = serde_json::from_slice(&bytes).map_err(|e| SchemaValidationError {
+        artifact: artifact_id,
+        reason: format!("published schema {} is not valid JSON: {e}", path.display()),
+    })?;
+    Ok(additive_violations_in(&schema))
+}
+
+/// Recursively find every path in a JSON Schema document that closes an object —
+/// `additionalProperties: false` or `unevaluatedProperties: false`. Each returned
+/// string is a JSON-pointer-ish path naming the offending keyword, so the drift
+/// guard's message points at the exact object.
+///
+/// A value-typed `additionalProperties` (e.g. `{"type": "integer"}` constraining
+/// an OPEN map's values) is additive-safe and never flagged — only the boolean
+/// `false` closes the object.
+#[must_use]
+pub fn additive_violations_in(schema: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_additive(schema, "#", &mut out);
+    out
+}
+
+/// The recursive worker behind [`additive_violations_in`].
+fn walk_additive(node: &Value, path: &str, out: &mut Vec<String>) {
+    match node {
+        Value::Object(map) => {
+            for keyword in ["additionalProperties", "unevaluatedProperties"] {
+                if map.get(keyword) == Some(&Value::Bool(false)) {
+                    out.push(format!("{path}/{keyword} is false (closes the object)"));
+                }
+            }
+            for (key, child) in map {
+                walk_additive(child, &format!("{path}/{key}"), out);
+            }
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter().enumerate() {
+                walk_additive(child, &format!("{path}/{i}"), out);
+            }
+        }
+        _ => {}
+    }
 }
