@@ -95,7 +95,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **063** · [T51 — C6: groups](063-T51-groups.md) · S · feature — after T13, T46
 - [x] **064** · [T52 — C17: teardown nodes](064-T52-teardown-nodes.md) · M · feature — after T35, T50, T0.4
 - [x] **065** · [T53 — C18: durable scratch store (local)](065-T53-durable-scratch-store-local.md) · M · feature — after T16, T0.6
-- [ ] **066** · [T54a — C18: scratch survives process restart under the run store](066-T54a-scratch-survives-restart.md) · S · feature — after T53
+- [x] **066** · [T54a — C18: scratch survives process restart under the run store](066-T54a-scratch-survives-restart.md) · S · feature — after T53
 - [ ] **067** · [T57 — C27: durable-output declaration and recording](067-T57-durable-output-declaration-recording.md) · M · feature — after T42, T0.8
 - [ ] **068** · [T55 — C26: CLI contract](068-T55-cli-contract.md) · M · feature — after T34, T36, T40, T42, T46, T57, T0.6
 - [ ] **069** · [T56 — C26: CLI acceptance tests](069-T56-cli-acceptance-tests.md) · M · feature (tests) — after T55
