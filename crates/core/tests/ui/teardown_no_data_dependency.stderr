@@ -1,0 +1,26 @@
+# Compile-failure snapshot for `teardown_no_data_dependency.rs` — ticket T52 (064).
+#
+# CONTRACT (T8 harness, crates/core/tests/ui.rs): each non-comment, non-blank
+# line below is a substring that MUST appear somewhere in the sample's real
+# compiler diagnostic. The harness asserts ONLY that the sample FAILS to compile
+# and that every substring appears — never exact prose, wording, note count, or
+# span layout — so ordinary compiler-message churn does not break the suite
+# (C3; C17; C28; pinned to the workspace toolchain per rust-toolchain.toml).
+#
+# A teardown never has a data dependency, enforced at COMPILE time: the
+# `register_teardown` seam takes a consume-nothing task (`Task<Input = ()>`)
+# because a teardown fires on the non-default `all-terminal` rule, which C3's
+# builder typestate makes inexpressible on a data-consuming node. Passing a task
+# whose `Input` is not `()` fails the trait bound. The stable, toolchain-pinned
+# substrings are the method name `register_teardown` and the unsatisfied
+# associated-type constraint on the input.
+#
+# REGENERATION (blessing): rewritten deliberately, never silently, via the
+# single documented command from the repo root:
+#
+#     DAGR_BLESS=1 cargo test -p dagr-core --test ui
+#
+# (see crates/core/tests/ui.rs). Review this diff on a pinned-toolchain bump.
+
+register_teardown
+Input

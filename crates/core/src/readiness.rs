@@ -373,11 +373,23 @@ impl ReadinessTracker {
             ups
         };
 
+        // Teardown nodes (C17 / T52) are deliberately EXCLUDED from the readiness
+        // graph: they run in the driver's dedicated post-loop teardown phase — on
+        // every exit path, under a fresh uncancelled signal, bypassing admission —
+        // not as part of the main frontier. Leaving them out here keeps them from
+        // being cancelled during a drain and keeps a pipeline with no teardown node
+        // byte-identical to the pre-teardown tracker (the filter is a no-op then).
+        // Their ordering edges onto covered nodes therefore add no dependency to any
+        // in-graph node.
+
         // First pass: build each node's state with its seeded countdown and rule.
         // The countdown is the precomputed data-dependency count PLUS the count of
         // distinct ordering upstreams (both must be terminal before the rule fires).
         let mut nodes: BTreeMap<String, NodeState> = BTreeMap::new();
         for node in pipeline.nodes() {
+            if node.policy().is_teardown() {
+                continue;
+            }
             let data_remaining = artifact
                 .remaining_dependency_count(node.id())
                 // A node always has a precomputed count; fall back to its edge
@@ -399,8 +411,13 @@ impl ReadinessTracker {
         }
 
         // Second pass: wire the dependents map (upstream name -> dependent names),
-        // over both data upstreams and the run-level ordering upstreams.
+        // over both data upstreams and the run-level ordering upstreams. A teardown
+        // node is not in the graph, so it is never wired as a dependent of the nodes
+        // it covers (its firing is the driver's teardown phase, not this tracker).
         for node in pipeline.nodes() {
+            if node.policy().is_teardown() {
+                continue;
+            }
             let mut upstream_names: Vec<String> = node
                 .data_edges()
                 .iter()
