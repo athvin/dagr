@@ -59,7 +59,11 @@ fn every_exit_code_is_distinct() {
             code.as_u8()
         );
     }
-    assert_eq!(seen.len(), ExitCode::ALL.len(), "every variant is enumerated");
+    assert_eq!(
+        seen.len(),
+        ExitCode::ALL.len(),
+        "every variant is enumerated"
+    );
 }
 
 /// Success is exactly zero — the Unix convention every orchestrator relies on.

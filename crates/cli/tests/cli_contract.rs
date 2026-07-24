@@ -61,13 +61,23 @@ impl Task for BetaSource {
 
 fn alpha() -> Pipeline {
     let mut flow = Flow::new();
-    let _h = flow.register_source_named::<AlphaSource>("a", &AlphaSource, None::<String>, NodePolicy::new());
+    let _h = flow.register_source_named::<AlphaSource>(
+        "a",
+        &AlphaSource,
+        None::<String>,
+        NodePolicy::new(),
+    );
     flow.finish()
 }
 
 fn beta() -> Pipeline {
     let mut flow = Flow::new();
-    let _h = flow.register_source_named::<BetaSource>("b", &BetaSource, None::<String>, NodePolicy::new());
+    let _h = flow.register_source_named::<BetaSource>(
+        "b",
+        &BetaSource,
+        None::<String>,
+        NodePolicy::new(),
+    );
     flow.finish()
 }
 
@@ -106,8 +116,8 @@ fn two_pipelines_share_the_identical_verb_table() {
     // "two distinct pipelines" scenario.
     let _a = alpha();
     let _b = beta();
-    let table_once: Vec<&str> = verb_table().iter().map(Verb::name).collect();
-    let table_twice: Vec<&str> = verb_table().iter().map(Verb::name).collect();
+    let table_once: Vec<&str> = verb_table().iter().map(|v| v.name()).collect();
+    let table_twice: Vec<&str> = verb_table().iter().map(|v| v.name()).collect();
     assert_eq!(table_once, table_twice);
 }
 
@@ -142,7 +152,11 @@ fn an_unknown_verb_is_invalid_usage() {
     let outcome = parse_cli(["dagr", "no-such-verb"]);
     match outcome {
         ParseOutcome::Error { exit, .. } => {
-            assert_eq!(exit, ExitCode::InvalidUsage, "unknown verb is invalid usage");
+            assert_eq!(
+                exit,
+                ExitCode::InvalidUsage,
+                "unknown verb is invalid usage"
+            );
         }
         other => panic!("unknown verb must be an invalid-usage error, got {other:?}"),
     }
@@ -152,7 +166,9 @@ fn an_unknown_verb_is_invalid_usage() {
 #[test]
 fn a_recognized_verb_parses() {
     match parse_cli(["dagr", "graph"]) {
-        ParseOutcome::Parsed(Cli { verb: Verb::Graph, .. }) => {}
+        ParseOutcome::Parsed(Cli {
+            verb: Verb::Graph, ..
+        }) => {}
         other => panic!("`graph` must parse to the Graph verb, got {other:?}"),
     }
 }
@@ -200,12 +216,21 @@ fn validate_prints_every_assembly_problem() {
     );
     let pipeline = flow.finish();
     // Precondition: this pipeline really does fail assembly with two problems.
-    let err = pipeline.assemble().expect_err("two durable-without-contract nodes fail assembly");
-    assert!(err.problems().len() >= 2, "two independent problems expected");
+    let err = pipeline
+        .assemble()
+        .expect_err("two durable-without-contract nodes fail assembly");
+    assert!(
+        err.problems().len() >= 2,
+        "two independent problems expected"
+    );
 
     let mut out = Vec::new();
     let exit = validate_verb(&pipeline, &mut out);
-    assert_eq!(exit, ExitCode::AssemblyFailure, "validate exits assembly-failure");
+    assert_eq!(
+        exit,
+        ExitCode::AssemblyFailure,
+        "validate exits assembly-failure"
+    );
     let text = String::from_utf8(out).unwrap();
     assert!(
         text.contains("durable-a") && text.contains("durable-b"),
@@ -224,15 +249,22 @@ fn render_produces_diagram_from_a_graph_artifact_alone() {
     let pipeline = alpha();
     // Produce the graph artifact through the real emitter (the library `graph`
     // verb path), then render it from the bytes alone.
-    let graph_json =
-        dagr_cli::graph::emit_graph(&pipeline, "a-pipeline", "2026-07-24T00:00:00Z", &dagr_cli::graph::BuildProvenance::embedded())
-            .expect("emits");
+    let graph_json = dagr_cli::graph::emit_graph(
+        &pipeline,
+        "a-pipeline",
+        "2026-07-24T00:00:00Z",
+        &dagr_cli::graph::BuildProvenance::embedded(),
+    )
+    .expect("emits");
 
     let mut out = Vec::new();
     let exit = render_verb(graph_json.as_bytes(), None, RenderFormat::Dot, &mut out);
     assert_eq!(exit, ExitCode::Success);
     let dot = String::from_utf8(out).unwrap();
-    assert!(dot.contains("digraph"), "DOT diagram source produced, got: {dot}");
+    assert!(
+        dot.contains("digraph"),
+        "DOT diagram source produced, got: {dot}"
+    );
     assert!(dot.contains('a'), "the node appears in the diagram");
 }
 
@@ -241,9 +273,13 @@ fn render_produces_diagram_from_a_graph_artifact_alone() {
 #[test]
 fn render_with_a_run_overlay_colours_nodes_by_state() {
     let pipeline = alpha();
-    let graph_json =
-        dagr_cli::graph::emit_graph(&pipeline, "a-pipeline", "2026-07-24T00:00:00Z", &dagr_cli::graph::BuildProvenance::embedded())
-            .expect("emits");
+    let graph_json = dagr_cli::graph::emit_graph(
+        &pipeline,
+        "a-pipeline",
+        "2026-07-24T00:00:00Z",
+        &dagr_cli::graph::BuildProvenance::embedded(),
+    )
+    .expect("emits");
 
     // A minimal run artifact overlaying node `a` as succeeded, produced by folding
     // a tiny event stream (the real C22 fold).
@@ -272,7 +308,11 @@ fn render_with_a_run_overlay_colours_nodes_by_state() {
 fn render_refuses_a_malformed_graph_artifact() {
     let mut out = Vec::new();
     let exit = render_verb(b"{ not a graph artifact", None, RenderFormat::Dot, &mut out);
-    assert_eq!(exit, ExitCode::InvalidUsage, "a malformed artifact is refused");
+    assert_eq!(
+        exit,
+        ExitCode::InvalidUsage,
+        "a malformed artifact is refused"
+    );
 }
 
 // ===========================================================================
@@ -293,7 +333,9 @@ fn fold_produces_the_interrupted_artifact_from_a_crashed_stream() {
     // The crash clause: the folded artifact is flagged interrupted (matching the
     // standalone function's output, T42/T68).
     assert_eq!(
-        value.get("interrupted").and_then(serde_json::Value::as_bool),
+        value
+            .get("interrupted")
+            .and_then(serde_json::Value::as_bool),
         Some(true),
         "a crash-truncated stream folds to an interrupted artifact"
     );
@@ -308,7 +350,9 @@ fn fold_produces_the_interrupted_artifact_from_a_crashed_stream() {
 #[test]
 fn resume_is_a_recognized_verb() {
     match parse_cli(["dagr", "resume", "some-run-id"]) {
-        ParseOutcome::Parsed(Cli { verb: Verb::Resume, .. }) => {}
+        ParseOutcome::Parsed(Cli {
+            verb: Verb::Resume, ..
+        }) => {}
         other => panic!("`resume` must be recognized, got {other:?}"),
     }
     // It is listed in the verb table.
@@ -321,7 +365,11 @@ fn resume_is_a_recognized_verb() {
 fn resume_stub_reports_not_yet_implemented_with_a_defined_code() {
     let mut out = Vec::new();
     let exit = dagr_cli::contract::resume_verb_stub(&mut out);
-    assert_eq!(exit, ExitCode::ResumeRefusal, "the resume stub uses the resume-refusal code");
+    assert_eq!(
+        exit,
+        ExitCode::ResumeRefusal,
+        "the resume stub uses the resume-refusal code"
+    );
     let text = String::from_utf8(out).unwrap();
     assert!(
         text.to_lowercase().contains("not yet implemented"),
@@ -340,10 +388,16 @@ fn resume_stub_reports_not_yet_implemented_with_a_defined_code() {
 fn a_parameter_colliding_with_a_library_flag_is_a_named_error() {
     // Pick a genuinely reserved library flag name.
     let reserved = reserved_flag_names();
-    assert!(!reserved.is_empty(), "the library reserves at least one flag name");
+    assert!(
+        !reserved.is_empty(),
+        "the library reserves at least one flag name"
+    );
     let collide = reserved[0];
 
-    let params = vec![ParamSpec::new(collide, "a pipeline parameter that shadows a library flag")];
+    let params = vec![ParamSpec::new(
+        collide,
+        "a pipeline parameter that shadows a library flag",
+    )];
     let result = dagr_cli::contract::check_reserved_collision(&params);
     match result {
         Err(LibraryFlagCollision { flag }) => {
@@ -453,33 +507,18 @@ fn fold_tiny_success_run(node: &str) -> String {
 /// fold has real records to derive from.
 fn success_stream(node: &str) -> String {
     use dagr_artifact::event_stream::{
-        AttemptOutcomeRecord, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-        RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+        AttemptOutcomeRecord, EventStreamWriter, RunId, RunOutcome, RunStartedHeader,
+        TerminalState, FINGERPRINT_ALGORITHM_VERSION,
     };
 
-    #[derive(Default)]
-    struct Buf(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
-    impl dagr_artifact::event_stream::EventSink for Buf {
-        fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
-            self.0.borrow_mut().extend_from_slice(line);
-            Ok(())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    struct StepClock(std::cell::Cell<u64>);
-    impl MonotonicClock for StepClock {
-        fn elapsed_ns(&self) -> u64 {
-            let n = self.0.get();
-            self.0.set(n + 1);
-            n
-        }
-    }
-
-    let bytes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let sink = Buf(std::rc::Rc::clone(&bytes));
-    let mut writer = EventStreamWriter::new(sink, StepClock(std::cell::Cell::new(0)), RunId::from_operator("run-1"), "p");
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Buf(std::sync::Arc::clone(&bytes));
+    let mut writer = EventStreamWriter::new(
+        sink,
+        StepClock::default(),
+        RunId::from_operator("run-1"),
+        "p",
+    );
     let _ = writer.run_started(RunStartedHeader {
         pipeline: "p".into(),
         fingerprint_structural: None,
@@ -503,8 +542,30 @@ fn success_stream(node: &str) -> String {
     let _ = writer.node_terminal(node, TerminalState::Succeeded);
     let _ = writer.run_finished(RunOutcome::Succeeded);
     let _ = writer.finish();
-    let out = bytes.borrow().clone();
+    let out = bytes.lock().unwrap().clone();
     String::from_utf8(out).unwrap()
+}
+
+/// A Send-safe in-memory event sink shared by the test-support stream builders.
+#[derive(Clone)]
+struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl dagr_artifact::event_stream::EventSink for Buf {
+    fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
+        self.0.lock().unwrap().extend_from_slice(line);
+        Ok(())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A Send-safe monotonic clock ticking one nanosecond per read.
+#[derive(Default)]
+struct StepClock(std::sync::atomic::AtomicU64);
+impl dagr_artifact::event_stream::MonotonicClock for StepClock {
+    fn elapsed_ns(&self) -> u64 {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// A crash-truncated stream: a run that started but never finished (no
@@ -535,33 +596,18 @@ fn prior_run_with_durable_producer() -> String {
 /// attempt records a durable reference iff `durable`.
 fn two_node_prior(durable: bool) -> String {
     use dagr_artifact::event_stream::{
-        record_durable_reference, AttemptOutcomeRecord, EventStreamWriter, MonotonicClock, RunId,
-        RunOutcome, RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+        record_durable_reference, AttemptOutcomeRecord, EventStreamWriter, RunId, RunOutcome,
+        RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
     };
 
-    #[derive(Default)]
-    struct Buf(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
-    impl dagr_artifact::event_stream::EventSink for Buf {
-        fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
-            self.0.borrow_mut().extend_from_slice(line);
-            Ok(())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    struct StepClock(std::cell::Cell<u64>);
-    impl MonotonicClock for StepClock {
-        fn elapsed_ns(&self) -> u64 {
-            let n = self.0.get();
-            self.0.set(n + 1);
-            n
-        }
-    }
-
-    let bytes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let sink = Buf(std::rc::Rc::clone(&bytes));
-    let mut writer = EventStreamWriter::new(sink, StepClock(std::cell::Cell::new(0)), RunId::from_operator("run-1"), "p");
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Buf(std::sync::Arc::clone(&bytes));
+    let mut writer = EventStreamWriter::new(
+        sink,
+        StepClock::default(),
+        RunId::from_operator("run-1"),
+        "p",
+    );
     let _ = writer.run_started(RunStartedHeader {
         pipeline: "p".into(),
         fingerprint_structural: None,
@@ -602,7 +648,7 @@ fn two_node_prior(durable: bool) -> String {
     let _ = writer.node_terminal("consumer", TerminalState::Succeeded);
     let _ = writer.run_finished(RunOutcome::Succeeded);
     let _ = writer.finish();
-    let out = bytes.borrow().clone();
+    let out = bytes.lock().unwrap().clone();
     let stream = String::from_utf8(out).unwrap();
     let artifact = dagr_artifact::fold::fold_stream(
         stream.as_bytes(),

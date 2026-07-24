@@ -27,7 +27,7 @@ use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::{NodePolicy, TaskError};
+use dagr_core::TaskError;
 
 // --- injection seams --------------------------------------------------------
 
@@ -134,7 +134,11 @@ fn slot_for<T: Send + Sync + 'static>(name: &str) -> Arc<Slot<T>> {
 /// The library `run` verb's exit-code selection: drive the plan, then map the
 /// report through the C26 table. This is exactly what `run_verb` does around the
 /// driver.
-fn run_and_exit(config: &RunConfig, pipeline: Pipeline, runners: BTreeMap<String, Box<dyn NodeRunner>>) -> ExitCode {
+fn run_and_exit(
+    config: &RunConfig,
+    pipeline: Pipeline,
+    runners: BTreeMap<String, Box<dyn NodeRunner>>,
+) -> ExitCode {
     let report = drive(
         config,
         "demo",
@@ -158,10 +162,17 @@ fn a_failed_node_exits_run_failure() {
     let _h = flow.register_source("boom", &Fails);
     let pipeline = flow.finish();
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("boom".into(), SourceRunner::boxed("boom", Fails, slot_for::<u64>("boom")));
+    runners.insert(
+        "boom".into(),
+        SourceRunner::boxed("boom", Fails, slot_for::<u64>("boom")),
+    );
 
     let exit = run_and_exit(&RunConfig::new("/tmp/dagr-t55-run"), pipeline, runners);
-    assert_eq!(exit, ExitCode::RunFailure, "a failed node exits run-failure");
+    assert_eq!(
+        exit,
+        ExitCode::RunFailure,
+        "a failed node exits run-failure"
+    );
 }
 
 /// Under stop-on-first-failure, a node fails and the failure triggers
@@ -178,8 +189,14 @@ fn stop_on_first_failure_still_exits_run_failure() {
     let _s = flow.register_source("other", &Succeeds);
     let pipeline = flow.finish();
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("boom".into(), SourceRunner::boxed("boom", Fails, slot_for::<u64>("boom")));
-    runners.insert("other".into(), SourceRunner::boxed("other", Succeeds, slot_for::<u64>("other")));
+    runners.insert(
+        "boom".into(),
+        SourceRunner::boxed("boom", Fails, slot_for::<u64>("boom")),
+    );
+    runners.insert(
+        "other".into(),
+        SourceRunner::boxed("other", Succeeds, slot_for::<u64>("other")),
+    );
 
     let config = RunConfig::new("/tmp/dagr-t55-run").failure_mode(FailureMode::StopOnFirstFailure);
     let exit = run_and_exit(&config, pipeline, runners);
@@ -198,8 +215,15 @@ fn a_skip_only_run_exits_success() {
     let _h = flow.register_source("skip", &Skips);
     let pipeline = flow.finish();
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
-    runners.insert("skip".into(), SourceRunner::boxed("skip", Skips, slot_for::<u64>("skip")));
+    runners.insert(
+        "skip".into(),
+        SourceRunner::boxed("skip", Skips, slot_for::<u64>("skip")),
+    );
 
     let exit = run_and_exit(&RunConfig::new("/tmp/dagr-t55-run"), pipeline, runners);
-    assert_eq!(exit, ExitCode::Success, "a skip-only run is a successful run");
+    assert_eq!(
+        exit,
+        ExitCode::Success,
+        "a skip-only run is a successful run"
+    );
 }
