@@ -47,10 +47,13 @@
 //! - [`RunContext::resources`] — the [`ResourceRegistry`] (C9). Landed here as a
 //!   stable, honestly-empty seam; type-keyed retrieval, newtype disambiguation,
 //!   secret wrapping, and bootstrap validation are **T30**'s.
-//! - [`RunContext::scratch`] — the [`ScratchStore`] (C18). Landed here as a stable
-//!   seam that is **honestly unimplemented** (reads and writes report
-//!   not-yet-available rather than pretending to persist); key-value persistence,
-//!   run/node namespacing, and resume copy-forward are **T53**'s.
+//! - [`RunContext::scratch`] — the [`ScratchStore`] (C18). The **local durable
+//!   store** now lands under **T53**: opaque-byte key-value persistence,
+//!   run/node namespacing with enforced cross-node isolation, atomic
+//!   crash-safe writes, and the on-success cleanup hook, physically under the run
+//!   store at `<base>/<pipeline>/<run-id>/scratch/<node>/`. A context built with
+//!   **no run store** (the C8 hand-built path) carries an honestly-unwired store
+//!   that never pretends to persist. Resume copy-forward is **T54b**'s.
 //!
 //! The [`CoveredNodeStates`] shape is defined here; the **runtime-side population**
 //! of covered states (teardown ordering, the fresh uncancelled signal, the
@@ -826,90 +829,12 @@ pub fn surface_requirements(
     surfaced
 }
 
-/// The error a [`ScratchStore`] operation reports (arch.md `### C18`; concrete
-/// store is **T53**).
-///
-/// Until C18 lands, the only variant is [`NotYetAvailable`](ScratchError::NotYetAvailable):
-/// the seam is **honest**, surfacing a not-yet-available result rather than
-/// pretending a read succeeded or a write persisted. T53 grows this into the real
-/// error surface (I/O failure classified retry-eligible — C18).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ScratchError {
-    /// The durable scratch store (C18) is not landed yet — its substance arrives
-    /// with **T53**. The seam does not pretend to persist.
-    NotYetAvailable,
-}
-
-impl std::fmt::Display for ScratchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotYetAvailable => {
-                write!(
-                    f,
-                    "durable scratch store is not yet available (lands with T53 / C18)"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ScratchError {}
-
-/// The durable-scratch accessor **seam** (arch.md `### C18`; concrete store is
-/// **T53**).
-///
-/// # Honestly-unimplemented seam — T53 lands the substance
-///
-/// C8 fixes that a task reaches its per-node scratch *through the context*; C18 /
-/// **T53** builds the store (opaque-byte key-value, run/node namespacing,
-/// read-after-write across attempts, resume copy-forward, success-time cleanup).
-/// Landed here as a **stable seam that is honestly unimplemented**:
-/// [`get`](Self::get) and [`put`](Self::put) return
-/// [`ScratchError::NotYetAvailable`] rather than pretending to persist. When T53
-/// lands, its covering test asserts read-after-write across attempts; the
-/// accessor signatures do not change.
-#[derive(Debug, Clone, Default)]
-pub struct ScratchStore {
-    // T53 (C18): the local run-store-backed key-value scratch lands here.
-    _seam: (),
-}
-
-impl ScratchStore {
-    /// Read a scratch value by opaque key. **T53 seam:** always
-    /// [`Err`]`(`[`ScratchError::NotYetAvailable`]`)` — the store does not pretend
-    /// to hold a value. T53 replaces this with the real read-after-write-across-
-    /// attempts behaviour.
-    ///
-    /// # Errors
-    ///
-    /// Always [`ScratchError::NotYetAvailable`] until T53 (C18) lands.
-    #[allow(
-        clippy::unused_self,
-        reason = "stable T53 seam: the real store (C18) reads `self`; here it is honestly unimplemented"
-    )]
-    pub fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>, ScratchError> {
-        // T53 (C18): namespaced key-value read against the run store lands here.
-        Err(ScratchError::NotYetAvailable)
-    }
-
-    /// Write a scratch value under an opaque key. **T53 seam:** always
-    /// [`Err`]`(`[`ScratchError::NotYetAvailable`]`)` — the store does not pretend
-    /// to persist. T53 replaces this with the real write, readable on the next
-    /// attempt.
-    ///
-    /// # Errors
-    ///
-    /// Always [`ScratchError::NotYetAvailable`] until T53 (C18) lands.
-    #[allow(
-        clippy::unused_self,
-        reason = "stable T53 seam: the real store (C18) reads `self`; here it is honestly unimplemented"
-    )]
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<(), ScratchError> {
-        // T53 (C18): namespaced key-value write to the run store lands here.
-        Err(ScratchError::NotYetAvailable)
-    }
-}
+// The **durable scratch store** (C18) and its error surface now live in
+// [`crate::scratch`], landed by T53. They are re-exported here so the C8 context
+// seam — `RunContext::scratch` returning `&ScratchStore` — keeps the exact type
+// path every existing caller uses (`dagr_core::context::ScratchStore` /
+// `ScratchError`), unchanged from the T16 seam.
+pub use crate::scratch::{ScratchError, ScratchStore};
 
 /// A node's **terminal state**, from arch.md's normative taxonomy (Vocabulary —
 /// "Terminal states"). Every node ends a run in exactly one of these.
@@ -1228,8 +1153,12 @@ impl RunContext {
         &self.resources
     }
 
-    /// The [durable-scratch accessor](ScratchStore) — a **stable seam**; the
-    /// concrete store (C18) lands with **T53** (see [`ScratchStore`]).
+    /// The node's [durable scratch store](ScratchStore) (C18 / T53): a per-run,
+    /// per-node key-value store of opaque bytes under the run store, with enforced
+    /// cross-node isolation, atomic crash-safe writes, and a success-time cleanup
+    /// hook. A value written on one attempt is readable on the next. A context
+    /// built with **no run store** carries an honestly-unwired store that never
+    /// pretends to persist (see [`ScratchStore`]).
     #[must_use]
     pub fn scratch(&self) -> &ScratchStore {
         &self.scratch
@@ -1282,7 +1211,7 @@ pub struct RunContextBuilder {
     data_interval: Option<DataInterval>,
     cancellation: Option<CancellationSignal>,
     resources: ResourceRegistry,
-    scratch: ScratchStore,
+    scratch_root: Option<std::path::PathBuf>,
     covered_terminal_states: Option<CoveredNodeStates>,
     temp_dir: Option<std::path::PathBuf>,
 }
@@ -1299,7 +1228,7 @@ impl RunContextBuilder {
             data_interval: None,
             cancellation: None,
             resources: ResourceRegistry::default(),
-            scratch: ScratchStore::default(),
+            scratch_root: None,
             covered_terminal_states: None,
             temp_dir: None,
         }
@@ -1358,6 +1287,22 @@ impl RunContextBuilder {
         self
     }
 
+    /// Supply the **run-store base** under which this context's node reaches its
+    /// [durable scratch store](ScratchStore) (C18 / T53). The store resolves to
+    /// `<base>/<pipeline>/<run-id>/scratch/<node>/` from the run / pipeline / node
+    /// identity this context already carries (T0.6 §3, §9).
+    ///
+    /// The runtime threads the resolved run-store base here at bootstrap; a test
+    /// hands in a temp base to exercise the real store with **no runtime running**
+    /// (the C8 single-task path). Omit it for the honestly-unwired store (the
+    /// default), whose reads report absent-of-store and whose writes report a
+    /// retry-eligible fault — it never pretends to persist.
+    #[must_use]
+    pub fn scratch_root(mut self, base: std::path::PathBuf) -> Self {
+        self.scratch_root = Some(base);
+        self
+    }
+
     /// Mark this as a **teardown** context by supplying the terminal states of the
     /// nodes it covers (arch.md C17). Omit it for a non-teardown context, which
     /// [`RunContext::covered_terminal_states`] reports as [`None`].
@@ -1393,6 +1338,14 @@ impl RunContextBuilder {
             node: self.node,
             attempt: self.attempt,
         };
+        // Resolve the node's durable scratch store from the run/pipeline/node
+        // identity and the supplied run-store base (T0.6 §3, §9). With no base
+        // (the C8 hand-built path) the store is honestly unwired — it never
+        // pretends to persist.
+        let scratch = match &self.scratch_root {
+            Some(base) => ScratchStore::for_node(base, &self.pipeline, &self.run, self.node),
+            None => ScratchStore::unwired(),
+        };
         RunContext {
             run: self.run,
             pipeline: self.pipeline,
@@ -1404,7 +1357,7 @@ impl RunContextBuilder {
             cancellation,
             span,
             resources: self.resources,
-            scratch: self.scratch,
+            scratch,
             covered_terminal_states: self.covered_terminal_states,
             temp_dir: self.temp_dir,
         }

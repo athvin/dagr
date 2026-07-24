@@ -267,6 +267,7 @@ pub mod handle;
 pub mod limits;
 pub mod metrics;
 pub mod readiness;
+pub mod scratch;
 pub mod slot;
 pub mod stable_name;
 pub mod task;
