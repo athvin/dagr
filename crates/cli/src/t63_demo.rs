@@ -252,9 +252,10 @@ fn signal_ready(marker: &std::path::Path) {
 /// C6 group label so the review scenario can rename a group without touching the
 /// fingerprint; pass [`base_groups`] for the canonical layout.
 ///
-/// `checkpoint_first_input` chooses which producer `consumer` demands — it is always
-/// `expensive` for the reference pipeline; the review's rewiring variant redirects it
-/// to `inmem` (a pure edge rewire over an unchanged node set).
+/// `consumer_from` chooses which producer `consumer` demands — it is always
+/// [`Expensive`](ConsumerFrom::Expensive) for the reference pipeline; the review's
+/// rewiring variant redirects it to [`InMemory`](ConsumerFrom::InMemory) (a pure edge
+/// rewire over an unchanged node set).
 #[must_use]
 pub fn assemble(
     group_of: impl Fn(&str) -> Option<&'static str>,
