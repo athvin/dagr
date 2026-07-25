@@ -5,13 +5,13 @@
 //! "System-level acceptance" names. It owns two of them directly — criterion 4's
 //! two machine halves — and closes the coverage claim of criterion 8:
 //!
-//! - **SL4a · structural determinism.** The reference pipeline, assembled twice,
+//! - **`SL4a` · structural determinism.** The reference pipeline, assembled twice,
 //!   emits (through the **real** `dagr_cli::graph::emit_graph` C20 path) a
 //!   byte-identical graph artifact once the sole generation-time header field is
 //!   masked, with identical structural fingerprint and identical policy hash. A
 //!   drift-injection negative control proves the comparison is a real byte
 //!   comparison, not a no-op — it reports the first differing byte offset.
-//! - **SL4b · interpretive determinism.** The reference pipeline is driven twice
+//! - **`SL4b` · interpretive determinism.** The reference pipeline is driven twice
 //!   through the **real** T62 full-pipeline fakes harness
 //!   ([`dagr_cli::full_pipeline`]) with the same scripted outcomes (success, a
 //!   retryable-then-success, a permanent failure, a downstream join, and a
@@ -154,7 +154,7 @@ fn fixed_provenance() -> BuildProvenance {
     BuildProvenance::new("dagr-test-0.0.0", "0000000", "0000000000000000")
 }
 
-/// Emit the reference pipeline's graph artifact through the real C20 emitter,
+/// Emit the reference pipeline's graph artifact through the real `C20` emitter,
 /// then parse and mask the generation-time header field — the canonical
 /// comparison surface for structural determinism.
 fn masked_reference_artifact(generated_at: &str) -> Value {
@@ -190,8 +190,8 @@ fn first_diff_offset(a: &[u8], b: &[u8]) -> Option<usize> {
 // Test-plan scenario 9 — Structural determinism holds across two builds.
 // ===========================================================================
 
-/// **Structural determinism holds (SL4a).** The reference pipeline, assembled
-/// twice and emitted twice through the real C20 emitter with the generation-time
+/// **Structural determinism holds (`SL4a`).** The reference pipeline, assembled
+/// twice and emitted twice through the real `C20` emitter with the generation-time
 /// field masked, is byte-identical; the structural fingerprint and the policy
 /// hash are equal across the two assemblies. This is the covering test for
 /// `SL4a`.
@@ -245,7 +245,7 @@ fn structural_determinism_holds_across_builds() {
 // Test-plan scenario 10 — Structural determinism catches a spurious drift.
 // ===========================================================================
 
-/// **Structural determinism catches a spurious drift (SL4a negative control).**
+/// **Structural determinism catches a spurious drift (`SL4a` negative control).**
 /// A pipeline with one extra node produces a graph artifact that differs
 /// byte-for-byte from the reference even after masking generation-time; the check
 /// reports the first differing byte offset — proving it is a real comparison and
@@ -277,7 +277,7 @@ fn structural_determinism_catches_a_spurious_drift() {
         let _p1 = flow.register_named(
             "publish",
             &Publish,
-            transformed.clone(),
+            transformed,
             None::<String>,
             NodePolicy::new(),
         );
@@ -289,8 +289,13 @@ fn structural_determinism_catches_a_spurious_drift() {
             NodePolicy::new(),
         );
         let pipeline = flow.finish();
-        let json = emit_graph(&pipeline, REFERENCE_PIPELINE_NAME, GEN_A, &fixed_provenance())
-            .expect("the drifted pipeline emits");
+        let json = emit_graph(
+            &pipeline,
+            REFERENCE_PIPELINE_NAME,
+            GEN_A,
+            &fixed_provenance(),
+        )
+        .expect("the drifted pipeline emits");
         mask_generated_at(serde_json::from_str::<Value>(&json).unwrap())
     };
 
@@ -325,7 +330,7 @@ fn structural_determinism_catches_a_spurious_drift() {
             let _p1 = flow.register_named(
                 "publish",
                 &Publish,
-                transformed.clone(),
+                transformed,
                 None::<String>,
                 NodePolicy::new(),
             );
@@ -370,7 +375,7 @@ fn interpretive_replay() -> dagr_cli::full_pipeline::HarnessRun {
         .run()
 }
 
-/// **Interpretive determinism holds under replay (SL4b).** The reference pipeline,
+/// **Interpretive determinism holds under replay (`SL4b`).** The reference pipeline,
 /// driven twice through the real T62 fakes harness with the same script, yields
 /// identical per-node terminal states, identical originated-vs-propagated skip and
 /// failure markings, and a byte-identical normalized run artifact — through the
@@ -396,9 +401,15 @@ fn interpretive_determinism_holds_under_replay() {
 
     // The script's shape held (a real run, not a stub): the flaky node recovered,
     // the permanent failure failed, and the skip's consumer is upstream-skipped.
-    assert_eq!(run_a.terminal_state("transform"), Some(TerminalState::Succeeded));
+    assert_eq!(
+        run_a.terminal_state("transform"),
+        Some(TerminalState::Succeeded)
+    );
     assert_eq!(run_a.terminal_state("audit"), Some(TerminalState::Failed));
-    assert_eq!(run_a.terminal_state("emit"), Some(TerminalState::UpstreamSkipped));
+    assert_eq!(
+        run_a.terminal_state("emit"),
+        Some(TerminalState::UpstreamSkipped)
+    );
 
     // Byte-identical normalized run artifact (volatile header fields excluded —
     // the harness normalizes run id, generation time, durations, worker).
@@ -415,7 +426,7 @@ fn interpretive_determinism_holds_under_replay() {
 // ===========================================================================
 
 /// **Interpretive determinism distinguishes originated from propagated states
-/// (SL4b).** In a script where one node fails and one downstream is consequently
+/// (`SL4b`).** In a script where one node fails and one downstream is consequently
 /// upstream-failed, and one node skips and one downstream is consequently
 /// upstream-skipped, both replays record the failing/skipping node as the
 /// *originator* and the downstream nodes as *propagated* — identically.
@@ -488,7 +499,10 @@ fn private_base(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("dagr-t65-{tag}-{}-{nanos}-{unique}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "dagr-t65-{tag}-{}-{nanos}-{unique}",
+        std::process::id()
+    ))
 }
 
 fn run_bin(args: &[&str]) -> Output {
@@ -507,7 +521,7 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
-/// **Every run produces artifacts, including the failure modes (SL3).** The real
+/// **Every run produces artifacts, including the failure modes (`SL3`).** The real
 /// sample binary is driven to a normal success, an assembly failure, and a
 /// bootstrap failure; each writes a run artifact recording its distinct overall
 /// outcome. This is the covering test for `SL3` — the "every run produces
@@ -548,7 +562,11 @@ fn every_run_produces_artifacts_including_the_failure_modes() {
         "--shard",
         "1",
     ]);
-    assert_eq!(out.status.code(), Some(3), "assembly failure has its own code");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "assembly failure has its own code"
+    );
     let asm = read_json(&run_dir(&base, "a1").join("run.json"));
     assert_eq!(
         asm["header"]["overall_outcome"].as_str(),
@@ -569,7 +587,11 @@ fn every_run_produces_artifacts_including_the_failure_modes() {
         "--shard",
         "1",
     ]);
-    assert_eq!(out.status.code(), Some(4), "bootstrap failure has its own code");
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "bootstrap failure has its own code"
+    );
     let boot = read_json(&run_dir(&base, "b1").join("run.json"));
     assert_eq!(
         boot["header"]["overall_outcome"].as_str(),
@@ -631,7 +653,7 @@ impl Task for Double {
     }
 }
 
-/// **No server, database, or scheduler is required (SL7).** A real two-node flow
+/// **No server, database, or scheduler is required (`SL7`).** A real two-node flow
 /// runs to a successful completion through the public `RunnableFlow` seam against
 /// an in-memory sink and an injected clock — no server process, no database, no
 /// external scheduler is started or contacted; the binary + its arguments (here,
@@ -696,7 +718,7 @@ fn repo_root() -> PathBuf {
 /// (Test-plan scenario 14).** The shipped coverage-matrix verifier, run against
 /// the real checked-in matrix, the real `cargo test --workspace` inventory, and
 /// the version-controlled release checklist, passes — every machine criterion in
-/// SL1–SL8 and C1–C28 maps to a passing, existing test, every human criterion has
+/// `SL1`–`SL8` and `C1`–`C28` maps to a passing, existing test, every human criterion has
 /// a checklist line, and no criterion is `unmapped`. This demonstrates the product
 /// invariant holds simultaneously.
 #[test]
@@ -739,7 +761,10 @@ fn the_whole_matrix_round_trips_against_the_live_suite_and_checklist() {
 fn the_verifier_self_tests_pass() {
     let root = repo_root();
     let selftest = root.join("scripts/check-coverage-verifier-selftest.sh");
-    assert!(selftest.is_file(), "the verifier self-test script is present");
+    assert!(
+        selftest.is_file(),
+        "the verifier self-test script is present"
+    );
     let output = Command::new("bash")
         .arg(&selftest)
         .current_dir(&root)
