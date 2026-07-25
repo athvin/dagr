@@ -1,35 +1,45 @@
-// UI compile-failure sample — ticket T9 (019), C1 task-type bound.
+// UI compile-failure sample — ticket T9 (019) / T64 (079), C1 task-type bound.
 //
 // THE most common first-hour error (arch.md C1; ticket DoD): capturing a
 // non-`Send` value in a task. The rustdoc on the real `Task` trait carries this
-// same worked example; this file is its compile-fail mirror.
+// same worked example, and the cookbook's "non-`Send` capture" entry reproduces
+// this exact broken form; its FIXES (capture an `Arc`, or build the value inside
+// `run`) compile and are exercised by the compiling cookbook tests.
 //
-// The T8 UI harness compiles each `tests/ui/*.rs` sample STANDALONE with the
-// pinned `rustc` and NO `--extern dagr_core`, so this sample cannot name the
-// real `Task` trait. It reproduces the exact bound the real trait imposes — a
-// task value must be `Send + 'static` — with a local `assert_task_bound` whose
-// `Send` bound is what the framework requires before moving a task to a worker
-// thread. Capturing an `Rc` (deliberately `!Send`) violates it.
-//
-// The diagnostic names two distinct types the snapshot keys on: `Rc` (the
-// non-`Send` captured value's type) and `NonSendTask` (the offending task type).
+// This is the REAL authoring API: `dagr_core::flow::Flow::register_source`, whose
+// `T: Task` bound (and `Task: Send + 'static`) is what the framework requires
+// before moving a task value to a worker thread. Capturing an `Rc` (deliberately
+// `!Send`) violates it. The T8 harness links this sample against the built
+// `dagr_core` rlib (crates/core/tests/ui.rs) and asserts only that it FAILS to
+// compile under the pinned toolchain, with the snapshot substrings present (C28).
 
 use std::rc::Rc;
 
-/// A task value the framework must be able to move to a worker thread: the real
-/// `Task` supertrait bound is `Send + 'static`. Mirrored here locally.
+use dagr_core::flow::Flow;
+use dagr_core::task::{RunContext, Task};
+use dagr_core::TaskError;
+
+/// A task that captures a non-`Send` value (`Rc`) in its configuration. Because
+/// `Rc<u32>` is deliberately `!Send`, this task struct is `!Send` — and a task
+/// must be `Send` to be moved onto a worker thread. The fix is to capture an
+/// `Arc` instead (or build the value inside `run`), not to weaken the bound.
 struct NonSendTask {
-    // `Rc<u32>` is deliberately NOT `Send` — the adversarial captured value.
     shared: Rc<u32>,
 }
 
-/// Stand-in for the framework's requirement that a registered task be `Send`.
-fn assert_task_bound<T: Send + 'static>(_task: T) {}
+impl Task for NonSendTask {
+    type Input = ();
+    type Output = u32;
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<u32, TaskError> {
+        Ok(*self.shared)
+    }
+}
 
 fn main() {
     let task = NonSendTask { shared: Rc::new(1) };
-    // Registering / moving the task to a worker thread requires `Send`; the
-    // captured `Rc<u32>` makes `NonSendTask` non-`Send`, so this fails to
-    // compile with an E0277 naming both `Rc` and `NonSendTask`.
-    assert_task_bound(task);
+    // Registering the task moves it toward a worker thread and demands `Send`; the
+    // captured `Rc<u32>` makes `NonSendTask` non-`Send`, so this fails to compile
+    // with an E0277 naming both `Rc` and `NonSendTask`.
+    let mut flow = Flow::new();
+    let _ = flow.register_source("non-send", &task);
 }

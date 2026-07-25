@@ -179,3 +179,68 @@ change.
 **Operator decision.** A prerequisite production fix on a dedicated branch
 (`fix/reconcile-event-stream-writer-schema`), not a numbered ticket; recorded here
 because it corrects a shipped T19 defect against the ratified T39 contract.
+
+---
+
+## 2026-07-25 · 079 (T64) — cookbook entries use the honest real-API shape where the shipped RunnableFlow seam cannot express a scenario literally
+
+**Quoted Test-plan lines (three, all under "write these first — TDD").**
+- *"Incremental-cursor entry checkpoints via scratch. … run an attempt that writes
+  a cursor to scratch, force a retry-eligible failure, then let the retry read
+  it."*
+- *"Fan-in cookbook entry wires many upstreams into one node. … the joining node
+  consumes multiple upstream handles as a tuple."*
+- *"Fan-out cookbook entry … run it and read its declared versus measured cost
+  from the run artifact (C23)."*
+
+**Deviation.** Every flow-running cookbook example uses the mandated one-call
+`dagr_cli::run_flow::RunnableFlow` seam and **never** hand-writes a `NodeRunner`.
+But the shipped `RunnableFlow` (ADR 081, merged 839d841) has three expressive
+limits this ticket may **not** modify (the CRITICAL-CONTEXT mandate: "Do not
+modify the shipped ergonomics API to make an example prettier"), so three entries
+realize their scenario through the honest real API instead of a literal
+one-`RunnableFlow`-node reading:
+
+1. **Incremental cursor via scratch.** `RunnableFlow`'s retry path
+   (`run_with_retries_caught`) mints a fresh per-attempt `RunContext` **without**
+   the driver's `scratch_root`, so a *retrying* node run through `RunnableFlow`
+   reaches only an unwired scratch store (T63's wiring covers the single-attempt
+   path; the retry path's scratch is genuinely T53/T54b's runtime concern). The
+   entry therefore demonstrates the exact C18 contract — "a value written on
+   attempt one is readable on attempt two" — against the **real** `ScratchStore`
+   via two stores sharing the node's namespace (the same shape C18's own
+   acceptance test uses), rather than through a retrying `RunnableFlow` node whose
+   scratch is not wired.
+2. **Fan-in.** `RunnableFlow::register`/`register_with` drive **single-input**
+   nodes only (its `InputWiring` blanket impl asserts one edge). The entry proves
+   the multi-upstream **tuple binding** — "consumes multiple upstream handles as a
+   tuple," compile-checked, under the default `all-succeeded` rule — on a raw
+   `Flow` via `assemble()` (a structural proof, no NodeRunner), and provides the
+   **runtime** fan-in through `RunnableFlow` using the documented
+   aggregate-into-a-struct escape hatch (an intermediate node produces a struct of
+   the joined values; the consumer depends on that one handle).
+3. **Fan-out declared cost.** `RunnableFlow` has no source-with-policy seam, so the
+   fan-out node carrying a declared-cost `NodePolicy` is a *data-dependent* node
+   (fed by a trivial source) registered with `register_with` — the honest way to
+   attach a policy through the seam. The declared-cost-vs-measured **run-artifact**
+   read (C23) is the M3 artifact surface proven by T49/T43, not re-built here; the
+   entry demonstrates the arch.md invariant it is really about — internal
+   parallelism bounded by the declared cost, and runtime fan-out adding **no**
+   nodes to the graph — observably.
+
+**Rationale.** Every documented behaviour is TRUE of the shipped code (the ticket
+mandate: "verify claims against the real API, do not aspirationally describe").
+Each entry is backed by a compiled, passing test in
+`crates/cli/tests/cookbook.rs`, so it cannot rot. The alternative — hand-rolling a
+`NodeRunner` to force a literal single-node reading of each scenario — is exactly
+the ~150 lines of scheduler plumbing arch.md C1 forbids in an author-facing doc,
+and is the precise thing this ticket exists to eliminate. No shipped API was
+changed; the seam is used as-is.
+
+**Operator decision.** Traces to the CRITICAL-CONTEXT mandate on this ticket:
+"MANDATE: EVERY quickstart / README / cookbook code example that runs a flow MUST
+use `RunnableFlow` … DO NOT hand-write `impl NodeRunner` …" together with "Do not
+modify the shipped ergonomics API (run_flow.rs) to make an example prettier … If
+the API genuinely cannot express something … write the example against the API AS
+IT IS." These three entries are the "API cannot express it literally" case,
+resolved by the real-API shape rather than a workaround.
