@@ -302,10 +302,17 @@ fn structural_determinism_catches_a_spurious_drift() {
     let ref_bytes = serde_json::to_vec(&reference).unwrap();
     let drift_bytes = serde_json::to_vec(&drifted).unwrap();
     let offset = first_diff_offset(&ref_bytes, &drift_bytes);
+    // The check reports the FIRST differing byte offset (Test-plan scenario 10:
+    // "prints the first differing byte offset or field"), proving it is a real
+    // comparison and not a no-op that would pass anything.
     assert!(
         offset.is_some(),
         "a semantically-changed pipeline must produce a byte-differing artifact — \
          the structural-determinism check is a real comparison, not a no-op"
+    );
+    println!(
+        "structural-determinism drift caught: first differing byte offset = {}",
+        offset.expect("the drift is byte-observable")
     );
 
     // The fingerprints must also diverge (the change is structural).
