@@ -109,8 +109,8 @@ fn readme_rust_block_matches_the_compiled_example_verbatim() {
     let readme = read_to_string(&root.join("README.md"));
     let example = read_to_string(&root.join("crates/cli/examples/quickstart.rs"));
 
-    let readme_block = fenced_block(&readme, "rust")
-        .expect("README has a fenced ```rust quickstart block");
+    let readme_block =
+        fenced_block(&readme, "rust").expect("README has a fenced ```rust quickstart block");
     let example_region = anchored_region(&example, "quickstart")
         .expect("the quickstart example carries its ANCHOR markers");
 
@@ -137,13 +137,21 @@ fn readme_setup_blocks_are_consistent_with_the_example() {
         "the quickstart's Cargo.toml block declares the dagr-cli dependency: {toml_block}"
     );
 
-    let shell_block = fenced_block(&readme, "console")
-        .or_else(|| fenced_block(&readme, "sh"))
-        .or_else(|| fenced_block(&readme, "bash"))
-        .expect("README has a shell block showing how to run the quickstart");
     assert!(
-        shell_block.contains("cargo run --example quickstart"),
-        "the shell block runs the quickstart example verbatim: {shell_block}"
+        fenced_block(&readme, "console").is_some()
+            || fenced_block(&readme, "sh").is_some()
+            || fenced_block(&readme, "bash").is_some(),
+        "the README has a shell block showing the reader how to build and run"
+    );
+    // The reader runs the pipeline binary against a run-store directory, and can
+    // reproduce exactly what CI checks via the compiled example.
+    assert!(
+        readme.contains("cargo run -- "),
+        "the README shows running the quickstart binary against a run-store directory"
+    );
+    assert!(
+        readme.contains("cargo run --example quickstart"),
+        "the README names the compiled example (`cargo run --example quickstart`) CI runs verbatim"
     );
 }
 
@@ -167,7 +175,15 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
     // private store, with nothing else running.
     let status = Command::new(env!("CARGO"))
         .current_dir(&root)
-        .args(["run", "--quiet", "-p", "dagr-cli", "--example", "quickstart", "--"])
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "dagr-cli",
+            "--example",
+            "quickstart",
+            "--",
+        ])
         .arg(&base)
         .status()
         .expect("failed to spawn `cargo run --example quickstart`");
@@ -181,8 +197,12 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
         .join("quickstart")
         .join("quickstart-run")
         .join("events.jsonl");
-    let bytes = std::fs::read(&stream)
-        .unwrap_or_else(|e| panic!("the quickstart wrote its event stream at {}: {e}", stream.display()));
+    let bytes = std::fs::read(&stream).unwrap_or_else(|e| {
+        panic!(
+            "the quickstart wrote its event stream at {}: {e}",
+            stream.display()
+        )
+    });
     let records = dagr_artifact::event_stream::read_records(&bytes)
         .expect("the quickstart's event stream parses");
 
@@ -198,8 +218,16 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
             })
             .and_then(|r| r.get("state").and_then(|s| s.as_str()).map(str::to_string))
     };
-    assert_eq!(terminal_of("count").as_deref(), Some("succeeded"), "`count` succeeded");
-    assert_eq!(terminal_of("double").as_deref(), Some("succeeded"), "`double` succeeded");
+    assert_eq!(
+        terminal_of("count").as_deref(),
+        Some("succeeded"),
+        "`count` succeeded"
+    );
+    assert_eq!(
+        terminal_of("double").as_deref(),
+        Some("succeeded"),
+        "`double` succeeded"
+    );
 
     // The two-node shape: exactly two node-terminal events, no more, no fewer.
     let terminals = records
@@ -207,15 +235,26 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
         .iter()
         .filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("node-terminal"))
         .count();
-    assert_eq!(terminals, 2, "the pipeline is exactly two nodes (criterion 1's two-node clause)");
+    assert_eq!(
+        terminals, 2,
+        "the pipeline is exactly two nodes (criterion 1's two-node clause)"
+    );
 
     // Run bookends prove the stream is complete.
     assert_eq!(
-        records.records.first().and_then(|r| r.get("kind")).and_then(|k| k.as_str()),
+        records
+            .records
+            .first()
+            .and_then(|r| r.get("kind"))
+            .and_then(|k| k.as_str()),
         Some("run-started"),
     );
     assert_eq!(
-        records.records.last().and_then(|r| r.get("kind")).and_then(|k| k.as_str()),
+        records
+            .records
+            .last()
+            .and_then(|r| r.get("kind"))
+            .and_then(|k| k.as_str()),
         Some("run-finished"),
     );
 

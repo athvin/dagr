@@ -68,7 +68,9 @@ fn main() -> ExitCode {
     // The one thing this binary needs from you: a run-store directory. Everything
     // the run leaves behind — its event stream — lives under it. No network, no
     // database, no scheduler.
-    let base = std::env::args().nth(1).unwrap_or_else(|| "./quickstart-runs".to_string());
+    let base = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "./quickstart-runs".to_string());
 
     // --- 2. Wire the flow. Register the two tasks; `register` binds the sink to
     // the source's typed handle. A wrong-typed binding would be a *compile* error,
@@ -101,7 +103,10 @@ fn main() -> ExitCode {
     let value = report.output(doubled);
     println!("run {} finished: {:?}", report.run_id(), report.outcome());
     println!("count -> {:?}", report.terminal_state("count"));
-    println!("double -> {:?} (value {value:?})", report.terminal_state("double"));
+    println!(
+        "double -> {:?} (value {value:?})",
+        report.terminal_state("double")
+    );
 
     // The event stream is the crash-proof record everything else derives from.
     let stream_path = Path::new(&base)

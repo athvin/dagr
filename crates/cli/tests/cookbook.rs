@@ -303,7 +303,8 @@ impl Task for RenderCountAndLabel {
 fn fan_in_via_aggregate_struct_runs_through_the_one_call_seam() {
     let mut flow = RunnableFlow::new();
     let aggregate = flow.register_source("aggregate", MakeCountAndLabel);
-    let rendered = flow.register::<RenderCountAndLabel, _>("render", RenderCountAndLabel, aggregate);
+    let rendered =
+        flow.register::<RenderCountAndLabel, _>("render", RenderCountAndLabel, aggregate);
 
     let mem = MemorySink::default();
     let report = flow
@@ -382,7 +383,11 @@ fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
         )
         .expect("assembles and runs");
 
-    assert_eq!(terminal_of(&mem.bytes(), "branch"), "skipped", "the branch originated a skip");
+    assert_eq!(
+        terminal_of(&mem.bytes(), "branch"),
+        "skipped",
+        "the branch originated a skip"
+    );
     assert_eq!(
         terminal_of(&mem.bytes(), "join"),
         "upstream-skipped",
@@ -413,13 +418,21 @@ fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
         )
         .expect("assembles and runs");
 
-    assert_eq!(terminal_of(&mem.bytes(), "branch"), "succeeded", "the branch succeeded (with empty)");
+    assert_eq!(
+        terminal_of(&mem.bytes(), "branch"),
+        "succeeded",
+        "the branch succeeded (with empty)"
+    );
     assert_eq!(
         terminal_of(&mem.bytes(), "join"),
         "succeeded",
         "the join stayed alive and ran on the empty value"
     );
-    assert_eq!(report.output(join), Some(0), "the join saw None and defaulted");
+    assert_eq!(
+        report.output(join),
+        Some(0),
+        "the join saw None and defaulted"
+    );
     assert_eq!(report.outcome(), RunOutcome::Succeeded);
 }
 
@@ -472,7 +485,10 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
     // "Attempt one": a fresh store for the node writes the first cursor.
     let attempt_one = ScratchStore::for_node(base_path, &pipeline, &run, node);
     let after_one = advance_cursor(&attempt_one).expect("attempt one advances");
-    assert_eq!(after_one, 512, "attempt one started from nothing and advanced by 512");
+    assert_eq!(
+        after_one, 512,
+        "attempt one started from nothing and advanced by 512"
+    );
 
     // "Attempt two": a NEW store for the same (base, pipeline, run, node) — the
     // same namespace — reads the cursor attempt one wrote and resumes from it,
@@ -482,9 +498,15 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
         .get(b"cursor")
         .expect("read succeeds")
         .expect("attempt two reads the cursor attempt one wrote");
-    assert_eq!(read_back, b"512", "the value written on attempt one is readable on attempt two");
+    assert_eq!(
+        read_back, b"512",
+        "the value written on attempt one is readable on attempt two"
+    );
     let after_two = advance_cursor(&attempt_two).expect("attempt two advances");
-    assert_eq!(after_two, 1024, "attempt two resumed from 512 rather than starting over");
+    assert_eq!(
+        after_two, 1024,
+        "attempt two resumed from 512 rather than starting over"
+    );
 
     let _ = std::fs::remove_dir_all(base_path);
 }
@@ -548,11 +570,8 @@ fn a_node_marked_durable_needs_the_contract_or_assembly_rejects_it() {
         }
     }
     let mut flow = Flow::new();
-    let _durable = flow.register_source_durable(
-        "dataset",
-        &ProduceDataset,
-        NodePolicy::new().durable(true),
-    );
+    let _durable =
+        flow.register_source_durable("dataset", &ProduceDataset, NodePolicy::new().durable(true));
     assert!(
         flow.finish().assemble().is_ok(),
         "a durable node whose output implements DurableOutput assembles"
@@ -589,8 +608,12 @@ fn two_same_typed_resources_are_distinguished_by_newtypes() {
         .expect("analytics registers")
         .build();
 
-    let billing = registry.get::<BillingClient>().expect("billing is retrievable by type");
-    let analytics = registry.get::<AnalyticsClient>().expect("analytics is retrievable by type");
+    let billing = registry
+        .get::<BillingClient>()
+        .expect("billing is retrievable by type");
+    let analytics = registry
+        .get::<AnalyticsClient>()
+        .expect("analytics is retrievable by type");
     assert_eq!(billing.0.base_url, "https://billing");
     assert_eq!(analytics.0.base_url, "https://analytics");
 }
@@ -613,4 +636,3 @@ fn registering_two_resources_of_the_identical_type_fails_as_ambiguous() {
         "a second resource of the identical type is rejected as ambiguous (C9)"
     );
 }
-
