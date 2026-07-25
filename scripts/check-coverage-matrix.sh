@@ -55,6 +55,8 @@ matrix="docs/coverage-matrix.md"
 partition="docs/criteria-matrix.md"
 required_ids=""      # optional fixture: lines "<id> <class>"
 tests_from=""        # optional fixture: existing test ids, one per line
+failing_tests=""     # optional (T65): test ids in the FAILING set, one per line
+checklist=""         # optional (T65): the release checklist to bind human criteria to
 owner_ticket="T7"    # the "owed here" sentinel; any other owner is a deferral
 # --- Platform-conditional annotation set (T70, ticket 077) -------------------
 # arch.md "Platform support" (lines 627-633) makes limit detection, signal
@@ -75,9 +77,11 @@ while [ $# -gt 0 ]; do
     --matrix)                matrix=$2; shift 2 ;;
     --required-ids)          required_ids=$2; shift 2 ;;
     --tests-from)            tests_from=$2; shift 2 ;;
+    --failing-tests)         failing_tests=$2; shift 2 ;;
+    --checklist)             checklist=$2; shift 2 ;;
     --owner)                 owner_ticket=$2; shift 2 ;;
     --platform-conditional)  platform_conditional_ids=$2; shift 2 ;;
-    *) echo "usage: check-coverage-matrix.sh [--matrix M] [--required-ids F] [--tests-from T] [--owner TID] [--platform-conditional \"IDS\"]" >&2; exit 2 ;;
+    *) echo "usage: check-coverage-matrix.sh [--matrix M] [--required-ids F] [--tests-from T] [--failing-tests F] [--checklist C] [--owner TID] [--platform-conditional \"IDS\"]" >&2; exit 2 ;;
   esac
 done
 
@@ -135,6 +139,22 @@ else
     | sort -u >"$tests_file"
 fi
 test_exists() { grep -qxF "$1" "$tests_file"; }
+
+# --- 2b. The set of FAILING test ids (T65) -----------------------------------
+# The T65 acceptance gate distinguishes a machine criterion whose mapped test is
+# UNMAPPED from one whose mapped test EXISTS BUT IS RED (covered-but-red). The
+# real gate has no live test-report to consult inside this script — a mapped test
+# that is red fails the `cargo test --workspace` gate itself, in its own CI job —
+# so the failing set is empty in the default (real) run and this check is a
+# provable no-op there. The hermetic self-tests inject a fixture failing set via
+# --failing-tests to prove the covered-but-red diagnostic has teeth (Test-plan
+# scenario 4). One test id per line.
+failing_file="$tmp/failing.txt"; : >"$failing_file"
+if [ -n "$failing_tests" ]; then
+  [ -f "$failing_tests" ] || { echo "FAIL  failing-tests file not found: $failing_tests"; exit 2; }
+  grep -vE '^[[:space:]]*$' "$failing_tests" >"$failing_file" || true
+fi
+test_is_failing() { grep -qxF "$1" "$failing_file"; }
 
 # --- 3. Parse the coverage-matrix rows ---------------------------------------
 # A data row is "| <id> | <class> | <platform> | <test> | <covered-by> | ...".
@@ -215,9 +235,15 @@ while read -r id class; do
         fi
         # else: deferred to a future ticket — allowed, the normal early state.
       else
-        # A concrete test id: it must exist in the suite (no dangling reference).
+        # A concrete test id: it must exist in the suite (no dangling reference)
+        # AND it must not be in the failing set (covered-but-red — T65).
         if ! test_exists "$test"; then
           err "machine criterion $id maps to test id '$test', which does not exist in the test suite (dangling reference)"
+        elif test_is_failing "$test"; then
+          # DISTINCT from the unmapped diagnostic: the criterion IS covered, but
+          # its covering test is RED. A machine criterion cannot be satisfied by a
+          # failing test (Test-plan scenario 4).
+          err "machine criterion $id maps to test id '$test', which exists but is FAILING (covered-but-red); a machine criterion's covering test must pass"
         fi
       fi
       ;;
@@ -275,6 +301,33 @@ cut -f1 "$rows" | sort -u | while read -r id; do
   fi
 done >"$tmp/extra.txt"
 if [ -s "$tmp/extra.txt" ]; then cat "$tmp/extra.txt"; fail=1; fi
+
+# --- 6. Human-criterion release-checklist binding (T65) ----------------------
+# arch.md system-level criterion 8 (human half): every HUMAN-classed criterion is
+# on the version-controlled release checklist, "reviewed like code". The T65
+# acceptance gate makes that binding ENFORCED, not aspirational: for every
+# criterion the partition classes `human`, the checklist must carry a line whose
+# leading `[<id>]` tag matches the criterion id. A human criterion with no
+# checklist line fails the build, naming the empty slot (Test-plan scenario 7).
+#
+# The binding runs only when a checklist is supplied (`--checklist`), so the
+# default local run without a checklist stays backward-compatible; CI and the T65
+# round-trip test pass `--checklist docs/release-checklist.md`. The disclaimer row
+# is neither required to map to a test NOR to a checklist item (Test-plan scenario
+# 8) — only human criteria are bound here.
+if [ -n "$checklist" ]; then
+  [ -f "$checklist" ] || { echo "FAIL  release checklist not found: $checklist"; exit 2; }
+  while read -r id class; do
+    [ -n "$id" ] || continue
+    [ "$class" = "human" ] || continue
+    # A matching checklist line carries the criterion id as a bracketed `[<id>]`
+    # tag (e.g. "[C1]", "[SL8human]"). Match the literal bracketed token.
+    if ! grep -qF "[$id]" "$checklist"; then
+      err "human criterion $id has no matching item in the release checklist ($checklist); \
+every human criterion must carry a version-controlled '[$id]'-tagged checklist line (arch.md criterion 8, human half)"
+    fi
+  done <"$req"
+fi
 
 # --- Summary ------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

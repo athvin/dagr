@@ -67,7 +67,53 @@ Each scenario is independently checkable. "The gate script" is the criterion-com
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket file, and the `tasks.md` T65 entry carries no `Q:` items.
+The following **design decisions** were made and are recorded here per
+ticket-conventions §5 (a decision with a defensible default is recorded, not
+escalated):
+
+1. **How the coverage-matrix closure is expressed.** The five criteria still
+   `unmapped` at ticket start (`SL2`, `SL3`, `SL4a`, `SL5`, `SL7`) are closed by
+   mapping each to a concrete, existing, passing test id (never a re-authored
+   constituent test — Out of scope): `SL2 → ui` (the T8 harness whose
+   `wrong_type_binding` case names both types), `SL3 →
+   every_run_produces_artifacts_including_the_failure_modes`, `SL4a →
+   structural_determinism_holds_across_builds`, `SL5 → pure_function_of_an_artifact`,
+   `SL7 → no_server_database_or_scheduler_is_required`. `SL3`/`SL4a`/`SL7`'s tests
+   are T65-owned acceptance assertions (assembling existing behaviour into the
+   system-level proof — T65's mandate); `SL2`/`SL5` map to already-shipped tests.
+   Coverage-matrix edits are additive (only the `Test` cell changes; every prior
+   Notes mapping is preserved).
+
+2. **Where the `mapped-to-failing-test` (covered-but-red) check gets its failing
+   set.** The verifier has no live test-report inside the script (a red mapped
+   test already fails the `cargo test --workspace` gate in its own CI job), so the
+   failing set is empty in the real run and this check is a provable no-op there;
+   its teeth are proven hermetically by the self-test's `--failing-tests` fixture
+   (Test-plan scenario 4). The alternative — parsing a JSON test report in bash —
+   was rejected as brittle and redundant with the test gate.
+
+3. **Human-criterion checklist binding shape.** The gate binds each `human`
+   criterion in the partition to a `[<id>]`-tagged line in the version-controlled
+   `docs/release-checklist.md` (`--checklist`), enabled in CI. The disclaimer row
+   (`SL4c`) is bound to neither a test nor a checklist item (Test-plan scenario 8).
+
+4. **Structural-determinism cross-toolchain check.** Implemented as a second CI
+   job (`structural-determinism`) running the new `reference_pipeline_artifact`
+   example under the pinned toolchain and a second (`stable`) toolchain and
+   diffing the masked graph artifact + both fingerprint strings byte-for-byte —
+   the same pinned-plus-second pattern the existing `cross-toolchain-fingerprint`
+   job uses, extended from fingerprints to the full C20 artifact. The in-process
+   `system_acceptance_gate.rs` test proves determinism + a drift negative control;
+   the CI job proves the cross-toolchain byte-identity (mirroring how T41 split
+   the fingerprint determinism unit test from its cross-toolchain CI job).
+
+5. **The single required gate job.** `system-acceptance-gate` `needs` the demos
+   (via `test`, which runs the whole workspace suite), the scale benchmark and
+   platform matrix (via `test`), determinism (`structural-determinism` +
+   `cross-toolchain-fingerprint`), and the coverage/checklist closure
+   (`coverage-matrix`), so it is red unless every constituent is green
+   (Test-plan scenario 13). It adds no new runtime capability.
 
 ## Out of scope
 - **Authoring or executing new pipeline behaviour.** This ticket asserts existing behaviour only; it adds no scheduling, admission, artifact, or resume feature. Any such need belongs to the component tickets it depends on.
