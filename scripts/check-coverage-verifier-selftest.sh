@@ -275,6 +275,117 @@ else
   bad "a mapped platform-conditional criterion must not be reported unmapped; output: $out"
 fi
 
+# ===========================================================================
+# T65 (ticket 080) — the acceptance gate's added completeness enforcement:
+# the mapped-to-FAILING-test failure mode and the human-criterion release-
+# checklist binding. Both are exercised hermetically here so the gate's own
+# teeth are self-tested (Test-plan scenarios 4 and 7).
+# ===========================================================================
+
+# A canned set of "failing test ids" (the tests that were in the failing set of
+# a test report), mirroring the shape check-coverage-matrix.sh consumes via
+# --failing-tests: one test id per line.
+cat >"$work/failing.txt" <<'EOF'
+coverage_matrix::verifier_passes_against_the_checked_in_matrix
+EOF
+
+# A canned release checklist: one line per human criterion, each tagged with the
+# partition id it discharges as `[<id>]`. The good fixture's sole human criterion
+# is HX, so a well-formed checklist carries an `[HX]` line.
+write_good_checklist() { # write_good_checklist <path>
+  cat >"$1" <<'EOF'
+# fixture release checklist
+- [ ] [HX] the human judgment for HX is audited each release
+EOF
+}
+write_good_checklist "$work/checklist.md"
+
+# ---------------------------------------------------------------------------
+# Case 11 — A machine criterion mapped to a test in the FAILING set fails the
+# gate, distinctly from unmapped (T65 Test-plan scenario 4: "covered-but-red").
+# MX in the good matrix maps to a real, existing test id; feed a --failing-tests
+# set that contains exactly that id, so the mapping is covered-but-red.
+# ---------------------------------------------------------------------------
+out=$("$verifier" --matrix "$work/good.md" --required-ids "$work/ids.txt" \
+      --tests-from "$work/tests.txt" --platform-conditional "$plat_ids" \
+      --failing-tests "$work/failing.txt" --checklist "$work/checklist.md" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  pass "mapped-to-failing-test fails (nonzero exit)"
+else
+  bad "a machine criterion mapped to a failing test must fail the gate; output: $out"
+fi
+if printf '%s' "$out" | grep -q 'MX' \
+   && printf '%s' "$out" | grep -q 'coverage_matrix::verifier_passes_against_the_checked_in_matrix' \
+   && printf '%s' "$out" | grep -qiE 'fail|red'; then
+  pass "mapped-to-failing error names MX, its test id, and reports it covered-but-red"
+else
+  bad "mapped-to-failing error must name MX, its test id, and say it is red; output: $out"
+fi
+# The covered-but-red diagnostic is DISTINCT from the unmapped one (a mapped test
+# that is red must not be reported as 'unmapped').
+if ! printf '%s' "$out" | grep -qi 'unmapped'; then
+  pass "covered-but-red is reported distinctly from unmapped"
+else
+  bad "a covered-but-red criterion must not be reported as unmapped; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 12 — The same good matrix + a failing set that does NOT contain the
+# mapped test passes (guards against a verifier that reds every mapping). This
+# is the normal green path with a --failing-tests argument present.
+# ---------------------------------------------------------------------------
+cat >"$work/failing-empty.txt" <<'EOF'
+some::unrelated_test_that_is_not_mapped
+EOF
+out=$("$verifier" --matrix "$work/good.md" --required-ids "$work/ids.txt" \
+      --tests-from "$work/tests.txt" --platform-conditional "$plat_ids" \
+      --failing-tests "$work/failing-empty.txt" --checklist "$work/checklist.md" 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "a mapped-and-green criterion with a failing set present still passes"
+else
+  bad "a mapped test absent from the failing set must pass; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 13 — A human criterion with NO release-checklist item fails the gate
+# (T65 Test-plan scenario 7). Strip HX's line from the checklist; HX is still
+# classed human in the partition, so it has an empty checklist slot.
+# ---------------------------------------------------------------------------
+grep -v '\[HX\]' "$work/checklist.md" >"$work/checklist-missing.md"
+out=$("$verifier" --matrix "$work/good.md" --required-ids "$work/ids.txt" \
+      --tests-from "$work/tests.txt" --platform-conditional "$plat_ids" \
+      --checklist "$work/checklist-missing.md" 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  pass "human criterion with no checklist item fails (nonzero exit)"
+else
+  bad "a human criterion with no checklist line must fail the gate; output: $out"
+fi
+if printf '%s' "$out" | grep -q 'HX' \
+   && printf '%s' "$out" | grep -qiE 'checklist'; then
+  pass "missing-checklist error names HX and the empty checklist slot"
+else
+  bad "missing-checklist error must name HX and the checklist; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 14 — A complete matrix + a complete checklist passes with the checklist
+# binding enabled (the green path for the human-criterion binding). The disclaimer
+# row (DX) is neither required to map to a test nor to a checklist item.
+# ---------------------------------------------------------------------------
+out=$("$verifier" --matrix "$work/good.md" --required-ids "$work/ids.txt" \
+      --tests-from "$work/tests.txt" --platform-conditional "$plat_ids" \
+      --checklist "$work/checklist.md" 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "complete matrix + complete checklist passes (human binding satisfied)"
+else
+  bad "a complete matrix with every human criterion on the checklist must pass; output: $out"
+fi
+if printf '%s' "$out" | grep -qi 'disclaimer'; then
+  pass "the disclaimer row is honoured (counted, not required to map or be on the checklist)"
+else
+  bad "the disclaimer total must still be reported; output: $out"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo "ALL COVERAGE-MATRIX SELF-TESTS PASSED"
   exit 0
