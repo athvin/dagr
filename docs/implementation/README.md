@@ -108,7 +108,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 - [x] **076** · [T69 — Scale benchmark](076-T69-scale-benchmark.md) · S · feature (bench) — after T24, T48
 - [x] **077** · [T70 — Platform-matrix CI](077-T70-platform-matrix-ci.md) · S · feature (ci) — after T7, T32, T36
 - [x] **078** · [T63 — M4 demo: kill, resume, and review](078-T63-m4-demo-kill-resume-review.md) · M · feature (demo) — after T36, T51, T52, T56, T59, T61, T62
-- [ ] **079** · [T64 — README, quickstart, and cookbook](079-T64-readme-quickstart-and-cookbook.md) · L · feature (docs) — after T49, T55
+- [x] **079** · [T64 — README, quickstart, and cookbook](079-T64-readme-quickstart-and-cookbook.md) · L · feature (docs) — after T49, T55
 - [ ] **080** · [T65 — System acceptance gate](080-T65-system-acceptance-gate.md) · M · feature (gate) — after T7, T28, T38, T49, T63, T64, T69, T70
 
 ---
