@@ -723,7 +723,13 @@ fn common_task_mistakes_have_compiling_fixes() {
     // FIX 1 + FIX 2: a `#[task]` returning `Result<_, TaskError>` and capturing an
     // `Arc`. Both compile and run (source produces 1; the Arc-doubler makes 2).
     let source = flow.register_source("source", One);
-    let doubled = flow.register::<Doubler, _>("double", Doubler { factor: Arc::new(2) }, source);
+    let doubled = flow.register::<Doubler, _>(
+        "double",
+        Doubler {
+            factor: Arc::new(2),
+        },
+        source,
+    );
 
     // FIX 3 + FIX 4: an aggregate struct carried as ONE handle, bound into a
     // consumer whose `run` argument type matches exactly.
