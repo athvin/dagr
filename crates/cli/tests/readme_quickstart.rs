@@ -122,6 +122,81 @@ fn readme_rust_block_matches_the_compiled_example_verbatim() {
     );
 }
 
+/// **The two tasks are authored with `#[task]`, plumbing-free (T73).** The
+/// quickstart is the canonical surface a reader copies first, so it must make
+/// arch.md C1's "declare four things, write no plumbing" claim demonstrably true:
+/// `Count` and `Double` are `#[task]` inherent impls whose bodies are a single
+/// `run` fn, carrying **no** hand-written `type Input` / `type Output` /
+/// `EXECUTION_CLASS` lines (the macro supplies them). The registration and the
+/// support types stay unchanged — asserted alongside so the rewrite touched only
+/// the two node bodies.
+#[test]
+fn quickstart_tasks_are_authored_with_the_task_macro_and_carry_no_hand_written_plumbing() {
+    let root = repo_root();
+    let example = read_to_string(&root.join("crates/cli/examples/quickstart.rs"));
+    let region = anchored_region(&example, "quickstart")
+        .expect("the quickstart example carries its ANCHOR markers");
+
+    // The macro is the primary authoring style: the anchored region pulls in the
+    // re-exported attribute and applies it to both node impls.
+    assert!(
+        region.contains("use dagr_core::task;"),
+        "the quickstart imports the `#[task]` attribute (`use dagr_core::task;`) — \
+         the macro is the primary authoring style the quickstart shows (ADR 082)"
+    );
+    assert!(
+        region.contains("#[task]\nimpl Count"),
+        "`Count` is authored with `#[task]` on an inherent `impl` block (not a \
+         hand-written `impl Task`)"
+    );
+    assert!(
+        region.contains("#[task]\nimpl Double"),
+        "`Double` is authored with `#[task]` on an inherent `impl` block"
+    );
+
+    // The macro supplies the four C1 declarations, so neither node body may carry
+    // a hand-written associated-type or execution-class line — that is exactly the
+    // scaffolding the macro removes.
+    assert!(
+        !region.contains("impl Task for Count"),
+        "`Count` no longer hand-writes `impl Task` — the `#[task]` expansion does"
+    );
+    assert!(
+        !region.contains("impl Task for Double"),
+        "`Double` no longer hand-writes `impl Task` — the `#[task]` expansion does"
+    );
+    assert!(
+        !region.contains("type Input"),
+        "the quickstart carries no hand-written `type Input` line: the `#[task]` \
+         expansion infers it (arch.md C1, 'declare four things, write no plumbing')"
+    );
+    assert!(
+        !region.contains("type Output"),
+        "the quickstart carries no hand-written `type Output` line: the `#[task]` \
+         expansion infers it"
+    );
+    assert!(
+        !region.contains("EXECUTION_CLASS"),
+        "the quickstart carries no hand-written `EXECUTION_CLASS` line: the default \
+         await-bound class is the macro's, not the author's"
+    );
+
+    // `main()` and the `RunnableFlow` registration are unchanged — the rewrite
+    // shrank only the two node bodies, leaving the wiring the reader learns intact.
+    assert!(
+        region.contains("let counted = flow.register_source(\"count\", Count { up_to: 21 });"),
+        "the source registration is unchanged from the pre-macro quickstart"
+    );
+    assert!(
+        region.contains("let doubled = flow.register::<Double, _>(\"double\", Double, counted);"),
+        "the sink registration is unchanged from the pre-macro quickstart"
+    );
+    assert!(
+        region.contains("flow.run(\"quickstart\", &config, sink, TickClock::default())"),
+        "the one-call `RunnableFlow::run` seam is unchanged from the pre-macro quickstart"
+    );
+}
+
 /// **The TOML and shell blocks match what the prose tells the reader to do.** The
 /// `Cargo.toml` dependency block names `dagr-cli`, and the shell block invokes the
 /// example exactly as the example's own docs say (`cargo run --example

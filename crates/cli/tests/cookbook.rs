@@ -25,6 +25,9 @@
 //!   output implements, and what it buys at resume (C10/C27).
 //! - **Two same-typed resources via newtypes** — retrieval by type succeeding and
 //!   the identical-type registration failing as ambiguous (C9).
+//! - **Common `#[task]` mistakes** — the *fixes* for the macro's four documented
+//!   failure modes compile and run; the broken forms are the trybuild corpus in
+//!   `crates/macros/tests/expand/fail/` (ADR 082, T73).
 //!
 //! The **non-`Send` capture** entry is a compile-fail fixture pinned to the
 //! workspace toolchain, so it lives in the T8 UI harness
@@ -41,6 +44,7 @@ use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::context::RunContext;
 use dagr_core::error::RehydrateError;
+use dagr_core::task;
 use dagr_core::task::Task;
 use dagr_core::{Flow, TaskError};
 
@@ -635,4 +639,118 @@ fn registering_two_resources_of_the_identical_type_fails_as_ambiguous() {
         result.is_err(),
         "a second resource of the identical type is rejected as ambiguous (C9)"
     );
+}
+
+// ===========================================================================
+// Entry: COMMON `#[task]` MISTAKES — the FIXES compile and run (T73 / ADR 082).
+//
+// The broken forms are the trybuild corpus (`crates/macros/tests/expand/fail/`,
+// each with a committed `.stderr`). This entry proves the *fix* for each of the
+// four documented mistakes compiles and runs through the one-call `RunnableFlow`
+// seam — and it is authored with `#[task]`, the primary style the cookbook now
+// shows, so the executable ground truth exercises the macro end to end.
+// ===========================================================================
+
+/// A zero-input source producing a starting number for the doubler below.
+struct One;
+
+#[task]
+impl One {
+    async fn run(&mut self, _input: ()) -> Result<u64, TaskError> {
+        Ok(1)
+    }
+}
+
+/// FIX 1 (bare return): a task's `run` returns `Result<T, TaskError>`, declaring
+/// the failure channel — even an infallible body returns `Ok(..)`. A bare `-> T`
+/// is the mistake (pinned: `expand/fail/bare_return.rs`).
+///
+/// FIX 2 (non-`Send` capture): the struct captures an `Arc` (Send + Sync when its
+/// contents are), not an `Rc`. Registering an `Rc`-capturing task is the mistake
+/// (pinned: `expand/fail/non_send_capture.rs`).
+struct Doubler {
+    /// An `Arc`, so the task stays `Send` — the fix for a shared read-only value.
+    factor: Arc<u64>,
+}
+
+#[task]
+impl Doubler {
+    async fn run(&mut self, input: u64) -> Result<u64, TaskError> {
+        // Returns `Ok(..)` (fix 1) over an `Arc`-captured value (fix 2).
+        Ok(input * *self.factor)
+    }
+}
+
+/// FIX 3 (over-8 inputs): aggregate the upstream values into one struct produced
+/// by an intermediate node, then depend on that *one* handle — instead of binding
+/// nine handles, which trips the arity-8 `Deps` ceiling (pinned:
+/// `expand/fail/over_eight_inputs.rs`).
+#[derive(Clone)]
+struct ManyInputs {
+    values: Vec<u64>,
+}
+
+/// The intermediate aggregator: it would gather nine-plus upstreams internally;
+/// here it produces the aggregate struct the single-input consumer depends on.
+struct Aggregate;
+
+#[task]
+impl Aggregate {
+    async fn run(&mut self, _input: ()) -> Result<ManyInputs, TaskError> {
+        Ok(ManyInputs {
+            values: (1..=9).collect(), // nine values, carried as ONE handle
+        })
+    }
+}
+
+/// FIX 3 consumer + FIX 4 (deps mismatch): the consumer's `run` argument type is
+/// `ManyInputs`, and it is bound to the aggregator's `Handle<ManyInputs>` — the
+/// types match exactly, so registration compiles. Binding a wrong-typed handle is
+/// the mistake (pinned: `expand/fail/deps_mismatch.rs`).
+struct SumAll;
+
+#[task]
+impl SumAll {
+    async fn run(&mut self, input: ManyInputs) -> Result<u64, TaskError> {
+        Ok(input.values.iter().sum())
+    }
+}
+
+#[test]
+fn common_task_mistakes_have_compiling_fixes() {
+    let mut flow = RunnableFlow::new();
+
+    // FIX 1 + FIX 2: a `#[task]` returning `Result<_, TaskError>` and capturing an
+    // `Arc`. Both compile and run (source produces 1; the Arc-doubler makes 2).
+    let source = flow.register_source("source", One);
+    let doubled = flow.register::<Doubler, _>(
+        "double",
+        Doubler {
+            factor: Arc::new(2),
+        },
+        source,
+    );
+
+    // FIX 3 + FIX 4: an aggregate struct carried as ONE handle, bound into a
+    // consumer whose `run` argument type matches exactly.
+    let aggregate = flow.register_source("aggregate", Aggregate);
+    let summed = flow.register::<SumAll, _>("sum", SumAll, aggregate);
+
+    let mem = MemorySink::default();
+    let report = flow
+        .run(
+            "cookbook-common-mistakes",
+            &RunConfig::new(temp_base("common-mistakes")),
+            mem.clone(),
+            TickClock::default(),
+        )
+        .expect("assembles and runs");
+
+    assert_eq!(report.outcome(), RunOutcome::Succeeded);
+    // FIX 1/2: the Arc-captured doubler ran (source produced 1, double produced 2).
+    assert_eq!(terminal_of(&mem.bytes(), "double"), "succeeded");
+    assert_eq!(report.output(doubled), Some(2));
+    // FIX 3/4: the aggregate-of-nine summed through one handle (1+..+9 = 45).
+    assert_eq!(terminal_of(&mem.bytes(), "sum"), "succeeded");
+    assert_eq!(report.output(summed), Some(45));
 }

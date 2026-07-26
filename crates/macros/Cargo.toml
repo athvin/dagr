@@ -41,5 +41,31 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 
+# --- Dev-only: the trybuild accept/reject corpus (T73, tests/trybuild.rs) -----
+#
+# The macro's expansion targets `dagr-core` items (`Task`, `RunContext`,
+# `TaskError`, the `#[task]` re-export) and the multi-input deps mismatch is a
+# `dagr-cli::run_flow::RunnableFlow` seam check, so the compile-pass/compile-fail
+# fixtures need both crates on their path — as DEV-dependencies only, so nothing
+# here touches the shipped proc-macro's dependency graph.
+#
+# This forms a DEV-dependency cycle (`dagr-core` depends on `dagr-macros` behind
+# its `macros` feature; the fixtures here depend back on `dagr-core`/`dagr-cli`).
+# Cargo permits dev-dependency cycles — a dev-dep is used only to build this
+# crate's own test targets, never its library — so the cycle is legal and does
+# not affect the normal (non-dev) build order.
+#
+# `trybuild` pins the macro's accept/reject boundary with byte-exact `.stderr`
+# snapshots under the workspace-pinned toolchain. Its transitive tree
+# (`serde`/`serde_json`/`toml`/`glob`/`termcolor`/`unicode-ident`) resolves to
+# MIT + Unicode-3.0, both already allowed in `deny.toml`, so it adds no new
+# licence surface (`unicode-ident` is already a build-time dep of `serde_derive`).
+[dev-dependencies]
+trybuild = "1"
+# `default-features = false` off `dagr-core` is deliberately NOT set: the fixtures
+# author tasks with `#[task]`, which is the `macros` feature (default-on).
+dagr-core = { path = "../core" }
+dagr-cli = { path = "../cli" }
+
 [lints]
 workspace = true
