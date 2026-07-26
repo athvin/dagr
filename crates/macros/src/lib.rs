@@ -20,14 +20,40 @@
 //! byte-for-byte unchanged — dagr-core's zero-runtime-dependency guarantee (ADR
 //! 081) is preserved.
 //!
-//! # This slice (T71)
+//! # What this crate expands (T71 + T72)
 //!
-//! Zero-input (`Input = ()`) and single-input (bare `Input = T`, never `(T,)`)
-//! tasks, the `AwaitBound` execution class only, an optional `ctx: &RunContext`
-//! parameter, and enforcement that `run` returns `Result<T, TaskError>`.
-//! Multi-arity (2..=8) tasks and the `#[task(blocking)]` / `#[task(compute)]`
-//! execution-class arguments are **T72**; the quickstart rewrite and the
-//! `trybuild` corpus are **T73**.
+//! - **Inputs → `type Input`.** Zero dependency inputs → `()`; one → the **bare**
+//!   value `T` (never `(T,)`); **2..=8** → the tuple `(A, B, …)`. A multi-input
+//!   task is written with **one non-destructured tuple parameter**
+//!   (`input: (A, B)`), or equivalently a destructuring tuple pattern
+//!   (`(a, b): (A, B)`) so the body observes the named bindings; either way the
+//!   macro binds that single by-value parameter directly and `type Input` is its
+//!   tuple type. Arguments are taken **by value** (dagr delivers inputs by value;
+//!   receive mode lives at the registration site, not the task body).
+//! - **Execution class → the impl-level `EXECUTION_CLASS` const.** Taken from the
+//!   **attribute argument**, never inferred from the body: `#[task]` and
+//!   `#[task()]` → `AwaitBound`; `#[task(blocking)]` → `Blocking`;
+//!   `#[task(compute)]` → `Compute`.
+//! - **Optional `ctx: &RunContext`** (detected by type) and the
+//!   `Result<T, TaskError>` return requirement (a bare `-> T` is a
+//!   `compile_error!`) — unchanged from T71.
+//!
+//! The **input-arity ceiling is 8**: a single tuple parameter of more than 8
+//! elements is not rejected by the macro — the tuple type flows through as
+//! `type Input`, and it is the sealed `dagr_core::binding::Deps` trait (whose
+//! tuple impls stop at `MAX_INPUT_ARITY = 8`) that surfaces the curated
+//! `#[diagnostic::on_unimplemented]` "too many inputs" error **at the
+//! registration site** when such a task is wired. The macro adds no second
+//! ceiling check; the one authoritative cliff is the `Deps` one. (Writing more
+//! than 8 **separate** by-value parameters is a different misuse — the surface is
+//! a single tuple parameter — and is rejected here with a message pointing at the
+//! tuple form.)
+//!
+//! (These `dagr_core` paths are written as plain code, not intra-doc links: this
+//! is a build-time proc-macro crate that does not depend on `dagr_core`, so its
+//! rustdoc cannot resolve links into it.)
+//!
+//! The quickstart rewrite and the `trybuild` corpus are **T73**.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -36,6 +62,30 @@ use syn::{
     parse_macro_input, FnArg, GenericArgument, ImplItem, ItemImpl, Pat, PatType, PathArguments,
     ReturnType, Type,
 };
+
+/// The execution class the attribute argument selected, mapped to the
+/// `dagr_core::task::ExecutionClass` variant the generated impl emits.
+///
+/// The class is taken **only** from the attribute — `#[task]`/`#[task()]` →
+/// `AwaitBound`, `#[task(blocking)]` → `Blocking`, `#[task(compute)]` → `Compute`
+/// — and is never inferred from the `run` body.
+#[derive(Clone, Copy)]
+enum ExecClass {
+    AwaitBound,
+    Blocking,
+    Compute,
+}
+
+impl ExecClass {
+    /// The `ExecutionClass` variant path this class emits as the impl-level const.
+    fn variant(self) -> proc_macro2::TokenStream {
+        match self {
+            ExecClass::AwaitBound => quote!(::dagr_core::task::ExecutionClass::AwaitBound),
+            ExecClass::Blocking => quote!(::dagr_core::task::ExecutionClass::Blocking),
+            ExecClass::Compute => quote!(::dagr_core::task::ExecutionClass::Compute),
+        }
+    }
+}
 
 /// The `#[task]` attribute — expands an inherent `impl` block into an
 /// `impl Task for Self` (ADR 082).
@@ -46,39 +96,71 @@ use syn::{
 ///
 /// - **Inputs → `type Input`.** Zero dependency arguments → `()`; one dependency
 ///   argument `x: T` → the **bare** `T` (never `(T,)` — the arity-1 blanket
-///   `Deps` impl delivers the bare value). Arguments are taken **by value**.
+///   `Deps` impl delivers the bare value); a single **tuple** parameter of 2..=8
+///   elements (`input: (A, B)` or the destructuring `(a, b): (A, B)`) → the tuple
+///   `type Input = (A, B, …)`. Arguments are taken **by value**.
 /// - **Output → `type Output`.** Inferred from a `-> Result<T, TaskError>`
 ///   return type; a `run` that does not return `Result<_, TaskError>` is rejected
 ///   with a `compile_error!` naming the required shape.
-/// - **Execution class.** `AwaitBound`, emitted unconditionally in this slice
-///   (the attribute takes no argument yet — T72 adds `#[task(blocking)]` /
-///   `#[task(compute)]`).
+/// - **Execution class.** Taken from the **attribute argument**, emitted as the
+///   impl-level associated const, never inferred from the body: `#[task]` and
+///   `#[task()]` → `AwaitBound`, `#[task(blocking)]` → `Blocking`,
+///   `#[task(compute)]` → `Compute`.
 /// - **Receiver & context.** The generated `run` always takes the trait's
 ///   `&mut self` receiver and the trait's `ctx` parameter; the user's
 ///   `ctx: &RunContext` is threaded into the body only when the user declares it,
 ///   and is left unused (no `unused` warning) when absent.
 ///
-/// The attribute takes **no** argument in this slice. See the module docs for
-/// the deferred scope.
+/// The attribute argument grammar is exactly `blocking` / `compute` / empty; any
+/// other argument is a `compile_error!`.
 #[proc_macro_attribute]
 pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // This slice's attribute takes no argument (execution-class args are T72).
-    if !attr.is_empty() {
-        let msg = "#[task] takes no argument in this release; \
-                   #[task(blocking)] / #[task(compute)] are a later slice (T72)";
-        let err = syn::Error::new(proc_macro2::TokenStream::from(attr).span(), msg);
-        return err.to_compile_error().into();
-    }
-
+    let class = match parse_exec_class(attr) {
+        Ok(class) => class,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let input = parse_macro_input!(item as ItemImpl);
-    expand(input)
+    expand(input, class)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
+/// Parse the attribute argument into an [`ExecClass`]: empty (`#[task]` /
+/// `#[task()]`) → `AwaitBound`, the bare identifier `blocking` → `Blocking`, the
+/// bare identifier `compute` → `Compute`. Any other token is a spanned error
+/// naming the accepted grammar (ADR 082: the grammar is exactly
+/// `blocking`/`compute`/empty; other opt-in markers are out of scope).
+fn parse_exec_class(attr: TokenStream) -> syn::Result<ExecClass> {
+    let attr = proc_macro2::TokenStream::from(attr);
+    if attr.is_empty() {
+        return Ok(ExecClass::AwaitBound);
+    }
+    // The argument is a single bare identifier — parse it as an `Ident` so a
+    // stray path, literal, or extra token is rejected with a clear message.
+    let ident: syn::Ident = syn::parse2(attr.clone()).map_err(|_| {
+        syn::Error::new(
+            attr.span(),
+            "#[task] accepts at most one execution-class argument: \
+             `blocking`, `compute`, or none (`#[task]`)",
+        )
+    })?;
+    match ident.to_string().as_str() {
+        "blocking" => Ok(ExecClass::Blocking),
+        "compute" => Ok(ExecClass::Compute),
+        other => Err(syn::Error::new(
+            ident.span(),
+            format!(
+                "unknown #[task] execution class `{other}`: the accepted arguments are \
+                 `blocking`, `compute`, or none (`#[task]` = await-bound)"
+            ),
+        )),
+    }
+}
+
 /// Build the `impl Task` from the annotated inherent `impl` block, or return a
-/// spanned error that becomes a `compile_error!`.
-fn expand(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
+/// spanned error that becomes a `compile_error!`. `class` is the execution class
+/// the attribute selected (emitted verbatim as the impl-level const).
+fn expand(mut item: ItemImpl, class: ExecClass) -> syn::Result<proc_macro2::TokenStream> {
     // Reject `#[task] impl Trait for Ty` — the attribute annotates an *inherent*
     // impl (the block that holds the `run` work), not a trait impl.
     if let Some((_, path, _)) = &item.trait_ {
@@ -122,6 +204,10 @@ fn expand(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
         quote!(#item)
     };
 
+    // The execution class comes from the attribute, emitted verbatim as the
+    // impl-level const — never inferred from the body (ADR 082).
+    let exec_class = class.variant();
+
     // `async fn` in the trait impl desugars to the trait's `impl Future + Send`
     // return, exactly as the hand-written impls do. The user's body is inlined
     // under the trait signature; the user's parameter names remain in scope.
@@ -131,8 +217,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
         impl ::dagr_core::task::Task for #self_ty {
             type Input = #input_ty;
             type Output = #output_ty;
-            const EXECUTION_CLASS: ::dagr_core::task::ExecutionClass =
-                ::dagr_core::task::ExecutionClass::AwaitBound;
+            const EXECUTION_CLASS: ::dagr_core::task::ExecutionClass = #exec_class;
 
             async fn run(
                 &mut self,
@@ -196,13 +281,25 @@ fn ctx_param(sig: &syn::Signature) -> syn::Result<Option<syn::Ident>> {
 /// The task's **input** shape: the inferred `type Input` and the parameter the
 /// generated `run` binds it to.
 ///
-/// - Zero by-value arguments → `type Input = ()`, bound to a throwaway
-///   `_input: ()` (no `unused` warning).
-/// - One by-value argument `x: T` → the **bare** `type Input = T` (never
-///   `(T,)`), bound to the user's own `x: T` parameter so the body names it.
+/// dagr delivers a task's input **as a single by-value value** — the bare `T` for
+/// one input, the tuple `(A, B, …)` for many (`binding.rs`) — so the authoring
+/// surface is a **single** by-value `run` parameter, and its type *is* `Input`:
 ///
-/// More than one by-value argument is multi-arity — **T72**; it is rejected here
-/// with a message pointing at that slice.
+/// - Zero by-value parameters → `type Input = ()`, bound to a throwaway
+///   `_input: ()` (no `unused` warning).
+/// - One by-value parameter `p: T` → `type Input = T`, bound to the user's own
+///   pattern `p` so the body names it. This covers **both** the single bare input
+///   (`x: u64` → `type Input = u64`, never `(u64,)`) and the multi-input tuple
+///   (`input: (A, B)` or the destructuring `(a, b): (A, B)` → `type Input =
+///   (A, B, …)`): binding the tuple pattern directly *is* the `let (a, b) = input;`
+///   the multi-input author gets, so a destructuring parameter observes its named
+///   bindings in declared order.
+///
+/// Two or more **separate** by-value parameters is a misuse — the surface is a
+/// single tuple parameter — and is rejected here with a message pointing at that
+/// form. The 8-input ceiling is **not** enforced here: an over-8 tuple flows
+/// through as `type Input` and the sealed `Deps` trait raises the curated "too
+/// many inputs" diagnostic at the registration site (see the module docs).
 fn input_shape(
     sig: &syn::Signature,
 ) -> syn::Result<(proc_macro2::TokenStream, proc_macro2::TokenStream)> {
@@ -215,15 +312,17 @@ fn input_shape(
         [only] => {
             let ty = &only.ty;
             let pat = &only.pat;
-            // Bare `T`, never `(T,)`: the arity-1 blanket `Deps` impl delivers
-            // the bare value. Bind the user's own parameter so the body names it.
+            // The single by-value parameter's type IS `Input` (bare `T`, or the
+            // tuple `(A, B, …)` for a multi-input task). Bind the user's own
+            // pattern so the body names it — for a destructuring tuple pattern
+            // that is exactly the `let (a, b) = input;` a multi-input task needs.
             Ok((quote!(#ty), quote!(#pat: #ty)))
         }
         _ => Err(syn::Error::new(
             value_args[1].span(),
-            "#[task] supports zero or one dependency input in this release; \
-             multi-input (2..=8) tasks are a later slice (T72) — for now, aggregate \
-             the inputs into a struct produced by an intermediate node",
+            "#[task] takes a single by-value input parameter; a multi-input task \
+             binds one tuple parameter (e.g. `input: (A, B)` or `(a, b): (A, B)`), \
+             not several separate parameters",
         )),
     }
 }

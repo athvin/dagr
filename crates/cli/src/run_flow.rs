@@ -31,8 +31,8 @@
 //! `GenericNodeRunner` that drives the node through the **same** real attempt
 //! path the hand-wired demos use. Nothing about the adapter is per-type: it is
 //! generic over `T: Task` and over the input arity via the [`InputWiring`] seam
-//! (implemented for every [`Deps`] shape), so a three-node chain and a
-//! twelve-node fan-in are built by the identical code.
+//! (implemented for the bare-input and the tuple dep shapes, arities 1..=8), so a
+//! three-node chain and an eight-input fan-in are built by the identical code.
 //!
 //! # What stays intact
 //!
@@ -52,7 +52,7 @@ use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_core::assembly::NodePolicy;
-use dagr_core::binding::{Deps, ReceiveMode};
+use dagr_core::binding::{BoundInput, Deps, ReceiveMode};
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{
     run_attempt_caught, run_with_retries_caught, AttemptEventSink, NoJitter, RetryConfig,
@@ -561,17 +561,19 @@ pub trait InputReader<Inputs>: Send {
 }
 
 /// The seam that turns a concrete [`Deps`] value into a boxed [`InputReader`] for
-/// its `Inputs` — a blanket impl over every [`Deps`] whose `Inputs` is a single
-/// cloneable value (the shape the M1 chain and every one-input map uses).
+/// its `Inputs`, implemented for every dep shape the registration surface accepts:
+/// the three arity-1 bound-input types (a bare [`Handle`], a `Shared`, a
+/// `CloneOnRead`) and the tuple shapes for arities **2..=8** (`MAX_INPUT_ARITY`).
 ///
 /// It reads the edge set the framework already computes ([`Deps::into_edges`], the
 /// same `(upstream id, receive mode)` pairs the pipeline binds), so it is generic
-/// over the upstream's concrete value type and its declared receive mode with no
+/// over each upstream's concrete value type and its declared receive mode with no
 /// per-type code at the call site. A registration's `deps` argument yields both the
 /// pipeline edges (via `Deps` on the flow) and the runtime input reader (via this
-/// trait) from one cloned value. Multi-input tuple arities extend this the same way
-/// (one small `impl` per arity to assemble the tuple); the current registration
-/// surface exercises the single-input shape.
+/// trait) from one cloned value. The arity-1 impls deliver the bare value; each
+/// tuple impl assembles its positions into the declared tuple in edge order. A
+/// dep shape of arity 9+ has no `Deps` impl at all (the sealed tuple impls stop at
+/// 8), so it is rejected at the registration site before this seam is consulted.
 pub trait InputWiring: Deps {
     /// Build the boxed input reader for this dep shape.
     #[doc(hidden)]
@@ -622,27 +624,139 @@ where
     }
 }
 
-// Arity 1: a single bound input (`Handle`/`Shared`/`CloneOnRead`) delivers the bare
-// value `V` (never a `(V,)`), mirroring `Deps`'s arity-1 rule. The single `(id,
-// mode)` pair comes from the framework's own `Deps::into_edges`, so this works for
-// every value type with no per-type code.
-impl<D> InputWiring for D
+/// Build the arity-1 [`SingleReader`] from a single bound input's edge — the body
+/// shared by the three concrete arity-1 [`InputWiring`] impls below.
+fn single_input_reader<D>(dep: D) -> Box<dyn InputReader<D::Inputs>>
 where
     D: Deps,
     D::Inputs: Clone + Send + Sync + 'static,
 {
+    let mut edges = dep.into_edges();
+    debug_assert_eq!(
+        edges.len(),
+        1,
+        "a single bound input yields exactly one edge"
+    );
+    let (upstream, mode) = edges.pop().expect("exactly one edge");
+    Box::new(SingleReader::<D::Inputs> {
+        edge: EdgeRead { upstream, mode },
+        _ty: std::marker::PhantomData,
+    })
+}
+
+// Arity 1: a single bound input delivers the bare value `V` (never a `(V,)`),
+// mirroring `Deps`'s arity-1 rule. `InputWiring` is implemented on the THREE
+// concrete arity-1 dep types — a bare `Handle<T>`, a `Shared<T>`, and a
+// `CloneOnRead<T>` — rather than as a `BoundInput`-keyed blanket. A blanket over
+// the (foreign, sealed) `BoundInput` trait would be seen by the compiler as
+// *potentially* overlapping the tuple impls below (it cannot see the seal from
+// this crate, so it must assume `dagr_core` might one day impl `BoundInput` for a
+// tuple), which is a coherence error. Three concrete impls plus the tuple impls
+// are pairwise disjoint by construction, so there is no overlap. The single
+// `(id, mode)` pair comes from the framework's own `Deps::into_edges`.
+impl<T> InputWiring for Handle<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
     fn input_reader(self) -> Box<dyn InputReader<Self::Inputs>> {
-        let mut edges = self.into_edges();
-        assert_eq!(
-            edges.len(),
-            1,
-            "run-a-flow: register/register_with currently support single-input nodes; \
-             a multi-input node needs the per-arity tuple reader"
-        );
-        let (upstream, mode) = edges.pop().expect("exactly one edge");
-        Box::new(SingleReader::<D::Inputs> {
-            edge: EdgeRead { upstream, mode },
-            _ty: std::marker::PhantomData,
-        })
+        single_input_reader(self)
     }
 }
+impl<T> InputWiring for dagr_core::binding::Shared<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn input_reader(self) -> Box<dyn InputReader<Self::Inputs>> {
+        single_input_reader(self)
+    }
+}
+impl<T> InputWiring for dagr_core::binding::CloneOnRead<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn input_reader(self) -> Box<dyn InputReader<Self::Inputs>> {
+        single_input_reader(self)
+    }
+}
+
+/// Generate the tuple [`InputReader`] + [`InputWiring`] impls for arity `N`
+/// (2..=8), mirroring [`SingleReader`] and the arity-1 blanket impl above.
+///
+/// Each generated reader owns one [`EdgeRead`] per position (in
+/// [`Deps::into_edges`] order, position `0..N`), and on `resolve` downcasts each
+/// upstream slot to that position's concrete element type, honouring that edge's
+/// declared receive mode, and assembles the positional tuple `(V0, V1, …, V{N-1})`.
+/// The read is deferred to attempt time exactly as the single-input reader is: it
+/// runs only when the generic runner calls `resolve` inside `run()`, after the
+/// driver has admitted the node and its upstreams have succeeded (so every slot is
+/// filled). Nothing here is per-type: it is generic over each position's value
+/// type and its declared [`ReceiveMode`].
+macro_rules! tuple_reader {
+    ($reader:ident, $($ty:ident => $idx:tt),+) => {
+        /// A tuple reader: one [`EdgeRead`] per bound position, assembled into the
+        /// declared tuple in [`Deps::into_edges`] order.
+        struct $reader<$($ty),+> {
+            edges: [EdgeRead; count_idents!($($ty),+)],
+            _ty: std::marker::PhantomData<fn() -> ($($ty,)+)>,
+        }
+
+        impl<$($ty),+> InputReader<($($ty,)+)> for $reader<$($ty),+>
+        where
+            $($ty: Clone + Send + Sync + 'static),+
+        {
+            fn resolve(&self, registry: &SlotRegistry) -> ($($ty,)+) {
+                // Read each position through its own edge (declared receive mode
+                // honoured) into its concrete element type, in declared order.
+                ($(self.edges[$idx].read::<$ty>(registry),)+)
+            }
+        }
+
+        // The tuple `Deps` shape for this arity — `($ty0, $ty1, …)` of `BoundInput`s
+        // — yields an `InputWiring` whose reader is this arity's `$reader`. Disjoint
+        // from the arity-1 `BoundInput` blanket (a tuple is not a `BoundInput`), so
+        // no overlap. `Deps::Inputs` for this shape is `($ty::Value, …)`, so the
+        // reader's element types are exactly the tuple's value types.
+        impl<$($ty: BoundInput),+> InputWiring for ($($ty,)+)
+        where
+            $(<$ty as BoundInput>::Value: Clone + Send + Sync + 'static),+
+        {
+            fn input_reader(self) -> Box<dyn InputReader<Self::Inputs>> {
+                let edges = Deps::into_edges(self);
+                debug_assert_eq!(
+                    edges.len(),
+                    count_idents!($($ty),+),
+                    "a {}-tuple `Deps` yields exactly that many edges",
+                    count_idents!($($ty),+),
+                );
+                // `Deps::into_edges` returns the positional `(id, mode)` pairs in
+                // input order; index them into the fixed-size edge array.
+                let edges: [EdgeRead; count_idents!($($ty),+)] = [
+                    $(EdgeRead { upstream: edges[$idx].0, mode: edges[$idx].1 }),+
+                ];
+                Box::new($reader::<$(<$ty as BoundInput>::Value),+> {
+                    edges,
+                    _ty: std::marker::PhantomData,
+                })
+            }
+        }
+    };
+}
+
+/// Count the identifiers passed to it — the arity of a `tuple_reader!` expansion,
+/// used to size the fixed edge array.
+macro_rules! count_idents {
+    ($($ty:ident),+) => { <[()]>::len(&[$(count_idents!(@one $ty)),+]) };
+    (@one $ty:ident) => { () };
+}
+
+// Arities 2..=8: tuple inputs, mirroring the arity-1 reader. The 8-arity ceiling
+// matches `MAX_INPUT_ARITY` — a 9+-tuple `Deps` has no impl (the sealed `Deps`
+// tuple impls stop at 8) and never reaches here, so the `on_unimplemented`
+// diagnostic fires at the registration site before this seam is consulted.
+tuple_reader!(TupleReader2, V0 => 0, V1 => 1);
+tuple_reader!(TupleReader3, V0 => 0, V1 => 1, V2 => 2);
+tuple_reader!(TupleReader4, V0 => 0, V1 => 1, V2 => 2, V3 => 3);
+tuple_reader!(TupleReader5, V0 => 0, V1 => 1, V2 => 2, V3 => 3, V4 => 4);
+tuple_reader!(TupleReader6, V0 => 0, V1 => 1, V2 => 2, V3 => 3, V4 => 4, V5 => 5);
+tuple_reader!(TupleReader7, V0 => 0, V1 => 1, V2 => 2, V3 => 3, V4 => 4, V5 => 5, V6 => 6);
+tuple_reader!(TupleReader8, V0 => 0, V1 => 1, V2 => 2, V3 => 3, V4 => 4, V5 => 5, V6 => 6, V7 => 7);
