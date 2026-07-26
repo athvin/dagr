@@ -88,10 +88,7 @@ fn run_named_flow_selects_and_drives_it() {
     let registry = FlowRegistry::new()
         .add("etl", build_etl)
         .add("nightly", build_nightly);
-    let code = run_registry(
-        &registry,
-        ["dagr", "run", "etl", "--store", base.as_str()],
-    );
+    let code = run_registry(&registry, ["dagr", "run", "etl", "--store", base.as_str()]);
     assert_eq!(
         code,
         ExitCode::Success,
@@ -116,9 +113,12 @@ fn single_flow_registry_runs_with_no_name() {
         ExitCode::Success,
         "a single-flow registry serves `run` with the name omitted"
     );
+    // The sole flow ran even though no name was given. A single-flow registry
+    // dispatches under the synthetic `flow` identity (the operator never types a
+    // name), so its stream lives under `<base>/flow/<run-id>/`.
     assert!(
-        run_store_has_a_stream(&base, "etl"),
-        "the sole flow ran even though no name was given"
+        run_store_has_a_stream(&base, "flow"),
+        "the sole flow ran (under the single-flow `flow` identity) even with no name given"
     );
 }
 
@@ -168,7 +168,9 @@ fn unknown_flow_name_is_invalid_usage_listing_available() {
 /// `Success`.
 #[test]
 fn list_prints_the_registered_names() {
-    let registry = FlowRegistry::new().add("a", build_etl).add("b", build_nightly);
+    let registry = FlowRegistry::new()
+        .add("a", build_etl)
+        .add("b", build_nightly);
     let (code, out) = run_registry_capturing(&registry, ["dagr", "list"]);
     assert_eq!(code, ExitCode::Success, "list exits Success");
     assert!(

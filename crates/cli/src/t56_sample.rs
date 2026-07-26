@@ -522,7 +522,7 @@ pub fn dispatch_main(sample: &Sample) -> ProcExit {
             eprintln!("dagr: {message}");
             exit
         }
-        ParseOutcome::Parsed(Cli { verb }) => dispatch(sample, verb),
+        ParseOutcome::Parsed(Cli { verb, .. }) => dispatch(sample, verb),
     };
     code.into()
 }

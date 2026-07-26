@@ -103,10 +103,12 @@ fn no_banner_flag_suppresses_in_leading_position() {
 /// stripped from argv before verb parsing, so its position is irrelevant).
 #[test]
 fn no_banner_flag_suppresses_after_a_verb() {
-    // `run` is a pipeline-bound verb the reference binary rejects without reading
-    // stdin — a clean vehicle for observing the flag in trailing position.
-    let leading = run(&["--no-banner", "run"]);
-    let trailing = run(&["run", "--no-banner"]);
+    // `graph` is a pipeline-bound verb the reference binary rejects without reading
+    // stdin and without touching the run store — a clean vehicle for observing the
+    // flag in trailing position. (`run` now routes through the flow registry and
+    // drives a flow, so it would write a store; `graph` keeps this test store-free.)
+    let leading = run(&["--no-banner", "graph"]);
+    let trailing = run(&["graph", "--no-banner"]);
     for (label, out) in [("leading", &leading), ("trailing", &trailing)] {
         assert!(
             !stderr(out).contains(MARKER),
