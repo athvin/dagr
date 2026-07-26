@@ -29,6 +29,7 @@ pub mod driver;
 pub mod full_pipeline;
 pub mod graph;
 pub mod logging;
+pub mod registry;
 pub mod run_flow;
 pub mod scale_bench;
 pub mod signals;

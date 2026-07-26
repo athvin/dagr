@@ -318,6 +318,19 @@ pub fn verb_table() -> &'static [Verb] {
 pub struct Cli {
     /// The selected verb.
     pub verb: Verb,
+    /// The **flow name** selected on the command line — the first *positional*
+    /// token after the verb (e.g. `etl` in `dagr run etl --store DIR`), or `None`
+    /// when none is present (arch.md `### C26`; ADR 086 — an operator-approved M5
+    /// addition).
+    ///
+    /// This is the additive contract extension that lets one binary host **many**
+    /// named flows and select one per invocation ([`crate::registry::FlowRegistry`] /
+    /// [`crate::registry::run_registry`]). It is **purely additive**: every existing
+    /// verb, flag, and single-flow binary parses unchanged, and the field is `None`
+    /// whenever no positional flow name is supplied — a leading `--flag` is never
+    /// mistaken for a flow name. A single-flow binary ignores it (the sole flow is
+    /// dispatched regardless); a multi-flow binary requires it on `run`.
+    pub flow_name: Option<String>,
 }
 
 /// Build the library-owned `dagr` [`clap::Command`] — one subcommand per C26
@@ -359,6 +372,56 @@ pub fn build_command() -> clap::Command {
 /// Map a parsed subcommand name back to its [`Verb`].
 fn verb_from_name(name: &str) -> Option<Verb> {
     verb_table().iter().copied().find(|v| v.name() == name)
+}
+
+/// Extract the **flow name** — the first *positional* token — from a verb's
+/// trailing arguments (arch.md `### C26`; ADR 086). The subcommand collects every
+/// trailing token into an undifferentiated `args` vector ([`build_command`]'s
+/// `trailing_var_arg`); the first token that is neither a `--flag` **nor the value
+/// of a value-taking library flag** is the flow name. A leading `--store DIR`
+/// therefore contributes no positional (the `DIR` is `--store`'s value, not a flow
+/// name), and everything stays available to the pipeline binary unchanged. A verb
+/// invoked with no positional (or only flags) yields `None`, so the extraction is
+/// purely additive.
+fn first_positional(sub: &clap::ArgMatches) -> Option<String> {
+    let mut tokens = sub.get_many::<String>("args").into_iter().flatten();
+    while let Some(tok) = tokens.next() {
+        if let Some(flag) = tok.strip_prefix("--") {
+            // A `--flag=value` form carries its own value; a bare value-taking flag
+            // (`--store DIR`) consumes the following token, so skip it so `DIR` is
+            // never mistaken for the positional flow name.
+            if !flag.contains('=') && flag_takes_value(flag) {
+                let _ = tokens.next();
+            }
+            continue;
+        }
+        if tok.starts_with('-') {
+            // A short flag or bare `-`; never a flow name.
+            continue;
+        }
+        return Some(tok.clone());
+    }
+    None
+}
+
+/// Whether a reserved library long-flag (given without its leading `--`) takes a
+/// following value token (`--store DIR`), as opposed to a boolean toggle
+/// (`--force`, `--no-banner`). Used so [`first_positional`] never mistakes a flag's
+/// value for the positional flow name. Unknown (pipeline-owned) flags are treated
+/// as valueless here — a pipeline parameter that takes a value and precedes the
+/// flow name is not a shape the registry's `run <flow>` selection supports (the
+/// flow name comes first).
+fn flag_takes_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        "run-id"
+            | "store"
+            | "grace"
+            | "teardown-deadline"
+            | "failure-mode"
+            | "pool"
+            | "data-interval"
+    )
 }
 
 /// The outcome of parsing the command line (arch.md C26).
@@ -412,8 +475,11 @@ where
     }
     match build_command().try_get_matches_from(&raw_args) {
         Ok(matches) => match matches.subcommand() {
-            Some((name, _sub)) => match verb_from_name(name) {
-                Some(verb) => ParseOutcome::Parsed(Cli { verb }),
+            Some((name, sub)) => match verb_from_name(name) {
+                Some(verb) => ParseOutcome::Parsed(Cli {
+                    verb,
+                    flow_name: first_positional(sub),
+                }),
                 // clap already gates the subcommand set, so this is unreachable in
                 // practice; surface it as invalid usage rather than panicking.
                 None => ParseOutcome::Error {
