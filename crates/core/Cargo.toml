@@ -5,10 +5,13 @@
 # arch.md "Stability" commits to keeping minimal and review-gated; it is empty
 # here (a skeleton) and every future addition is an API decision.
 #
-# Dependency direction: core depends on nothing in the workspace. render must
-# never gain a dependency edge onto core (C24). The domain types, task/handle
-# APIs, assembly, and runtime land in later tickets (T9, T13, T14, T2, …); this
-# crate is a placeholder lib only.
+# Dependency direction: core's ONLY workspace dependency is a build-time,
+# default-on-`macros`-feature, OPTIONAL path edge onto dagr-macros (the `#[task]`
+# proc-macro, ADR 082). A proc-macro runs inside the compiler and is never linked
+# into the shipped binary, so core's RUNTIME dependency set stays empty and
+# `--no-default-features` drops the edge entirely (proved by `cargo build --all
+# --no-default-features`). render must never gain a dependency edge onto core
+# (C24).
 [package]
 name = "dagr-core"
 version.workspace = true
@@ -23,6 +26,13 @@ name = "dagr_core"
 path = "src/lib.rs"
 
 [dependencies]
+# dagr-macros — the OPTIONAL `#[task]` proc-macro (ADR 082), pulled ONLY behind
+# the default-on `macros` feature below. `optional = true` means the dependency
+# edge exists only when the feature is on, so `--no-default-features` builds core
+# with no edge onto dagr-macros at all. A proc-macro is a build-time compiler
+# plugin, never linked into the runtime binary, so this adds ZERO runtime
+# dependency — core's zero-runtime-dependency guarantee (ADR 081) is preserved.
+dagr-macros = { path = "../macros", optional = true }
 
 [features]
 # The C28 single-task test kit (ticket T60) — a shipped testing utility
@@ -33,8 +43,16 @@ path = "src/lib.rs"
 # production build can `default-features = false` to exclude it. It adds NO
 # dependency and NO production runtime behavior — it is inert constructor/driver
 # code reachable only when test code calls it.
-default = ["test-kit"]
+#
+# The `macros` feature (ADR 082 / T71): re-exports the optional `#[task]`
+# proc-macro as `dagr_core::task`, so `use dagr_core::task;` resolves the
+# attribute. ON by default so the ergonomic authoring layer is available out of
+# the box; `default-features = false` (or explicitly disabling `macros`) drops
+# the dagr-macros dependency edge entirely, keeping the zero-runtime-dependency
+# guarantee provable via `cargo build --all --no-default-features`.
+default = ["test-kit", "macros"]
 test-kit = []
+macros = ["dep:dagr-macros"]
 
 [lints]
 workspace = true

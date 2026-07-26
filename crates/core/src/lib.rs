@@ -357,5 +357,91 @@ pub use slot::{
 };
 pub use stable_name::{is_well_formed, StableInputNames, StableName, UNIT_STABLE_NAME};
 pub use task::{ExecutionClass, Task};
+
+/// The `#[task]` attribute macro — the optional ergonomic authoring layer
+/// (ADR 082, ticket T71). Re-exported from the build-time-only
+/// [`dagr-macros`](dagr_macros) proc-macro crate **behind the default-on
+/// `macros` feature**, so `use dagr_core::task;` resolves the attribute and
+/// `--no-default-features` (or disabling `macros`) turns it off — preserving
+/// core's zero-runtime-dependency guarantee (ADR 081; a proc-macro is a
+/// build-time compiler plugin, never linked into the shipped binary).
+///
+/// Applied to an inherent `impl` block, `#[task]` expands to the exact
+/// [`impl Task`](task::Task) an author writes by hand, inferring `Input`,
+/// `Output`, and the `AwaitBound` class from the `run` signature. See the
+/// [`dagr_macros::task`] docs for the full expansion rules; this slice (T71)
+/// covers zero-input and single-input tasks.
+///
+/// # Zero-input `#[task]`
+///
+/// A task that consumes nothing writes a `()` input; `#[task]` generates
+/// `type Input = ()`, `type Output = u64`, and the await-bound class:
+///
+/// ```
+/// use dagr_core::task;
+/// use dagr_core::task::{RunContext, Task};
+/// use dagr_core::TaskError;
+///
+/// struct Answer { base: u64 }
+///
+/// #[task]
+/// impl Answer {
+///     async fn run(&mut self, _input: ()) -> Result<u64, TaskError> {
+///         Ok(self.base)
+///     }
+/// }
+///
+/// // The generated `impl Task` has the hand-written shape and runs the body.
+/// fn assert_shape<T: Task<Input = (), Output = u64>>() {}
+/// assert_shape::<Answer>();
+/// ```
+///
+/// # Single-input `#[task]`
+///
+/// One dependency argument `input: T` is delivered **bare** (never `(T,)`);
+/// an optional `ctx: &RunContext` is threaded into the body only when declared:
+///
+/// ```
+/// use dagr_core::task;
+/// use dagr_core::task::{RunContext, Task};
+/// use dagr_core::TaskError;
+///
+/// struct Stringify;
+///
+/// #[task]
+/// impl Stringify {
+///     async fn run(&mut self, ctx: &RunContext, input: u64) -> Result<String, TaskError> {
+///         let _ = ctx.attempt(); // the declared ctx is usable in the body
+///         Ok(input.to_string())
+///     }
+/// }
+///
+/// fn assert_shape<T: Task<Input = u64, Output = String>>() {}
+/// assert_shape::<Stringify>();
+/// ```
+///
+/// # `run` must return `Result<T, TaskError>`
+///
+/// A `run` written with a bare `-> T` (no `Result`) is rejected at compile time
+/// with a message naming the required shape (ADR 082: the failure channel is
+/// explicit):
+///
+/// ```compile_fail
+/// use dagr_core::task;
+/// use dagr_core::TaskError;
+///
+/// struct BadReturn;
+///
+/// #[task]
+/// impl BadReturn {
+///     // Bare `-> u64` is rejected: a task's `run` must return
+///     // `Result<T, TaskError>`.
+///     async fn run(&mut self, _input: ()) -> u64 {
+///         7
+///     }
+/// }
+/// ```
+#[cfg(feature = "macros")]
+pub use dagr_macros::task;
 #[cfg(feature = "test-kit")]
 pub use test_kit::{SingleTaskTest, TaskOutcome};
