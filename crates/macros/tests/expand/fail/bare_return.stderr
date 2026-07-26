@@ -1,0 +1,5 @@
+error: #[task]'s `run` must return `Result<T, TaskError>` (a task must be able to fail with a classified error)
+  --> tests/expand/fail/bare_return.rs:14:44
+   |
+14 |     async fn run(&mut self, input: u64) -> u64 {
+   |                                            ^^^

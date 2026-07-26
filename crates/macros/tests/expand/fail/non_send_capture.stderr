@@ -1,0 +1,53 @@
+error: future cannot be sent between threads safely
+  --> tests/expand/fail/non_send_capture.rs:18:1
+   |
+18 | #[task]
+   | ^^^^^^^ future returned by `run` is not `Send`
+   |
+   = help: within `impl Future<Output = Result<<NonSend as Task>::Output, TaskError>>`, the trait `Send` is not implemented for `Rc<u32>`
+note: captured value is not `Send` because `&mut` references cannot be sent unless their referent is `Send`
+  --> tests/expand/fail/non_send_capture.rs:18:1
+   |
+18 | #[task]
+   | ^^^^^^^ has type `&mut NonSend` which is not `Send`, because `NonSend` is not `Send`
+note: required by a bound in `Task::run::{anon_assoc#0}`
+  --> $WORKSPACE/crates/core/src/task.rs
+   |
+   |     ) -> impl Future<Output = Result<Self::Output, TaskError>> + Send;
+   |                                                                  ^^^^ required by this bound in `Task::run::{anon_assoc#0}`
+
+error[E0277]: `Rc<u32>` cannot be sent between threads safely
+  --> tests/expand/fail/non_send_capture.rs:19:6
+   |
+19 | impl NonSend {
+   |      ^^^^^^^ `Rc<u32>` cannot be sent between threads safely
+   |
+   = help: within `NonSend`, the trait `Send` is not implemented for `Rc<u32>`
+note: required because it appears within the type `NonSend`
+  --> tests/expand/fail/non_send_capture.rs:14:8
+   |
+14 | struct NonSend {
+   |        ^^^^^^^
+note: required by a bound in `Task`
+  --> $WORKSPACE/crates/core/src/task.rs
+   |
+   | pub trait Task: Send + 'static {
+   |                 ^^^^ required by this bound in `Task`
+
+error[E0277]: `Rc<u32>` cannot be sent between threads safely
+  --> tests/expand/fail/non_send_capture.rs:32:19
+   |
+32 |     assert_send::<NonSend>();
+   |                   ^^^^^^^ `Rc<u32>` cannot be sent between threads safely
+   |
+   = help: within `NonSend`, the trait `Send` is not implemented for `Rc<u32>`
+note: required because it appears within the type `NonSend`
+  --> tests/expand/fail/non_send_capture.rs:14:8
+   |
+14 | struct NonSend {
+   |        ^^^^^^^
+note: required by a bound in `assert_send`
+  --> tests/expand/fail/non_send_capture.rs:29:26
+   |
+29 | fn assert_send<T: Task + Send + 'static>() {}
+   |                          ^^^^ required by this bound in `assert_send`

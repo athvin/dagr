@@ -1,0 +1,56 @@
+error[E0277]: the trait bound `(Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>): InputWiring` is not satisfied
+  --> tests/expand/fail/over_eight_inputs.rs:44:41
+   |
+44 |     let _ = flow.register::<NineInputs, _>(
+   |                  --------               ^ unsatisfied trait bound
+   |                  |
+   |                  required by a bound introduced by this call
+   |
+   = help: the trait `InputWiring` is not implemented for `(Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>)`
+   = help: the following other types implement trait `InputWiring`:
+             (V0, V1)
+             (V0, V1, V2)
+             (V0, V1, V2, V3)
+             (V0, V1, V2, V3, V4)
+             (V0, V1, V2, V3, V4, V5)
+             (V0, V1, V2, V3, V4, V5, V6)
+             (V0, V1, V2, V3, V4, V5, V6, V7)
+note: required by a bound in `RunnableFlow::register`
+  --> $WORKSPACE/crates/cli/src/run_flow.rs
+   |
+   |     pub fn register<T, D>(&mut self, name: impl Into<String>, task: T, deps: D) -> Handle<T::Output>
+   |            -------- required by a bound in this associated function
+...
+   |         D: Deps<Inputs = T::Input> + InputWiring + Clone,
+   |                                      ^^^^^^^^^^^ required by this bound in `RunnableFlow::register`
+
+error[E0277]: too many inputs bound to one task: the maximum input arity is 8
+  --> tests/expand/fail/over_eight_inputs.rs:44:41
+   |
+44 |     let _ = flow.register::<NineInputs, _>(
+   |                  --------               ^ this binds more than 8 handles
+   |                  |
+   |                  required by a bound introduced by this call
+   |
+   = help: the trait `BoundInput` is not implemented for `(Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>)`
+   = note: aggregate the upstream values into a struct produced by an intermediate node, then depend on that one handle
+help: the following other types implement trait `BoundInput`
+  --> $WORKSPACE/crates/core/src/binding.rs
+   |
+   | impl<T> BoundInput for Handle<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Handle<T>`
+...
+   | impl<T> BoundInput for Shared<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dagr_core::Shared<T>`
+...
+   | impl<T> BoundInput for CloneOnRead<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dagr_core::CloneOnRead<T>`
+   = note: required for `(Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>, Handle<u8>)` to implement `Deps`
+note: required by a bound in `RunnableFlow::register`
+  --> $WORKSPACE/crates/cli/src/run_flow.rs
+   |
+   |     pub fn register<T, D>(&mut self, name: impl Into<String>, task: T, deps: D) -> Handle<T::Output>
+   |            -------- required by a bound in this associated function
+...
+   |         D: Deps<Inputs = T::Input> + InputWiring + Clone,
+   |            ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RunnableFlow::register`

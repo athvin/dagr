@@ -1,0 +1,23 @@
+error[E0271]: type mismatch resolving `<Handle<String> as Deps>::Inputs == u64`
+  --> tests/expand/fail/deps_mismatch.rs:38:65
+   |
+38 |     let _ = flow.register::<WantsU64, _>("wants-u64", WantsU64, label);
+   |                  --------                                       ^^^^^ expected `u64`, found `String`
+   |                  |
+   |                  required by a bound introduced by this call
+   |
+note: the method call chain might not have had the expected associated types
+  --> tests/expand/fail/deps_mismatch.rs:35:22
+   |
+34 |     let mut flow = RunnableFlow::new();
+   |                    ------------------- this expression has type `RunnableFlow`
+35 |     let label = flow.register_source("label", Label); // Handle<String>
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Deps::Inputs` is `String` here
+note: required by a bound in `RunnableFlow::register`
+  --> $WORKSPACE/crates/cli/src/run_flow.rs
+   |
+   |     pub fn register<T, D>(&mut self, name: impl Into<String>, task: T, deps: D) -> Handle<T::Output>
+   |            -------- required by a bound in this associated function
+...
+   |         D: Deps<Inputs = T::Input> + InputWiring + Clone,
+   |                 ^^^^^^^^^^^^^^^^^ required by this bound in `RunnableFlow::register`
