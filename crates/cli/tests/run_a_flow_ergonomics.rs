@@ -491,3 +491,167 @@ fn distinct_input_and_output_types_flow_through_the_adapter() {
         "the downstream node consumed the String and produced its length"
     );
 }
+
+// ===========================================================================
+// Multi-input tuple wiring (T72): a 2..=8-input node runs through RunnableFlow,
+// assembling `Deps::into_edges` positionally into the declared tuple, honouring
+// each edge's declared receive mode, reading INSIDE run() (never at assembly).
+// ===========================================================================
+
+/// A two-input node that keeps its inputs distinguishable by POSITION: it
+/// concatenates `first` then `second` so a swapped order is observable.
+struct JoinInOrder;
+impl Task for JoinInOrder {
+    type Input = (String, String);
+    type Output = String;
+    async fn run(&mut self, _c: &RunContext, (first, second): (String, String)) -> Result<String, TaskError> {
+        Ok(format!("{first}|{second}"))
+    }
+}
+
+struct EmitText {
+    text: &'static str,
+}
+impl Task for EmitText {
+    type Input = ();
+    type Output = String;
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<String, TaskError> {
+        Ok(self.text.to_string())
+    }
+}
+
+/// **A two-input node receives both upstream values in DECLARED ORDER.** Two
+/// sources emit distinct strings; the join node binds `(left, right)` and must
+/// see `left` at position 0 and `right` at position 1 — proving the tuple
+/// `InputWiring` reader assembles `Deps::into_edges` positionally.
+#[test]
+fn two_input_node_receives_upstreams_in_declared_order() {
+    let mut flow = RunnableFlow::new();
+    let left = flow.register_source("left", EmitText { text: "LEFT" });
+    let right = flow.register_source("right", EmitText { text: "RIGHT" });
+    // Bind in declared order (left, right) — both clone-on-read so nothing needs
+    // ownership adjudication and each edge is independently readable.
+    let joined = flow.register::<JoinInOrder, _>(
+        "join",
+        JoinInOrder,
+        (left.clone_on_read(), right.clone_on_read()),
+    );
+
+    let mem = MemorySink::default();
+    let report = flow
+        .run(
+            "run-a-flow-tuple-order",
+            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-order"),
+            mem.clone(),
+            TickClock::default(),
+        )
+        .expect("assembles and runs");
+
+    let bytes = mem.bytes();
+    assert_eq!(report.outcome(), RunOutcome::Succeeded, "the run succeeds");
+    for node in ["left", "right", "join"] {
+        assert_eq!(terminal_of(&bytes, node), "succeeded", "`{node}` succeeded");
+    }
+    assert_eq!(
+        report.output(joined),
+        Some("LEFT|RIGHT".to_string()),
+        "the two upstream values arrived in DECLARED order (left at position 0)"
+    );
+}
+
+/// **A `handle.shared()` edge is honoured by the tuple reader while its sibling
+/// reads under its own declared mode.** One upstream is bound `shared()`, the
+/// other `clone_on_read()`; both values must still flow into the tuple in order.
+/// The receive mode comes from the registration-site binding, never the macro.
+#[test]
+fn two_input_node_honours_a_shared_edge_alongside_a_clone_on_read_edge() {
+    let mut flow = RunnableFlow::new();
+    let left = flow.register_source("left", EmitText { text: "SHARED" });
+    let right = flow.register_source("right", EmitText { text: "CLONED" });
+    // left via shared(), right via clone_on_read() — mixed modes on one node.
+    let joined = flow.register::<JoinInOrder, _>(
+        "join",
+        JoinInOrder,
+        (left.shared(), right.clone_on_read()),
+    );
+
+    let mem = MemorySink::default();
+    let report = flow
+        .run(
+            "run-a-flow-tuple-shared",
+            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-shared"),
+            mem.clone(),
+            TickClock::default(),
+        )
+        .expect("assembles and runs");
+
+    let bytes = mem.bytes();
+    assert_eq!(report.outcome(), RunOutcome::Succeeded, "the run succeeds");
+    for node in ["left", "right", "join"] {
+        assert_eq!(terminal_of(&bytes, node), "succeeded", "`{node}` succeeded");
+    }
+    assert_eq!(
+        report.output(joined),
+        Some("SHARED|CLONED".to_string()),
+        "the shared edge and the clone-on-read edge both delivered, in order"
+    );
+}
+
+/// **A multi-input node reads its inputs INSIDE `run()`, after its upstreams
+/// succeed — not at plan-assembly (read-before-fill would panic on empty
+/// slots).** A three-input node fed by three sources completes cleanly and reads
+/// all three values; if the tuple reader read at assembly time the run would
+/// panic, so a clean success is the proof of deferral.
+#[test]
+fn three_input_node_reads_inside_run_after_upstreams_succeed() {
+    struct SumThree;
+    impl Task for SumThree {
+        type Input = (u64, u64, u64);
+        type Output = u64;
+        async fn run(&mut self, _c: &RunContext, (a, b, c): (u64, u64, u64)) -> Result<u64, TaskError> {
+            Ok(a + 10 * b + 100 * c)
+        }
+    }
+    struct Emit {
+        n: u64,
+    }
+    impl Task for Emit {
+        type Input = ();
+        type Output = u64;
+        async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+            Ok(self.n)
+        }
+    }
+
+    let mut flow = RunnableFlow::new();
+    let a = flow.register_source("a", Emit { n: 1 });
+    let b = flow.register_source("b", Emit { n: 2 });
+    let c = flow.register_source("c", Emit { n: 3 });
+    let sum = flow.register::<SumThree, _>(
+        "sum",
+        SumThree,
+        (a.clone_on_read(), b.clone_on_read(), c.clone_on_read()),
+    );
+
+    let mem = MemorySink::default();
+    let report = flow
+        .run(
+            "run-a-flow-tuple-deferred",
+            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-deferred"),
+            mem.clone(),
+            TickClock::default(),
+        )
+        .expect("assembles and runs");
+
+    let bytes = mem.bytes();
+    assert_eq!(report.outcome(), RunOutcome::Succeeded, "the run succeeds");
+    for node in ["a", "b", "c", "sum"] {
+        assert_eq!(terminal_of(&bytes, node), "succeeded", "`{node}` succeeded");
+    }
+    // Positional weights (1 + 10*2 + 100*3 = 321) prove all three arrived in order.
+    assert_eq!(
+        report.output(sum),
+        Some(321),
+        "the three inputs were read inside run(), in declared order"
+    );
+}
