@@ -223,7 +223,10 @@ fn two_input_task_infers_tuple_input_and_destructures() {
     // body observed BOTH named bindings in order (a = first, b = second).
     let yes = block_on(task.run(&ctx, (3, "abc".to_string()))).expect("task succeeds");
     let no = block_on(task.run(&ctx, (2, "abc".to_string()))).expect("task succeeds");
-    assert!(yes, "3 == \"abc\".len(): both tuple positions were observed in order");
+    assert!(
+        yes,
+        "3 == \"abc\".len(): both tuple positions were observed in order"
+    );
     assert!(!no, "2 != \"abc\".len()");
 }
 

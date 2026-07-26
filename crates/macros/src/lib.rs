@@ -32,7 +32,7 @@
 //!   receive mode lives at the registration site, not the task body).
 //! - **Execution class → the impl-level `EXECUTION_CLASS` const.** Taken from the
 //!   **attribute argument**, never inferred from the body: `#[task]` and
-//!   `#[task()]` → [`AwaitBound`]; `#[task(blocking)]` → `Blocking`;
+//!   `#[task()]` → `AwaitBound`; `#[task(blocking)]` → `Blocking`;
 //!   `#[task(compute)]` → `Compute`.
 //! - **Optional `ctx: &RunContext`** (detected by type) and the
 //!   `Result<T, TaskError>` return requirement (a bare `-> T` is a
@@ -40,16 +40,18 @@
 //!
 //! The **input-arity ceiling is 8**: a single tuple parameter of more than 8
 //! elements is not rejected by the macro — the tuple type flows through as
-//! `type Input`, and it is the sealed [`Deps`](dagr_core::binding::Deps) trait
-//! (whose tuple impls stop at [`MAX_INPUT_ARITY`](dagr_core::binding::MAX_INPUT_ARITY)
-//! `= 8`) that surfaces the curated `#[diagnostic::on_unimplemented]` "too many
-//! inputs" error **at the registration site** when such a task is wired. The
-//! macro adds no second ceiling check; the one authoritative cliff is the `Deps`
-//! one. (Writing more than 8 **separate** by-value parameters is a different
-//! misuse — the surface is a single tuple parameter — and is rejected here with a
-//! message pointing at the tuple form.)
+//! `type Input`, and it is the sealed `dagr_core::binding::Deps` trait (whose
+//! tuple impls stop at `MAX_INPUT_ARITY = 8`) that surfaces the curated
+//! `#[diagnostic::on_unimplemented]` "too many inputs" error **at the
+//! registration site** when such a task is wired. The macro adds no second
+//! ceiling check; the one authoritative cliff is the `Deps` one. (Writing more
+//! than 8 **separate** by-value parameters is a different misuse — the surface is
+//! a single tuple parameter — and is rejected here with a message pointing at the
+//! tuple form.)
 //!
-//! [`AwaitBound`]: dagr_core::task::ExecutionClass::AwaitBound
+//! (These `dagr_core` paths are written as plain code, not intra-doc links: this
+//! is a build-time proc-macro crate that does not depend on `dagr_core`, so its
+//! rustdoc cannot resolve links into it.)
 //!
 //! The quickstart rewrite and the `trybuild` corpus are **T73**.
 
@@ -65,8 +67,8 @@ use syn::{
 /// `dagr_core::task::ExecutionClass` variant the generated impl emits.
 ///
 /// The class is taken **only** from the attribute — `#[task]`/`#[task()]` →
-/// [`AwaitBound`](ExecutionClass::AwaitBound), `#[task(blocking)]` → `Blocking`,
-/// `#[task(compute)]` → `Compute` — and is never inferred from the `run` body.
+/// `AwaitBound`, `#[task(blocking)]` → `Blocking`, `#[task(compute)]` → `Compute`
+/// — and is never inferred from the `run` body.
 #[derive(Clone, Copy)]
 enum ExecClass {
     AwaitBound,

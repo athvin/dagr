@@ -31,8 +31,8 @@
 //! `GenericNodeRunner` that drives the node through the **same** real attempt
 //! path the hand-wired demos use. Nothing about the adapter is per-type: it is
 //! generic over `T: Task` and over the input arity via the [`InputWiring`] seam
-//! (implemented for every [`Deps`] shape), so a three-node chain and a
-//! twelve-node fan-in are built by the identical code.
+//! (implemented for the bare-input and the tuple dep shapes, arities 1..=8), so a
+//! three-node chain and an eight-input fan-in are built by the identical code.
 //!
 //! # What stays intact
 //!
@@ -561,17 +561,19 @@ pub trait InputReader<Inputs>: Send {
 }
 
 /// The seam that turns a concrete [`Deps`] value into a boxed [`InputReader`] for
-/// its `Inputs` — a blanket impl over every [`Deps`] whose `Inputs` is a single
-/// cloneable value (the shape the M1 chain and every one-input map uses).
+/// its `Inputs`, implemented for every dep shape the registration surface accepts:
+/// the three arity-1 bound-input types (a bare [`Handle`], a `Shared`, a
+/// `CloneOnRead`) and the tuple shapes for arities **2..=8** (`MAX_INPUT_ARITY`).
 ///
 /// It reads the edge set the framework already computes ([`Deps::into_edges`], the
 /// same `(upstream id, receive mode)` pairs the pipeline binds), so it is generic
-/// over the upstream's concrete value type and its declared receive mode with no
+/// over each upstream's concrete value type and its declared receive mode with no
 /// per-type code at the call site. A registration's `deps` argument yields both the
 /// pipeline edges (via `Deps` on the flow) and the runtime input reader (via this
-/// trait) from one cloned value. Multi-input tuple arities extend this the same way
-/// (one small `impl` per arity to assemble the tuple); the current registration
-/// surface exercises the single-input shape.
+/// trait) from one cloned value. The arity-1 impls deliver the bare value; each
+/// tuple impl assembles its positions into the declared tuple in edge order. A
+/// dep shape of arity 9+ has no `Deps` impl at all (the sealed tuple impls stop at
+/// 8), so it is rejected at the registration site before this seam is consulted.
 pub trait InputWiring: Deps {
     /// Build the boxed input reader for this dep shape.
     #[doc(hidden)]
@@ -630,7 +632,11 @@ where
     D::Inputs: Clone + Send + Sync + 'static,
 {
     let mut edges = dep.into_edges();
-    debug_assert_eq!(edges.len(), 1, "a single bound input yields exactly one edge");
+    debug_assert_eq!(
+        edges.len(),
+        1,
+        "a single bound input yields exactly one edge"
+    );
     let (upstream, mode) = edges.pop().expect("exactly one edge");
     Box::new(SingleReader::<D::Inputs> {
         edge: EdgeRead { upstream, mode },

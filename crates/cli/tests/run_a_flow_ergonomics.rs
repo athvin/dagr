@@ -504,7 +504,11 @@ struct JoinInOrder;
 impl Task for JoinInOrder {
     type Input = (String, String);
     type Output = String;
-    async fn run(&mut self, _c: &RunContext, (first, second): (String, String)) -> Result<String, TaskError> {
+    async fn run(
+        &mut self,
+        _c: &RunContext,
+        (first, second): (String, String),
+    ) -> Result<String, TaskError> {
         Ok(format!("{first}|{second}"))
     }
 }
@@ -608,7 +612,11 @@ fn three_input_node_reads_inside_run_after_upstreams_succeed() {
     impl Task for SumThree {
         type Input = (u64, u64, u64);
         type Output = u64;
-        async fn run(&mut self, _c: &RunContext, (a, b, c): (u64, u64, u64)) -> Result<u64, TaskError> {
+        async fn run(
+            &mut self,
+            _c: &RunContext,
+            (a, b, c): (u64, u64, u64),
+        ) -> Result<u64, TaskError> {
             Ok(a + 10 * b + 100 * c)
         }
     }
