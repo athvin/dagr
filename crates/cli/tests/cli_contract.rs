@@ -414,6 +414,25 @@ fn a_non_colliding_parameter_is_accepted() {
     assert!(dagr_cli::contract::check_reserved_collision(&params).is_ok());
 }
 
+/// The startup-banner toggle is a library-owned flag: `no-banner` is reserved (so a
+/// pipeline parameter can never shadow the flag that `main` strips from argv), and
+/// a colliding parameter is the same named, hard error as any other reserved flag.
+#[test]
+fn the_no_banner_toggle_is_reserved() {
+    assert!(
+        reserved_flag_names().contains(&"no-banner"),
+        "the startup-banner toggle is reserved so no pipeline parameter can shadow it"
+    );
+    let params = vec![ParamSpec::new(
+        "no-banner",
+        "a parameter shadowing the banner toggle",
+    )];
+    match dagr_cli::contract::check_reserved_collision(&params) {
+        Err(LibraryFlagCollision { flag }) => assert_eq!(flag, "no-banner"),
+        Ok(()) => panic!("a parameter named `no-banner` must be a hard collision error"),
+    }
+}
+
 /// A typed parameter value that fails validation is rejected with the
 /// invalid-usage code (rejected at bootstrap, before any node executes — the
 /// no-node-executed half is covered by the run-verb integration test).
