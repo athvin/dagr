@@ -115,7 +115,7 @@ M0 gates the work pairwise, not as a block. Land the two highest-risk spikes fir
 
 Purely additive `dagx`-inspired ergonomics and multi-flow selection over the finished engine — no existing behaviour changes and `dagr-core` stays runtime-dependency-free. The three decisions are recorded in companion ADRs, accepted alongside this plan: [082 — task-authoring macro](082-task-macro-adr.md), [086 — flow registry](086-flow-registry-adr.md), and [089 — runtime knob precedence](089-config-precedence-adr.md). Work the three streams in order: task-authoring ergonomics (T71–T73), then the flow registry (T74–T75), then runtime-knob precedence (T76–T77). Note: ticket codes continue at **T71** because T66–T70 were already used in earlier milestones.
 
-- [ ] **083** · [T71 — dagr-macros scaffold + zero/single-input `#[task]`](083-T71-dagr-macros-scaffold.md) · M · feature — after T9, T13
+- [x] **083** · [T71 — dagr-macros scaffold + zero/single-input `#[task]`](083-T71-dagr-macros-scaffold.md) · M · feature — after T9, T13
 - [ ] **084** · [T72 — `#[task]` multi-arity, ctx, ExecutionClass + tuple InputWiring](084-T72-task-macro-multiarity-and-wiring.md) · M · feature — after T71
 - [ ] **085** · [T73 — quickstart/cookbook rewrite + trybuild suite](085-T73-quickstart-macro-and-trybuild.md) · M · feature (tests) — after T72
 - [ ] **087** · [T74 — FlowRegistry + `dagr run <flow>` / `list` dispatch](087-T74-flow-registry-and-dispatch.md) · M · feature — after T13, T24, T55
