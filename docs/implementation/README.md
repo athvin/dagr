@@ -118,7 +118,7 @@ Purely additive `dagx`-inspired ergonomics and multi-flow selection over the fin
 - [x] **083** · [T71 — dagr-macros scaffold + zero/single-input `#[task]`](083-T71-dagr-macros-scaffold.md) · M · feature — after T9, T13
 - [x] **084** · [T72 — `#[task]` multi-arity, ctx, ExecutionClass + tuple InputWiring](084-T72-task-macro-multiarity-and-wiring.md) · M · feature — after T71
 - [x] **085** · [T73 — quickstart/cookbook rewrite + trybuild suite](085-T73-quickstart-macro-and-trybuild.md) · M · feature (tests) — after T72
-- [ ] **087** · [T74 — FlowRegistry + `dagr run <flow>` / `list` dispatch](087-T74-flow-registry-and-dispatch.md) · M · feature — after T13, T24, T55
+- [x] **087** · [T74 — FlowRegistry + `dagr run <flow>` / `list` dispatch](087-T74-flow-registry-and-dispatch.md) · M · feature — after T13, T24, T55
 - [ ] **088** · [T75 — registry graph/validate routing + multi-flow example](088-T75-registry-graph-validate-and-example.md) · M · feature — after T74, T40
 - [ ] **090** · [T76 — precedence helper + parsers](090-T76-precedence-helper-and-parsers.md) · M · feature — after T55
 - [ ] **091** · [T77 — wire DAGR_* env fallbacks + expose headroom](091-T77-env-fallbacks-and-headroom.md) · M · feature — after T76, T31, T32
