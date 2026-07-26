@@ -14,6 +14,54 @@ the one-call [`RunnableFlow`](../crates/cli/src/run_flow.rs) seam every runnable
 entry here uses: you write plain [tasks](../crates/core/src/task.rs) and a flow,
 and never a scheduler or a `NodeRunner` (arch.md **C1**).
 
+## Authoring a task: `#[task]` first, hand-written `impl Task` as the fallback
+
+The **primary** way to author a task is the [`#[task]`](../crates/macros/src/lib.rs)
+attribute (ADR 082): put it on an inherent `impl` block that holds one
+`async fn run`, and it generates the `impl Task` — inferring the input type from
+the `run` arguments, the output type from the `Result<T, TaskError>` return, and
+the execution class from the attribute (`#[task]` = await-bound,
+`#[task(blocking)]`, `#[task(compute)]`). You write only the work:
+
+```rust
+use dagr_core::task;
+
+struct Double;
+
+#[task]
+impl Double {
+    async fn run(&mut self, input: u64) -> Result<u64, TaskError> {
+        Ok(input * 2)
+    }
+}
+```
+
+That is the whole task — the four things arch.md **C1** says an author declares,
+with no `type Input` / `type Output` / `EXECUTION_CLASS` scaffolding to write.
+Zero inputs is `_input: ()`; two-to-eight inputs are one **tuple** parameter
+(`(a, b): (A, B)`), delivered by value; an optional `ctx: &RunContext` parameter
+is detected by type and threaded in.
+
+**Hand-written `impl Task` stays a first-class fallback**, and the sole escape
+hatch for anything the macro cannot express. It is `use dagr_core::task::Task;`
+and the four declarations spelled out:
+
+```rust
+use dagr_core::task::{RunContext, Task};
+
+impl Task for Double {
+    type Input = u64;
+    type Output = u64;
+    async fn run(&mut self, _ctx: &RunContext, input: u64) -> Result<u64, TaskError> {
+        Ok(input * 2)
+    }
+}
+```
+
+The two forms are equivalent — the macro expands to exactly this. The entries
+below spell out `impl Task` (the fallback) so the associated types stay visible
+next to each pattern; every one is equally authorable with `#[task]`.
+
 The normative vocabulary these entries lean on — the nine terminal states, the
 state classes, and the closed trigger-rule set — lives in
 [`docs/arch.md`](arch.md) "Vocabulary". Read it once; the entries reference it.
@@ -27,6 +75,7 @@ state classes, and the closed trigger-rule set — lives in
 5. [Durable stage boundaries](#durable-stage-boundaries)
 6. [The non-`Send` capture error and its fixes](#the-non-send-capture-error-and-its-fixes)
 7. [Two same-typed resources via newtypes](#two-same-typed-resources-via-newtypes)
+8. [Common `#[task]` mistakes](#common-task-mistakes)
 
 ---
 
@@ -285,3 +334,101 @@ path, so the framework never serializes them into artifacts or its own logs.
 > **Backing tests:** `two_same_typed_resources_are_distinguished_by_newtypes` and
 > `registering_two_resources_of_the_identical_type_fails_as_ambiguous` in
 > `crates/cli/tests/cookbook.rs`.
+
+---
+
+## Common `#[task]` mistakes
+
+The [`#[task]`](../crates/macros/src/lib.rs) macro turns four hand-written
+declarations into one `run` fn (see [Authoring a task](#authoring-a-task-task-first-hand-written-impl-task-as-the-fallback)
+above), but a few misuses trip authors up. **A caveat that applies to all of
+them:** a proc-macro rewrites your `impl` block, so a diagnostic can attribute the
+error to the `#[task]` **attribute site** (the `#[task]` line) rather than the
+exact offending line inside `run` — this is a known limitation (ADR 082). When a
+message points at `#[task]`, read the whole `run` signature and body, not just the
+attribute. Every mistake below is a committed compile-test in the macro's
+**trybuild corpus** ([`crates/macros/tests/expand/`](../crates/macros/tests/expand)):
+the `fail/` directory holds each broken form with its exact `.stderr` snapshot, so
+these diagnostics are a versioned contract, not a moving target. Regenerate the
+snapshots deliberately with `TRYBUILD=overwrite cargo test -p dagr-macros --test
+trybuild` after a pinned-toolchain bump.
+
+**1. A bare `-> T` return instead of `-> Result<T, TaskError>`.** A task must be
+able to fail with a classified error, so the return type is not optional. Writing
+`-> u64` where the framework needs `-> Result<u64, TaskError>` is rejected by the
+macro with a `compile_error!` naming the required shape:
+
+```rust
+// WRONG — no failure channel:
+#[task]
+impl Double {
+    async fn run(&mut self, input: u64) -> u64 { input * 2 }
+    //                                     ^^^ error: #[task]'s `run` must return
+    //                                         `Result<T, TaskError>`
+}
+```
+
+**The fix:** wrap the output in `Result<T, TaskError>` and return `Ok(..)` — even
+an infallible body declares the channel. (Pinned: `fail/bare_return.rs`.)
+
+**2. Capturing a non-`Send` value.** A task value is moved onto a worker thread, so
+it must be `Send + 'static`. Capturing an `Rc`, a `RefCell<Rc<…>>`, a raw pointer,
+or a `MutexGuard` held across the body makes the task `!Send` and reds the build:
+
+```rust
+use std::rc::Rc;
+#[task]                       // the diagnostic may point HERE (the attribute site)
+impl NonSend {                //   rather than at the `Rc` field below
+    async fn run(&mut self, input: u64) -> Result<u64, TaskError> {
+        Ok(input + *self.shared) // self.shared: Rc<u32> — `Rc<u32>` is not `Send`
+    }
+}
+```
+
+**The fix** (never weaken the bound): capture an `Arc` instead of an `Rc` for
+shared read-only config; construct a genuinely per-attempt non-`Send` value
+*inside* `run` rather than in the struct; or, for a non-thread-safe client that
+must be shared, use the owning-worker pattern and register the channel end as a
+resource. See [The non-`Send` capture error and its fixes](#the-non-send-capture-error-and-its-fixes)
+for the full treatment. (Pinned: `fail/non_send_capture.rs` — its snapshot is the
+canonical example of the attribute-site attribution above.)
+
+**3. More than eight inputs.** dagr's input-arity ceiling is **8** (arch.md **C3**,
+[`binding.rs`](../crates/core/src/binding.rs) `MAX_INPUT_ARITY`). The macro adds no
+second check — a 9-tuple flows through as `type Input` — so the ceiling is enforced
+where the node is **wired**: binding nine upstream handles fails with the sealed
+`Deps` trait's curated *"too many inputs: the maximum input arity is 8"*
+diagnostic, whose note tells you the fix:
+
+```text
+error[E0277]: too many inputs bound to one task: the maximum input arity is 8
+   = note: aggregate the upstream values into a struct produced by an
+           intermediate node, then depend on that one handle
+```
+
+**The fix:** produce an aggregate `struct` from an intermediate node and depend on
+that one handle — the same shape [Fan-in](#fan-in) uses past arity 8. (Pinned:
+`fail/over_eight_inputs.rs`.)
+
+**4. A deps mismatch at registration.** The `run` arguments declare the task's
+input types, and `RunnableFlow::register` binds upstream handles whose value types
+must **exactly** match them (`D: Deps<Inputs = T::Input>`, C3). Binding a
+`Handle<String>` into a task whose `run` takes `input: u64` is a *compile* error,
+not a runtime surprise, and the diagnostic names both sides:
+
+```text
+error[E0271]: type mismatch resolving `<Handle<String> as Deps>::Inputs == u64`
+   |  ...register::<WantsU64, _>("wants-u64", WantsU64, label);
+   |                                                    ^^^^^ expected `u64`, found `String`
+```
+
+**The fix:** bind the handle whose type matches the `run` argument, or change the
+`run` argument to the upstream's actual type — the compiler names the expected and
+actual types, so the mismatch is unambiguous. (Pinned: `fail/deps_mismatch.rs`.)
+
+> **Backing corpus:** [`crates/macros/tests/trybuild.rs`](../crates/macros/tests/trybuild.rs)
+> drives the whole `expand/pass/` (every accepted arity and execution class) and
+> `expand/fail/` (the four mistakes above, each with a committed `.stderr`)
+> boundary under the workspace-pinned toolchain, and
+> `common_task_mistakes_have_compiling_fixes` in `crates/cli/tests/cookbook.rs`
+> proves each **fix** above compiles and runs through `RunnableFlow`.

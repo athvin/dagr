@@ -101,24 +101,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::RunConfig;
 use dagr_cli::run_flow::RunnableFlow;
-use dagr_core::task::{RunContext, Task};
-use dagr_core::TaskError;
+use dagr_core::task;
 
-// --- 1. Author two tasks. A task is a value holding its configuration, with a
-// declared input type, a declared output type, and an `async fn run` body that
-// returns a value or a classified error. You write business logic only — no
-// scheduling, retry, or permit code (arch.md C1).
+// --- 1. Author two tasks. A task is a value holding its configuration, plus one
+// `async fn run` body — that is the whole authoring surface. `#[task]` reads the
+// `run` signature and generates the four things arch.md C1 says you declare (the
+// input type, the output type, the execution class, the work), so you write
+// business logic only — no scheduling, retry, permit, or trait-impl scaffolding.
+// (Prefer to write the `impl Task` by hand? It stays a first-class fallback — see
+// the cookbook.)
 
-/// The source: consumes nothing (`Input = ()`) and produces a starting number.
+/// The source: consumes nothing (an `()` input) and produces a starting number.
 struct Count {
     up_to: u64,
 }
 
-impl Task for Count {
-    type Input = ();
-    type Output = u64;
-
-    async fn run(&mut self, _ctx: &RunContext, _input: ()) -> Result<u64, TaskError> {
+#[task]
+impl Count {
+    async fn run(&mut self, _input: ()) -> Result<u64, TaskError> {
         Ok(self.up_to)
     }
 }
@@ -126,11 +126,9 @@ impl Task for Count {
 /// The sink: consumes the source's `u64` and produces its double.
 struct Double;
 
-impl Task for Double {
-    type Input = u64;
-    type Output = u64;
-
-    async fn run(&mut self, _ctx: &RunContext, input: u64) -> Result<u64, TaskError> {
+#[task]
+impl Double {
+    async fn run(&mut self, input: u64) -> Result<u64, TaskError> {
         Ok(input * 2)
     }
 }

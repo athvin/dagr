@@ -11,10 +11,13 @@
 //! It takes a reader from an empty directory to a compiled, run,
 //! artifact-inspected **two-node pipeline** using the one-call
 //! [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow) seam (ADR 081): the author
-//! writes two plain [`Task`](dagr_core::task::Task)s and a flow, and *never*
-//! writes a scheduler, a `NodeRunner`, or any slot wiring (arch.md C1). No async
-//! experience is required — the two task bodies are ordinary code returning a
-//! value; the framework runs them.
+//! writes two [`#[task]`](dagr_core::task)s and a flow, and *never* writes a
+//! scheduler, a `NodeRunner`, or any slot wiring (arch.md C1). The
+//! [`#[task]`](dagr_core::task) attribute (ADR 082) generates the
+//! [`Task`](dagr_core::task::Task) impl from the `run` fn, so each node body is a
+//! single function — the hand-written `impl Task` stays a first-class fallback.
+//! No async experience is required — the two task bodies are ordinary code
+//! returning a value; the framework runs them.
 //!
 //! No server, database, or scheduler is involved: the binary and its one
 //! argument (a run-store directory) are sufficient (system criterion 7). Run it
@@ -30,24 +33,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::RunConfig;
 use dagr_cli::run_flow::RunnableFlow;
-use dagr_core::task::{RunContext, Task};
-use dagr_core::TaskError;
+use dagr_core::task;
 
-// --- 1. Author two tasks. A task is a value holding its configuration, with a
-// declared input type, a declared output type, and an `async fn run` body that
-// returns a value or a classified error. You write business logic only — no
-// scheduling, retry, or permit code (arch.md C1).
+// --- 1. Author two tasks. A task is a value holding its configuration, plus one
+// `async fn run` body — that is the whole authoring surface. `#[task]` reads the
+// `run` signature and generates the four things arch.md C1 says you declare (the
+// input type, the output type, the execution class, the work), so you write
+// business logic only — no scheduling, retry, permit, or trait-impl scaffolding.
+// (Prefer to write the `impl Task` by hand? It stays a first-class fallback — see
+// the cookbook.)
 
-/// The source: consumes nothing (`Input = ()`) and produces a starting number.
+/// The source: consumes nothing (an `()` input) and produces a starting number.
 struct Count {
     up_to: u64,
 }
 
-impl Task for Count {
-    type Input = ();
-    type Output = u64;
-
-    async fn run(&mut self, _ctx: &RunContext, _input: ()) -> Result<u64, TaskError> {
+#[task]
+impl Count {
+    async fn run(&mut self, _input: ()) -> Result<u64, TaskError> {
         Ok(self.up_to)
     }
 }
@@ -55,11 +58,9 @@ impl Task for Count {
 /// The sink: consumes the source's `u64` and produces its double.
 struct Double;
 
-impl Task for Double {
-    type Input = u64;
-    type Output = u64;
-
-    async fn run(&mut self, _ctx: &RunContext, input: u64) -> Result<u64, TaskError> {
+#[task]
+impl Double {
+    async fn run(&mut self, input: u64) -> Result<u64, TaskError> {
         Ok(input * 2)
     }
 }
