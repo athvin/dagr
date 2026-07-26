@@ -1,0 +1,45 @@
+# dagr-macros — the OPTIONAL proc-macro authoring layer (ADR 082).
+#
+# Role (per ADR 082, docs/implementation/082-task-macro-adr.md): a build-time-only
+# proc-macro crate exporting the `#[task]` attribute, which expands an inherent
+# `impl` block into the exact `impl Task for Foo { … }` an author writes by hand
+# today. It is a purely ADDITIVE, opt-in ergonomic layer over dagr-core's C1 task
+# abstraction — hand-written `impl Task` stays the first-class, zero-dependency
+# escape hatch.
+#
+# Zero-runtime-dependency guarantee (ADR 081, preserved by ADR 082). This crate's
+# only dependencies are the build-time `syn` / `quote` / `proc-macro2`; a
+# proc-macro runs INSIDE the compiler and is NEVER linked into the shipped binary.
+# dagr-core depends on dagr-macros only behind its default-on `macros` feature,
+# and the macro's expansion references only existing dagr-core items, so a
+# produced program's RUNTIME dependency graph is byte-for-byte unchanged. This is
+# proved by `cargo build --all --no-default-features`, which builds core with no
+# dependency edge onto dagr-macros at all (a T71 DoD check).
+[package]
+name = "dagr-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_macros"
+# A proc-macro crate: its public surface is attribute/derive macros only, and it
+# is loaded by the compiler, not linked into the runtime binary.
+proc-macro = true
+
+[dependencies]
+# The three build-time proc-macro crates — and NOTHING else (no runtime deps).
+# Versions are pinned to the entries already resolved in the workspace lockfile
+# (added by serde_derive / clap via proc-macro2/syn), so this crate adds no NEW
+# crate to the dependency tree and no new licence surface: all three are MIT,
+# already allowed by deny.toml. `syn` uses the "full" feature to parse whole
+# `impl` blocks (items, not just expressions).
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

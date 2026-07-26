@@ -179,6 +179,18 @@ dependencies = [
 [[package]]
 name = "dagr-core"
 version = "0.0.0"
+dependencies = [
+ "dagr-macros",
+]
+
+[[package]]
+name = "dagr-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "dagr-render"

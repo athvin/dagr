@@ -12,8 +12,15 @@
 #   cli      -> core, artifact, render     (the pipeline binary; the one place
 #                                           the live pipeline and rendering meet)
 #   render   -> artifact                    (renderers consume artifacts only; C24)
-#   core     -> (none)                      (the live-pipeline surface; minimal,
-#                                           review-gated dependency set — Stability)
+#   core     -> macros (build-time, opt-in) (the live-pipeline surface; its only
+#                                           dependency edge is a BUILD-TIME,
+#                                           default-on-`macros`-feature path to the
+#                                           proc-macro crate — never a runtime dep,
+#                                           `--no-default-features` drops it; the
+#                                           runtime dependency set stays empty —
+#                                           Stability / ADR 082)
+#   macros   -> (none in-workspace)         (proc-macro crate; syn/quote/proc-macro2
+#                                           are build-time only, ADR 082)
 #   artifact -> (none)                      (the C24 consumption boundary)
 # render has NO edge onto core, so it is structurally incapable of reaching the
 # pipeline binary (C24). See the ADR for the full rationale.
@@ -22,6 +29,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/macros",
     "crates/artifact",
     "crates/render",
     "crates/cli",

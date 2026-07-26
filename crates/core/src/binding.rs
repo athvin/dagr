@@ -5,7 +5,7 @@
 //! **binding one or more already-registered upstream [`Handle`]s** whose value
 //! types must **exactly match** the consuming task's declared input types. This
 //! module delivers the binding vocabulary layered on the C2 typed handles
-//! ([`crate::handle`], T10) and the C1 task abstraction ([`crate::task`], T9):
+//! ([`crate::handle`], T10) and the C1 task abstraction ([`mod@crate::task`], T9):
 //! the sealed positional [`Deps`] encoding, the per-edge receive-mode recording,
 //! and the trigger-rule typestate. It implements the encoding **exactly** as the
 //! T5 design-spike ADR
