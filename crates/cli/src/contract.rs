@@ -460,6 +460,86 @@ pub fn help_text() -> String {
 }
 
 // ===========================================================================
+// Startup banner
+// ===========================================================================
+
+/// The long flag that suppresses the startup [`BANNER`]. Reserved
+/// (see [`reserved_flag_names`]) so a pipeline parameter can never shadow it, and
+/// stripped from argv before verb parsing ([`split_banner_flag`]) — it carries no
+/// verb semantics, only the cosmetic startup toggle.
+pub const NO_BANNER_FLAG: &str = "--no-banner";
+
+/// The environment variable that suppresses the startup [`BANNER`] when set to a
+/// non-empty value. The widely-honoured `NO_COLOR` convention
+/// (<https://no-color.org>) suppresses it too; either one is enough.
+pub const NO_BANNER_ENV: &str = "DAGR_NO_BANNER";
+
+/// The deterministic startup banner (arch.md C26 / Determinism): a **static,
+/// colour-free** constant — no timestamps, no runtime version, no terminal-width
+/// or TTY-dependent formatting — so it never perturbs machine-readable stdout or
+/// the structural-determinism guarantees. Printed to **stderr** at startup
+/// ([`print_banner`]); suppress it with [`NO_BANNER_FLAG`], [`NO_BANNER_ENV`], or
+/// `NO_COLOR`.
+pub const BANNER: &str = "\
+════════════════════════════════════════════
+ ██████╗  █████╗  ██████╗ ██████╗
+ ██╔══██╗██╔══██╗██╔════╝ ██╔══██╗
+ ██║  ██║███████║██║  ███╗██████╔╝
+ ██║  ██║██╔══██║██║   ██║██╔══██╗
+ ██████╔╝██║  ██║╚██████╔╝██║  ██║
+ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
+   ●──▶●──▶●   deterministic · parallel DAG runner
+════════════════════════════════════════════";
+
+/// Write the startup [`BANNER`] (followed by a newline) to `w`. Callers on the
+/// startup path route this to **stderr** and ignore the result: a broken pipe on
+/// stderr must never change the process exit code.
+///
+/// # Errors
+/// Propagates any write error from `w` (so a non-stderr caller may inspect it).
+pub fn print_banner<W: Write>(w: &mut W) -> std::io::Result<()> {
+    writeln!(w, "{BANNER}")
+}
+
+/// Split the startup banner flag out of a raw argv: return whether
+/// [`NO_BANNER_FLAG`] was present and the argv with **every** occurrence removed.
+///
+/// The flag is a purely cosmetic startup toggle with no verb semantics, so it is
+/// stripped here — before [`parse_cli`] — rather than threaded through the C26
+/// verb parser. Stripping (instead of registering a clap arg) makes it
+/// position-independent (`dagr --no-banner run` and `dagr run --no-banner` behave
+/// identically) and leaves the public [`Cli`]/[`Verb`]/[`build_command`] surface
+/// untouched. Mirrors [`parse_cli`]'s argv signature so a caller chains the two.
+pub fn split_banner_flag<I, T>(argv: I) -> (bool, Vec<std::ffi::OsString>)
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString>,
+{
+    let flag = std::ffi::OsStr::new(NO_BANNER_FLAG);
+    let mut present = false;
+    let mut kept = Vec::new();
+    for arg in argv {
+        let arg = arg.into();
+        if arg.as_os_str() == flag {
+            present = true;
+        } else {
+            kept.push(arg);
+        }
+    }
+    (present, kept)
+}
+
+/// Whether the environment suppresses the startup [`BANNER`]: true when
+/// [`NO_BANNER_ENV`] **or** `NO_COLOR` is set to a non-empty value (the
+/// <https://no-color.org> convention — present and non-empty ⇒ suppress). An
+/// empty or unset variable does not suppress.
+#[must_use]
+pub fn banner_suppressed_by_env() -> bool {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    set(NO_BANNER_ENV) || set("NO_COLOR")
+}
+
+// ===========================================================================
 // Reserved library-flag namespace
 // ===========================================================================
 
@@ -469,8 +549,8 @@ pub fn help_text() -> String {
 ///
 /// These are the library-owned run/inspection flags (the store base, the run-id
 /// override, the grace period, the failure mode, the pool pinning, the data
-/// interval, and the always-reserved `help`/`version`). Fixed and library-owned,
-/// so the namespace is identical across every pipeline.
+/// interval, the startup-banner toggle, and the always-reserved `help`/`version`).
+/// Fixed and library-owned, so the namespace is identical across every pipeline.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -485,6 +565,7 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "data-interval",
         "force",
         "run",
+        "no-banner",
     ]
 }
 

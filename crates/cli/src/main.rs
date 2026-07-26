@@ -22,11 +22,20 @@ use std::io::{self, Read, Write};
 use std::process::ExitCode as ProcExit;
 
 use dagr_cli::contract::{
-    fold_verb, parse_cli, render_verb, resume_verb_stub, ExitCode, ParseOutcome, RenderFormat, Verb,
+    banner_suppressed_by_env, fold_verb, parse_cli, print_banner, render_verb, resume_verb_stub,
+    split_banner_flag, ExitCode, ParseOutcome, RenderFormat, Verb,
 };
 
 fn main() -> ProcExit {
-    let outcome = parse_cli(std::env::args_os());
+    // Print the startup banner to stderr before anything else, unless suppressed by
+    // `--no-banner`, `DAGR_NO_BANNER`, or `NO_COLOR`. The flag is stripped from argv
+    // here so it never reaches the verb parser; stdout stays reserved for
+    // machine-readable verb output, so the banner (stderr) never contaminates it.
+    let (no_banner, argv) = split_banner_flag(std::env::args_os());
+    if !no_banner && !banner_suppressed_by_env() {
+        let _ = print_banner(&mut io::stderr().lock());
+    }
+    let outcome = parse_cli(argv);
     let code = match outcome {
         ParseOutcome::Help { exit, text } => {
             print!("{text}");
