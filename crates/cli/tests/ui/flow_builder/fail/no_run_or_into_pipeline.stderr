@@ -1,0 +1,11 @@
+error[E0599]: no method named `run` found for struct `FlowBuilder<'a>` in the current scope
+  --> tests/ui/flow_builder/fail/no_run_or_into_pipeline.rs:14:15
+   |
+14 |     let _ = f.run();
+   |               ^^^ method not found in `FlowBuilder<'_>`
+
+error[E0599]: no method named `into_pipeline` found for struct `FlowBuilder<'a>` in the current scope
+  --> tests/ui/flow_builder/fail/no_run_or_into_pipeline.rs:16:15
+   |
+16 |     let _ = f.into_pipeline();
+   |               ^^^^^^^^^^^^^ method not found in `FlowBuilder<'_>`
