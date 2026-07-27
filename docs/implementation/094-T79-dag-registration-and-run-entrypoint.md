@@ -48,6 +48,12 @@ Deliver `inventory`-backed DAG discovery and a one-call entrypoint that reuses t
 ## Open questions
 None. (The user-manifest `inventory` dependency and the leaf-binary contract are decided in ADR 092; this ticket implements the `dagr-cli` side only.)
 
+Implementation choices settled during T79 (recorded here per ticket-conventions §5; none contested — each follows from ADR 092 / the Test plan):
+- **Duplicate diagnostic wording.** A duplicate DAG name prints `dagr: duplicate DAG name \`<name>\` (two DAGs are declared with the same name; rename one)` on stdout and exits `InvalidUsage` (2), before any flow is built — matching how the existing registry routes selection diagnostics to stdout.
+- **Single-flow default plumbing.** Exactly one discovered DAG builds the registry via `FlowRegistry::single_flow` (name omittable); ≥2 build it via `new()` + `add` per record in sorted order — reusing the registry's own single-flow ergonomic, not a new path.
+- **Discovery test corpus = example binaries.** The Test plan / DoD require the submissions to live in a **binary/example** crate (leaf-binary contract). T79 adds `crates/cli/examples/{many_dags,one_dag,dup_dags}.rs` — hand-written `inventory::submit!` *discovery fixtures* that exercise sorted `list` / single-flow `run` / `graph` / `validate` / duplicate-rejection. These are distinct from, and not a substitute for, the `#[dag]`-based user-facing many-dags **cookbook** example T81 owns (which does not exist until `#[dag]` does in T80).
+- **`run` return type + `.into()` in `main`.** `run` returns the library `dagr_cli::contract::ExitCode` (same shape as `run_registry`); a binary's `fn main() -> std::process::ExitCode` converts with `.into()` (the existing `From<ExitCode>` impl). ADR 092's illustrative one-liner elides the conversion.
+
 ## Out of scope
 - The `#[dag]` attribute macro that emits `inventory::submit!` — that is **T80**; this ticket tests discovery against hand-written `submit!`s.
 - The `FlowBuilder` façade — delivered by **T78** (a dependency for T80, not this ticket).

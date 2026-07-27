@@ -65,9 +65,22 @@ required-features = ["test-kit"]
 # single-task kit, T60), while a production `default-features = false` build can
 # still exclude it. It adds NO dependency — it composes already-present library
 # entry points (`driver`, `dagr_core::flow`, `dagr_artifact::fold`).
-default = ["test-kit"]
+default = ["test-kit", "dag"]
 test-kit = []
 schema-validation = ["dagr-artifact/schema-validation"]
+
+# --- The M6 declarative-DAG auto-discovery feature (T79), ON by default ------
+# `dag` turns on `inventory`-backed DAG discovery: the `DagRegistration` collected
+# record type, the single `inventory::collect!`, and the `dagr_cli::run(argv)`
+# auto-discovery entrypoint (ADR 092). `inventory` is a RUNTIME dependency, so it is
+# confined to `dagr-cli` behind this OPTIONAL feature and never reaches `dagr-core`
+# (core's zero-runtime-dependency guarantee, ADR 081/082) — exactly as
+# `--no-default-features` drops `dagr-macros` from core. A production
+# `default-features = false` build of `dagr-cli` therefore has NO `inventory`
+# dependency edge and none of the `DagRegistration` / `run` items. It ships ON by
+# default so the one-line `fn main() { dagr_cli::run(env::args_os()) }` and the
+# `#[dag]` re-export (T80) work with no opt-in.
+dag = ["dep:inventory"]
 
 [dependencies]
 dagr-core = { path = "../core" }
@@ -178,6 +191,21 @@ rayon = "1"
 #     `cargo audit`/`cargo deny` stay green.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
+
+# inventory — the M6 `dag`-feature link-time DAG registry (ADR 092, T79). `#[dag]`
+# (T80) emits an `inventory::submit!` of a `{ name, factory }` record and
+# `dagr_cli::run` iterates `inventory::iter` to build a `FlowRegistry`; T79 builds
+# the discovery mechanism against hand-written `submit!`s. `inventory` registers
+# life-before-`main` constructors in a linker section, so a submission is reliably
+# collected only in the final linked binary — hence ADR 092's leaf-binary contract
+# (DAGs live in the binary crate). It is the FIRST runtime dependency outside the
+# already-vetted clap/tokio/rayon/tracing/serde set, so it is OPTIONAL and pulled
+# ONLY by the default-on `dag` feature (`dag = ["dep:inventory"]`), keeping it out of
+# a `--no-default-features` build and away from `dagr-core` entirely. It is
+# `MIT OR Apache-2.0` (MIT-resolved) with no transitive runtime deps, so it needs no
+# `deny.toml` change — `cargo deny`/`cargo audit` stay green (a DoD check because it
+# is the first dependency added since that set was vetted).
+inventory = { version = "0.3", optional = true }
 
 [dev-dependencies]
 # trybuild — the `FlowBuilder` façade's compile-time safety corpus (T78,
