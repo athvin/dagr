@@ -1,18 +1,17 @@
-//! C24 · T46 — the 30-node render fixture is a **schema-valid** C20 graph
-//! artifact. Written first, TDD.
+//! The 30-node render fixture is a **schema-valid** graph artifact. Written
+//! first, TDD.
 //!
-//! The renderer reads a graph artifact conforming to the published C20/T39
-//! schema (arch.md C24; the T46 `DoD`). This proves the checked-in 30-node fixture
-//! this ticket renders is itself schema-valid — it validates against
-//! `schemas/graph/v1.schema.json` via the published T39 helper
-//! (`dagr_artifact::schema::validate_value`) — and, for teeth, that a corrupted
-//! copy (a required field removed) is rejected.
+//! The renderer reads a graph artifact conforming to the published schema. This
+//! proves the checked-in 30-node fixture the renderer consumes is itself
+//! schema-valid — it validates against `schemas/graph/v1.schema.json` via the
+//! published helper (`dagr_artifact::schema::validate_value`) — and, for teeth,
+//! that a corrupted copy (a required field removed) is rejected.
 //!
 //! This suite is gated behind the `schema-validation` feature (default OFF)
-//! exactly like T39's own `artifact_schemas` and T40's `graph_artifact_schema_
-//! roundtrip`: the `jsonschema` validator is CI-/dev-scoped (T4 ADR 017 §4), so
-//! the shipped renderer and the bare `cargo test --workspace` never pull it. CI
-//! runs it in a dedicated step.
+//! exactly like the artifact crate's own `artifact_schemas` and
+//! `graph_artifact_schema_roundtrip`: the `jsonschema` validator is CI-/dev-
+//! scoped, so the shipped renderer and the bare `cargo test --workspace` never
+//! pull it. CI runs it in a dedicated step.
 
 #![cfg(feature = "schema-validation")]
 

@@ -1,7 +1,6 @@
-//! C24 · T46 — the rendered DOT and Mermaid are accepted by their **reference
-//! tools** (arch.md C24 line 520 "both output formats are accepted by their
-//! reference tools in CI: `dot` parses; Mermaid's parser accepts"). Written
-//! first, TDD.
+//! The rendered DOT and Mermaid are accepted by their **reference tools** —
+//! both output formats are accepted by their reference tools in CI (`dot`
+//! parses; Mermaid's parser accepts). Written first, TDD.
 //!
 //! Each test renders the **real** 30-node fixture through the renderer and runs
 //! the output through the format's reference tool:
@@ -11,15 +10,14 @@
 //!   input — so the check has teeth (a deliberately-malformed diagram is
 //!   rejected).
 //! * Mermaid → **Mermaid's own parser**, `mermaid.parse()` from the
-//!   `mermaid` library, run **browserless** under Node. The `DoD` is
-//!   "Mermaid's parser accepts the Mermaid" (057 `DoD` / arch.md C24 line 520),
-//!   NOT SVG rendering — so we call the parser directly instead of the `mmdc`
-//!   CLI, which would launch headless Chromium via puppeteer (unavailable and
-//!   flaky in CI). `mermaid.parse(src)` resolves on valid flowchart syntax and
-//!   throws on invalid syntax; a tiny jsdom DOM satisfies the library's
-//!   DOM/`DOMPurify` dependency without any browser. This keeps the exact
-//!   arch-required guarantee ("the parser accepts") while removing all Chromium
-//!   fragility from every future PR.
+//!   `mermaid` library, run **browserless** under Node. The requirement is that
+//!   Mermaid's parser accepts the Mermaid, NOT SVG rendering — so we call the
+//!   parser directly instead of the `mmdc` CLI, which would launch headless
+//!   Chromium via puppeteer (unavailable and flaky in CI). `mermaid.parse(src)`
+//!   resolves on valid flowchart syntax and throws on invalid syntax; a tiny
+//!   jsdom DOM satisfies the library's DOM/`DOMPurify` dependency without any
+//!   browser. This keeps the exact required guarantee ("the parser accepts")
+//!   while removing all Chromium fragility from every future PR.
 //!
 //! # Local vs CI
 //!
@@ -221,11 +219,11 @@ fn mermaid_reference_tool_accepts_the_rendered_mermaid() {
     );
 }
 
-/// **Reference tool accepts OVERLAID DOT (CI gate, T47).** The 30-node fixture
+/// **Reference tool accepts OVERLAID DOT (CI gate).** The 30-node fixture
 /// rendered with a run overlay (state colouring + duration annotations) is piped
 /// through `dot` in parse/validation mode; the overlay's styling additions must
-/// still produce a diagram `dot` accepts (arch.md C24 line 520 extended to the
-/// overlay).
+/// still produce a diagram `dot` accepts (the reference-tool gate extended to
+/// the overlay).
 #[test]
 fn dot_reference_tool_accepts_the_overlaid_dot() {
     if !tool_available("dot", &["-V"]) {
@@ -248,7 +246,7 @@ fn dot_reference_tool_accepts_the_overlaid_dot() {
     );
 }
 
-/// **Reference tool accepts OVERLAID Mermaid (CI gate, T47).** The 30-node
+/// **Reference tool accepts OVERLAID Mermaid (CI gate).** The 30-node
 /// fixture rendered with a run overlay (per-state `classDef`/`class` + duration
 /// annotations) is run through Mermaid's own parser browserless; the overlay's
 /// additions must still produce Mermaid the parser accepts.

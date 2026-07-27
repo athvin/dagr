@@ -1,17 +1,16 @@
-//! C24 · Diagram renderer — ticket T46. Written first, TDD.
+//! Diagram renderer tests. Written first, TDD.
 //!
-//! These translate the T46 Test plan into executable, structurally-checkable
-//! tests against the **real** renderer (`dagr_render`) reading a **real**
-//! published C20 graph artifact (the checked-in 30-node fixture, plus the genuine
-//! T40-emitted corpus fixture). Each test maps to one T46 Test-plan scenario /
-//! arch.md C24 acceptance line (see the per-test doc comment).
+//! These exercise the renderer (`dagr_render`) with executable,
+//! structurally-checkable tests reading a **real** published graph artifact (the
+//! checked-in 30-node fixture, plus the genuine emitter-produced corpus
+//! fixture).
 //!
 //! The renderer is a pure reader over the artifact schema: it deserializes the
 //! artifact JSON into typed structs and emits Graphviz DOT and Mermaid source. It
-//! has **no** dependency on `dagr-core` — that independence is a crate-graph fact
-//! (arch.md C24 "rendering requires no access to the binary that produced the
-//! artifacts"), asserted structurally by this crate's manifest, and exercised
-//! here by rendering artifacts alone with no producing binary linked.
+//! has **no** dependency on `dagr-core` — that independence (rendering requires
+//! no access to the binary that produced the artifacts) is a crate-graph fact,
+//! asserted structurally by this crate's manifest, and exercised here by
+//! rendering artifacts alone with no producing binary linked.
 //!
 //! The schema-validity of the 30-node fixture (that it conforms to the published
 //! `schemas/graph/v1.schema.json`) is proven by the sibling
@@ -33,11 +32,11 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// The genuine T40-emitted graph artifact from the shared corpus
+/// The genuine graph artifact from the shared corpus
 /// (`tests/fixtures/corpus/graph/v1/t40-three-node.json`, produced by the real
-/// C20 emitter and kept equal to a live emission by T40's own suite). Rendering
-/// this proves the renderer consumes **real emitter output**, not a hand-faked
-/// artifact.
+/// emitter and kept equal to a live emission by the emitter's own suite).
+/// Rendering this proves the renderer consumes **real emitter output**, not a
+/// hand-faked artifact.
 fn t40_corpus_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent() // crates/
@@ -610,13 +609,14 @@ fn rendering_is_byte_stable_across_repetitions() {
 
 /// **Renders a historical artifact with no producing binary present.** Handing
 /// the renderer a fixture artifact alone succeeds; the crate links no pipeline
-/// crate (a crate-graph fact). Uses the genuine T40-emitted corpus artifact.
+/// crate (a crate-graph fact). Uses the genuine emitter-produced corpus
+/// artifact.
 #[test]
 fn renders_a_real_t40_emitted_artifact_with_no_producing_binary() {
     let raw = std::fs::read_to_string(t40_corpus_path()).expect("t40 corpus fixture readable");
     let art = GraphArtifact::from_json_str(&raw).expect("t40 corpus is a valid graph artifact");
 
-    // It is a REAL emission (3 nodes, 2 data edges) from the C20 emitter.
+    // It is a REAL emission (3 nodes, 2 data edges) from the emitter.
     assert_eq!(art.nodes().len(), 3);
     assert_eq!(art.edges().len(), 2);
 

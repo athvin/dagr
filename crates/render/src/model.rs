@@ -1,6 +1,5 @@
-//! The typed, read-only view of a **C20 graph artifact** the renderer consumes
-//! (arch.md `### C20 · Graph artifact`; the published schema
-//! `schemas/graph/v1.schema.json`, T39).
+//! The typed, read-only view of a **graph artifact** the renderer consumes
+//! (the published schema `schemas/graph/v1.schema.json`).
 //!
 //! The renderer is a pure *reader*: it deserializes the published artifact JSON
 //! into these structs and emits diagram source. It never re-serializes the
@@ -10,24 +9,23 @@
 //! data edge, its carried `type_name`) are *required* on these structs, so an
 //! artifact missing one is refused with a diagnostic naming the field
 //! ([`GraphArtifact::from_json_str`]) rather than producing partial or misleading
-//! diagram source (arch.md C24 "reject … with a clear diagnostic"). Unknown
-//! future fields are ignored (schema evolution is additive-only within a version,
-//! T0.10), so a newer artifact still renders.
+//! diagram source. Unknown future fields are ignored (schema evolution is
+//! additive-only within a version), so a newer artifact still renders.
 //!
 //! # Only artifact fields the diagram needs
 //!
 //! These structs deliberately model **only** the fields the base renderer draws:
 //! node identity + group, and edge endpoints + kind + carried type. The full
 //! policy, resources, fingerprints, and provenance the artifact also carries are
-//! not modelled here — they are not part of the C24 base diagram (the run overlay
-//! that colours by terminal state and annotates duration is T47, a separate
-//! artifact and a separate concern). `serde`'s default "ignore unknown fields"
-//! posture makes that omission safe and forward-compatible.
+//! not modelled here — they are not part of the base diagram (the run overlay
+//! that colours by terminal state and annotates duration is a separate artifact
+//! and a separate concern). `serde`'s default "ignore unknown fields" posture
+//! makes that omission safe and forward-compatible.
 
 use serde::Deserialize;
 
-/// A parsed, read-only **C20 graph artifact** — the renderer's sole input
-/// (arch.md C24 "renderers consume artifacts only").
+/// A parsed, read-only **graph artifact** — the renderer's sole input
+/// (renderers consume artifacts only).
 ///
 /// Obtain one with [`GraphArtifact::from_json_str`]. It exposes only what the
 /// diagram draws: the node set (identity + group) and the edge set (endpoints,
@@ -41,9 +39,9 @@ pub struct GraphArtifact {
 }
 
 impl GraphArtifact {
-    /// The artifact's nodes, in the artifact's own (already canonical, T40)
-    /// order. The renderer sorts by identity name itself, so callers need not
-    /// rely on input order.
+    /// The artifact's nodes, in the artifact's own (already canonical) order.
+    /// The renderer sorts by identity name itself, so callers need not rely on
+    /// input order.
     #[must_use]
     pub fn nodes(&self) -> &[Node] {
         &self.nodes
@@ -58,8 +56,8 @@ impl GraphArtifact {
 }
 
 /// One node of the graph artifact — its stable identity `name`, its `group`
-/// label (the empty string when ungrouped, C6), and its stable declared
-/// `output_type_name` (C20 identity, never the informational `type_name`).
+/// label (the empty string when ungrouped), and its stable declared
+/// `output_type_name` (identity, never the informational `type_name`).
 ///
 /// The base renderer draws the identity name and the group association; the
 /// declared type/task names and policy the artifact also carries are not part of
@@ -78,20 +76,20 @@ pub struct Node {
 
 impl Node {
     /// The node's stable identity name — the label the diagram draws (never the
-    /// informational `type_name` debug field, arch.md C20 line 439).
+    /// informational `type_name` debug field).
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// The node's group label, or the empty string when it is ungrouped (C6). An
+    /// The node's group label, or the empty string when it is ungrouped. An
     /// ungrouped node is drawn outside every cluster.
     #[must_use]
     pub fn group(&self) -> &str {
         &self.group
     }
 
-    /// The node's stable declared output type name (C20). Not drawn by the base
+    /// The node's stable declared output type name. Not drawn by the base
     /// diagram, but held so identity is always the stable name.
     #[must_use]
     pub fn output_type_name(&self) -> &str {
@@ -99,16 +97,15 @@ impl Node {
     }
 }
 
-/// The kind of a graph edge: a **data** dependency (a value flows along it, C3)
-/// or an **ordering** dependency (sequence only, no value, C4). The two are
-/// recorded distinctly in the artifact and drawn distinctly in the diagram
-/// (arch.md C4 line 143).
+/// The kind of a graph edge: a **data** dependency (a value flows along it) or
+/// an **ordering** dependency (sequence only, no value). The two are recorded
+/// distinctly in the artifact and drawn distinctly in the diagram.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EdgeKind {
     /// A data dependency — carries the stable name of the type it carries.
     Data,
-    /// An ordering dependency — carries no value and no type label (C4 line 144).
+    /// An ordering dependency — carries no value and no type label.
     Ordering,
 }
 
@@ -146,7 +143,7 @@ impl Edge {
     }
 
     /// The carried stable type name for a data edge; `None` for an ordering edge
-    /// (which carries no value, C4 line 144).
+    /// (which carries no value).
     #[must_use]
     pub fn type_name(&self) -> Option<&str> {
         self.type_name.as_deref()

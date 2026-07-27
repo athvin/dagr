@@ -1,12 +1,12 @@
-//! **Run overlay** for the C24 renderer (arch.md `### C24 · Renderers`).
+//! **Run overlay** for the renderer.
 //!
-//! The base renderer ([`crate::render_dot`] / [`crate::render_mermaid`], T46)
-//! draws a graph artifact's *structure*. This module adds the optional **run
-//! overlay**: given a C22 **run artifact** (produced by the T42 fold) alongside
-//! the graph artifact, it projects each node's **terminal state** and
-//! **duration** onto the diagram — colouring each node by a documented, distinct
-//! per-state style and annotating it with its recorded duration — so a diagram
-//! becomes a legible post-mortem.
+//! The base renderer ([`crate::render_dot`] / [`crate::render_mermaid`]) draws a
+//! graph artifact's *structure*. This module adds the optional **run overlay**:
+//! given a **run artifact** (produced by folding the event stream) alongside the
+//! graph artifact, it projects each node's **terminal state** and **duration**
+//! onto the diagram — colouring each node by a documented, distinct per-state
+//! style and annotating it with its recorded duration — so a diagram becomes a
+//! legible post-mortem.
 //!
 //! The overlay is a **pure function** of `(graph artifact, run artifact) →
 //! diagram text`: [`render_dot_overlay`] and [`render_mermaid_overlay`]. It
@@ -17,16 +17,15 @@
 //!
 //! # The documented state → style mapping (auditable from source)
 //!
-//! Every entry in the normative **Terminal states** table (arch.md Vocabulary),
-//! plus the `not-requested` single-node-replay artifact marking (C22/C26 — an
-//! artifact marking, **not** a terminal state), maps to a **distinct** style. In
-//! DOT the discriminator is the node `fillcolor` (nodes are `style="filled"`);
-//! in Mermaid it is a per-state `classDef`/`class`. All fill colours are
-//! mutually distinct, so `skipped` (originated) is separable from
-//! `upstream-skipped` (propagated), and `failed`/`timed-out` (originated) from
-//! `upstream-failed` (propagated) — the arch.md C24 requirement. Each node's
-//! label additionally carries its **state tag** and **duration**, so the
-//! distinction is textual as well as chromatic.
+//! Every entry in the normative **Terminal states** taxonomy, plus the
+//! `not-requested` single-node-replay artifact marking (an artifact marking,
+//! **not** a terminal state), maps to a **distinct** style. In DOT the
+//! discriminator is the node `fillcolor` (nodes are `style="filled"`); in
+//! Mermaid it is a per-state `classDef`/`class`. All fill colours are mutually
+//! distinct, so `skipped` (originated) is separable from `upstream-skipped`
+//! (propagated), and `failed`/`timed-out` (originated) from `upstream-failed`
+//! (propagated). Each node's label additionally carries its **state tag** and
+//! **duration**, so the distinction is textual as well as chromatic.
 //!
 //! | state (or marking) | class | DOT `fillcolor` |
 //! |---|---|---|
@@ -50,7 +49,7 @@
 //! Graph nodes are joined to run records by **node identity** (the stable
 //! name). Two mismatch cases have documented, non-panicking behaviour:
 //!
-//! * A graph node **absent from the run artifact** renders with its base T46
+//! * A graph node **absent from the run artifact** renders with its base
 //!   styling and **no** overlay colouring or duration (there is nothing to
 //!   overlay). This is the ordinary case for a partial single-node replay's
 //!   out-of-request nodes that carry no marking either.
@@ -63,8 +62,8 @@
 //! A node with several attempt records (retries) is coloured by its **final**
 //! attempt's status (highest attempt number) and annotated with the **sum** of
 //! all its attempts' durations — retries are real re-work, the same convention
-//! the critical-path summary uses (C22 · T43). A `not-requested` marking wins
-//! over any (absent) attempt record for that node.
+//! the critical-path summary uses. A `not-requested` marking wins over any
+//! (absent) attempt record for that node.
 //!
 //! # Determinism
 //!
@@ -80,9 +79,8 @@ use serde::Deserialize;
 use crate::model::GraphArtifact;
 use crate::{dot, mermaid};
 
-/// The nine normative **terminal states** (arch.md Vocabulary). `not-requested`
-/// is deliberately **absent** — it is an artifact marking, never a terminal
-/// state.
+/// The nine normative **terminal states**. `not-requested` is deliberately
+/// **absent** — it is an artifact marking, never a terminal state.
 pub const TERMINAL_STATES: [&str; 9] = [
     "succeeded",
     "failed",
@@ -95,10 +93,11 @@ pub const TERMINAL_STATES: [&str; 9] = [
     "satisfied-from-prior",
 ];
 
-/// A read-only view of a **C22 run artifact** (the published
-/// `schemas/run/v1.schema.json` shape, produced by the T42 fold). The overlay
-/// reads only the fields it projects: each attempt's node identity, terminal
-/// status, and phase durations, plus the single-node-replay `node_markings`.
+/// A read-only view of a **run artifact** (the published
+/// `schemas/run/v1.schema.json` shape, produced by folding the event stream).
+/// The overlay reads only the fields it projects: each attempt's node identity,
+/// terminal status, and phase durations, plus the single-node-replay
+/// `node_markings`.
 ///
 /// Obtain one with [`RunArtifact::from_json_str`]. Unknown fields are ignored
 /// (additive-only schema evolution), so a newer run artifact still overlays.
@@ -106,8 +105,8 @@ pub const TERMINAL_STATES: [&str; 9] = [
 pub struct RunArtifact {
     #[serde(default)]
     attempts: Vec<Attempt>,
-    /// Single-node-replay per-node markings (C26): maps a node id to `requested`
-    /// / `not-requested`. Absent on a full run.
+    /// Single-node-replay per-node markings: maps a node id to `requested` /
+    /// `not-requested`. Absent on a full run.
     #[serde(default)]
     node_markings: BTreeMap<String, String>,
 }
@@ -127,9 +126,9 @@ fn one() -> u64 {
 }
 
 impl RunArtifact {
-    /// Parse a published **C22 run-artifact** JSON document into the read-only
-    /// overlay view (arch.md C24 — the overlay consumes the published artifact
-    /// and nothing else).
+    /// Parse a published **run-artifact** JSON document into the read-only
+    /// overlay view — the overlay consumes the published artifact and nothing
+    /// else.
     ///
     /// # Errors
     ///
@@ -452,10 +451,10 @@ fn format_duration_ns(ns: u64) -> String {
 }
 
 /// Render `graph` to Graphviz DOT source with a **run overlay** projected from
-/// `run` (arch.md C24). Each node joined to the run artifact is coloured by its
-/// terminal state and annotated with its duration; the base structure (nodes,
-/// edges, clusters) is drawn exactly as [`crate::render_dot`]. Deterministic and
-/// byte-stable; accepted by the `dot` reference tool.
+/// `run`. Each node joined to the run artifact is coloured by its terminal state
+/// and annotated with its duration; the base structure (nodes, edges, clusters)
+/// is drawn exactly as [`crate::render_dot`]. Deterministic and byte-stable;
+/// accepted by the `dot` reference tool.
 ///
 /// See the [module documentation](self) for the state → style mapping and the
 /// node-identity join rules.
@@ -466,10 +465,10 @@ pub fn render_dot_overlay(graph: &GraphArtifact, run: &RunArtifact) -> String {
 }
 
 /// Render `graph` to Mermaid flowchart source with a **run overlay** projected
-/// from `run` (arch.md C24). Each node joined to the run artifact carries its
-/// documented per-state `class` and a duration annotation; the base structure is
-/// drawn exactly as [`crate::render_mermaid`]. Deterministic and byte-stable;
-/// accepted by the browserless Mermaid parser.
+/// from `run`. Each node joined to the run artifact carries its documented
+/// per-state `class` and a duration annotation; the base structure is drawn
+/// exactly as [`crate::render_mermaid`]. Deterministic and byte-stable; accepted
+/// by the browserless Mermaid parser.
 ///
 /// See the [module documentation](self) for the state → style mapping and the
 /// node-identity join rules.
