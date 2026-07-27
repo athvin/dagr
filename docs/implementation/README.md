@@ -130,7 +130,7 @@ Purely additive `dagx`-inspired *declarative-DAG* ergonomics over the finished e
 - [x] **093** · [T78 — `FlowBuilder` declaration façade over `RunnableFlow`](093-T78-flowbuilder-facade.md) · S · feature — after T74
 - [x] **094** · [T79 — `DagRegistration` inventory type + `dagr_cli::run` entrypoint](094-T79-dag-registration-and-run-entrypoint.md) · M · feature — after T74, T75
 - [x] **095** · [T80 — `#[dag]` attribute macro (keep fn, generate factory, submit)](095-T80-dag-attribute-macro.md) · M · feature — after T78, T79
-- [ ] **096** · [T81 — many-dags example, cookbook, and `#[dag]` trybuild corpus](096-T81-dag-example-docs-and-trybuild.md) · M · feature (tests) — after T80
+- [x] **096** · [T81 — many-dags example, cookbook, and `#[dag]` trybuild corpus](096-T81-dag-example-docs-and-trybuild.md) · M · feature (tests) — after T80
 
 ---
 
