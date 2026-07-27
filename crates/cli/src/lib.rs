@@ -26,10 +26,12 @@ pub mod config;
 pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;
+pub mod flow_builder;
 #[cfg(feature = "test-kit")]
 pub mod full_pipeline;
 pub mod graph;
 pub mod logging;
+pub mod prelude;
 pub mod registry;
 pub mod run_flow;
 pub mod scale_bench;
@@ -39,6 +41,7 @@ pub mod structure_snapshot;
 pub mod t63_demo;
 pub mod temp;
 
+pub use flow_builder::FlowBuilder;
 pub use graph::{
     emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
     GRAPH_SCHEMA_VERSION,

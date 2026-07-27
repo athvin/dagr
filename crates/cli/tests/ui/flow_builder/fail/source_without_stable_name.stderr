@@ -1,0 +1,58 @@
+error[E0277]: the trait bound `Unnamed: StableName` is not satisfied
+  --> tests/ui/flow_builder/fail/source_without_stable_name.rs:30:33
+   |
+30 |     let _ = f.source("unnamed", Unnamed);
+   |               ------            ^^^^^^^ unsatisfied trait bound
+   |               |
+   |               required by a bound introduced by this call
+   |
+help: the trait `StableName` is not implemented for `Unnamed`
+  --> tests/ui/flow_builder/fail/source_without_stable_name.rs:16:1
+   |
+16 | struct Unnamed;
+   | ^^^^^^^^^^^^^^
+   = help: the following other types implement trait `StableName`:
+             ()
+             Blob
+             Checkpoint
+             Consumer
+             Effect
+             Teardown
+             Unit
+             dagr_cli::t63_demo::Expensive
+             dagr_cli::t63_demo::InMemory
+note: required by a bound in `FlowBuilder::<'a>::source`
+  --> src/flow_builder.rs
+   |
+   |     pub fn source<T>(&mut self, name: impl Into<String>, task: T) -> Handle<T::Output>
+   |            ------ required by a bound in this associated function
+   |     where
+   |         T: Task<Input = ()> + StableName + Send + 'static,
+   |                               ^^^^^^^^^^ required by this bound in `FlowBuilder::<'a>::source`
+
+error[E0277]: the trait bound `u64: StableName` is not satisfied
+  --> tests/ui/flow_builder/fail/source_without_stable_name.rs:30:33
+   |
+30 |     let _ = f.source("unnamed", Unnamed);
+   |               ------            ^^^^^^^ the trait `StableName` is not implemented for `u64`
+   |               |
+   |               required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `StableName`:
+             ()
+             Blob
+             Checkpoint
+             Consumer
+             Effect
+             Teardown
+             Unit
+             dagr_cli::t63_demo::Expensive
+             dagr_cli::t63_demo::InMemory
+note: required by a bound in `FlowBuilder::<'a>::source`
+  --> src/flow_builder.rs
+   |
+   |     pub fn source<T>(&mut self, name: impl Into<String>, task: T) -> Handle<T::Output>
+   |            ------ required by a bound in this associated function
+...
+   |         T::Output: StableName + Send + Sync + 'static,
+   |                    ^^^^^^^^^^ required by this bound in `FlowBuilder::<'a>::source`

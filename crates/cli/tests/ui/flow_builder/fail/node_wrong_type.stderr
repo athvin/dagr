@@ -1,0 +1,21 @@
+error[E0271]: type mismatch resolving `<Handle<Label> as Deps>::Inputs == Count`
+  --> tests/ui/flow_builder/fail/node_wrong_type.rs:64:64
+   |
+64 |     let _ = f.node::<WantsCount, _>("wants-count", WantsCount, label);
+   |               ---- required by a bound introduced by this call ^^^^^ expected `Count`, found `Label`
+   |
+note: the method call chain might not have had the expected associated types
+  --> tests/ui/flow_builder/fail/node_wrong_type.rs:61:19
+   |
+60 |     let mut f = FlowBuilder::new(&mut flow);
+   |                 --------------------------- this expression has type `FlowBuilder<'_>`
+61 |     let label = f.source("label", MakeLabel); // Handle<Label>
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Deps::Inputs` is `Label` here
+note: required by a bound in `FlowBuilder::<'a>::node`
+  --> src/flow_builder.rs
+   |
+   |     pub fn node<T, D>(&mut self, name: impl Into<String>, task: T, deps: D) -> Handle<T::Output>
+   |            ---- required by a bound in this associated function
+...
+   |         D: Deps<Inputs = T::Input> + InputWiring + Clone,
+   |                 ^^^^^^^^^^^^^^^^^ required by this bound in `FlowBuilder::<'a>::node`
