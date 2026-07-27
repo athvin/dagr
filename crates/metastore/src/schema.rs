@@ -1,7 +1,7 @@
 //! The run-index schema as **ordered, idempotent** migrations.
 //!
 //! Every migration is `CREATE TABLE IF NOT EXISTS …` / `CREATE INDEX IF NOT
-//! EXISTS …`, so applying [`MIGRATIONS`] against a fresh **or** an
+//! EXISTS …`, so applying [`migrations`] against a fresh **or** an
 //! already-initialized store is a no-op the second time (arch.md/ADR 097: the
 //! index is a *guaranteed, reproducible* projection). The M7 tables are `dag`,
 //! `dag_version`, `dag_run`, `node_attempt`, `node_terminal`.

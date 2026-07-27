@@ -2,9 +2,9 @@
 //! `metastore` feature.
 //!
 //! `dagr metastore init [--store <path>]` creates/opens the libSQL run-index
-//! store at `<path>` (default [`DEFAULT_METASTORE_PATH`]) and applies the ordered
-//! idempotent migrations, exiting `0` on success. Re-running is a no-op success
-//! (the migrations are `CREATE … IF NOT EXISTS`).
+//! store at `<path>` (default [`default_metastore_path`](crate::metastore::default_metastore_path))
+//! and applies the ordered idempotent migrations, exiting `0` on success.
+//! Re-running is a no-op success (the migrations are `CREATE … IF NOT EXISTS`).
 //!
 //! This module is compiled only when `--features metastore` is set; the whole
 //! edge onto `dagr-metastore` (and thus `libsql`) is absent from a default build.
