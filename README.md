@@ -268,6 +268,11 @@ branch-in-task, incremental cursors, durable stage boundaries, the non-`Send`
 capture error, and same-typed resources — see the
 [cookbook](docs/cookbook.md).
 
+To host **many named flows** in one binary and select one per invocation
+(`dagr run etl` versus `dagr run analytics`, `dagr graph etl`, `dagr list`), see
+the [flow-registry guide](docs/flow-registry.md) and the compiled example
+[`crates/cli/examples/multi_flow.rs`](crates/cli/examples/multi_flow.rs).
+
 ## When not to use this
 
 A three-node script that runs one thing after another does not need a framework.

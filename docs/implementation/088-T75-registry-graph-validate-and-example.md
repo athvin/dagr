@@ -47,7 +47,45 @@ Route the remaining flow-selecting verbs through `run_registry` and ship the cop
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+The ticket declares "None", and `docs/tasks.md` carries no `Q:` items for T75.
+Three implementation decisions the ticket left implicit are resolved and recorded
+here (per ticket-conventions §5), none of them contested (each has a single
+defensible default that the DoD forces):
+
+- **`RunnableFlow` gains a graph seam.** `graph <flow>` must emit the C20 artifact
+  (DoD) and `graph_verb`/`validate_verb` need a live `&Pipeline`, but the T74
+  `RunnableFlow` only exposed `run(self)` (which consumes the flow and drives it)
+  and its `register`/`register_source` are *type-erased* (no stable names, so the
+  built pipeline is not graph-emittable — `graph_verb` would return
+  `MissingStableNames`). **Resolved:** add `RunnableFlow::into_pipeline(self) ->
+  Pipeline` (finish without driving — the crux the ADR names) plus stable-name-aware
+  `register_source_named` / `register_named` (registering through the flow's
+  `register_source_named` / `register_named`, requiring `T: StableName`). These are
+  purely additive over the ADR-081 seam and are what make `graph <flow>`
+  byte-identical to a single-flow binary. The reference `main.rs`'s trivial flow and
+  `examples/multi_flow.rs` register through the named surface accordingly.
+
+- **`single-node` / `prune` routing shape.** The objective says route "the
+  flow-selecting shape of `single-node`/`prune`", but neither has a shipped
+  library verb body — the reference sample `dagr-t56-alpha` hand-dispatches them
+  with per-invocation store/parameter/replay (C27) plumbing the registry entrypoint
+  does not own, and the DoD checkboxes cover only `graph`/`validate`. **Resolved:**
+  `run_registry` applies the *same* selection rules to `single-node`/`prune` (so a
+  bad/absent/unknown name fails identically to every other verb) and then, on a
+  successful selection, prints a diagnostic naming the selected flow and pointing at
+  the pipeline-specific verb body, returning `InvalidUsage`. This keeps the surface
+  honest without pulling C27 replay / retention plumbing (their owning components)
+  into this ticket. The reference `main.rs` still delegates these verbs to
+  `run_registry` (satisfying DoD "delegates to it rather than reporting 'needs a
+  pipeline-specific binary'").
+
+- **`graph`'s `generated_at` source.** `graph_verb` takes a caller-supplied
+  `now_rfc3339` string; the registry has no date-formatting dependency.
+  **Resolved:** `run_registry` reads the wall clock **once** and formats a
+  second-granularity RFC 3339 UTC stamp via a dependency-free civil-from-days
+  helper. Generation time is the only byte-varying field (C20), never
+  fingerprint-bound, so second granularity is sufficient and byte-identity
+  comparisons mask it.
 
 ## Out of scope
 - The `FlowRegistry` type + factory contract, the `run_registry` entrypoint, the `Cli.flow_name` positional extraction in `parse_cli`, and the `run`/`list` verbs — T74 owns those; this ticket only routes the remaining flow-selecting verbs and ships the example + docs on top of them.

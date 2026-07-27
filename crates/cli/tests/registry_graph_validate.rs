@@ -40,8 +40,11 @@ impl StableName for Rows {
     const STABLE_NAME: &'static str = "Rows";
 }
 
-/// A report payload with a declared stable name.
+/// A report payload with a declared stable name. The wrapped total is the terminal
+/// value; these tests assert on graph *structure* / assembly outcome, not the
+/// produced value, so the field is not read back.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Report(u64);
 impl StableName for Report {
     const STABLE_NAME: &'static str = "Report";
