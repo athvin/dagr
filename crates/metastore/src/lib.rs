@@ -1,7 +1,7 @@
 //! `dagr-metastore` — the local, embedded, opt-in run index (M7, ADR 097 · T82).
 //!
 //! A queryable projection of dagr's JSONL event stream into a **libSQL** (the
-//! `libsql` C fork) / SQLite file, so one many-DAG binary has a single place to
+//! `libsql` C fork) / `SQLite` file, so one many-DAG binary has a single place to
 //! query cross-run state instead of scanning per-run `events.jsonl` files.
 //!
 //! # What this crate is — and is not

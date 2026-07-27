@@ -22,8 +22,7 @@ fn temp_store_path(tag: &str) -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     std::env::temp_dir().join(format!(
         "dagr-metastore-t83-{tag}-{}-{nanos}-{n}.db",
         std::process::id()
@@ -167,7 +166,7 @@ async fn node_attempt_check_accepts_all_nine_canonical_states() {
     for (i, state) in NODE_TERMINAL_STATES.iter().enumerate() {
         let state = (*state).to_string();
         let label = state.clone();
-        let try_number = i as i64;
+        let try_number = i64::try_from(i).expect("small index fits i64");
         store
             .with_write_txn(move |c| {
                 let state = state.clone();
@@ -191,7 +190,7 @@ async fn node_attempt_check_accepts_all_nine_canonical_states() {
     let count = scalar_i64(conn, "SELECT count(*) FROM node_attempt").await;
     assert_eq!(
         count,
-        NODE_TERMINAL_STATES.len() as i64,
+        i64::try_from(NODE_TERMINAL_STATES.len()).expect("nine fits i64"),
         "all nine canonical node states were inserted"
     );
 
