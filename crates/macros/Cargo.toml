@@ -66,6 +66,18 @@ trybuild = "1"
 # author tasks with `#[task]`, which is the `macros` feature (default-on).
 dagr-core = { path = "../core" }
 dagr-cli = { path = "../cli" }
+# inventory — a dev-dependency ONLY for the `#[dag]` trybuild corpus (T81). `#[dag]`
+# expands to `::inventory::submit! { … }`, which `$crate`-resolves `inventory` in the
+# CALLER's extern prelude (ADR 092, no path override). A `#[dag]` fixture that reaches
+# full expansion (the bad-fn-signature case — grammar-error fixtures short-circuit
+# before expansion) therefore needs `inventory` in this test crate's prelude, exactly
+# as the leaf-binary contract requires an app crate to depend on `inventory = "0.3"`.
+# Without it the fixture's `.stderr` would carry a spurious "cannot find `inventory`"
+# error instead of the clean bad-signature diagnostic the corpus is pinning. It is
+# test-only (never in the shipped proc-macro's dependency graph), already in the
+# lockfile via `dagr-cli`'s default-on `dag` feature, and `MIT OR Apache-2.0`
+# (MIT-resolved) — no new licence surface, no `deny.toml` change.
+inventory = "0.3"
 
 [lints]
 workspace = true

@@ -192,6 +192,7 @@ version = "0.0.0"
 dependencies = [
  "dagr-cli",
  "dagr-core",
+ "inventory",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

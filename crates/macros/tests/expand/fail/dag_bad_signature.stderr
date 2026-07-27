@@ -1,0 +1,13 @@
+error[E0061]: this function takes 0 arguments but 1 argument was supplied
+  --> tests/expand/fail/dag_bad_signature.rs:18:4
+   |
+17 | #[dag]
+   | ------ unexpected argument of type `&mut FlowBuilder<'_>`
+18 | fn etl() {}
+   |    ^^^
+   |
+note: function defined here
+  --> tests/expand/fail/dag_bad_signature.rs:18:4
+   |
+18 | fn etl() {}
+   |    ^^^

@@ -45,6 +45,26 @@
 //!   sibling `.stderr`: over-8 inputs, a non-`Send` capture held across the body,
 //!   a deps mismatch at the `RunnableFlow` registration seam, and a bare
 //!   non-`Result` return. A red here means the diagnostic wording drifted.
+//!
+//! # The `#[dag]` corpus lives here too
+//!
+//! The same `fail/` directory pins the `#[dag]` attribute's diagnostics (the
+//! sibling authoring macro, ADR 092), so one runner covers both macros:
+//!
+//! - `dag_bad_grammar.rs` — `#[dag(bogus)]`, an argument that is not the accepted
+//!   `name = "…"` grammar.
+//! - `dag_name_not_str.rs` — `#[dag(name = 42)]`, the right key but a non-string
+//!   value.
+//! - `dag_bad_signature.rs` — a `#[dag]` fn with the wrong shape (no
+//!   `&mut FlowBuilder` parameter): the macro keeps the fn verbatim and the natural
+//!   argument-count error surfaces at the generated factory's call site.
+//!
+//! Duplicate DAG *names* are **not** in this corpus: they are not a compile-time
+//! error. `#[dag]` derives a collision-free factory item name from the fn ident, so
+//! two `#[dag]`s never clash at the Rust-item level; two DAGs declared under the same
+//! *name* are rejected at **runtime** by `dagr_cli::run` with `ExitCode::InvalidUsage`
+//! (T79), covered by `crates/cli/examples/dup_dags.rs` + the `dag_auto_discovery`
+//! test, not by a `trybuild` fixture.
 
 /// Run the whole compile-pass / compile-fail corpus. `trybuild` compiles each
 /// `pass/*.rs` and asserts it builds, and each `fail/*.rs` and asserts it fails
