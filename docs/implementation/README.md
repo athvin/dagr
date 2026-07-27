@@ -121,7 +121,7 @@ Purely additive `dagx`-inspired ergonomics and multi-flow selection over the fin
 - [x] **087** · [T74 — FlowRegistry + `dagr run <flow>` / `list` dispatch](087-T74-flow-registry-and-dispatch.md) · M · feature — after T13, T24, T55
 - [x] **088** · [T75 — registry graph/validate routing + multi-flow example](088-T75-registry-graph-validate-and-example.md) · M · feature — after T74, T40
 - [x] **090** · [T76 — precedence helper + parsers](090-T76-precedence-helper-and-parsers.md) · M · feature — after T55
-- [ ] **091** · [T77 — wire DAGR_* env fallbacks + expose headroom](091-T77-env-fallbacks-and-headroom.md) · M · feature — after T76, T31, T32
+- [x] **091** · [T77 — wire DAGR_* env fallbacks + expose headroom](091-T77-env-fallbacks-and-headroom.md) · M · feature — after T76, T31, T32
 
 ---
 
