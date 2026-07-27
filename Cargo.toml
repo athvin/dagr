@@ -12,6 +12,11 @@
 #   cli      -> core, artifact, render     (the pipeline binary; the one place
 #                                           the live pipeline and rendering meet)
 #   render   -> artifact                    (renderers consume artifacts only; C24)
+#   metastore-> artifact, libsql, tokio      (the opt-in run index; artifact-only
+#                                           workspace edge, NO edge onto core — the
+#                                           same C24-style boundary as render, ADR
+#                                           097/T82 §5. cli reaches it only behind a
+#                                           default-off `metastore` feature.)
 #   core     -> macros (build-time, opt-in) (the live-pipeline surface; its only
 #                                           dependency edge is a BUILD-TIME,
 #                                           default-on-`macros`-feature path to the
@@ -32,6 +37,7 @@ members = [
     "crates/macros",
     "crates/artifact",
     "crates/render",
+    "crates/metastore",
     "crates/cli",
 ]
 

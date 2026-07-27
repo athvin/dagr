@@ -156,15 +156,18 @@ topology and rationale are recorded in the ADR embedded in
 | `macros` (`dagr-macros`) | Build-time proc-macro crate: `#[task]`, `#[dag]`, and `#[derive(StableName)]`. Runs inside the compiler and is never linked into the shipped binary, so it adds no runtime dependency. | *(nothing)* |
 | `artifact` (`dagr-artifact`) | The serializable records a run leaves behind (graph artifact, run artifact, event records) — the boundary a renderer consumes. | *(nothing)* |
 | `render` (`dagr-render`) | Reads an artifact and emits diagram source (DOT / Mermaid). Library plus a standalone renderer binary. | `artifact` **only** |
-| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` |
+| `metastore` (`dagr-metastore`) | The local, embedded, **opt-in** run index (M7): a queryable libSQL/SQLite projection of the event stream. Reached from `cli` only behind a default-off `metastore` feature. | `artifact` + `libsql` + `tokio` (no `core`) |
+| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` (+ `metastore`, opt-in) |
 
 The allowed dependency edges are `cli → {core, artifact, render}`,
-`render → artifact`, and `core → macros` (build-time only). **`render` has no
-dependency edge onto `core`**, so a renderer is structurally incapable of
-reaching the live pipeline — it consumes artifacts only and needs no access to
-the binary that produced them ([`docs/arch.md`](docs/arch.md) C24 · Renderers).
-The standalone `dagr-render` binary builds without `core` or `cli`, which is that
-guarantee made concrete.
+`render → artifact`, `metastore → artifact`, and `core → macros` (build-time
+only); `cli → metastore` exists only behind the default-off `metastore` feature.
+**Neither `render` nor `metastore` has a dependency edge onto `core`**, so a
+renderer (and the run index) is structurally incapable of reaching the live
+pipeline — it consumes artifacts only and needs no access to the binary that
+produced them ([`docs/arch.md`](docs/arch.md) C24 · Renderers). The standalone
+`dagr-render` binary builds without `core` or `cli`, which is that guarantee made
+concrete.
 
 ## MSRV
 

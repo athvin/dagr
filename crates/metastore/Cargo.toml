@@ -1,0 +1,72 @@
+# dagr-metastore — the local, embedded, opt-in run index (M7, ADR 097 / T82).
+#
+# Role (per ADR 097 · T82): a queryable projection of the JSONL event stream
+# into a libSQL/SQLite file, so one many-DAG binary has a single place to query
+# cross-run state. It coordinates nothing — the event stream stays the source of
+# truth (arch.md "The shape of a run"); this is the "not a *coordinating*
+# metadata store" carve-out, decided in ADR 097.
+#
+# Dependency direction (the ADR §5 boundary this crate keeps):
+#   * dagr-metastore -> dagr-artifact  (the event/artifact types it maps and,
+#                                       later, `fold_stream` — mirroring how
+#                                       dagr-render depends on artifact only, C24)
+#   * dagr-metastore -> libsql, tokio  (the substrate + async runtime)
+#   * dagr-metastore -> (NO edge onto dagr-core)  — it is structurally incapable
+#                                       of reaching the live-pipeline surface, so
+#                                       core's zero-runtime-dependency guarantee
+#                                       (arch.md "Stability", ADR 081/082) is
+#                                       untouched. `scripts/check-workspace-skeleton`
+#                                       and the crate graph enforce this.
+#
+# This crate is heavy (libSQL is a C fork; it pulls a bindgen/clang toolchain),
+# which is exactly why the CLI edge onto it lives behind a DEFAULT-OFF `metastore`
+# feature (crates/cli/Cargo.toml): a plain `cargo build --all` never pulls libsql
+# through the cli. The crate itself is a normal workspace member, so
+# `cargo test --workspace` builds and tests it directly — but nothing depends on
+# it by default.
+[package]
+name = "dagr-metastore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "dagr_metastore"
+path = "src/lib.rs"
+
+[dependencies]
+# dagr-artifact — the ONLY workspace edge (ADR 097 §5): this crate maps the
+# event/artifact types (and later folds event streams via `fold_stream`) into
+# rows, exactly as dagr-render consumes artifacts only and provably cannot reach
+# dagr-core (C24). There is deliberately NO `dagr-core` edge.
+dagr-artifact = { path = "../artifact" }
+
+# libsql — the substrate PINNED EXACTLY by ADR 097 §2 (`=0.10.0-pre.4`; do not
+# float it). `default-features = false` + only `core` drops libSQL's network /
+# replication / remote / TLS stack (`replication`, `remote`, `sync`, `tls`) — the
+# RemoteSqld/SyncedReplica functionality this ticket does NOT implement (T83 ships
+# only the embedded LocalFile path; those modes are recognized stubs). Using only
+# the embedded local-file `core` feature both matches this ticket's scope and keeps
+# the dependency surface minimal: the `rustls-webpki` advisory chain the default
+# features pull in is not in the tree, so `cargo audit`/`cargo deny` stay green
+# (see deny.toml for the three OSI-permissive licence ids libSQL's build toolchain
+# — bindgen/clang-sys/libloading — requires).
+libsql = { version = "=0.10.0-pre.4", default-features = false, features = ["core"] }
+
+# tokio — libsql's `Connection`/`Database` API is async (ADR 097 §3 discipline is
+# encoded around it). The feature set is minimal: `rt` (drive the async open /
+# migration / write-txn futures) + `time` (the bounded-retry backoff sleep) +
+# `sync` (no I/O of our own beyond libsql). It is the same tokio the workspace
+# already commits to as a supported public dependency (arch.md C13).
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync"] }
+
+[dev-dependencies]
+# tokio's test macro + a current-thread runtime for the crate's async unit tests
+# (open / migrate / with_write_txn). Dev-only, so it never reaches a consumer.
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync"] }
+
+[lints]
+workspace = true
