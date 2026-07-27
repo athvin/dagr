@@ -473,9 +473,18 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
+The tasks and payloads carry **`#[derive(StableName)]`** (one line each). The
+graph-emittable `f.source` / `f.node` require every task and payload type to have a
+`StableName` — the author-declared name the graph artifact records — and the derive
+supplies it (defaulting to the type's identifier; `#[stable_name = "…"]` overrides).
+So a `#[task]` task composes with `#[dag]` with **no hand-written trait bodies**: the
+three macros are the whole authoring surface.
+
 The library owns every verb, so `list`, `graph <dag>`, `validate <dag>`, and
 `run <dag> --store DIR` all work against any declared DAG with no extra code — each
-`run <dag>` is its own independent run with its own run identity and store. Copy
+`run <dag>` is its own independent run with its own run identity and store. A one-DAG
+binary keeps its real name (`list` prints it, `graph <name>` selects it) and may omit
+the name (`run` / `graph` / `validate` dispatch the sole DAG). Copy
 [`crates/cli/examples/many_dags.rs`](../crates/cli/examples/many_dags.rs) whole; it is
 the compiled, run reference for this pattern.
 
@@ -533,3 +542,54 @@ produce the same `list` / `graph` / `validate` / `run` behaviour.
 > and the sort/dedup rules — all on both `ubuntu-latest` and `macos-latest`. The
 > grammar/signature diagnostics are pinned by
 > [`crates/macros/tests/trybuild.rs`](../crates/macros/tests/trybuild.rs).
+
+## Running a flow programmatically (no `#[dag]`, no CLI verbs)
+
+`#[dag]` + `dagr_cli::run` is the pipeline-binary path: the library owns `main` and
+the verbs. When you instead want to **build and drive a flow in your own code** — an
+embedded run, a test, a computed flow set, or to read a node's value back in-process —
+register tasks on a [`RunnableFlow`](../crates/cli/src/run_flow.rs) and call
+**`run_to_store`**. It builds the default event sink, the wall-clock clock, a fresh
+run id, and the run store for you — one call, no hand-written plumbing:
+
+```rust
+use dagr_cli::prelude::*;
+
+let mut flow = RunnableFlow::new();
+let counted = flow.register_source("count", Count { up_to: 21 });
+let doubled = flow.register::<Double, _>("double", Double, counted);
+
+// One call: the sink, clock, run id, and store are all defaulted for you. Writes a
+// real event stream under `<base>/report/<run-id>/events.jsonl`.
+let report = flow.run_to_store("report", "./runs").expect("assembles and runs");
+println!("{:?} -> {:?}", report.outcome(), report.output(doubled)); // Succeeded -> Some(42)
+```
+
+`run_to_store` returns a `RunToStoreError { Store, Assembly }` so a store that cannot
+be opened stays distinct from a flow that does not assemble. Need a **custom** sink,
+a deterministic `TickClock` (for byte-reproducible streams), or a tuned `RunConfig`?
+The fully-explicit `flow.run(pipeline, &config, sink, clock)` stays available — the
+public `dagr_cli::{FileSink, SystemClock, TickClock, mint_run_id}` are the same
+defaults `run_to_store` uses, exposed for that path.
+
+## Testing and inspecting a run
+
+**Unit-test one task with no runtime.** A task is a value with a `run` method, so you
+can test it in isolation with the [`SingleTaskTest`](../crates/core/src/test_kit.rs)
+kit (`dagr_core::test_kit`, the default-on `test-kit` feature) — no flow, no
+scheduler. A synchronous (`#[task(blocking)]` / `#[task(compute)]`) body runs with
+`run_sync`; an await-bound body runs with `run_await`, which supplies the runtime so
+the test author writes none.
+
+**Read a run's event stream back without touching the pipeline.** The
+`<base>/<pipeline>/<run-id>/events.jsonl` a run writes is self-contained: fold it with
+[`read_records`](../crates/artifact/src/event_stream.rs)
+(`dagr_artifact::event_stream`) and answer questions — terminal states, attempt
+counts, the run bookends — from the artifact alone, with no access to the live flow.
+This is the seam every renderer and the `fold` verb read.
+
+**Catch an unintended rewiring in review.** Capture a pipeline's structure with
+[`StructureSnapshot::from_pipeline`](../crates/cli/src/structure_snapshot.rs) and diff
+two revisions: an intended change shows as a reviewable structural diff, and an
+*accidental* rewiring shows up as a diff nobody meant to make — a pure-assembly check
+that needs no run store, network, or database.

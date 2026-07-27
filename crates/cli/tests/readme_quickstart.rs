@@ -51,6 +51,36 @@ fn read_to_string(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
+/// The event-stream bytes of the **single** run under `<base>/<pipeline>/`. The
+/// framework mints the run id, so the run directory is discovered rather than
+/// hardcoded.
+fn single_run_stream(base: &Path, pipeline: &str) -> Vec<u8> {
+    let pipeline_dir = base.join(pipeline);
+    let run_dir = std::fs::read_dir(&pipeline_dir)
+        .unwrap_or_else(|e| {
+            panic!(
+                "the run store has a {} directory: {e}",
+                pipeline_dir.display()
+            )
+        })
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.join("events.jsonl").exists())
+        .unwrap_or_else(|| {
+            panic!(
+                "a run directory with events.jsonl exists under {}",
+                pipeline_dir.display()
+            )
+        });
+    let stream = run_dir.join("events.jsonl");
+    std::fs::read(&stream).unwrap_or_else(|e| {
+        panic!(
+            "the quickstart wrote its stream at {}: {e}",
+            stream.display()
+        )
+    })
+}
+
 /// Extract the text of the first fenced block whose opening fence is
 /// ```` ```<lang> ```` (e.g. ` ```rust `), from `md`. Returns the block's inner
 /// lines joined with `\n` and a trailing newline (so it round-trips a file).
@@ -121,79 +151,74 @@ fn readme_rust_block_matches_the_compiled_example_verbatim() {
     );
 }
 
-/// **The two tasks are authored with `#[task]`, plumbing-free.** The
-/// quickstart is the canonical surface a reader copies first, so it must make
-/// the "declare four things, write no plumbing" claim demonstrably true:
-/// `Count` and `Double` are `#[task]` inherent impls whose bodies are a single
-/// `run` fn, carrying **no** hand-written `type Input` / `type Output` /
-/// `EXECUTION_CLASS` lines (the macro supplies them). The registration and the
-/// support types stay unchanged — asserted alongside so the rewrite touched only
-/// the two node bodies.
+/// **The quickstart is authored with the macro trio, plumbing-free.** It is the
+/// canonical surface a reader copies first, so it must make the "just define your
+/// DAGs and tasks" claim demonstrably true: two `#[task]` tasks, a
+/// `#[derive(StableName)]` payload, one `#[dag]` fn, a one-line `dagr_cli::run`
+/// `main`, and **no** hand-written `impl Task` / `impl StableName` / `type Input` /
+/// `type Output` / `EXECUTION_CLASS` — the macros supply all of it. The whole
+/// authoring surface is reachable through the single `dagr_cli::prelude` import.
 #[test]
-fn quickstart_tasks_are_authored_with_the_task_macro_and_carry_no_hand_written_plumbing() {
+fn quickstart_is_authored_with_the_macro_trio_and_no_hand_written_plumbing() {
     let root = repo_root();
     let example = read_to_string(&root.join("crates/cli/examples/quickstart.rs"));
     let region = anchored_region(&example, "quickstart")
         .expect("the quickstart example carries its ANCHOR markers");
 
-    // The macro is the primary authoring style: the anchored region pulls in the
-    // re-exported attribute and applies it to both node impls.
+    // One authoring import brings in the whole macro trio (`#[task]`, `#[dag]`,
+    // `#[derive(StableName)]`) plus `FlowBuilder` / `TaskError`.
     assert!(
-        region.contains("use dagr_core::task;"),
-        "the quickstart imports the `#[task]` attribute (`use dagr_core::task;`) — \
-         the macro is the primary authoring style the quickstart shows (ADR 082)"
+        region.contains("use dagr_cli::prelude::*;"),
+        "the quickstart uses the single prelude import (`use dagr_cli::prelude::*;`)"
     );
+    // The two tasks are `#[task]` inherent impls; the structs are named by the derive;
+    // the flow is declared with `#[dag]`; `main` is the one-line entrypoint.
     assert!(
         region.contains("#[task]\nimpl Count"),
-        "`Count` is authored with `#[task]` on an inherent `impl` block (not a \
-         hand-written `impl Task`)"
+        "`Count` is authored with `#[task]` on an inherent `impl` block"
     );
     assert!(
         region.contains("#[task]\nimpl Double"),
         "`Double` is authored with `#[task]` on an inherent `impl` block"
     );
-
-    // The macro supplies the four declarations, so neither node body may carry
-    // a hand-written associated-type or execution-class line — that is exactly the
-    // scaffolding the macro removes.
     assert!(
-        !region.contains("impl Task for Count"),
-        "`Count` no longer hand-writes `impl Task` — the `#[task]` expansion does"
+        region.contains("#[derive(StableName)]"),
+        "types are named with `#[derive(StableName)]`, not a hand-written `impl StableName`"
     );
     assert!(
-        !region.contains("impl Task for Double"),
-        "`Double` no longer hand-writes `impl Task` — the `#[task]` expansion does"
+        region.contains("#[dag]"),
+        "the flow is declared with the `#[dag]` attribute"
     );
     assert!(
-        !region.contains("type Input"),
-        "the quickstart carries no hand-written `type Input` line: the `#[task]` \
-         expansion infers it (arch.md C1, 'declare four things, write no plumbing')"
-    );
-    assert!(
-        !region.contains("type Output"),
-        "the quickstart carries no hand-written `type Output` line: the `#[task]` \
-         expansion infers it"
-    );
-    assert!(
-        !region.contains("EXECUTION_CLASS"),
-        "the quickstart carries no hand-written `EXECUTION_CLASS` line: the default \
-         await-bound class is the macro's, not the author's"
+        region.contains("dagr_cli::run(std::env::args_os())"),
+        "`main` is the one-line `dagr_cli::run` entrypoint"
     );
 
-    // `main()` and the `RunnableFlow` registration are unchanged — the rewrite
-    // shrank only the two node bodies, leaving the wiring the reader learns intact.
+    // The graph is declared through the `FlowBuilder` façade; a wrong-typed binding
+    // would be a compile error.
     assert!(
-        region.contains("let counted = flow.register_source(\"count\", Count { up_to: 21 });"),
-        "the source registration is unchanged from the pre-macro quickstart"
+        region.contains("f.source(\"count\", Count { up_to: 21 })"),
+        "the source node is declared with `f.source`"
     );
     assert!(
-        region.contains("let doubled = flow.register::<Double, _>(\"double\", Double, counted);"),
-        "the sink registration is unchanged from the pre-macro quickstart"
+        region.contains("f.node(\"double\", Double, counted)"),
+        "the sink node is declared with `f.node`, bound to the source's handle"
     );
-    assert!(
-        region.contains("flow.run(\"quickstart\", &config, sink, TickClock::default())"),
-        "the one-call `RunnableFlow::run` seam is unchanged from the pre-macro quickstart"
-    );
+
+    // The macros generate every trait body, so the quickstart hand-writes none of the
+    // scaffolding they remove — that is exactly the "write no plumbing" claim.
+    for forbidden in [
+        "impl Task for",
+        "impl StableName for",
+        "type Input",
+        "type Output",
+        "EXECUTION_CLASS",
+    ] {
+        assert!(
+            !region.contains(forbidden),
+            "the quickstart carries no hand-written `{forbidden}` — the macros generate it"
+        );
+    }
 }
 
 /// **The TOML and shell blocks match what the prose tells the reader to do.** The
@@ -245,8 +270,8 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
             .as_nanos()
     ));
 
-    // Run the *compiled example binary* — the same target CI compiles — against a
-    // private store, with nothing else running.
+    // Run the *compiled example binary* — the same target CI compiles — driving the
+    // sole DAG through the `run` verb against a private store, nothing else running.
     let status = Command::new(env!("CARGO"))
         .current_dir(&root)
         .args([
@@ -257,26 +282,20 @@ fn quickstart_runs_end_to_end_and_the_artifact_matches_the_prose() {
             "--example",
             "quickstart",
             "--",
+            "run",
+            "--store",
         ])
         .arg(&base)
         .status()
-        .expect("failed to spawn `cargo run --example quickstart`");
+        .expect("failed to spawn `cargo run --example quickstart -- run --store`");
     assert!(
         status.success(),
         "the quickstart exits with the success code (criterion 1's run clause)"
     );
 
-    // Artifact inspection: fold the event stream and assert the promised values.
-    let stream = base
-        .join("quickstart")
-        .join("quickstart-run")
-        .join("events.jsonl");
-    let bytes = std::fs::read(&stream).unwrap_or_else(|e| {
-        panic!(
-            "the quickstart wrote its event stream at {}: {e}",
-            stream.display()
-        )
-    });
+    // Artifact inspection: fold the single run's event stream (its id is minted, so
+    // it is discovered under `<base>/quickstart/`) and assert the promised values.
+    let bytes = single_run_stream(&base, "quickstart");
     let records = dagr_artifact::event_stream::read_records(&bytes)
         .expect("the quickstart's event stream parses");
 

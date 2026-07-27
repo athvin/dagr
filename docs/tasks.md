@@ -1,5 +1,12 @@
 # dagr — task breakdown
 
+> **Superseded — historical.** This is the pre-implementation task breakdown. Every
+> task here has shipped as a self-contained ticket under
+> [`docs/implementation/`](implementation/README.md) (the authoritative, per-ticket
+> record) and is mapped in [`coverage-matrix.md`](coverage-matrix.md). It is retained
+> for provenance, not as current guidance — start from the implementation tickets and
+> [`arch.md`](arch.md).
+
 Engineering tasks for building the tool specified in [arch.md](arch.md). Milestones M1–M4 match the spec's build order; **M0 is pre-code work** — decisions, spikes, and scaffolding that the adversarial design review (2026-07-22) showed must land before implementation starts. Sizes: **S** under a day, **M** 1–3 days, **L** up to a week.
 
 **Critical path.** M0 gates the work pairwise, not as a block: T0.2 and (via T3) T0.4 gate every M1 implementation task, since all of M1 reaches T9; T0.5 first bites at T14; T0.6 at T19; T0.3 at T21; T0.7 gates T13 (and later T40, T41, T61); T0.8 gates T14's durable-contract check and T39 onward; T0.9 gates T12 and T50. Practical reading: land T0.2 and T0.4 first, the rest of M0 before their first consumers. Decisions for later components that leak backward (C4 semantics into M1's compile-fail suite, node identity into M1's builder, the durable-output contract into M1 assembly checks, the run store into M1's event writer) are deliberately made in M0 while their full implementations stay in their spec milestones.

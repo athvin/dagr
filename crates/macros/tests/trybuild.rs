@@ -59,6 +59,22 @@
 //!   `&mut FlowBuilder` parameter): the macro keeps the fn verbatim and the natural
 //!   argument-count error surfaces at the generated factory's call site.
 //!
+//! # The `#[derive(StableName)]` corpus lives here too
+//!
+//! The same directories pin the derive's boundary (the third authoring macro):
+//!
+//! - `pass/stable_name_derive.rs` — the default (ident) name, an explicit
+//!   `#[stable_name = "…"]` override, and a generic struct, each proven at compile
+//!   time.
+//! - `pass/task_and_derive_compose.rs` — the headline: a `#[task]` task and its
+//!   `#[derive(StableName)]` payloads flow through the graph-emittable
+//!   `FlowBuilder::source` / `node` registrars with no hand-written trait bodies.
+//! - `fail/stable_name_not_str.rs` — `#[stable_name = 42]`, a non-string value.
+//! - `fail/stable_name_bad_grammar.rs` — `#[stable_name("x")]`, the list form.
+//! - `fail/stable_name_conflicting_impl.rs` — a derive **and** a hand-written
+//!   `impl StableName` for the same type: the ordinary `E0119`, pinned to document
+//!   that this is the only collision the design admits (never from `#[task]`).
+//!
 //! Duplicate DAG *names* are **not** in this corpus: they are not a compile-time
 //! error. `#[dag]` derives a collision-free factory item name from the fn ident, so
 //! two `#[dag]`s never clash at the Rust-item level; two DAGs declared under the same

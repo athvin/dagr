@@ -1,11 +1,12 @@
 //! A **leaf binary** declaring exactly **one** DAG by hand-written
 //! `inventory::submit!` and dispatching it through `dagr_cli::run`.
 //!
-//! This is the single-flow ergonomic corpus for T79: with exactly one discovered
-//! DAG, `run` builds the registry through `FlowRegistry::single_flow`, so the DAG's
-//! name may be **omitted** on the command line (`run` / `graph` / `validate` with no
-//! name dispatch the sole DAG) — parity with the one-flow ergonomic default the
-//! existing registry already offers.
+//! Test discovery corpus (drives `tests/dag_auto_discovery.rs`), not a tutorial —
+//! see `examples/README.md`. It pins the single-DAG ergonomic: with exactly one
+//! discovered DAG, `dagr_cli::run` registers it under its **own declared name**
+//! (`only`), so `list` prints `only` and its stream lives under `<base>/only/…`,
+//! while the name stays **omittable** on the command line (`run` / `graph` /
+//! `validate` with no name dispatch the sole DAG, since it is the only flow).
 
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::DagRegistration;

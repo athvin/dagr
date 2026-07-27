@@ -29,11 +29,26 @@ pub use crate::flow_builder::FlowBuilder;
 #[cfg(feature = "dag")]
 pub use crate::run::{run, DagRegistration};
 pub use crate::run_flow::RunnableFlow;
+/// The run-store defaults a hand-written driver reaches for: the default local-file
+/// [`FileSink`], the wall-clock [`SystemClock`], and the [`DEFAULT_STORE_BASE`] — so
+/// [`RunnableFlow::run`](crate::run_flow::RunnableFlow::run) needs no hand-written
+/// sink/clock. (The one-call [`run_to_store`](crate::run_flow::RunnableFlow::run_to_store)
+/// builds them for you; these are here for the explicit path.)
+pub use crate::run_store::{FileSink, SystemClock, DEFAULT_STORE_BASE};
 /// The `#[dag]` attribute macro (M6, T80) — the DAG-authoring sibling of `#[task]`.
 /// Carried in the prelude under the default-on `dag` feature so `use
 /// dagr_cli::prelude::*;` brings it into scope; absent under `--no-default-features`.
 #[cfg(feature = "dag")]
 pub use dagr_macros::dag;
+/// The `#[task]` attribute and `#[derive(StableName)]` derive, re-exported from the
+/// build-time proc-macro crate so `use dagr_cli::prelude::*;` is the **single**
+/// authoring import that brings in the whole macro trio — `#[task]` (author a task),
+/// `#[dag]` (declare a DAG), `#[derive(StableName)]` (name a task/payload so the
+/// graph-emittable registrars accept it). The `StableName` *derive* (macro namespace)
+/// coexists with the `StableName` *trait* re-exported below (type namespace) — the
+/// standard trait+derive pairing. A proc-macro is never linked into the shipped
+/// binary, so this adds no runtime dependency.
+pub use dagr_macros::{task, StableName};
 
 pub use dagr_core::context::RunContext;
 pub use dagr_core::stable_name::{StableInputNames, StableName};

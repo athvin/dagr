@@ -1,5 +1,10 @@
 //! Cross-toolchain fingerprint stability fixture.
 //!
+//! **CI fixture — do not change its printed output.** CI builds and runs this under
+//! two toolchains and diffs the output byte-for-byte; changing the pipeline shape or
+//! the printed bytes breaks the determinism gate. Not a tutorial (see
+//! `examples/README.md`).
+//!
 //! Prints the two graph fingerprints — the structural fingerprint and the policy
 //! hash, each as its version-prefixed header string — for a small, fixed fixture
 //! pipeline, one per line:

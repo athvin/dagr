@@ -20,60 +20,45 @@ use dagr_cli::prelude::*;
 /// A row-count payload with a declared stable name, so the graph-emittable `source`
 /// registrar can record it. The examples assert on discovery, not the value, so the
 /// wrapped count is unread.
-#[derive(Clone)]
+#[derive(Clone, StableName)]
 #[allow(dead_code)]
 struct Rows(u64);
-impl StableName for Rows {
-    const STABLE_NAME: &'static str = "Rows";
-}
 
 /// A report payload with a declared stable name.
-#[derive(Clone)]
+#[derive(Clone, StableName)]
 #[allow(dead_code)]
 struct Report(u64);
-impl StableName for Report {
-    const STABLE_NAME: &'static str = "Report";
-}
 
 /// The `etl` DAG's source node: extracts some rows.
+#[derive(StableName)]
 struct Extract {
     rows: u64,
 }
-impl StableName for Extract {
-    const STABLE_NAME: &'static str = "Extract";
-}
-impl Task for Extract {
-    type Input = ();
-    type Output = Rows;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Rows, TaskError> {
+#[task]
+impl Extract {
+    async fn run(&mut self, _input: ()) -> Result<Rows, TaskError> {
         Ok(Rows(self.rows))
     }
 }
 
 /// The `etl` DAG's sink node: loads the rows into a report.
+#[derive(StableName)]
 struct Load;
-impl StableName for Load {
-    const STABLE_NAME: &'static str = "Load";
-}
-impl Task for Load {
-    type Input = Rows;
-    type Output = Report;
-    async fn run(&mut self, _c: &RunContext, input: Rows) -> Result<Report, TaskError> {
+#[task]
+impl Load {
+    async fn run(&mut self, input: Rows) -> Result<Report, TaskError> {
         Ok(Report(input.0 * 2))
     }
 }
 
 /// The `nightly` DAG's single source node.
+#[derive(StableName)]
 struct Aggregate {
     seed: u64,
 }
-impl StableName for Aggregate {
-    const STABLE_NAME: &'static str = "Aggregate";
-}
-impl Task for Aggregate {
-    type Input = ();
-    type Output = Report;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Report, TaskError> {
+#[task]
+impl Aggregate {
+    async fn run(&mut self, _input: ()) -> Result<Report, TaskError> {
         Ok(Report(self.seed))
     }
 }

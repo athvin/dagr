@@ -47,11 +47,13 @@
 //! # A thin layer over the existing dispatch
 //!
 //! [`run()`] adds no verb logic: it discovers records, sorts + dedups, builds a
-//! [`FlowRegistry`](crate::registry::FlowRegistry) (via [`FlowRegistry::single_flow`](crate::registry::FlowRegistry::single_flow) when exactly one DAG is
-//! present, so its name may be omitted — parity with the one-flow ergonomic
-//! default), and delegates to [`run_registry`](crate::registry::run_registry), which already owns `list` / `run` /
-//! `graph` / `validate` dispatch, per-verb exit codes, store handling, run-id
-//! minting, and diagnostics.
+//! [`FlowRegistry`](crate::registry::FlowRegistry) registering **each DAG under its
+//! own declared name** (so a one-DAG binary keeps its real name — `list` prints it,
+//! `graph <name>` selects it, its stream lives under `<base>/<name>/…` — while the
+//! name stays omittable, since the registry dispatches the sole flow when exactly one
+//! is registered), and delegates to [`run_registry`](crate::registry::run_registry),
+//! which already owns `list` / `run` / `graph` / `validate` dispatch, per-verb exit
+//! codes, store handling, run-id minting, and diagnostics.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -113,8 +115,9 @@ inventory::collect!(DagRegistration);
 /// the records by name (neutralising [`inventory`]'s unspecified iteration order),
 /// **rejects a duplicate name** with an [`ExitCode::InvalidUsage`] diagnostic naming
 /// the duplicate *before* building any flow, builds a [`FlowRegistry`] in sorted
-/// order (via [`FlowRegistry::single_flow`] when exactly one DAG is present, so its
-/// name may be omitted; else [`add`](FlowRegistry::add) per record), and delegates to
+/// order ([`add`](FlowRegistry::add) per record, each under its own declared name —
+/// a one-DAG binary keeps its real name and, being the sole flow, still serves the
+/// verbs with the name omitted), and delegates to
 /// [`run_registry`] — which owns the `list` / `run` / `graph` / `validate` dispatch,
 /// per-verb exit codes, store handling, run-id minting, and diagnostics.
 ///
@@ -178,14 +181,15 @@ fn discover<W: Write>(out: &mut W) -> Result<FlowRegistry, ExitCode> {
         return Err(ExitCode::InvalidUsage);
     }
 
-    // Exactly one DAG → the single-flow ergonomic default (its name may be omitted on
-    // the command line), parity with `FlowRegistry::single_flow`. Otherwise register
-    // each record in sorted order.
-    let registry = match records.as_slice() {
-        [only] => FlowRegistry::single_flow(only.factory),
-        many => many
-            .iter()
-            .fold(FlowRegistry::new(), |reg, r| reg.add(r.name, r.factory)),
-    };
+    // Register every discovered DAG under its **own declared name**. A one-DAG binary
+    // therefore keeps its real name — `list` prints it, `graph <name>` / `run <name>`
+    // select it, and its stream lives under `<base>/<name>/…` — while the name stays
+    // **omittable** for free: `FlowRegistry::select` dispatches the sole flow when
+    // exactly one is registered (`flows.len() == 1`), so `run` / `graph` / `validate`
+    // with no name still work. (The synthetic-`flow`-identity `FlowRegistry::single_flow`
+    // stays the hand-wired one-flow constructor for a caller who has no name to give.)
+    let registry = records
+        .iter()
+        .fold(FlowRegistry::new(), |reg, r| reg.add(r.name, r.factory));
     Ok(registry)
 }

@@ -33,9 +33,12 @@
 //! An author who needs the recorded name to survive a *Rust* rename (or to
 //! disambiguate two types that share a short name) writes the constant explicitly
 //! with a different value; that explicit name is then the stable identity and a
-//! later Rust rename does not move it. A one-line **derive** is a later ergonomic
-//! convenience; the trait itself — the identity contract every consumer binds to
-//! — is this module's.
+//! later Rust rename does not move it. The one-line ergonomic is
+//! `#[derive(StableName)]` (the `dagr_core::StableName` derive, re-exported behind
+//! the default-on `macros` feature): it emits exactly this `impl` with the default
+//! name being the type's identifier, and `#[stable_name = "…"]` supplies an explicit
+//! override. The trait itself — the identity contract every consumer binds to — is
+//! this module's; the derive is only sugar over it.
 //!
 //! # Well-formedness
 //!

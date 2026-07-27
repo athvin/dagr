@@ -137,9 +137,10 @@ fn duplicate_name_is_invalid_usage_naming_the_duplicate() {
 // ===========================================================================
 
 /// With exactly one discovered DAG, `run run --store DIR` with the **name omitted**
-/// dispatches the sole DAG (single-flow default) and exits `Success`, writing a real
-/// event stream under the store — the same outcome as a hand-wired
-/// `FlowRegistry::single_flow` + `run_registry`.
+/// dispatches the sole DAG and exits `Success`, writing a real event stream under the
+/// store. The DAG keeps its **own declared name** (`one_dag` declares `only`): `list`
+/// prints it and the stream lives under `<base>/only/<run-id>/` — the name is optional
+/// (the sole flow dispatches without it), not replaced by a synthetic identity.
 #[test]
 fn single_discovered_dag_runs_with_no_name() {
     let base = temp_base("single");
@@ -149,12 +150,19 @@ fn single_discovered_dag_runs_with_no_name() {
         "a single discovered DAG serves `run` with the name omitted, stderr:\n{}",
         run.stderr
     );
-    // The sole DAG really ran: a single-flow registry dispatches under the synthetic
-    // `flow` identity, so its stream lives under `<base>/flow/<run-id>/`.
+    // The sole DAG really ran, under its own name `only` (not a synthetic `flow`).
     assert!(
-        run_store_has_a_stream(&base, "flow"),
-        "the sole DAG wrote an event stream under {base}/flow/<run-id>/ (stdout:\n{})",
+        run_store_has_a_stream(&base, "only"),
+        "the sole DAG wrote an event stream under {base}/only/<run-id>/ (stdout:\n{})",
         run.stdout
+    );
+
+    // `list` prints the DAG's real declared name — a one-DAG binary is not renamed.
+    let listed = run_example("one_dag", &["list"]);
+    assert_eq!(
+        listed.stdout.trim(),
+        "only",
+        "the sole DAG lists under its declared name `only`"
     );
 }
 

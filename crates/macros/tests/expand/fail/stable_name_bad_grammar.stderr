@@ -1,0 +1,5 @@
+error: #[stable_name = "…"] takes exactly one string-literal value (the author-declared stable name); omit it to default to the type name
+ --> tests/expand/fail/stable_name_bad_grammar.rs:8:3
+  |
+8 | #[stable_name("x")]
+  |   ^^^^^^^^^^^

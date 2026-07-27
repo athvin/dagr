@@ -1,10 +1,19 @@
 //! `dagr-macros` — the optional, build-time-only proc-macro authoring layer.
 //!
-//! This crate exports one attribute, [`macro@task`], applied to an inherent
-//! `impl` block. It expands to the exact `impl Task for Foo { … }` a task author
-//! writes by hand today (`dagr_core::task::Task`), so an author can write only
-//! the `run` fn and have the four declarations (input type, output type,
-//! execution class, work) generated.
+//! This crate exports two attributes and a derive:
+//!
+//! - [`macro@task`], applied to an inherent `impl` block, expands to the exact
+//!   `impl Task for Foo { … }` a task author writes by hand today
+//!   (`dagr_core::task::Task`), so an author can write only the `run` fn and have
+//!   the four declarations (input type, output type, execution class, work)
+//!   generated.
+//! - [`macro@dag`], applied to a `fn(&mut FlowBuilder)`, keeps the fn and emits a
+//!   DAG factory plus its `inventory` registration for auto-discovery (ADR 092).
+//! - [`derive@StableName`], derived on a task or payload **struct**, emits the
+//!   one-line `impl StableName` (`STABLE_NAME = "<ident>"`, overridable with
+//!   `#[stable_name = "…"]`) that the graph-emittable registrars require — so a
+//!   `#[task]` task and its payloads compose with `#[dag]` / `FlowBuilder::source`
+//!   / `node` with no hand-written trait bodies.
 //!
 //! # It is a build-time crate — never linked into a binary
 //!
@@ -56,8 +65,8 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Expr, ExprLit, FnArg, GenericArgument, ImplItem, ItemFn, ItemImpl, Lit,
-    Meta, Pat, PatType, PathArguments, ReturnType, Type,
+    parse_macro_input, DeriveInput, Expr, ExprLit, FnArg, GenericArgument, ImplItem, ItemFn,
+    ItemImpl, Lit, Meta, Pat, PatType, PathArguments, ReturnType, Type,
 };
 
 /// The execution class the attribute argument selected, mapped to the
@@ -508,4 +517,118 @@ fn expand_dag(func: &ItemFn, name: &syn::LitStr) -> proc_macro2::TokenStream {
             }
         }
     }
+}
+
+/// Derive `dagr_core::stable_name::StableName` for a task or payload struct — the
+/// one-line ergonomic the trait's own docs anticipated.
+///
+/// The graph-emittable registrars (`FlowBuilder::source` / `node`,
+/// `RunnableFlow::register_source_named` / `register_named`) require every task and
+/// payload type to carry a `StableName`. `#[task]` deliberately does **not** emit
+/// one (it annotates the `impl` block, not the struct; auto-emitting would collide
+/// with an author who wants a custom name). This derive is the counterpart: put it
+/// on the struct, and the two macros compose with no hand-written `impl StableName`.
+///
+/// # Grammar
+///
+/// - `#[derive(StableName)]` — the stable name is the **struct's own identifier**,
+///   as a source-level string literal (`STABLE_NAME = "Foo"`).
+/// - `#[derive(StableName)] #[stable_name = "warehouse.Rows"]` — the stable name is
+///   the given string literal, so a later *Rust* rename does not move the recorded
+///   identity.
+/// - Any other form of the helper attribute (`#[stable_name]` with no value,
+///   `#[stable_name = 42]`, `#[stable_name("x")]`, or two `#[stable_name = …]`) is a
+///   spanned `compile_error!` naming the accepted `#[stable_name = "…"]` shape,
+///   mirroring `#[dag]`'s attribute rejection.
+///
+/// # Generics
+///
+/// Generic structs are supported: the impl reproduces the struct's own generics and
+/// where-clause via `split_for_impl` and adds **no** `StableName` bound (the const
+/// does not depend on the type parameters). The default name is the bare identifier
+/// (`"Wrapper"`, never `"Wrapper<T>"` — `<>` is not a well-formed stable-name
+/// character); a type needing *per-monomorphisation* distinct names must write the
+/// `impl StableName` by hand (the always-available fallback).
+///
+/// # Well-formedness
+///
+/// A default identifier is always a well-formed stable name (ASCII letters/digits
+/// and `_`). An **override** value is validated for well-formedness at the
+/// whole-pipeline **assembly** check (the authoritative enforcement point), never
+/// here — the derive adds no second check.
+///
+/// (These `dagr_core` paths are plain code, not intra-doc links: this build-time
+/// proc-macro crate does not depend on `dagr_core`, so its rustdoc cannot resolve
+/// links into it.)
+#[proc_macro_derive(StableName, attributes(stable_name))]
+pub fn stable_name(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    expand_stable_name(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// The stable-name string literal a `#[derive(StableName)]` emits: the override from
+/// a single `#[stable_name = "…"]` helper attribute if present, else the type's own
+/// identifier as a source-level literal. A malformed helper attribute (missing/
+/// non-string value, list form, or more than one) is a spanned error naming the
+/// accepted grammar, mirroring [`parse_dag_name`].
+fn stable_name_literal(input: &DeriveInput) -> syn::Result<syn::LitStr> {
+    let grammar = "#[stable_name = \"…\"] takes exactly one string-literal value \
+                   (the author-declared stable name); omit it to default to the type name";
+
+    let mut found: Option<syn::LitStr> = None;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("stable_name") {
+            continue;
+        }
+        // The sole accepted form is `#[stable_name = "…"]` — a name-value pair whose
+        // value is a string literal. A list (`#[stable_name(…)]`) or a bare path
+        // (`#[stable_name]`) each map to a clear, spanned message.
+        let Meta::NameValue(nv) = &attr.meta else {
+            return Err(syn::Error::new(attr.meta.span(), grammar));
+        };
+        let value = match &nv.value {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) => s.clone(),
+            other => return Err(syn::Error::new(other.span(), grammar)),
+        };
+        // A second `#[stable_name = …]` is an authoring error: one override only.
+        if found.is_some() {
+            return Err(syn::Error::new(
+                attr.span(),
+                "duplicate `#[stable_name = \"…\"]`: a type declares at most one stable name",
+            ));
+        }
+        found = Some(value);
+    }
+
+    Ok(found.unwrap_or_else(|| {
+        // The default: the type's own identifier, baked as a source-level string
+        // literal at expansion time. This is byte-stable across toolchains by
+        // construction — it is the author's source token, exactly like a
+        // hand-written `const STABLE_NAME: &str = "Foo"`. NEVER derive this from
+        // `std::any::type_name`, whose format is not a cross-toolchain stability
+        // guarantee (that would silently break the determinism fixtures).
+        syn::LitStr::new(&input.ident.to_string(), input.ident.span())
+    }))
+}
+
+/// Emit `impl StableName for #ident { const STABLE_NAME = #name; }`, reproducing the
+/// type's own generics and where-clause (no added bound — the const is
+/// type-parameter-independent). Infallible once [`stable_name_literal`] resolved the
+/// name.
+fn expand_stable_name(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let name = stable_name_literal(input)?;
+    let ident = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::dagr_core::stable_name::StableName
+            for #ident #ty_generics #where_clause
+        {
+            const STABLE_NAME: &'static str = #name;
+        }
+    })
 }
