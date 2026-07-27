@@ -14,8 +14,10 @@ use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
 use dagr_core::TaskError;
 
-/// A row-count payload with a declared stable name.
+/// A row-count payload with a declared stable name. This example asserts on the run
+/// outcome / store, not the produced value, so the wrapped count is unread.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Rows(u64);
 impl StableName for Rows {
     const STABLE_NAME: &'static str = "Rows";
@@ -46,5 +48,5 @@ fn build_only() -> RunnableFlow {
 inventory::submit! { DagRegistration { name: "only", factory: build_only } }
 
 fn main() -> std::process::ExitCode {
-    dagr_cli::run(std::env::args_os())
+    dagr_cli::run(std::env::args_os()).into()
 }

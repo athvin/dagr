@@ -27,8 +27,10 @@ impl StableName for Rows {
     const STABLE_NAME: &'static str = "Rows";
 }
 
-/// A report payload with a declared stable name.
+/// A report payload with a declared stable name. These examples assert on graph
+/// structure / run outcome, not the produced value, so the wrapped total is unread.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Report(u64);
 impl StableName for Report {
     const STABLE_NAME: &'static str = "Report";
@@ -105,5 +107,5 @@ inventory::submit! { DagRegistration { name: "alpha", factory: build_alpha } }
 inventory::submit! { DagRegistration { name: "beta", factory: build_beta } }
 
 fn main() -> std::process::ExitCode {
-    dagr_cli::run(std::env::args_os())
+    dagr_cli::run(std::env::args_os()).into()
 }

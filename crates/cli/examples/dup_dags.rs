@@ -14,8 +14,10 @@ use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
 use dagr_core::TaskError;
 
-/// A payload with a declared stable name.
+/// A payload with a declared stable name. The duplicate is rejected before any flow
+/// is built, so this value is never produced or read.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Rows(u64);
 impl StableName for Rows {
     const STABLE_NAME: &'static str = "Rows";
@@ -55,5 +57,5 @@ inventory::submit! { DagRegistration { name: "dup", factory: build_first } }
 inventory::submit! { DagRegistration { name: "dup", factory: build_second } }
 
 fn main() -> std::process::ExitCode {
-    dagr_cli::run(std::env::args_os())
+    dagr_cli::run(std::env::args_os()).into()
 }

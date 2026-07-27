@@ -21,7 +21,7 @@ use std::process::Command;
 
 use dagr_cli::graph::mask_generated_at;
 
-/// The InvalidUsage exit code (`ExitCode::as_u8`), asserted numerically so this
+/// The `InvalidUsage` exit code (`ExitCode::as_u8`), asserted numerically so this
 /// test needs no `dag`-feature-gated symbols of its own.
 const INVALID_USAGE: i32 = 2;
 
@@ -51,7 +51,15 @@ struct Run {
 fn run_example(example: &str, args: &[&str]) -> Run {
     let out = Command::new(env!("CARGO"))
         .current_dir(repo_root())
-        .args(["run", "--quiet", "-p", "dagr-cli", "--example", example, "--"])
+        .args([
+            "run",
+            "--quiet",
+            "-p",
+            "dagr-cli",
+            "--example",
+            example,
+            "--",
+        ])
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("failed to spawn `cargo run --example {example}`: {e}"));
@@ -64,7 +72,11 @@ fn run_example(example: &str, args: &[&str]) -> Run {
 
 /// The non-empty lines of a `list` output, in order.
 fn list_lines(stdout: &str) -> Vec<&str> {
-    stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect()
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 // ===========================================================================
@@ -171,7 +183,11 @@ fn graph_and_validate_delegate_transparently() {
     );
 
     let beta = run_example("many_dags", &["graph", "beta"]);
-    assert_eq!(beta.code, 0, "graph beta succeeds, stderr:\n{}", beta.stderr);
+    assert_eq!(
+        beta.code, 0,
+        "graph beta succeeds, stderr:\n{}",
+        beta.stderr
+    );
     let beta_json: serde_json::Value = serde_json::from_str(beta.stdout.trim())
         .unwrap_or_else(|e| panic!("graph beta emits a JSON artifact: {e}\n{}", beta.stdout));
     assert_ne!(

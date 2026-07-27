@@ -33,6 +33,11 @@ pub mod graph;
 pub mod logging;
 pub mod prelude;
 pub mod registry;
+/// The `inventory`-backed DAG auto-discovery entrypoint (M6, ADR 092). Gated behind
+/// the default-on `dag` feature so `--no-default-features` drops the `inventory`
+/// runtime dependency edge entirely (`dagr-core` never sees it).
+#[cfg(feature = "dag")]
+pub mod run;
 pub mod run_flow;
 pub mod scale_bench;
 pub mod signals;
@@ -46,6 +51,12 @@ pub use graph::{
     emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
     GRAPH_SCHEMA_VERSION,
 };
+/// The DAG auto-discovery surface (M6, ADR 092), re-exported at the crate root under
+/// the default-on `dag` feature: [`run()`] (the one-call entrypoint a DAG-hosting
+/// binary's `main` delegates to) and [`DagRegistration`] (the record a binary submits
+/// per DAG). Absent under `--no-default-features`.
+#[cfg(feature = "dag")]
+pub use run::{run, DagRegistration};
 pub use structure_snapshot::{
     assert_structure, bless_structure, StructureAssertError, StructureDiff, StructureSnapshot,
 };
