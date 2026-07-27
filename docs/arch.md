@@ -550,6 +550,21 @@ Readable output with no manual layout is the design goal; the *criteria* are the
 
 **Many flows per binary (operator-approved M5 addition — ADR 086).** A binary may host **many named flows** and select one per invocation: a small, additive `FlowRegistry` maps a flow **name → a re-invokable factory `Fn() -> RunnableFlow`**, and a `run_registry(&registry, argv)` entrypoint dispatches over it (`dagr run etl` versus `dagr run nightly`, plus `dagr list`). Selection is purely name-based over the existing single-run engine — each `dagr run <flow>` is its own independent run with its own run identity and store; it is *not* concurrent orchestration and *not* sub-DAG composition (both remain permanent non-goals). This adds one **optional positional to the command surface**: the parsed `Cli` gains a `flow_name: Option<String>` — the first positional token after the verb, or `None` when absent. The addition is backward-compatible: every existing verb, flag, and single-flow binary parses unchanged (a leading `--flag` is never a flow name), and a single-flow registry lets the name be omitted while a multi-flow registry requires it on `run`. Factories, not stored flows, are load-bearing because `RunnableFlow::run(self)` consumes the flow and it is not `Clone`, so one instance serves at most one verb.
 
+**Environment fallbacks and the headroom knob (operator-approved M5 addition — ADR 089).** Every runtime knob honours the standard **`flag > env > default`** precedence, so a knob can be set once in an orchestrator's environment and still be overridden per-invocation on the command line. The env namespace is `DAGR_*`, snake-case (flags stay kebab-case), documented alongside the startup-banner toggle `DAGR_NO_BANNER`:
+
+| Flag | Env var | Default | Type | Validation |
+|---|---|---|---|---|
+| `--grace` | `DAGR_GRACE` | 10s | Duration | `10` / `10s` / `10ms` |
+| `--teardown-deadline` | `DAGR_TEARDOWN_DEADLINE` | 15s | Duration | `10` / `10s` / `10ms` |
+| `--failure-mode` | `DAGR_FAILURE_MODE` | continue-independent | enum | `continue-independent` \| `stop-on-first-failure` |
+| `--dagr.pool.compute-threads` | `DAGR_POOL_COMPUTE_THREADS` | detected | u32 | ≥ 1 |
+| `--dagr.pool.blocking-threads` | `DAGR_POOL_BLOCKING_THREADS` | detected | u32 | ≥ 1 |
+| `--dagr.pool.memory` | `DAGR_POOL_MEMORY` | detected | u64 | ≥ 1 byte |
+| `--dagr.headroom-fraction` | `DAGR_HEADROOM` | 0.20 | f64 | `0.0..=1.0` |
+| `--no-banner` | `DAGR_NO_BANNER` (or `NO_COLOR`) | banner shown | flag | present ⇒ suppress |
+
+The headroom fraction (the admission-pool slack, C12) is exposed for the first time; the existing at-least-one-unit floor is unchanged, so even a `1.0` headroom still yields one unit per pool. A **bad env value fails loudly** and is never silently ignored or clamped: an unparseable value exits `InvalidUsage`, an out-of-range value (e.g. a headroom of `1.5`) exits `BootstrapFailure`, each diagnostic naming the offending variable. **`dagr-core` reads no environment** — the CLI resolves `DAGR_*` and passes already-parsed values inward (the `RunConfig` env-fallback builder methods and the pool pins), preserving the core's "reads the host once, injectable for tests" property (C12). This is a config *surface* only: it changes how a single invocation is configured, never *when* a pipeline runs, and there is no config file or DSL (a permanent scope boundary).
+
 **Acceptance criteria.**
 - Every verb behaves identically across all pipelines built with the library.
 - Validate exits non-zero on any assembly failure and prints every problem found.
