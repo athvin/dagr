@@ -34,7 +34,9 @@ use dagr_cli::config::{
     DAGR_POOL_MEMORY, DAGR_TEARDOWN_DEADLINE,
 };
 use dagr_cli::contract::ExitCode;
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan, DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE};
+use dagr_cli::driver::{
+    drive, NodeRunner, RunConfig, RunPlan, DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE,
+};
 use dagr_core::admission::PoolCapacities;
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
@@ -168,7 +170,10 @@ fn failure_mode_precedence() {
             .failure_mode_from_env(Some(FailureMode::ContinueIndependent))
             .expect("flag path")
     });
-    assert_eq!(cfg.effective_failure_mode(), FailureMode::ContinueIndependent);
+    assert_eq!(
+        cfg.effective_failure_mode(),
+        FailureMode::ContinueIndependent
+    );
 
     // env used when no flag
     let cfg = with_env(&[(DAGR_FAILURE_MODE, "stop-on-first-failure")], || {
@@ -176,7 +181,10 @@ fn failure_mode_precedence() {
             .failure_mode_from_env(None)
             .expect("env path")
     });
-    assert_eq!(cfg.effective_failure_mode(), FailureMode::StopOnFirstFailure);
+    assert_eq!(
+        cfg.effective_failure_mode(),
+        FailureMode::StopOnFirstFailure
+    );
 
     // default when neither (continue-independent)
     let cfg = with_clean_env(|| {
@@ -184,7 +192,10 @@ fn failure_mode_precedence() {
             .failure_mode_from_env(None)
             .expect("default path")
     });
-    assert_eq!(cfg.effective_failure_mode(), FailureMode::ContinueIndependent);
+    assert_eq!(
+        cfg.effective_failure_mode(),
+        FailureMode::ContinueIndependent
+    );
 }
 
 // ===========================================================================
@@ -257,7 +268,10 @@ fn pool_env_reaches_the_probe_derived_capacities() {
 #[test]
 fn headroom_default_is_twenty_percent() {
     let h = with_clean_env(|| resolve_headroom(None).expect("default"));
-    assert!((h - 0.20).abs() < f64::EPSILON, "default headroom is 0.20, got {h}");
+    assert!(
+        (h - 0.20).abs() < f64::EPSILON,
+        "default headroom is 0.20, got {h}"
+    );
 }
 
 #[test]
@@ -265,7 +279,10 @@ fn headroom_env_used_when_no_flag() {
     let h = with_env(&[(DAGR_HEADROOM, "0.5")], || {
         resolve_headroom(None).expect("valid env")
     });
-    assert!((h - 0.5).abs() < f64::EPSILON, "DAGR_HEADROOM=0.5 is used, got {h}");
+    assert!(
+        (h - 0.5).abs() < f64::EPSILON,
+        "DAGR_HEADROOM=0.5 is used, got {h}"
+    );
 }
 
 #[test]
@@ -476,10 +493,7 @@ fn config_via_env() -> RunConfig {
         .expect("grace env")
         .failure_mode_from_env(None)
         .expect("failure-mode env")
-        .capacities(
-            PoolCapacities::new()
-                .memory(pins.memory_pin().expect("memory pinned via env")),
-        )
+        .capacities(PoolCapacities::new().memory(pins.memory_pin().expect("memory pinned via env")))
 }
 
 /// Build the run config for the **flag** path: the equivalent flags, no env.
@@ -507,8 +521,18 @@ fn env_configured_run_reflects_env_values() {
             let config = config_via_env();
             // The effective knobs observed by the run reflect the env values.
             assert_eq!(config.effective_grace(), Duration::from_secs(20));
-            assert_eq!(config.effective_failure_mode(), FailureMode::StopOnFirstFailure);
-            drive(&config, "t77", Ok(plan), &[], sink.clone(), TickClock::default())
+            assert_eq!(
+                config.effective_failure_mode(),
+                FailureMode::StopOnFirstFailure
+            );
+            drive(
+                &config,
+                "t77",
+                Ok(plan),
+                &[],
+                sink.clone(),
+                TickClock::default(),
+            )
         },
     );
     assert_eq!(report.outcome, RunOutcome::Succeeded);
@@ -536,7 +560,14 @@ fn env_path_and_flag_path_are_behaviourally_identical() {
         ],
         || {
             let config = config_via_env();
-            drive(&config, "t77", Ok(plan_env), &[], sink_env.clone(), TickClock::default())
+            drive(
+                &config,
+                "t77",
+                Ok(plan_env),
+                &[],
+                sink_env.clone(),
+                TickClock::default(),
+            )
         },
     );
 
@@ -544,10 +575,20 @@ fn env_path_and_flag_path_are_behaviourally_identical() {
     let sink_flag = MemorySink::default();
     let flag_report = with_clean_env(|| {
         let config = config_via_flags();
-        drive(&config, "t77", Ok(plan_flag), &[], sink_flag.clone(), TickClock::default())
+        drive(
+            &config,
+            "t77",
+            Ok(plan_flag),
+            &[],
+            sink_flag.clone(),
+            TickClock::default(),
+        )
     });
 
-    assert_eq!(env_report.outcome, flag_report.outcome, "same overall outcome");
+    assert_eq!(
+        env_report.outcome, flag_report.outcome,
+        "same overall outcome"
+    );
     assert_eq!(
         env_report.terminal_states, flag_report.terminal_states,
         "same per-node terminal states via env and via flags"

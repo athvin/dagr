@@ -173,3 +173,87 @@ impl MonotonicClock for TickClock {
     }
 }
 // ANCHOR_END: quickstart
+
+// ===========================================================================
+// The DAGR_* environment surface + the binary-wiring pattern (ADR 089 / T77)
+// ===========================================================================
+//
+// Every runtime knob honours the standard **`flag > env > default`** precedence:
+// a value can be set once in an orchestrator's environment and still be overridden
+// per-invocation on the command line. The environment surface, alongside the
+// startup-banner toggle `DAGR_NO_BANNER`:
+//
+// | Flag                          | Env var                      | Default              | Type     | Validation                                    |
+// |-------------------------------|------------------------------|----------------------|----------|-----------------------------------------------|
+// | `--grace`                     | `DAGR_GRACE`                 | 10s                  | Duration | `10` / `10s` / `10ms`                          |
+// | `--teardown-deadline`         | `DAGR_TEARDOWN_DEADLINE`     | 15s                  | Duration | `10` / `10s` / `10ms`                          |
+// | `--failure-mode`              | `DAGR_FAILURE_MODE`          | continue-independent | enum     | `continue-independent` \| `stop-on-first-failure` |
+// | `--dagr.pool.compute-threads` | `DAGR_POOL_COMPUTE_THREADS`  | detected             | u32      | ≥ 1                                            |
+// | `--dagr.pool.blocking-threads`| `DAGR_POOL_BLOCKING_THREADS` | detected             | u32      | ≥ 1                                            |
+// | `--dagr.pool.memory`          | `DAGR_POOL_MEMORY`           | detected             | u64      | ≥ 1 byte                                       |
+// | `--dagr.headroom-fraction`    | `DAGR_HEADROOM`              | 0.20                 | f64      | `0.0..=1.0`                                    |
+// | `--no-banner`                 | `DAGR_NO_BANNER` (or NO_COLOR) | banner shown       | flag     | present ⇒ suppress                             |
+//
+// A bad env value **fails loudly** and is never silently ignored or clamped: an
+// unparseable value exits `InvalidUsage`, an out-of-range value (e.g. a headroom of
+// `1.5`) exits `BootstrapFailure` — each diagnostic naming the offending variable.
+//
+// `dagr-core` reads **no** environment. The CLI resolves `DAGR_*` here and passes
+// the already-parsed values inward (`RunConfig` builder methods and the pool pins).
+// The pattern a pipeline binary folds into its own `main` — parse each flag as it
+// does today, then fold in the env fallback before building `RunConfig` and the
+// pool pins:
+
+#[allow(dead_code)]
+mod dagr_env_wiring {
+    use std::time::Duration;
+
+    use dagr_cli::config::{resolve_headroom, resolve_pool_pins, EnvParseError, PoolPinFlags};
+    use dagr_cli::driver::RunConfig;
+    use dagr_core::flow::FailureMode;
+    use dagr_core::limits::ContainerLimitProbe;
+
+    /// The runtime-flag values a binary has already parsed from its argv (each
+    /// `None` when the operator supplied no flag). Your binary parses these however
+    /// it likes; this function does the `flag > env > default` fold.
+    #[derive(Clone, Copy, Default)]
+    pub struct ParsedFlags {
+        pub grace: Option<Duration>,
+        pub teardown_deadline: Option<Duration>,
+        pub failure_mode: Option<FailureMode>,
+        pub headroom: Option<f64>,
+        pub pool: PoolPinFlags,
+    }
+
+    /// Fold the parsed flags with the `DAGR_*` env fallbacks into a fully-resolved
+    /// [`RunConfig`] and sized pool capacities. A bad env value surfaces as an
+    /// [`EnvParseError`] whose `exit_code()` is the C26 code to exit with (an
+    /// unparseable value → `InvalidUsage`, an out-of-range headroom →
+    /// `BootstrapFailure`) — the binary maps it straight to a process exit.
+    pub fn resolve_config(base: &str, flags: ParsedFlags) -> Result<RunConfig, EnvParseError> {
+        let ParsedFlags {
+            grace,
+            teardown_deadline,
+            failure_mode,
+            headroom,
+            pool,
+        } = flags;
+
+        // 1. The pool pins (DAGR_POOL_*) and headroom (DAGR_HEADROOM), resolved in
+        //    the CLI and handed to the core probe — dagr-core reads no env.
+        let pins = resolve_pool_pins(pool)?;
+        let headroom = resolve_headroom(headroom)?;
+        let capacities = ContainerLimitProbe::from_host()
+            .with_pins(pins)
+            .with_headroom(headroom)
+            .detect()
+            .expect("sizing never fails; the too-big-node check runs at drive time");
+
+        // 2. The driver knobs, each via the opt-in fallible env-fallback builder.
+        Ok(RunConfig::new(base)
+            .grace_from_env(grace)?
+            .teardown_deadline_from_env(teardown_deadline)?
+            .failure_mode_from_env(failure_mode)?
+            .capacities(capacities))
+    }
+}

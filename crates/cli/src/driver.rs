@@ -526,6 +526,86 @@ impl RunConfig {
         self
     }
 
+    /// The **effective** run-level [failure mode](FailureMode) this run will honour
+    /// (the override if set, else [`ContinueIndependent`](FailureMode::ContinueIndependent);
+    /// arch.md C15).
+    #[must_use]
+    pub fn effective_failure_mode(&self) -> FailureMode {
+        self.failure_mode
+    }
+
+    /// Set the **grace period** from `flag > env > default` (ADR 089 / T77): the
+    /// already-parsed `--grace` flag `flag` if present, else the `DAGR_GRACE`
+    /// environment variable, else the [default](DEFAULT_GRACE) (10 s).
+    ///
+    /// This is one of the three opt-in, **fallible** env-fallback builders (grace,
+    /// teardown-deadline, failure-mode). A binary that wants the standard
+    /// `flag > env > default` behaviour calls this instead of [`grace`](Self::grace);
+    /// [`RunConfig::new`](Self::new) stays infallible and env-free, and this method
+    /// is the *only* place `DAGR_GRACE` is read (in `dagr-cli`, never `dagr-core`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming `DAGR_GRACE`
+    /// (kind `Parse` → [`InvalidUsage`](crate::contract::ExitCode::InvalidUsage))
+    /// when the environment value is not a duration — a bad env value fails loudly
+    /// and is never silently ignored.
+    pub fn grace_from_env(
+        self,
+        flag: Option<Duration>,
+    ) -> Result<Self, crate::config::EnvParseError> {
+        let resolved = crate::config::resolve::<crate::config::EnvDuration>(
+            flag.map(crate::config::EnvDuration),
+            crate::config::DAGR_GRACE,
+            crate::config::EnvDuration(DEFAULT_GRACE),
+        )?;
+        Ok(self.grace(resolved.into_inner()))
+    }
+
+    /// Set the **teardown deadline** from `flag > env > default` (ADR 089 / T77):
+    /// the already-parsed `--teardown-deadline` flag if present, else
+    /// `DAGR_TEARDOWN_DEADLINE`, else the [default](DEFAULT_TEARDOWN_DEADLINE)
+    /// (15 s).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming
+    /// `DAGR_TEARDOWN_DEADLINE` (kind `Parse` → `InvalidUsage`) when the environment
+    /// value is not a duration.
+    pub fn teardown_deadline_from_env(
+        self,
+        flag: Option<Duration>,
+    ) -> Result<Self, crate::config::EnvParseError> {
+        let resolved = crate::config::resolve::<crate::config::EnvDuration>(
+            flag.map(crate::config::EnvDuration),
+            crate::config::DAGR_TEARDOWN_DEADLINE,
+            crate::config::EnvDuration(DEFAULT_TEARDOWN_DEADLINE),
+        )?;
+        Ok(self.teardown_deadline(resolved.into_inner()))
+    }
+
+    /// Set the run-level **failure mode** from `flag > env > default` (ADR 089 /
+    /// T77): the already-parsed `--failure-mode` flag if present, else
+    /// `DAGR_FAILURE_MODE`, else the default
+    /// ([`ContinueIndependent`](FailureMode::ContinueIndependent)).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming
+    /// `DAGR_FAILURE_MODE` (kind `Parse` → `InvalidUsage`) when the environment
+    /// value is neither `continue-independent` nor `stop-on-first-failure`.
+    pub fn failure_mode_from_env(
+        self,
+        flag: Option<FailureMode>,
+    ) -> Result<Self, crate::config::EnvParseError> {
+        let resolved = crate::config::resolve::<crate::config::EnvFailureMode>(
+            flag.map(crate::config::EnvFailureMode),
+            crate::config::DAGR_FAILURE_MODE,
+            crate::config::EnvFailureMode(FailureMode::default()),
+        )?;
+        Ok(self.failure_mode(resolved.into_inner()))
+    }
+
     /// The resolved run identity: the operator override verbatim if present, else
     /// a freshly-minted `UUIDv7` (T0.6 §4).
     #[must_use]

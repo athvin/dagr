@@ -52,7 +52,9 @@ Apply the T76 helper to give every runtime knob the standard `flag > env > defau
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None in the ticket; `docs/tasks.md` carries no `T77` entry (an M5 addition), so no `Q:` items to resolve. One design decision surfaced during implementation and is recorded here:
+
+- **Where the `0.0..=1.0` headroom range is enforced.** `dagr-core`'s `ContainerLimitProbe::with_headroom(f64)` already *clamps* out-of-range fractions (a defensive floor that keeps the core total). The DoD requires an out-of-range value to **fail** with `BootstrapFailure`, and the core must stay env-free — so validation lives in the CLI, in `dagr_cli::config::resolve_headroom`, which rejects anything outside `0.0..=1.0` (naming `DAGR_HEADROOM` or `--dagr.headroom-fraction`) **before** the value ever reaches `with_headroom`. The core clamp is left intact as a belt-and-braces floor; it is unreachable via the CLI path (the CLI has already rejected out-of-range values), so no behaviour is duplicated and `dagr-core` is untouched.
 
 ## Out of scope
 - The `resolve<T>` helper itself, the duration/`FailureMode` parsers, `EnvParseError`, and the extended reserved-flag list — those are **T76**; this ticket only applies them.

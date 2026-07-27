@@ -45,6 +45,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use dagr_core::flow::FailureMode;
+use dagr_core::limits::PinnedPools;
 
 use crate::contract::ExitCode;
 
@@ -396,6 +397,148 @@ impl FromStr for EnvFailureMode {
     }
 }
 
+// ===========================================================================
+// The CLI pool-pinning layer — DAGR_POOL_* → PinnedPools (T77)
+// ===========================================================================
+
+/// The already-parsed **pool-pin flags** a pipeline binary passes to
+/// [`resolve_pool_pins`] (ADR 089 / T77).
+///
+/// Each field is the flag value if the operator supplied one, else [`None`]. A
+/// present flag wins outright over the matching `DAGR_POOL_*` variable (the
+/// `flag > env > default` rule); with no flag, the environment is consulted; with
+/// neither, that pool is left un-pinned (it derives from the container-limit
+/// probe). This mirrors what a binary already does for its other flags — it parses
+/// them, then folds in the env fallback here — keeping `dagr-core` environment-free
+/// (the resolved values are handed to the core [`PinnedPools`] as parsed pins).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolPinFlags {
+    /// The `--dagr.pool.compute-threads` flag value, if supplied.
+    pub compute_threads: Option<u32>,
+    /// The `--dagr.pool.blocking-threads` flag value, if supplied.
+    pub blocking_threads: Option<u32>,
+    /// The `--dagr.pool.memory` flag value (bytes), if supplied.
+    pub memory: Option<u64>,
+}
+
+/// Resolve the three `DAGR_POOL_*` pins by the ADR 089 precedence
+/// **`flag > env > default`** and fold them into a core [`PinnedPools`] (T77).
+///
+/// For each pool: a present flag wins outright (the env is never read); with no
+/// flag, `DAGR_POOL_COMPUTE_THREADS` / `DAGR_POOL_BLOCKING_THREADS` /
+/// `DAGR_POOL_MEMORY` is read and parsed; with neither, the pool is left un-pinned
+/// (it will derive from the [`ContainerLimitProbe`](dagr_core::limits::ContainerLimitProbe)).
+/// The environment is resolved **here in `dagr-cli`** and handed to the core
+/// [`PinnedPools`] as parsed pins — `dagr-core` reads no environment (ADR 089's
+/// load-bearing boundary).
+///
+/// # Errors
+///
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming the offending `DAGR_POOL_*` variable when its
+/// value fails to parse as a non-negative integer — a bad env value is **never**
+/// silently ignored or clamped.
+pub fn resolve_pool_pins(flags: PoolPinFlags) -> Result<PinnedPools, EnvParseError> {
+    let mut pins = PinnedPools::new();
+    if let Some(compute) = resolve_opt::<u32>(flags.compute_threads, DAGR_POOL_COMPUTE_THREADS)? {
+        pins = pins.compute_threads(compute);
+    }
+    if let Some(blocking) = resolve_opt::<u32>(flags.blocking_threads, DAGR_POOL_BLOCKING_THREADS)?
+    {
+        pins = pins.blocking_threads(blocking);
+    }
+    if let Some(memory) = resolve_opt::<u64>(flags.memory, DAGR_POOL_MEMORY)? {
+        pins = pins.memory(memory);
+    }
+    Ok(pins)
+}
+
+/// Resolve an **optional** knob by `flag > env > (nothing)`: a present flag wins
+/// outright; with no flag the env var `env_key` is read and parsed (an unset or
+/// empty variable is "not supplied" → [`None`], so the caller leaves the pool
+/// un-pinned); a value that fails to parse is a loud [`EnvParseError`].
+///
+/// This is the "no default" sibling of [`resolve`]: a pool with neither a flag nor
+/// an env value has *no* pin (it derives from detection), which a plain
+/// `resolve(_, _, default)` cannot express.
+fn resolve_opt<T>(flag: Option<T>, env_key: &str) -> Result<Option<T>, EnvParseError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    if let Some(value) = flag {
+        return Ok(Some(value));
+    }
+    match std::env::var(env_key) {
+        Ok(raw) if !raw.is_empty() => T::from_str(&raw)
+            .map(Some)
+            .map_err(|e| EnvParseError::parse(env_key, raw, e.to_string())),
+        _ => Ok(None),
+    }
+}
+
+// ===========================================================================
+// The headroom knob — DAGR_HEADROOM / --dagr.headroom-fraction (T77)
+// ===========================================================================
+
+/// The default admission **headroom fraction** (arch.md C12: 20%), mirrored here
+/// so the CLI resolves `--dagr.headroom-fraction` / `DAGR_HEADROOM` to the same
+/// default `dagr-core`'s [`HEADROOM_DEFAULT`](dagr_core::limits::HEADROOM_DEFAULT)
+/// applies when no knob is set.
+pub const HEADROOM_DEFAULT: f64 = 0.20;
+
+/// Resolve the admission **headroom fraction** by `flag > env > default` and
+/// **validate it to `0.0..=1.0`** (ADR 089 / T77). The resolved value is handed to
+/// [`ContainerLimitProbe::with_headroom`](dagr_core::limits::ContainerLimitProbe::with_headroom);
+/// the existing at-least-one-unit floor is unchanged, so even a `1.0` headroom
+/// still yields one unit per pool.
+///
+/// - A present `flag` wins outright (the env is never read).
+/// - With no flag, `DAGR_HEADROOM` is read and parsed as an `f64`.
+/// - With neither, the [`HEADROOM_DEFAULT`] (0.20) is returned.
+///
+/// # Errors
+///
+/// Two **distinct** loud failures, each naming `DAGR_HEADROOM`, per ADR 089:
+/// - a value that is not a float → an [`EnvParseError`] of kind
+///   [`Parse`](EnvParseErrorKind::Parse), mapping to [`ExitCode::InvalidUsage`];
+/// - a float **outside `0.0..=1.0`** → an [`EnvParseError`] of kind
+///   [`OutOfRange`](EnvParseErrorKind::OutOfRange), mapping to
+///   [`ExitCode::BootstrapFailure`] — the value is never silently clamped.
+///
+/// A bad **flag** value is validated the same way (out-of-range → an
+/// `OutOfRange` error naming `--dagr.headroom-fraction`), so the two paths agree.
+pub fn resolve_headroom(flag: Option<f64>) -> Result<f64, EnvParseError> {
+    // A present flag wins outright; validate its range against the same bound.
+    if let Some(fraction) = flag {
+        return validate_headroom("--dagr.headroom-fraction", fraction, &fraction.to_string());
+    }
+    // No flag: fall back to DAGR_HEADROOM (unset/empty → the default).
+    match std::env::var(DAGR_HEADROOM) {
+        Ok(raw) if !raw.is_empty() => {
+            let parsed: f64 = raw.parse().map_err(|e: std::num::ParseFloatError| {
+                EnvParseError::parse(DAGR_HEADROOM, &raw, e.to_string())
+            })?;
+            validate_headroom(DAGR_HEADROOM, parsed, &raw)
+        }
+        _ => Ok(HEADROOM_DEFAULT),
+    }
+}
+
+/// Check `fraction` is in `0.0..=1.0`; otherwise an [`out_of_range`](EnvParseError::out_of_range)
+/// error naming `source` (`BootstrapFailure`).
+fn validate_headroom(source: &str, fraction: f64, raw: &str) -> Result<f64, EnvParseError> {
+    if (0.0..=1.0).contains(&fraction) {
+        Ok(fraction)
+    } else {
+        Err(EnvParseError::out_of_range(
+            source,
+            raw,
+            "expected a fraction in 0.0..=1.0",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +720,94 @@ mod tests {
         assert_eq!(DAGR_POOL_BLOCKING_THREADS, "DAGR_POOL_BLOCKING_THREADS");
         assert_eq!(DAGR_POOL_MEMORY, "DAGR_POOL_MEMORY");
         assert_eq!(DAGR_HEADROOM, "DAGR_HEADROOM");
+    }
+
+    // --- Pool pins + headroom resolvers (T77) ----------------------------
+    //
+    // These read the REAL DAGR_POOL_* / DAGR_HEADROOM names, so they take a
+    // module-local lock and set/remove inside it (never a shared mutable OS var
+    // observed across parallel tests). The generic-resolver tests above avoid the
+    // lock by using unique names; these cannot, because the resolver hardcodes the
+    // real names it wires.
+
+    fn pool_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn pool_pins_flag_beats_env_and_env_fills_the_rest() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_POOL_COMPUTE_THREADS, "9");
+        std::env::set_var(DAGR_POOL_MEMORY, "4096");
+        std::env::remove_var(DAGR_POOL_BLOCKING_THREADS);
+        let pins = resolve_pool_pins(PoolPinFlags {
+            compute_threads: Some(2),
+            ..PoolPinFlags::default()
+        })
+        .expect("valid pins");
+        std::env::remove_var(DAGR_POOL_COMPUTE_THREADS);
+        std::env::remove_var(DAGR_POOL_MEMORY);
+        assert_eq!(pins.compute_threads_pin(), Some(2), "flag wins over env");
+        assert_eq!(pins.memory_pin(), Some(4096), "env fills memory");
+        assert_eq!(pins.blocking_threads_pin(), None, "unset stays un-pinned");
+    }
+
+    #[test]
+    fn pool_pins_bad_env_is_invalid_usage_naming_the_variable() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_POOL_MEMORY, "notanumber");
+        let err = resolve_pool_pins(PoolPinFlags::default()).expect_err("bad pool env fails");
+        std::env::remove_var(DAGR_POOL_MEMORY);
+        assert_eq!(err.kind, EnvParseErrorKind::Parse);
+        assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
+        assert!(err.to_string().contains(DAGR_POOL_MEMORY));
+    }
+
+    #[test]
+    fn headroom_flag_env_default_precedence() {
+        let _g = pool_env_lock();
+        // default when neither
+        std::env::remove_var(DAGR_HEADROOM);
+        assert!((resolve_headroom(None).expect("default") - HEADROOM_DEFAULT).abs() < f64::EPSILON);
+        // env used when no flag
+        std::env::set_var(DAGR_HEADROOM, "0.5");
+        assert!((resolve_headroom(None).expect("env") - 0.5).abs() < f64::EPSILON);
+        // flag beats env
+        assert!((resolve_headroom(Some(0.1)).expect("flag") - 0.1).abs() < f64::EPSILON);
+        std::env::remove_var(DAGR_HEADROOM);
+    }
+
+    #[test]
+    fn headroom_out_of_range_is_bootstrap_failure() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_HEADROOM, "1.5");
+        let err = resolve_headroom(None).expect_err("1.5 is out of range");
+        std::env::remove_var(DAGR_HEADROOM);
+        assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
+        assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
+        assert!(err.to_string().contains(DAGR_HEADROOM));
+    }
+
+    #[test]
+    fn headroom_out_of_range_flag_is_bootstrap_failure_naming_the_flag() {
+        let _g = pool_env_lock();
+        std::env::remove_var(DAGR_HEADROOM);
+        let err = resolve_headroom(Some(-0.5)).expect_err("negative headroom is out of range");
+        assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
+        assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
+        assert!(err.to_string().contains("--dagr.headroom-fraction"));
+    }
+
+    #[test]
+    fn headroom_non_float_env_is_parse_failure() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_HEADROOM, "half");
+        let err = resolve_headroom(None).expect_err("a non-float is a parse failure");
+        std::env::remove_var(DAGR_HEADROOM);
+        assert_eq!(err.kind, EnvParseErrorKind::Parse);
+        assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
     }
 }
