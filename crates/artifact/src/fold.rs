@@ -1,49 +1,49 @@
-//! The C22 **fold** — the standalone reader that turns a C19 event stream into a
-//! run artifact (arch.md `### C22 · Run artifact`).
+//! The **fold** — the standalone reader that turns an event stream into a
+//! run artifact.
 //!
 //! # What the fold is
 //!
 //! The run artifact is *derived, never authored*: every field comes from folding
-//! the append-only event stream (C19). [`fold_stream`] is that fold — a pure
+//! the append-only event stream. [`fold_stream`] is that fold — a pure
 //! function from stream bytes (plus the graph's node roster, for coverage) to a
-//! [`RunArtifact`]. It takes **no run store, no live graph, and no network**
-//! (arch.md C19: the fold "needs no access to the original run"), so it runs both
+//! [`RunArtifact`]. It takes **no run store, no live graph, and no network** —
+//! the fold needs no access to the original run — so it runs both
 //! at natural run end and, crucially, by a *later* invocation over a crashed
 //! run's stream — the dead run cannot fold itself.
 //!
 //! The fold is a **reader only**: it never re-runs a task, never mutates
 //! execution, and never changes the graph's shape. It reads the bytes it is
 //! given and produces a static artifact. Cross-run analysis stays "concatenate
-//! streams partitioned by run identity" (C19), not a queryable store.
+//! streams partitioned by run identity", not a queryable store.
 //!
-//! # Input: the published event-stream wire form (C19 / T39)
+//! # Input: the published event-stream wire form
 //!
 //! The fold reads the **published** event-stream schema
-//! (`schemas/event-stream/v1.schema.json`, T39): `kind`-discriminated JSON-Lines
-//! records carrying the T0.6/C19 header (run identity, `schema_version`, gapless
+//! (`schemas/event-stream/v1.schema.json`): `kind`-discriminated JSON-Lines
+//! records carrying the header (run identity, `schema_version`, gapless
 //! `seq`, informational `wall`, authoritative `offset_ns`). The
 //! **`attempt-outcome`** record is the fold's richest input: it carries the
 //! attempt's terminal status, the task-reported metrics, declared-vs-measured
 //! cost, structured error and message, the durable-output reference, the
 //! retention flag, and the measured slot residency. Durations are computed from
-//! `offset_ns` **only** — never from the informational `wall` stamp (C19).
+//! `offset_ns` **only** — never from the informational `wall` stamp.
 //!
 //! The fold **declares which stream schema versions it reads**
 //! ([`ACCEPTED_STREAM_SCHEMA_VERSIONS`]) and its own reader version
 //! ([`FOLD_READER_VERSION`]); both are recorded on the produced artifact under
 //! `fold_reader`. Within a stream version, evolution is additive-only: the fold
-//! **ignores unknown fields and defaults missing ones** (T0.10).
+//! **ignores unknown fields and defaults missing ones**.
 //!
 //! # Determinism & truncation tolerance
 //!
 //! The fold is deterministic — folding the same stream twice yields byte-
 //! identical artifacts (attempts are ordered by `(seq)`, maps serialize
-//! canonically). It reuses the C19 tolerant reader
+//! canonically). It reuses the tolerant reader
 //! ([`crate::event_stream::read_records`]): it discards **at most one** trailing
 //! partial record (the abrupt-kill tolerance, since the default sink does not
 //! fsync per event) and marks the artifact `interrupted`. A **non-final**
 //! corruption, or a *second* trailing corruption, is a hard [`FoldError`], never
-//! silently dropped (the C19 tolerance boundary).
+//! silently dropped (the tolerance boundary).
 //!
 //! # Interrupted representation (why `cancelled` + a first-class `interrupted`)
 //!
@@ -62,20 +62,20 @@
 //! [`RunArtifact::is_interrupted`] and (for a reader that reads only that block)
 //! `fold_reader.interrupted`. This is safe and additive: the run schema is
 //! **open-world at every level** — no object sets `additionalProperties:false`
-//! (the schema's own header note; T0.10 additive evolution) — so a top-level
+//! (the schema's own header note; additive evolution) — so a top-level
 //! `interrupted` field validates against the *unmodified* published schema. A
 //! downstream consumer therefore distinguishes crash-truncation from deliberate
 //! cancellation by reading one boolean, without any provenance archaeology.
 //!
 //! Promoting the distinction into `overall_outcome` itself (a dedicated
 //! `interrupted` enum token) is **deferred to a schema revision** (`dagr.run@2`),
-//! since it would widen a *closed* enum and is out of this ticket's scope.
+//! since it would widen a *closed* enum.
 //!
-//! # Open-question resolutions (recorded here, per the ticket)
+//! # Open-question resolutions
 //!
 //! - **Canonical phase list** — the fold names four phases that *partition* an
-//!   attempt's elapsed time so they sum to the total exactly (C22 phase
-//!   criterion), aligned to the C14 waiting/admission/dispatch/backoff phases:
+//!   attempt's elapsed time so they sum to the total exactly, aligned to the
+//!   waiting/admission/dispatch/backoff phases:
 //!   `ready-wait` (node-ready → node-admitted), `permit-wait` (node-admitted →
 //!   attempt-started), `executing` (attempt-started → attempt terminal), and
 //!   `backoff` (the inter-attempt wait a retry records, folded onto the *later*
@@ -95,24 +95,24 @@ use serde_json::Value;
 
 use crate::event_stream::read_records;
 
-/// The fold-reader version declared on every produced artifact (C22 schema
-/// discipline). Bumped when the fold's *reading* behavior changes in a way a
-/// downstream consumer must notice; it is independent of the artifact
-/// `schema_version` (which the run schema governs).
+/// The fold-reader version declared on every produced artifact. Bumped when the
+/// fold's *reading* behavior changes in a way a downstream consumer must notice;
+/// it is independent of the artifact `schema_version` (which the run schema
+/// governs).
 pub const FOLD_READER_VERSION: &str = "dagr.run-fold@1";
 
-/// The event-stream schema versions this fold declares it can read (C22: "the
-/// folding function declares which stream schema versions it reads"). Recorded
-/// on the artifact under `fold_reader.accepts`.
+/// The event-stream schema versions this fold declares it can read (the folding
+/// function declares which stream schema versions it reads). Recorded on the
+/// artifact under `fold_reader.accepts`.
 pub const ACCEPTED_STREAM_SCHEMA_VERSIONS: &[&str] = &["dagr.event-stream@1"];
 
-/// The `ready-wait` phase: node-ready → node-admitted (C14 waiting).
+/// The `ready-wait` phase: node-ready → node-admitted (waiting).
 pub const PHASE_READY_WAIT: &str = "ready-wait";
-/// The `permit-wait` phase: node-admitted → attempt-started (C14 admission).
+/// The `permit-wait` phase: node-admitted → attempt-started (admission).
 pub const PHASE_PERMIT_WAIT: &str = "permit-wait";
-/// The `executing` phase: attempt-started → attempt terminal (C14 dispatch).
+/// The `executing` phase: attempt-started → attempt terminal (dispatch).
 pub const PHASE_EXECUTING: &str = "executing";
-/// The `backoff` phase: the inter-attempt wait a retry records (C14 backoff).
+/// The `backoff` phase: the inter-attempt wait a retry records (backoff).
 pub const PHASE_BACKOFF: &str = "backoff";
 
 /// The worker string used when the stream names neither a pool nor a thread.
@@ -121,13 +121,13 @@ pub const UNKNOWN_WORKER: &str = "unknown";
 // === Errors ================================================================
 
 /// A fold failure. The fold is tolerant of exactly one *trailing* partial
-/// record (C19); anything else that prevents producing a faithful artifact is
+/// record; anything else that prevents producing a faithful artifact is
 /// one of these.
 #[derive(Debug)]
 pub enum FoldError {
     /// A record could not be parsed and it was **not** the single tolerated
     /// trailing partial — a non-final corruption, or a second trailing
-    /// corruption (the C19 tolerance boundary).
+    /// corruption (the tolerance boundary).
     CorruptRecord {
         /// The zero-based physical line index that failed to parse.
         line: usize,
@@ -155,7 +155,7 @@ impl std::error::Error for FoldError {}
 // === The produced artifact =================================================
 
 /// One attempt record in the run artifact body — one per *attempt*, never
-/// collapsed per node (C22).
+/// collapsed per node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptRecord {
     node: String,
@@ -174,7 +174,7 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    /// The node's author-declared identity (T13).
+    /// The node's author-declared identity.
     #[must_use]
     pub fn node(&self) -> &str {
         &self.node
@@ -184,7 +184,7 @@ impl AttemptRecord {
     pub fn attempt_number(&self) -> u32 {
         self.attempt
     }
-    /// The terminal status from the normative taxonomy (arch.md Vocabulary).
+    /// The terminal status from the normative taxonomy.
     #[must_use]
     pub fn status(&self) -> &str {
         &self.status
@@ -217,8 +217,8 @@ impl AttemptRecord {
     pub fn error(&self) -> Option<&Value> {
         self.error.as_ref()
     }
-    /// The task-reported metrics, byte/value-identical to the stream (C23: the
-    /// fold copies whatever metrics the stream recorded, unmodified).
+    /// The task-reported metrics, byte/value-identical to the stream (the fold
+    /// copies whatever metrics the stream recorded, unmodified).
     #[must_use]
     pub fn metrics(&self) -> &Value {
         &self.metrics
@@ -234,18 +234,18 @@ impl AttemptRecord {
         self.cost_measured.as_ref()
     }
     /// The durable-output reference, present only when the stream recorded one
-    /// (a durable node's succeeded attempt, or copied forward on resume — C27).
+    /// (a durable node's succeeded attempt, or copied forward on resume).
     #[must_use]
     pub fn durable_reference(&self) -> Option<&Value> {
         self.durable_reference.as_ref()
     }
-    /// The originating run identity a `satisfied-from-prior` record carries (C27).
+    /// The originating run identity a `satisfied-from-prior` record carries.
     #[must_use]
     pub fn satisfied_from_run(&self) -> Option<&str> {
         self.satisfied_from_run.as_deref()
     }
     /// The originating node identity an `upstream-skipped` record carries — the
-    /// node that decided to skip (arch.md Vocabulary).
+    /// node that decided to skip.
     #[must_use]
     pub fn originating_node(&self) -> Option<&str> {
         self.originating_node.as_deref()
@@ -290,20 +290,18 @@ impl AttemptRecord {
     }
 }
 
-/// The run summary the fold assembles (C22). Its two headline numbers —
+/// The run summary the fold assembles. Its two headline numbers —
 /// `total_elapsed_ns` (read via
 /// [`RunArtifact::summary_total_elapsed_ns`]) and `critical_path_ns` (read via
 /// [`RunArtifact::summary_critical_path_ns`]) — together answer whether the run
-/// was limited by its dependency **structure** or by its **resources** (arch.md
-/// `### C22 · Run artifact`).
+/// was limited by its dependency **structure** or by its **resources**.
 ///
 /// **Total elapsed** is the authoritative monotonic wall of the run: the maximum
 /// event `offset_ns` seen minus the run-start offset (`0`). It is computed from
 /// monotonic offsets **only**, never from the informational `wall` stamps.
 ///
-/// **Critical-path time** (C22 · T43) is the longest **dependency-respecting**
-/// chain of node **executing** contributions. Precisely what it INCLUDES and
-/// EXCLUDES — fixed by `docs/adr/0001-critical-path-definition.md`:
+/// **Critical-path time** is the longest **dependency-respecting** chain of node
+/// **executing** contributions. Precisely what it INCLUDES and EXCLUDES:
 ///
 /// - **INCLUDES** each node's `executing` phase, **summed across all of that
 ///   node's attempts** (retries collapse by summing executing — retries are real
@@ -346,7 +344,7 @@ impl RunSummary {
     }
 }
 
-/// A folded C22 run artifact: the outcome of one execution, joinable to the
+/// A folded run artifact: the outcome of one execution, joinable to the
 /// structure. Produced only by [`fold_stream`]; every field is derived from the
 /// event stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,7 +376,7 @@ impl RunArtifact {
         &self.overall_outcome
     }
     /// Whether the stream ended without a `run-finished` record — a crash-
-    /// truncated (interrupted) run (C22). This is the **first-class** distinction
+    /// truncated (interrupted) run. This is the **first-class** distinction
     /// between a crash-truncation and a deliberate cancellation (both carry
     /// [`overall_outcome`](Self::overall_outcome) `cancelled`); it is serialized
     /// as a top-level `interrupted` boolean on [`to_value`](Self::to_value), so a
@@ -389,7 +387,7 @@ impl RunArtifact {
         self.interrupted
     }
     /// Whether the tolerant reader discarded a single trailing partial record
-    /// (the abrupt-kill tolerance; C19).
+    /// (the abrupt-kill tolerance).
     #[must_use]
     pub fn trailing_partial_discarded(&self) -> bool {
         self.trailing_partial_discarded
@@ -416,7 +414,7 @@ impl RunArtifact {
             .and_then(Value::as_str)
             .unwrap_or_default()
     }
-    /// The structural fingerprint (present only when assembly succeeded; C21).
+    /// The structural fingerprint (present only when assembly succeeded).
     /// Joins to a graph artifact from the same build.
     #[must_use]
     pub fn header_fingerprint_structural(&self) -> Option<&str> {
@@ -424,7 +422,7 @@ impl RunArtifact {
             .get("fingerprint_structural")
             .and_then(Value::as_str)
     }
-    /// The policy-hash fingerprint (present only when assembly succeeded; C21).
+    /// The policy-hash fingerprint (present only when assembly succeeded).
     #[must_use]
     pub fn header_fingerprint_policy(&self) -> Option<&str> {
         self.header
@@ -447,7 +445,7 @@ impl RunArtifact {
         self.header.get("data_interval").filter(|v| !v.is_null())
     }
     /// The allowlisted captured environment values from the header — verbatim,
-    /// and **only** these (the fold sources env from nowhere else; C22).
+    /// and **only** these (the fold sources env from nowhere else).
     #[must_use]
     pub fn header_captured_environment(&self) -> &Value {
         static EMPTY: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -466,7 +464,7 @@ impl RunArtifact {
     pub fn summary(&self) -> Option<&RunSummary> {
         self.summary.as_ref()
     }
-    /// The values still retained at run end (summary; C10). Empty when there is
+    /// The values still retained at run end (summary). Empty when there is
     /// no summary.
     #[must_use]
     pub fn summary_retained_values(&self) -> Vec<String> {
@@ -475,28 +473,27 @@ impl RunArtifact {
             .map(|s| s.retained_values.clone())
             .unwrap_or_default()
     }
-    /// The peak measured slot residency (summary; C10).
+    /// The peak measured slot residency (summary).
     #[must_use]
     pub fn summary_peak_slot_residency(&self) -> u64 {
         self.summary.as_ref().map_or(0, |s| s.peak_slot_residency)
     }
     /// The run's **total elapsed time** — the authoritative monotonic wall of the
     /// run (last event offset minus the run-start offset, which is 0), never from
-    /// the informational `wall` stamps (summary; C22 · T43). Zero when there is no
-    /// summary.
+    /// the informational `wall` stamps (summary). Zero when there is no summary.
     #[must_use]
     pub fn summary_total_elapsed_ns(&self) -> u64 {
         self.summary.as_ref().map_or(0, |s| s.total_elapsed_ns)
     }
     /// The run's **critical-path time** — the longest dependency-respecting chain
-    /// of node executing contributions (summary; C22 · T43). See the module-level
-    /// critical-path note and `docs/adr/0001-critical-path-definition.md` for
-    /// exactly what it includes and excludes. Zero when there is no summary.
+    /// of node executing contributions (summary). See the module-level
+    /// critical-path note for exactly what it includes and excludes. Zero when
+    /// there is no summary.
     #[must_use]
     pub fn summary_critical_path_ns(&self) -> u64 {
         self.summary.as_ref().map_or(0, |s| s.critical_path_ns)
     }
-    /// The time pinned by abandoned-but-running (zombie) work (summary; C10/C14).
+    /// The time pinned by abandoned-but-running (zombie) work (summary).
     #[must_use]
     pub fn summary_abandoned_pinned_time_ns(&self) -> u64 {
         self.summary
@@ -512,9 +509,9 @@ impl RunArtifact {
     }
 
     /// The artifact as a `serde_json::Value`, conforming to the published
-    /// `schemas/run/v1.schema.json` (T39) plus the additive top-level
+    /// `schemas/run/v1.schema.json` plus the additive top-level
     /// `interrupted` boolean and `fold_reader` declaration (both validate against
-    /// the unmodified schema — it is open-world at every level, T0.10).
+    /// the unmodified schema — it is open-world at every level).
     #[must_use]
     pub fn to_value(&self) -> Value {
         let mut o = serde_json::Map::new();
@@ -545,10 +542,10 @@ impl RunArtifact {
         // `fold_reader`, while `overall_outcome` stays inside its closed enum
         // (`cancelled`). This is additive and schema-valid because the run schema
         // is open-world at every level — no object sets `additionalProperties:false`
-        // (`schemas/run/v1.schema.json` header note; T0.10). See the module-level
+        // (`schemas/run/v1.schema.json` header note). See the module-level
         // "interrupted representation" note for the full rationale.
         o.insert("interrupted".into(), Value::from(self.interrupted));
-        // Additive fold-reader declaration (T0.10: unknown fields validate). The
+        // Additive fold-reader declaration (unknown fields validate). The
         // `interrupted` flag is mirrored here too, so the reader-provenance block
         // stays self-describing for a consumer that reads only it.
         o.insert(
@@ -562,7 +559,7 @@ impl RunArtifact {
         Value::Object(o)
     }
 
-    /// The artifact in canonical JSON (T4 §6): sorted keys, compact, integers —
+    /// The artifact in canonical JSON: sorted keys, compact, integers —
     /// so folding the same stream twice is byte-identical.
     #[must_use]
     pub fn to_canonical_json(&self) -> String {
@@ -572,7 +569,7 @@ impl RunArtifact {
 
 // === The fold ==============================================================
 
-/// Fold a C19 event stream into a C22 [`RunArtifact`].
+/// Fold an event stream into a [`RunArtifact`].
 ///
 /// `stream_bytes` is the raw event-stream bytes (JSON Lines, published wire
 /// form); `graph_nodes` is the graph's node roster used for **node coverage** —
@@ -593,8 +590,8 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
     let read = read_records(stream_bytes).map_err(|e| FoldError::CorruptRecord { line: e.line })?;
     let records = read.records;
 
-    // The header comes from run-started alone (C19: it carries every start
-    // header field). Find it; without it there is nothing to fold.
+    // The header comes from run-started alone (it carries every start header
+    // field). Find it; without it there is nothing to fold.
     let run_started = records
         .iter()
         .find(|r| kind_of(r) == Some("run-started"))
@@ -625,7 +622,7 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
                 .unwrap_or_default();
             (outcome, errors)
         }
-        // No run-finished ⇒ crash-truncated. arch.md marks such a run
+        // No run-finished ⇒ crash-truncated. Such a run is marked
         // `interrupted`; the schema's `overall_outcome` enum has no dedicated
         // token, so the outcome is `cancelled` (an interrupted run terminated
         // without completing) and `is_interrupted()` carries the distinction.
@@ -796,11 +793,11 @@ fn build_attempt_record(
         .unwrap_or("failed")
         .to_string();
 
-    // Phase breakdown (open-question 1). The **attempt total** is anchored at
-    // its own `attempt-started` → its terminal `attempt-outcome`, so
-    // `total = outcome_off − start` (C22: "the total equals the offset delta
-    // between attempt start and terminal event"). The four canonical phases
-    // partition *that* window and always sum to it bit-exactly:
+    // Phase breakdown. The **attempt total** is anchored at its own
+    // `attempt-started` → its terminal `attempt-outcome`, so
+    // `total = outcome_off − start` (the total equals the offset delta between
+    // attempt start and terminal event). The four canonical phases partition
+    // *that* window and always sum to it bit-exactly:
     //
     //   - `executing`   — the always-present body of the attempt.
     //   - `permit-wait` — an admission wait that fell *inside* the attempt
@@ -814,7 +811,7 @@ fn build_attempt_record(
     // normally precede `attempt-started` and so lie *outside* the attempt total
     // — they contribute zero here and never a negative span, while the phase
     // vocabulary remains declared for streams that carry in-window sub-phase
-    // offsets (additive, T0.10). `executing` absorbs the remainder so the four
+    // offsets (additive). `executing` absorbs the remainder so the four
     // phases sum to the attempt total exactly.
     let start = started_at
         .get(node)
@@ -930,9 +927,9 @@ fn zero_phases() -> BTreeMap<String, u64> {
     m
 }
 
-/// The worker identity for an attempt (open-question 2): a verbatim
-/// stream-supplied `worker` string, else `"<pool>#<thread>"` synthesized from
-/// the `pool`/`thread` fields, else [`UNKNOWN_WORKER`].
+/// The worker identity for an attempt: a verbatim stream-supplied `worker`
+/// string, else `"<pool>#<thread>"` synthesized from the `pool`/`thread`
+/// fields, else [`UNKNOWN_WORKER`].
 fn worker_of(rec: &Value) -> String {
     if let Some(w) = rec.get("worker").and_then(Value::as_str) {
         return w.to_string();
@@ -951,9 +948,8 @@ fn worker_of(rec: &Value) -> String {
     }
 }
 
-/// Assemble the run summary from the fields the stream supplies (C22). The
-/// dependency-aware critical path is T43; here `critical_path_ns` mirrors the
-/// total elapsed as the fold's derivable lower bound.
+/// Assemble the run summary from the fields the stream supplies. The
+/// dependency-aware `critical_path_ns` is computed by [`critical_path_ns`].
 fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary {
     // Total elapsed = the maximum monotonic offset seen (run start is offset 0).
     let total_elapsed_ns = records.iter().map(offset_of).max().unwrap_or(0);
@@ -985,7 +981,7 @@ fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary
         .filter_map(|(n, f)| f.then_some(n))
         .collect();
 
-    // Zombie-pinned time and capacity (C10/C14): for each zombie-at-exit event,
+    // Zombie-pinned time and capacity: for each zombie-at-exit event,
     // the pinned capacity it carries, and the pinned time between the abandoned
     // attempt's terminal (timed-out) offset and the zombie-at-exit offset.
     let terminal_off: BTreeMap<(String, u64), u64> = records
@@ -1020,9 +1016,9 @@ fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary
         }
     }
 
-    // Critical-path time (C22 · T43): the longest dependency-respecting chain of
-    // node executing contributions, reconstructed from monotonic offsets alone
-    // (no edge list). See [`critical_path_ns`] and the ADR.
+    // Critical-path time: the longest dependency-respecting chain of node
+    // executing contributions, reconstructed from monotonic offsets alone (no
+    // edge list). See [`critical_path_ns`].
     let critical_path_ns = critical_path_ns(records, attempts);
 
     RunSummary {
@@ -1036,13 +1032,12 @@ fn assemble_summary(records: &[Value], attempts: &[AttemptRecord]) -> RunSummary
 }
 
 /// Compute the **critical-path time** — the longest dependency-respecting chain
-/// of node **executing** contributions (C22 · T43), fixed by
-/// `docs/adr/0001-critical-path-definition.md`.
+/// of node **executing** contributions.
 ///
 /// The fold has **no explicit dependency-edge list**; it reconstructs the
 /// dependency partial order from the stream's monotonic timing, because a node's
 /// `node-ready` record is emitted the instant all of its upstreams reach a
-/// terminal state (arch.md C11). The computation is therefore a pure function of
+/// terminal state. The computation is therefore a pure function of
 /// the artifact bytes — no store, no live graph, no I/O:
 ///
 /// 1. **Contribution** `c(v)` — the `executing` phase **summed across all of `v`'s

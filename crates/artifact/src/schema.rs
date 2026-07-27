@@ -1,45 +1,44 @@
-//! The T39 (ticket 050) published-artifact-schema validation helper.
+//! The published-artifact-schema validation helper.
 //!
-//! This module is the shared validation helper the rest of M3 leans on
-//! (arch.md C19 event stream, C20 graph artifact, C22 run artifact). It
-//! validates a candidate artifact or event-stream record against its
-//! **published, versioned JSON Schema** and returns an actionable error naming
-//! the artifact and the reason on failure. It is used by the emitters (T40
-//! graph, T42 fold) and the compatibility CI (T48), so those target one
-//! authoritative definition rather than inventing their own.
+//! This module is the shared validation helper for the event stream, graph
+//! artifact, and run artifact. It validates a candidate artifact or
+//! event-stream record against its **published, versioned JSON Schema** and
+//! returns an actionable error naming the artifact and the reason on failure. It
+//! is used by the emitters (graph and fold) and the compatibility CI, so those
+//! target one authoritative definition rather than inventing their own.
 //!
-//! # Where the schemas live (T4 §5)
+//! # Where the schemas live
 //!
-//! The published schemas are checked in at the repo-root path the T4 ADR (017)
-//! fixed: `schemas/<kind>/v<version>.schema.json` — one frozen file per artifact
+//! The published schemas are checked in at the repo-root path
+//! `schemas/<kind>/v<version>.schema.json` — one frozen file per artifact
 //! kind per released schema version. A version bump adds a new file beside the
 //! old one, which is never edited, so old readers keep validating old artifacts
-//! (C22 "prior-version fixtures remain parseable forever"). The fixture corpus
-//! (T0.10) sits at `tests/fixtures/corpus/<kind>/v<version>/`.
+//! (prior-version fixtures remain parseable forever). The fixture corpus
+//! sits at `tests/fixtures/corpus/<kind>/v<version>/`.
 //!
-//! # Evolution posture (T0.10)
+//! # Evolution posture
 //!
-//! Each family carries its own `schema_version` (`dagr.<kind>@<major>`, T4 §3).
+//! Each family carries its own `schema_version` (`dagr.<kind>@<major>`).
 //! Within a version, evolution is **additive-only**: no published schema sets
 //! `additionalProperties: false` on an evolving object, so an unknown future
 //! field validates (the reader ignores it) and a missing additively-introduced
-//! field is defaulted by the reader (T0.10 / Stability). The published `run`
-//! schema records that the fold reader (T42) declares which stream schema
-//! versions it reads (C22) — that declaration is T42's; this helper validates.
+//! field is defaulted by the reader. The published `run` schema records that the
+//! fold reader declares which stream schema versions it reads — that declaration
+//! is the fold's; this helper validates.
 //!
-//! # Dependency posture (T4 §4)
+//! # Dependency posture
 //!
-//! Validation uses the `jsonschema` crate (draft 2020-12), which the T4 ADR
-//! scopes to **CI/tests only**, not the runtime. This whole module is therefore
-//! behind the `schema-validation` cargo feature (default OFF); the runtime
-//! writers (T19/T40/T42) never pull `jsonschema`. `dagr-core` stays entirely
-//! dependency-free — schemas and validation live here, in `dagr-artifact`.
+//! Validation uses the `jsonschema` crate (draft 2020-12), scoped to **CI/tests
+//! only**, not the runtime. This whole module is therefore behind the
+//! `schema-validation` cargo feature (default OFF); the runtime writers never
+//! pull `jsonschema`. `dagr-core` stays entirely dependency-free — schemas and
+//! validation live here, in `dagr-artifact`.
 //!
-//! # Scope (T39)
+//! # Scope
 //!
-//! This module **publishes and validates** the schemas. It emits nothing (T40),
-//! folds nothing (T42), computes no fingerprint (T41), and seeds no scale corpus
-//! (T48) — those are named in the ticket's Out of scope.
+//! This module **publishes and validates** the schemas. It emits nothing,
+//! folds nothing, computes no fingerprint, and seeds no scale corpus — those
+//! live elsewhere.
 
 #![cfg(feature = "schema-validation")]
 
@@ -50,22 +49,22 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// The repo-root directory holding the published JSON Schema documents (T4 §5),
+/// The repo-root directory holding the published JSON Schema documents,
 /// relative to the workspace root: `schemas/`.
 pub const SCHEMA_DIR: &str = "schemas";
 
-/// The repo-root directory holding the fixture corpus (T0.10), relative to the
+/// The repo-root directory holding the fixture corpus, relative to the
 /// workspace root: `tests/fixtures/corpus/`.
 pub const CORPUS_DIR: &str = "tests/fixtures/corpus";
 
 /// The three durable artifact families dagr publishes a schema for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArtifactKind {
-    /// The C19 event stream (`dagr.event-stream@N`).
+    /// The event stream (`dagr.event-stream@N`).
     EventStream,
-    /// The C20 graph artifact (`dagr.graph@N`).
+    /// The graph artifact (`dagr.graph@N`).
     Graph,
-    /// The C22 run artifact (`dagr.run@N`).
+    /// The run artifact (`dagr.run@N`).
     Run,
 }
 
@@ -78,7 +77,7 @@ impl ArtifactKind {
     ];
 
     /// The on-disk directory segment for this kind under `schemas/` and
-    /// `tests/fixtures/corpus/` (T4 §5).
+    /// `tests/fixtures/corpus/`.
     #[must_use]
     pub fn dir_name(self) -> &'static str {
         match self {
@@ -88,7 +87,7 @@ impl ArtifactKind {
         }
     }
 
-    /// The `schema_version` name for this kind (T4 §3), e.g. `dagr.graph`.
+    /// The `schema_version` name for this kind, e.g. `dagr.graph`.
     #[must_use]
     pub fn schema_name(self) -> &'static str {
         match self {
@@ -99,7 +98,7 @@ impl ArtifactKind {
     }
 
     /// The full `schema_version` string a `version`-numbered artifact of this
-    /// kind carries, e.g. `dagr.run@1` (T4 §3).
+    /// kind carries, e.g. `dagr.run@1`.
     #[must_use]
     pub fn schema_version_string(self, version: u32) -> String {
         format!("{}@{version}", self.schema_name())
@@ -115,7 +114,7 @@ fn workspace_root() -> PathBuf {
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
-/// The published-schema file path for `kind`@`version` (T4 §5):
+/// The published-schema file path for `kind`@`version`:
 /// `schemas/<kind>/v<version>.schema.json`.
 #[must_use]
 pub fn schema_path(kind: ArtifactKind, version: u32) -> PathBuf {
@@ -147,8 +146,8 @@ pub fn published_schema_versions(kind: ArtifactKind) -> Vec<u32> {
 }
 
 /// The outcome of a failed schema validation, naming the artifact and the
-/// reason so tests and CI can assert on it (T39 "returns an actionable error
-/// identifying the artifact and reason on failure").
+/// reason so tests and CI can assert on it — an actionable error identifying the
+/// artifact and reason on failure.
 #[derive(Debug)]
 pub struct SchemaValidationError {
     /// Human-readable identity of the artifact that failed (kind + version, and
@@ -209,7 +208,7 @@ fn load_validator(
 /// Returns `Ok(())` when the instance validates, or a [`SchemaValidationError`]
 /// naming the artifact (`dagr.<kind>@<version>`) and the failing reason (the
 /// JSON-pointer instance path and the validator's message) on failure — the
-/// actionable error T40/T42/T48 assert on.
+/// actionable error the emitters and CI assert on.
 ///
 /// # Errors
 ///
@@ -264,7 +263,7 @@ pub fn validate_bytes(
 }
 
 /// Validate every checked-in corpus fixture against its declared version's
-/// published schema (T0.10 / Stability: "a corpus parsed in CI forever after").
+/// published schema — a corpus parsed in CI forever after.
 ///
 /// Walks `tests/fixtures/corpus/<kind>/v<version>/*.json`, validating each file
 /// against `schemas/<kind>/v<version>.schema.json`. On the first failure it
@@ -272,9 +271,9 @@ pub fn validate_bytes(
 /// CI step fails loudly. Returns `Ok(())` only if every corpus fixture
 /// validates.
 ///
-/// This is the library half of the CI validation step T39 ships; T48 owns the
-/// enduring compatibility gate and the ten-thousand-attempt scale artifact
-/// (both named in the ticket's Out of scope) — this walker is the seed.
+/// This is the library half of the CI validation step; the enduring
+/// compatibility gate and the ten-thousand-attempt scale artifact live
+/// elsewhere — this walker is the seed.
 ///
 /// # Errors
 ///
@@ -319,10 +318,10 @@ pub fn check_corpus() -> Result<(), SchemaValidationError> {
     Ok(())
 }
 
-// === T48 — the enduring compatibility gate =================================
+// === The enduring compatibility gate =======================================
 //
-// T39 (above) publishes and validates the schemas and seeds the corpus walker.
-// T48 turns that into the standing compatibility CI gate: a corpus that is
+// The helpers above publish and validate the schemas and seed the corpus walker.
+// This section is the standing compatibility CI gate: a corpus that is
 // COMPLETE (a fixture per released version, so the corpus can never fall behind a
 // schema bump) and evolution that is provably ADDITIVE-ONLY (no published schema
 // closes an object, so a prior reader never rejects a newer artifact). The
@@ -362,8 +361,8 @@ pub fn corpus_versions(kind: ArtifactKind) -> Vec<u32> {
 /// published schema version has at least one checked-in corpus fixture.
 ///
 /// This is the standing gate that fails the day a schema version is introduced
-/// without a matching new corpus member (arch.md Stability / C22 · "one artifact
-/// per released schema version, parsed in CI forever after").
+/// without a matching new corpus member — one artifact per released schema
+/// version, parsed in CI forever after.
 ///
 /// The event stream is not a durable *artifact* a run leaves behind the way the
 /// graph and run artifacts are, but its corpus is checked the same way when
@@ -387,8 +386,8 @@ pub fn assert_corpus_complete() -> Result<(), SchemaValidationError> {
 /// The pure form of [`assert_corpus_complete`]: given the published versions and
 /// the corpus versions present for each kind, report the first published version
 /// with no corpus fixture. Separated so the completeness rule is unit-testable
-/// without touching the repo (T48 test plan: "a new schema version requires a new
-/// corpus fixture").
+/// without touching the repo — a new schema version requires a new corpus
+/// fixture.
 ///
 /// # Errors
 ///
@@ -421,8 +420,8 @@ pub fn corpus_completeness_over(
 /// Walk the published schema document for `kind`@`version` and return every path
 /// at which it VIOLATES additive-only evolution — i.e. closes an object with
 /// `additionalProperties: false` or `unevaluatedProperties: false`, which would
-/// let a reader reject a future additive field (arch.md Stability / T0.10:
-/// "evolution within a version is additive-only; readers ignore unknown fields").
+/// let a reader reject a future additive field (evolution within a version is
+/// additive-only; readers ignore unknown fields).
 /// An empty result means the schema is additive-safe.
 ///
 /// # Errors

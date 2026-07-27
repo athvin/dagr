@@ -1,15 +1,14 @@
-//! T48 (ticket 059) — **artifact validation and compatibility CI**. Written
-//! first, TDD.
+//! **Artifact validation and compatibility CI**. Written first, TDD.
 //!
-//! This is the enduring compatibility gate arch.md `### C22 · Run artifact` and
-//! the Stability section promise: *"a checked-in fixture corpus with one artifact
-//! per released schema version is parsed in CI forever after"*, evolution is
+//! This is the enduring compatibility gate the run-artifact contract and the
+//! Stability posture promise: *"a checked-in fixture corpus with one artifact per
+//! released schema version is parsed in CI forever after"*, evolution is
 //! *"additive-only within a version"*, and a run artifact whose size stays
 //! *"proportional to attempt count"* keeps the tooling honest at scale (the
 //! ten-thousand-attempt fixture in the Performance envelope).
 //!
-//! Where T39 (`artifact_schemas.rs`) proves the *published schemas accept the
-//! valid shapes*, and T40/T42 prove *the real producers emit shapes that
+//! Where `artifact_schemas.rs` proves the *published schemas accept the valid
+//! shapes*, and the fold suites prove *the real producers emit shapes that
 //! validate*, THIS suite proves the three things that outlive any single
 //! producer:
 //!
@@ -32,9 +31,9 @@
 //! size-proportional to attempt count.
 //!
 //! Gated behind the `schema-validation` feature (default OFF), which pulls the
-//! CI-/dev-scoped `jsonschema` validator (T4 ADR 017 §4); CI runs it with the
-//! feature ON in a dedicated step, mirroring T39/T40/T42. The shipped binary and
-//! the bare `cargo test --workspace` never activate it.
+//! CI-/dev-scoped `jsonschema` validator; CI runs it with the feature ON in a
+//! dedicated step, mirroring the other schema suites. The shipped binary and the
+//! bare `cargo test --workspace` never activate it.
 
 #![cfg(feature = "schema-validation")]
 
@@ -97,10 +96,10 @@ fn read_json(path: &Path) -> Value {
 
 #[test]
 fn frozen_corpus_round_trips_by_enumerating_the_directory() {
-    // The standing CI obligation (arch.md Stability / C22): every checked-in
-    // corpus fixture, from every released schema version, validates against its
-    // declared version's published schema. The library walker enumerates the
-    // directory so a newly added fixture is covered with no test edit.
+    // The standing CI obligation: every checked-in corpus fixture, from every
+    // released schema version, validates against its declared version's published
+    // schema. The library walker enumerates the directory so a newly added fixture
+    // is covered with no test edit.
     check_corpus().unwrap_or_else(|e| panic!("frozen corpus must parse forever after: {e}"));
 
     // Non-vacuous: the corpus is not empty — there is at least one graph and one
@@ -154,8 +153,8 @@ fn a_planted_malformed_corpus_fixture_is_caught_by_the_walker() {
 
 #[test]
 fn every_published_schema_is_additive_only() {
-    // The additive-only invariant (arch.md Stability / T0.10) has a mechanical
-    // shape: no published schema object may set `additionalProperties: false` (or
+    // The additive-only invariant has a mechanical shape: no published schema
+    // object may set `additionalProperties: false` (or
     // `unevaluatedProperties: false`), because a closed object rejects a future
     // additive field — breaking a prior reader on a newer artifact. The drift
     // guard walks every published schema document and asserts none closes.
@@ -292,7 +291,7 @@ fn a_new_schema_version_without_a_fixture_is_reported_incomplete() {
 // === (4) The ten-thousand-attempt scale artifact stays honest ==============
 
 /// The number of attempts in the frozen scale corpus member — the
-/// ten-thousand-attempt run artifact named in arch.md's Performance envelope.
+/// ten-thousand-attempt run artifact from the Performance envelope.
 const SCALE_ATTEMPTS: u32 = 10_000;
 
 /// A sink capturing every appended event line so the test can fold the exact
@@ -429,7 +428,7 @@ fn scale_artifact_is_generated_from_the_real_producers_validates_and_parses() {
         "the scale artifact carries one record per attempt"
     );
 
-    // (c) Phase durations sum exactly to each attempt total (C22), even at scale.
+    // (c) Phase durations sum exactly to each attempt total, even at scale.
     for a in art.attempts() {
         let sum: u64 = a.phase_durations_ns().values().copied().sum();
         assert_eq!(sum, a.total_elapsed_ns(), "phases sum to the attempt total");
@@ -443,8 +442,8 @@ fn scale_artifact_size_is_proportional_to_attempt_count() {
     // marginal cost is bounded by a constant, independent of n.
     const PER_ATTEMPT_BYTE_BOUND: u64 = 512;
 
-    // Keep the tooling honest at scale (arch.md Performance envelope): the
-    // serialized artifact size grows PROPORTIONALLY to attempt count, not
+    // Keep the tooling honest at scale (the Performance envelope): the serialized
+    // artifact size grows PROPORTIONALLY to attempt count, not
     // super-linearly. Compare a small and the full scale artifact: the per-attempt
     // marginal bytes at 10k must not exceed a generous per-attempt bound derived
     // from the small artifact — a quadratic blow-up (e.g. an O(n^2) roster copied
@@ -496,9 +495,9 @@ fn the_frozen_scale_corpus_member_matches_a_real_generation() {
         .unwrap_or_else(|e| panic!("scale corpus member is checked in: {e}"));
 
     // The frozen member is stored as the producer's exact CANONICAL JSON (sorted
-    // keys, compact) — folding the same stream twice is byte-identical (T4 §6), so
-    // this is a byte-for-byte drift check, not a value comparison. Compact form
-    // keeps a ten-thousand-attempt fixture as small as possible in the repo.
+    // keys, compact) — folding the same stream twice is byte-identical, so this is
+    // a byte-for-byte drift check, not a value comparison. Compact form keeps a
+    // ten-thousand-attempt fixture as small as possible in the repo.
     let produced = fold_stream(&scale_stream(SCALE_ATTEMPTS), &["worker-node".to_string()])
         .expect("fold")
         .to_canonical_json();
@@ -538,18 +537,18 @@ fn regenerate_scale_corpus() {
     validate_value(ArtifactKind::Run, 1, &value).expect("regenerated scale fixture validates");
 }
 
-// === corpus semantic assertions (C22 acceptance over frozen fixtures) ======
+// === corpus semantic assertions over frozen fixtures =======================
 //
-// The C22 acceptance criteria the fold proves on live output (T42) must also hold
-// on the FROZEN corpus — these are the checks a prior-version fixture keeps
+// The run-artifact acceptance criteria the fold proves on live output must also
+// hold on the FROZEN corpus — these are the checks a prior-version fixture keeps
 // satisfying "forever after", independent of any producer still existing.
 
 #[test]
 fn phase_durations_sum_exactly_on_every_corpus_run_fixture() {
-    // arch.md C22: "phase durations for an attempt sum exactly to that attempt's
-    // total". Over every run corpus fixture, every attempt's named phase durations
-    // are non-negative integers (the total is their sum by construction, so the
-    // check is that they are a well-formed integer partition the schema accepts —
+    // "Phase durations for an attempt sum exactly to that attempt's total". Over
+    // every run corpus fixture, every attempt's named phase durations are
+    // non-negative integers (the total is their sum by construction, so the check
+    // is that they are a well-formed integer partition the schema accepts —
     // already validated — here we assert the sum is computable and each phase is a
     // u64).
     for version in published_schema_versions(ArtifactKind::Run) {
@@ -572,9 +571,9 @@ fn phase_durations_sum_exactly_on_every_corpus_run_fixture() {
                     });
                     sum = sum.checked_add(ns).expect("phase sum fits in u64");
                 }
-                // The attempt total is the sum of phases by definition (C22); the
-                // schema forbids a non-integer phase, so a fixture that violated
-                // this could not be a valid corpus member.
+                // The attempt total is the sum of phases by definition; the schema
+                // forbids a non-integer phase, so a fixture that violated this
+                // could not be a valid corpus member.
                 let _ = sum;
             }
         }
@@ -583,8 +582,8 @@ fn phase_durations_sum_exactly_on_every_corpus_run_fixture() {
 
 #[test]
 fn no_environment_value_outside_the_allowlist_appears_in_any_corpus_fixture() {
-    // arch.md C22 "no environment value outside the declared allowlist appears in
-    // any artifact", asserted over the frozen corpus with a planted sentinel: the
+    // "No environment value outside the declared allowlist appears in any
+    // artifact", asserted over the frozen corpus with a planted sentinel: the
     // sentinel string (which no corpus fixture declares in its captured_environment
     // allowlist) appears NOWHERE in any corpus artifact's bytes.
     const SENTINEL: &str = "SENTINEL_NON_ALLOWLISTED_abc123XYZ";

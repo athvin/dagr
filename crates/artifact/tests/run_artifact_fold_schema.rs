@@ -1,18 +1,17 @@
-//! C22 · Run-artifact **fold** schema round-trip — ticket T42 (053). Written
-//! first, TDD.
+//! Run-artifact **fold** schema round-trip. Written first, TDD.
 //!
-//! The load-bearing interlock with T39 (ticket 050): a **real folded** run
-//! artifact validates against the published `schemas/run/v1.schema.json` via the
-//! T39 validation helper (`dagr_artifact::schema`), across the full-run,
+//! The load-bearing interlock with the published-schema suite: a **real folded**
+//! run artifact validates against the published `schemas/run/v1.schema.json` via
+//! the validation helper (`dagr_artifact::schema`), across the full-run,
 //! interrupted, and pre-execution-failure variants. This proves the fold emits
 //! to the *published* contract, and that the fold-reader version declaration the
-//! fold adds is additive (unknown fields validate, T0.10). A deliberately
-//! corrupted copy is rejected — proving the check has teeth.
+//! fold adds is additive (unknown fields validate). A deliberately corrupted copy
+//! is rejected — proving the check has teeth.
 //!
 //! Gated behind the `schema-validation` feature (default OFF), which pulls the
-//! CI-/dev-scoped `jsonschema` validator (T4 ADR 017 §4); CI runs it with the
-//! feature ON in a dedicated step, mirroring T39/T40. The shipped binary and the
-//! bare `cargo test --workspace` never activate it.
+//! CI-/dev-scoped `jsonschema` validator; CI runs it with the feature ON in a
+//! dedicated step. The shipped binary and the bare `cargo test --workspace` never
+//! activate it.
 
 #![cfg(feature = "schema-validation")]
 
@@ -150,7 +149,7 @@ fn folded_full_run_validates_against_published_schema() {
         .unwrap_or_else(|e| panic!("REAL folded run artifact must validate: {e}"));
 
     // The fold-reader declaration is additive and validates (unknown fields
-    // ignored, T0.10).
+    // ignored).
     assert!(
         value.get("fold_reader").is_some(),
         "fold declares its reader version"
@@ -217,16 +216,16 @@ fn folded_assembly_failed_validates() {
         .unwrap_or_else(|e| panic!("folded assembly-failed artifact must validate: {e}"));
 }
 
-// === GAP 1: end-to-end REAL-writer → fold → run-schema round-trip ==========
+// === End-to-end REAL-writer → fold → run-schema round-trip =================
 //
-// The prior tests fold *hand-built* stream bytes — they never prove the real C19
-// writer (`EventStreamWriter`, reconciled to the published event-stream schema on
-// main) and the C22 fold agree. These two tests drive an **actual writer** to
-// produce real event-stream bytes, fold THOSE bytes, and assert the folded
-// artifact validates against `schemas/run/v1.schema.json`. If the writer's wire
-// shape (`kind` names, top-level field spread, `attempt-outcome` payload) and the
-// fold's reader ever diverge, the fold sees the wrong records and these
-// non-vacuous assertions fail (see the per-assertion notes).
+// The prior tests fold *hand-built* stream bytes — they never prove the real
+// `EventStreamWriter` (reconciled to the published event-stream schema) and the
+// fold agree. These two tests drive an **actual writer** to produce real
+// event-stream bytes, fold THOSE bytes, and assert the folded artifact validates
+// against `schemas/run/v1.schema.json`. If the writer's wire shape (`kind` names,
+// top-level field spread, `attempt-outcome` payload) and the fold's reader ever
+// diverge, the fold sees the wrong records and these non-vacuous assertions fail
+// (see the per-assertion notes).
 
 /// A sink that keeps every appended line, so the test can recover the exact bytes
 /// the real writer emitted and hand them straight to the fold.
@@ -529,8 +528,8 @@ fn e2e_real_writer_truncated_stream_folds_interrupted_and_validates() {
     let graph_nodes = ["load".to_string(), "sink".to_string(), "orphan".to_string()];
     let art = fold_stream(&bytes, &graph_nodes).expect("fold tolerates one trailing partial");
 
-    // Interrupted representation (GAP 2, first-class field): the crash-truncated
-    // run reads `overall_outcome = cancelled` INSIDE the closed enum, and the
+    // Interrupted representation (first-class field): the crash-truncated run
+    // reads `overall_outcome = cancelled` INSIDE the closed enum, and the
     // distinction lives in the first-class `interrupted` flag.
     assert!(art.is_interrupted(), "no run-finished ⇒ interrupted");
     assert!(
@@ -568,15 +567,13 @@ fn e2e_real_writer_truncated_stream_folds_interrupted_and_validates() {
     );
 }
 
-// === T43: a REAL folded artifact WITH the critical path validates ==========
+// === A REAL folded artifact WITH the critical path validates ===============
 //
-// T42 populated `critical_path_ns` with a conservative placeholder; T43 makes it
-// the true dependency-respecting longest chain. This test folds a real two-node
-// DEPENDENCY CHAIN stream, asserts the summary now carries the dependency-aware
-// critical path (a→b executing chain, NOT the single longest attempt), and
-// asserts the artifact — with that critical path — validates against the
-// UNMODIFIED `schemas/run/v1.schema.json` (`critical_path_ns` is an existing
-// summary field; T43 edits no schema).
+// This test folds a real two-node DEPENDENCY CHAIN stream, asserts the summary
+// carries the dependency-aware critical path (the a→b executing chain, NOT the
+// single longest attempt), and asserts the artifact — with that critical path —
+// validates against the UNMODIFIED `schemas/run/v1.schema.json` (`critical_path_ns`
+// is an existing summary field; no schema edit is required).
 
 /// A two-node chain a→b with known offsets: `a` executes 100→1000 (900ns), `b`
 /// becomes ready only after `a` terminal (1000) and executes 1000→3000 (2000ns).

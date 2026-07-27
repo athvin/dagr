@@ -1,11 +1,11 @@
-//! C19 crash-safety and I/O fault-injection suite — ticket T27 (037). TDD.
+//! Crash-safety and I/O fault-injection suite. TDD.
 //!
-//! This is the fault-injection suite C28 requires — *"kill-points around every
-//! event write, disk-full, and slow or failing sinks"* — driven against the
-//! **merged** C19 event-stream writer (T19, `dagr_artifact::event_stream`) through
-//! an **injected controllable test sink**, exercised against the run-store /
-//! record-header / flush contract fixed in T0.6 (012). It proves two things the
-//! spec asserts but nothing else yet checks (arch.md `### C19 · Event stream`):
+//! This is the fault-injection suite the crash-safety acceptance requires —
+//! *"kill-points around every event write, disk-full, and slow or failing sinks"*
+//! — driven against the **merged** event-stream writer
+//! (`dagr_artifact::event_stream`) through an **injected controllable test sink**,
+//! exercised against the run-store / record-header / flush contract. It proves two
+//! things the spec asserts but nothing else yet checks:
 //!
 //! 1. **Crash tolerance.** Killing the process at any moment leaves a stream whose
 //!    every record but at most one trailing partial is valid and parseable, whose
@@ -16,38 +16,36 @@
 //! 2. **Sink-failure surfacing.** An induced mid-run / disk-full / slow sink
 //!    fault surfaces the documented `SinkFault` carrying the verbatim reason
 //!    `"event stream unwritable"` (the run-level fault the run loop reacts to by
-//!    moving to cancelling and exiting with the distinct sink-failure code —
-//!    T0.6 §5), asserted **by its documented cause, never by a magic number**, and
-//!    the complete records preceding the fault remain a valid, gapless prefix.
+//!    moving to cancelling and exiting with the distinct sink-failure code),
+//!    asserted **by its documented cause, never by a magic number**, and the
+//!    complete records preceding the fault remain a valid, gapless prefix.
 //!
-//! # What this suite is, and what it is NOT (scope — T27)
+//! # What this suite is, and what it is NOT (scope)
 //!
-//! It asserts the guarantees the **already-merged** writer/reader (T19) and the
-//! injected-sink seam (T0.6) already provide; it changes **no** production
-//! behavior. It does not build or modify the writer (T19), the run-loop driver
-//! (T24), or the sink/base contract (T0.6); it injects fault variants of that sink
-//! and asserts against the contract. The OS-signal / final-flush / temp-cleanup
-//! wiring is T36; the fold of a crashed stream into a run artifact is C22/C26
-//! (T42/T68) — this suite asserts only that the raw stream survives the crash. The
-//! full two-concurrent-runs test is T67; the concurrency check here is scoped to
-//! the fault suite's disjointness-and-validity assertion.
+//! It asserts the guarantees the **already-merged** writer/reader and the
+//! injected-sink seam already provide; it changes **no** production behavior. It
+//! does not build or modify the writer, the run-loop driver, or the sink/base
+//! contract; it injects fault variants of that sink and asserts against the
+//! contract. The OS-signal / final-flush / temp-cleanup wiring, and the fold of a
+//! crashed stream into a run artifact, live elsewhere — this suite asserts only
+//! that the raw stream survives the crash. The full two-concurrent-runs test lives
+//! elsewhere too; the concurrency check here is scoped to the fault suite's
+//! disjointness-and-validity assertion.
 //!
 //! # How a "crash" is simulated (deterministic-in-CI, seeded)
 //!
-//! Real process kills are non-deterministic and can hang or flake CI. Per the T27
-//! process rules this suite simulates a crash as a **truncation of the byte stream
-//! the real writer produced**: it drives the genuine [`EventStreamWriter`] through
-//! a capturing sink to obtain the exact bytes an abrupt kill would have left on
-//! disk (the default local-file sink does not fsync per event — T0.6 §6, so the
-//! on-disk bytes are exactly the appended-so-far prefix, possibly cut mid-line),
-//! truncates that buffer at **seeded** byte offsets landing *at*, *before*, and
-//! *part-way through* individual event writes, and feeds the truncation to the
-//! **real tolerant reader** [`read_records`]. This exercises the identical
-//! invariant an uncatchable-signal kill would (a valid prefix with at most one
-//! trailing partial) with none of the process-kill nondeterminism — and every
-//! randomized trial records its seed so a CI failure reproduces exactly. The
-//! resolution of the "real child kill vs deterministic truncation" tension is
-//! recorded in the ticket's Open questions.
+//! Real process kills are non-deterministic and can hang or flake CI. This suite
+//! simulates a crash as a **truncation of the byte stream the real writer
+//! produced**: it drives the genuine [`EventStreamWriter`] through a capturing
+//! sink to obtain the exact bytes an abrupt kill would have left on disk (the
+//! default local-file sink does not fsync per event, so the on-disk bytes are
+//! exactly the appended-so-far prefix, possibly cut mid-line), truncates that
+//! buffer at **seeded** byte offsets landing *at*, *before*, and *part-way
+//! through* individual event writes, and feeds the truncation to the **real
+//! tolerant reader** [`read_records`]. This exercises the identical invariant an
+//! uncatchable-signal kill would (a valid prefix with at most one trailing
+//! partial) with none of the process-kill nondeterminism — and every randomized
+//! trial records its seed so a CI failure reproduces exactly.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -62,22 +60,22 @@ use dagr_artifact::event_stream::{
 };
 
 // ===========================================================================
-// Exit code by CAUSE, never by a literal (C26 / T0.6 §5)
+// Exit code by CAUSE, never by a literal
 // ===========================================================================
 
 /// The distinct **sink-failure cause** every sink-failure assertion resolves
 /// through — the documented cancellation reason a [`SinkFault`] carries, the
-/// verbatim arch.md C19 string re-exported by the writer as
+/// verbatim event-stream string re-exported by the writer as
 /// [`EVENT_STREAM_UNWRITABLE`]. The concrete numeric exit code and its place in
-/// the C26 exit-code precedence table are fixed by the CLI ticket (T55, still
-/// `unmapped`); until then the **cause** is the stable, documented identifier, so
-/// this suite compares against the named cause and **never hard-codes a magic
-/// exit-code number** (T0.6 §5: "exit codes are named by cause, not by number").
-/// Renumbering the table in one place therefore keeps these tests correct.
+/// the exit-code precedence table are fixed by the CLI, still unmapped here; until
+/// then the **cause** is the stable, documented identifier, so this suite compares
+/// against the named cause and **never hard-codes a magic exit-code number** (exit
+/// codes are named by cause, not by number). Renumbering the table in one place
+/// therefore keeps these tests correct.
 const SINK_FAILURE_CAUSE: &str = EVENT_STREAM_UNWRITABLE;
 
-/// The run outcome a sink fault drives the run toward: `cancelled` (arch.md C19:
-/// "the run moves to cancelling with reason 'event stream unwritable'"). A run
+/// The run outcome a sink fault drives the run toward: `cancelled` ("the run
+/// moves to cancelling with reason 'event stream unwritable'"). A run
 /// that stops because it could not record what it did is a **cancelled** run, not
 /// a `succeeded` one — this is the outcome the sink-failure exit code is selected
 /// from by cause.
@@ -109,8 +107,8 @@ fn assert_is_sink_failure(fault: &SinkFault) {
 
 /// A tiny `SplitMix64` PRNG. Dependency-free (no `rand`, deny/audit untouched)
 /// and fully deterministic: a recorded seed replays the exact same kill/injection
-/// point, so a CI failure is diagnosable rather than a flake (T27 definition of
-/// done: "every randomized scenario records and reports its seed").
+/// point, so a CI failure is diagnosable rather than a flake — every randomized
+/// scenario records and reports its seed.
 struct SeededRng {
     state: u64,
     seed: u64,
@@ -139,14 +137,14 @@ impl SeededRng {
 }
 
 // ===========================================================================
-// Injected controllable test sinks (the C19 injection seam — T0.6 §1)
+// Injected controllable test sinks (the injection seam)
 // ===========================================================================
 
 /// A capturing sink that keeps every appended byte in order, so a test can obtain
 /// the exact on-disk bytes and then truncate them to simulate an abrupt kill. The
-/// default local-file sink does not fsync per append (T0.6 §6), so the bytes a
-/// crash leaves are exactly the concatenation of the appends that completed —
-/// which is what this sink records.
+/// default local-file sink does not fsync per append, so the bytes a crash leaves
+/// are exactly the concatenation of the appends that completed — which is what
+/// this sink records.
 #[derive(Clone, Default)]
 struct CaptureSink {
     bytes: Arc<Mutex<Vec<u8>>>,
@@ -326,7 +324,7 @@ fn drive_fixture<S: EventSink>(w: &mut EventStreamWriter<S, TickClock>) -> usize
         w.attempt_started(node, 1).unwrap();
         w.attempt_succeeded(node, 1).unwrap();
         // The single rich attempt-outcome record, alongside the per-transition
-        // attempt-succeeded event (arch.md l.331) — what a real run now emits.
+        // attempt-succeeded event — what a real run now emits.
         w.attempt_outcome(AttemptOutcomeRecord::new(node, 1, "succeeded"))
             .unwrap();
         w.node_terminal(node, TerminalState::Succeeded).unwrap();
@@ -365,7 +363,7 @@ fn assert_gapless_from_zero(records: &[serde_json::Value]) {
     );
 }
 
-/// Assert every record carries the run identity and the schema version (C19).
+/// Assert every record carries the run identity and the schema version.
 fn assert_every_record_identified(records: &[serde_json::Value], run_id: &str) {
     for rec in records {
         assert_eq!(
@@ -562,7 +560,7 @@ fn a_one_record_stream_still_identifies_its_run() {
         .get("header")
         .and_then(serde_json::Value::as_object)
         .unwrap();
-    // Every header field known at start is present (C19: full artifact header).
+    // Every header field known at start is present (the full artifact header).
     // The captured environment is `captured_environment` in the published schema.
     for field in [
         "pipeline",
@@ -778,9 +776,9 @@ fn slow_or_unwritable_sink_at_shutdown_is_a_bounded_wait_not_a_hang() {
 /// **Sink-failure exit code is asserted by cause, not by literal.** Each
 /// sink-failure scenario compares the observed fault against the named
 /// sink-failure *cause* and its `cancelled` outcome, resolved through the
-/// documented mapping — so renumbering the C26 exit-code table in one place keeps
-/// the tests correct and no test hard-codes a magic number. This test pins the
-/// mapping itself.
+/// documented mapping — so renumbering the exit-code table in one place keeps the
+/// tests correct and no test hard-codes a magic number. This test pins the mapping
+/// itself.
 #[test]
 fn sink_failure_is_asserted_by_cause_not_by_literal() {
     // A sink fault always carries the same documented cause, whatever the
@@ -795,8 +793,8 @@ fn sink_failure_is_asserted_by_cause_not_by_literal() {
     // code is selected from — by cause, never a literal number.
     assert_eq!(SINK_FAILURE_OUTCOME, RunOutcome::Cancelled);
     assert_eq!(SINK_FAILURE_OUTCOME.as_str(), "cancelled");
-    // The cause string is the exact arch.md C19 identifier (the stable mapping
-    // key the C26 table / T55 renumbers behind).
+    // The cause string is the exact documented identifier (the stable mapping key
+    // the exit-code table renumbers behind).
     assert_eq!(SINK_FAILURE_CAUSE, "event stream unwritable");
 }
 
@@ -849,8 +847,8 @@ fn run_failure_is_not_masked_by_self_inflicted_cancellation() {
 /// of the same fixture binary against the same base write under their own
 /// `<base>/<pipeline>/<run-id>/` directory (disjoint paths), each stream is
 /// independently valid with gapless sequences, and concatenating the two
-/// partitions cleanly by the run identity every record carries. (Overlaps T67's
-/// remit; here it is the fault-suite's concurrency-safety check only.)
+/// partitions cleanly by the run identity every record carries. (Here it is the
+/// fault-suite's concurrency-safety check only.)
 #[test]
 fn two_concurrent_runs_produce_disjoint_individually_valid_streams() {
     // Drive two runs on separate threads against the same base+pipeline.
@@ -865,7 +863,7 @@ fn two_concurrent_runs_produce_disjoint_individually_valid_streams() {
     let (path_a, bytes_a, n_a) = run("run-concurrent-A").join().unwrap();
     let (path_b, bytes_b, n_b) = run("run-concurrent-B").join().unwrap();
 
-    // Disjoint per-run directories — the path embeds the run id (T0.6 §3).
+    // Disjoint per-run directories — the path embeds the run id.
     assert_ne!(path_a, path_b, "the two runs write disjoint stream paths");
     assert!(path_a.contains("run-concurrent-A"));
     assert!(path_b.contains("run-concurrent-B"));
@@ -887,7 +885,7 @@ fn two_concurrent_runs_produce_disjoint_individually_valid_streams() {
     }
 
     // Concatenate both streams and partition cleanly by run identity — cross-run
-    // analysis is safe concatenation, no shared index (C19 / T0.6 §10).
+    // analysis is safe concatenation, no shared index.
     let mut all = bytes_a.clone();
     all.extend_from_slice(&bytes_b);
     let merged = read_records(&all).unwrap();

@@ -1,10 +1,9 @@
-//! C22 · Run **summary** headline numbers — total elapsed and critical-path
-//! time (ticket T43, 054). Written first, TDD.
+//! Run **summary** headline numbers — total elapsed and critical-path time.
+//! Written first, TDD.
 //!
 //! These fixtures build hand-crafted event streams with *known* monotonic
-//! offsets and assert the two summary numbers the fold computes on top of the
-//! T42 artifact. The critical-path definition is fixed by
-//! `docs/adr/0001-critical-path-definition.md`: each node contributes the SUM of
+//! offsets and assert the two summary numbers the fold computes on top of the run
+//! artifact. The critical-path definition is: each node contributes the SUM of
 //! its attempts' `executing` phase (retries collapse; ready-wait, permit-wait,
 //! backoff, and zombie time are EXCLUDED), dependency predecessors are
 //! reconstructed from `node-ready`/terminal timing, and critical-path time is
@@ -13,9 +12,9 @@
 //!
 //! The fold has no explicit edge list: it reconstructs the dependency partial
 //! order from the fact that a node's `node-ready` offset is the instant its
-//! slowest upstream reached terminal (arch.md C11). So each fixture emits the
-//! full `node-ready` / `node-admitted` / `attempt-started` / `attempt-outcome` /
-//! `node-terminal` lifecycle with offsets that encode the intended graph shape.
+//! slowest upstream reached terminal. So each fixture emits the full `node-ready`
+//! / `node-admitted` / `attempt-started` / `attempt-outcome` / `node-terminal`
+//! lifecycle with offsets that encode the intended graph shape.
 
 use serde_json::{json, Value};
 
@@ -223,9 +222,9 @@ fn structure_limited_run_reads_as_structure_limited() {
 fn resource_limited_run_reads_as_resource_limited() {
     // Four INDEPENDENT siblings (no dependencies), all ready at offset 0, but a
     // one-permit pool serialized them: each waits behind the previous, then
-    // executes 1000ns. Permit-wait is EXCLUDED from the path (ADR), so the
-    // critical path is the single longest node's executing time (1000ns), while
-    // total elapsed is the full serialized wall (4000ns).
+    // executes 1000ns. Permit-wait is EXCLUDED from the path, so the critical path
+    // is the single longest node's executing time (1000ns), while total elapsed is
+    // the full serialized wall (4000ns).
     let mut t = Timeline::new();
     // All ready at 0; admitted staggered (permit-wait), execute 1000ns each.
     t.node_run("s0", 0, 0, 0, 1_000, "succeeded", &[]);
@@ -287,8 +286,8 @@ fn critical_path_respects_dependencies_not_raw_duration() {
 #[test]
 fn retries_collapse_per_the_adr() {
     // A single node on the (trivial) critical chain has three attempts: two
-    // failed with backoff, one succeeded. Per the ADR the node contributes the
-    // SUM of its attempts' `executing` phases; backoff is EXCLUDED.
+    // failed with backoff, one succeeded. The node contributes the SUM of its
+    // attempts' `executing` phases; backoff is EXCLUDED.
     //   attempt 1: started 100, outcome 300  → executing 200
     //   attempt 2: started 500, outcome 800  → executing 300 (backoff 300..500)
     //   attempt 3: started 1200, outcome 1700 → executing 500 (backoff 800..1200)
@@ -355,9 +354,9 @@ fn retries_collapse_per_the_adr() {
 #[test]
 fn permit_wait_treatment_matches_the_adr() {
     // Two otherwise-identical chains a→b, differing ONLY in b's permit-wait: one
-    // with zero permit-wait, one with a large permit-wait. Per the ADR
-    // (permit-wait EXCLUDED), the two critical-path numbers are EQUAL — the added
-    // permit-wait makes no difference on the path.
+    // with zero permit-wait, one with a large permit-wait. Permit-wait is
+    // EXCLUDED, so the two critical-path numbers are EQUAL — the added permit-wait
+    // makes no difference on the path.
     let build = |b_admitted: u64, b_started: u64, b_outcome: u64, finish: u64| {
         let mut t = Timeline::new();
         t.node_run("a", 0, 0, 0, 1_000, "succeeded", &[]);
@@ -390,9 +389,9 @@ fn permit_wait_treatment_matches_the_adr() {
 #[test]
 fn zombie_pinned_time_is_separated_from_the_path() {
     // A node timed out at 1500 (executing 1000 from started 500), but its thread
-    // ran on and was a zombie at exit (4000), pinning 2500ns. Per the ADR the
-    // zombie overrun is NOT on the critical path; it stays in its own summary
-    // field. Critical path = the node's executing-to-terminal (1000), not 3500.
+    // ran on and was a zombie at exit (4000), pinning 2500ns. The zombie overrun
+    // is NOT on the critical path; it stays in its own summary field. Critical
+    // path = the node's executing-to-terminal (1000), not 3500.
     let mut t = Timeline::new();
     t.push(0, "node-ready", &[("node", json!("slow"))]);
     t.push(0, "node-admitted", &[("node", json!("slow"))]);
@@ -434,7 +433,7 @@ fn zombie_pinned_time_is_separated_from_the_path() {
     assert_eq!(
         art.summary_abandoned_pinned_time_ns(),
         2_500,
-        "zombie-pinned time stays in its own summary field (from T42)"
+        "zombie-pinned time stays in its own summary field"
     );
 }
 

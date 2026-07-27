@@ -1,12 +1,12 @@
-//! C27 · Durable reference **schema round-trip** — ticket T57 (067), written
-//! first (TDD). Gated behind `schema-validation` (default OFF), the CI-/dev-scoped
-//! validator (T4 ADR 017 §4), like the other T39/T42 schema round-trips.
+//! Durable reference **schema round-trip**, written first (TDD). Gated behind
+//! `schema-validation` (default OFF), the CI-/dev-scoped validator, like the other
+//! schema round-trips.
 //!
 //! A REAL folded run artifact carrying a durable node's recorded reference
-//! validates against the UNMODIFIED published `schemas/run/v1.schema.json` (T39,
-//! §`durable_reference` — "OPAQUE to the schema"). T57 edits **no** schema: the
-//! `durable_reference` slot was published by T39; this proves the recording bridge
-//! emits into it validly. Teeth: a corrupted copy is rejected.
+//! validates against the UNMODIFIED published `schemas/run/v1.schema.json`, where
+//! `durable_reference` is OPAQUE to the schema. This suite edits **no** schema:
+//! the `durable_reference` slot is already published; here we prove the recording
+//! bridge emits into it validly. Teeth: a corrupted copy is rejected.
 
 #![cfg(feature = "schema-validation")]
 
