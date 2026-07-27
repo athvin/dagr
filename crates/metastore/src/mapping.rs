@@ -160,9 +160,7 @@ fn build_statements(artifact: &RunArtifact, events_path: Option<&str>) -> Vec<St
     // pre-execution failure) ⇒ no dag_version row.
     let dag_id = pipeline.clone();
     let fingerprint = artifact.header_fingerprint_structural().map(String::from);
-    let dag_version_id = fingerprint
-        .as_ref()
-        .map(|fp| format!("{dag_id}@{fp}"));
+    let dag_version_id = fingerprint.as_ref().map(|fp| format!("{dag_id}@{fp}"));
 
     let mut out = Vec::new();
 
@@ -217,7 +215,9 @@ fn build_statements(artifact: &RunArtifact, events_path: Option<&str>) -> Vec<St
           env_json=excluded.env_json",
         run_id = sql_quote(&run_id),
         dag = sql_quote(&dag_id),
-        dvid = dag_version_id.as_deref().map_or("NULL".to_string(), |v| format!("'{}'", sql_quote(v))),
+        dvid = dag_version_id
+            .as_deref()
+            .map_or("NULL".to_string(), |v| format!("'{}'", sql_quote(v))),
         state = sql_quote(state),
         finished = finished_sql,
         interrupted = interrupted,

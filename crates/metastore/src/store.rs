@@ -424,9 +424,12 @@ impl MetaStore {
 fn map_migration_error(e: WriteError) -> OpenError {
     match e {
         WriteError::Libsql(err) => OpenError::Libsql(err),
-        WriteError::BusyRetriesExhausted { attempts } => OpenError::Libsql(
-            libsql::Error::SqliteFailure(SQLITE_BUSY, format!("DDL still SQLITE_BUSY after {attempts} attempts")),
-        ),
+        WriteError::BusyRetriesExhausted { attempts } => {
+            OpenError::Libsql(libsql::Error::SqliteFailure(
+                SQLITE_BUSY,
+                format!("DDL still SQLITE_BUSY after {attempts} attempts"),
+            ))
+        }
     }
 }
 

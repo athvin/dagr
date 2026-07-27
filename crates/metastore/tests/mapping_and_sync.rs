@@ -245,13 +245,19 @@ async fn mapping_matches_fold_stream_for_a_multi_node_run_with_retry() {
         Some(artifact.overall_outcome()),
         "dag_run.state is the folded overall_outcome"
     );
-    let interrupted =
-        scalar_i64(&store, "SELECT interrupted FROM dag_run WHERE run_id='run-1'").await;
+    let interrupted = scalar_i64(
+        &store,
+        "SELECT interrupted FROM dag_run WHERE run_id='run-1'",
+    )
+    .await;
     assert_eq!(interrupted, 0, "a finished run is not interrupted");
 
     // node_attempt: one row per AttemptRecord the fold produced.
-    let attempt_rows = scalar_i64(&store, "SELECT count(*) FROM node_attempt WHERE run_id='run-1'")
-        .await;
+    let attempt_rows = scalar_i64(
+        &store,
+        "SELECT count(*) FROM node_attempt WHERE run_id='run-1'",
+    )
+    .await;
     assert_eq!(
         attempt_rows,
         i64::try_from(expected_attempts).unwrap(),
@@ -341,7 +347,10 @@ async fn crash_truncated_run_is_interrupted_with_partial_attempts() {
     });
 
     let artifact = fold_stream(&bytes, &[]).expect("fold");
-    assert!(artifact.is_interrupted(), "the fixture folds as interrupted");
+    assert!(
+        artifact.is_interrupted(),
+        "the fixture folds as interrupted"
+    );
 
     let store = open_store(base).await;
     let summary = sync_run_store(&store, base).await.expect("sync");

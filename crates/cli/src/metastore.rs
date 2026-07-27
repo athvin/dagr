@@ -57,9 +57,7 @@ pub fn metastore_verb(sub_argv: &[OsString]) -> ExitCode {
             ExitCode::InvalidUsage
         }
         None => {
-            eprintln!(
-                "dagr metastore: a subcommand is required (subcommands are `init`, `sync`)"
-            );
+            eprintln!("dagr metastore: a subcommand is required (subcommands are `init`, `sync`)");
             ExitCode::InvalidUsage
         }
     }
