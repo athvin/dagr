@@ -215,6 +215,21 @@ jobs:
       - name: artifact validation + schema-compatibility gate (T48)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-artifact --features schema-validation --test compatibility_ci
+      # M7 run-index feature gating + the `metastore init` verb (T83, ADR 097).
+      # The `metastore` cli feature is OFF by default (libSQL is heavy and pre-1.0),
+      # so a plain `cargo test --workspace` above never pulls `libsql` through the
+      # cli and never sees the `metastore` verb. These two steps turn the feature ON
+      # to exercise the CLI init verb, and run the structural gate proving the
+      # feature is truly default-off (default cli reaches neither libsql nor
+      # dagr-metastore; --features metastore reaches both; core reaches neither even
+      # --all-features; libsql pinned exactly). Linux tier-1 is enough — the crate
+      # graph and the verb are platform-independent.
+      - name: metastore feature-gating (T83)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-metastore-feature-gating.sh
+      - name: metastore init verb (T83, --features metastore)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p dagr-cli --features metastore --test metastore_init
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference

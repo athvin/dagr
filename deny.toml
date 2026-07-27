@@ -41,7 +41,21 @@ version = 2
 #     does not weaken the gate — it names exactly one additional OSI-approved
 #     license required by one build tool, added by review (T19) as the writer's
 #     serde stack lands, rather than loosening MIT-only to a permissive wildcard.
-allow = ["MIT", "Unicode-3.0"]
+#   * Apache-2.0, BSD-3-Clause, ISC — required, and ONLY, by the build-time
+#     libSQL FFI toolchain that the M7 `dagr-metastore` crate pulls (T83 / ADR 097).
+#     `libsql = "=0.10.0-pre.4"` is taken with `default-features = false,
+#     features = ["core"]` — the embedded local-file path only, dropping libSQL's
+#     network/replication/TLS stack — so the tree is minimal (`cargo audit` is
+#     clean, no advisory ignores) and needs exactly these three OSI-approved
+#     permissive ids, each traceable to one build tool:
+#       - Apache-2.0    — `clang-sys` (loads libclang so bindgen can generate the
+#                         libSQL C bindings; Apache-2.0-only, no MIT clause).
+#       - BSD-3-Clause  — `bindgen` (generates those C FFI bindings; BSD-3-Clause).
+#       - ISC           — `libloading` (how `clang-sys` dlopen's libclang; ISC).
+#     These are review-gated additions (arch.md "Stability"), scoped to the
+#     default-off `metastore` feature's transitive tree — a plain `cargo build`
+#     pulls none of them — not a loosening of the MIT-only posture to a wildcard.
+allow = ["MIT", "Unicode-3.0", "Apache-2.0", "BSD-3-Clause", "ISC"]
 # A crate whose declared license does not resolve to an SPDX id in `allow`
 # fails; this confidence threshold keeps that resolution strict.
 confidence-threshold = 0.8
