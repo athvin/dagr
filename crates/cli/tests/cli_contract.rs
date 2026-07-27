@@ -433,6 +433,57 @@ fn the_no_banner_toggle_is_reserved() {
     }
 }
 
+/// Every knob in ADR 089's table has its own reserved library-flag name so a
+/// pipeline parameter can never shadow one: a parameter named after any of the
+/// newly reserved flags is the same named, hard collision error (ticket T76).
+#[test]
+fn every_adr_089_knob_flag_is_reserved() {
+    for flag in [
+        "grace",
+        "teardown-deadline",
+        "failure-mode",
+        "dagr.pool.compute-threads",
+        "dagr.pool.blocking-threads",
+        "dagr.pool.memory",
+        "dagr.headroom-fraction",
+    ] {
+        assert!(
+            reserved_flag_names().contains(&flag),
+            "the library flag `{flag}` (ADR 089) must be reserved"
+        );
+        let params = vec![ParamSpec::new(
+            flag,
+            "a parameter shadowing an ADR-089 knob",
+        )];
+        match dagr_cli::contract::check_reserved_collision(&params) {
+            Err(LibraryFlagCollision { flag: got }) => assert_eq!(
+                got, flag,
+                "the collision must name the exact offending flag `{flag}`"
+            ),
+            Ok(()) => panic!("a parameter named `{flag}` must be a hard collision error"),
+        }
+    }
+}
+
+/// The generic `pool` name was **replaced** by the specific `dagr.pool.*` entries
+/// (ticket T76 / ADR 089), so it is no longer reserved: a pipeline may now declare
+/// a parameter named `pool` without a collision.
+#[test]
+fn the_generic_pool_flag_is_no_longer_reserved() {
+    assert!(
+        !reserved_flag_names().contains(&"pool"),
+        "the generic `pool` entry was replaced by the specific `dagr.pool.*` flags"
+    );
+    let params = vec![ParamSpec::new(
+        "pool",
+        "an ordinary pipeline parameter named pool",
+    )];
+    assert!(
+        dagr_cli::contract::check_reserved_collision(&params).is_ok(),
+        "`pool` is no longer a reserved library flag, so it must not collide"
+    );
+}
+
 /// A typed parameter value that fails validation is rejected with the
 /// invalid-usage code (rejected at bootstrap, before any node executes — the
 /// no-node-executed half is covered by the run-verb integration test).

@@ -419,7 +419,10 @@ fn flag_takes_value(flag: &str) -> bool {
             | "grace"
             | "teardown-deadline"
             | "failure-mode"
-            | "pool"
+            | "dagr.pool.compute-threads"
+            | "dagr.pool.blocking-threads"
+            | "dagr.pool.memory"
+            | "dagr.headroom-fraction"
             | "data-interval"
     )
 }
@@ -614,9 +617,16 @@ pub fn banner_suppressed_by_env() -> bool {
 /// collision is a hard, named error ([`LibraryFlagCollision`]).
 ///
 /// These are the library-owned run/inspection flags (the store base, the run-id
-/// override, the grace period, the failure mode, the pool pinning, the data
-/// interval, the startup-banner toggle, and the always-reserved `help`/`version`).
-/// Fixed and library-owned, so the namespace is identical across every pipeline.
+/// override, the grace period, the teardown deadline, the failure mode, the three
+/// specific pool pins, the headroom fraction, the data interval, the
+/// startup-banner toggle, and the always-reserved `help`/`version`). Fixed and
+/// library-owned, so the namespace is identical across every pipeline.
+///
+/// ADR 089 (ticket T76) replaced the generic `pool` entry with the specific
+/// `dagr.pool.compute-threads` / `dagr.pool.blocking-threads` / `dagr.pool.memory`
+/// pins and added `teardown-deadline` and `dagr.headroom-fraction`, so every
+/// runtime knob that gains a `DAGR_*` env fallback (T77) has its own reserved flag
+/// a pipeline parameter can never shadow.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -627,7 +637,10 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "grace",
         "teardown-deadline",
         "failure-mode",
-        "pool",
+        "dagr.pool.compute-threads",
+        "dagr.pool.blocking-threads",
+        "dagr.pool.memory",
+        "dagr.headroom-fraction",
         "data-interval",
         "force",
         "run",
