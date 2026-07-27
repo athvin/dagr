@@ -273,15 +273,14 @@ where
     // Every flow-selecting verb resolves its flow through the SAME selection rules
     // (single-flow default, name-required, unknown-name), then routes to its own
     // verb body. Selection failures never reach the flow build.
-    let mut dispatch = |verb_label: &str, action: FlowAction<W>| match registry
-        .select(cli.flow_name.as_deref())
-    {
-        Ok((name, factory)) => action(name, factory, &raw, out),
-        Err(message) => {
-            let _ = writeln!(out, "dagr {verb_label}: {message}");
-            ExitCode::InvalidUsage
-        }
-    };
+    let mut dispatch =
+        |verb_label: &str, action: FlowAction<W>| match registry.select(cli.flow_name.as_deref()) {
+            Ok((name, factory)) => action(name, factory, &raw, out),
+            Err(message) => {
+                let _ = writeln!(out, "dagr {verb_label}: {message}");
+                ExitCode::InvalidUsage
+            }
+        };
 
     match cli.verb {
         Verb::Run => dispatch("run", run_selected_flow),

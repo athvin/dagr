@@ -167,7 +167,11 @@ fn graph_named_flow_emits_its_artifact() {
         .add("etl", build_etl)
         .add("analytics", build_analytics);
     let (code, bytes) = run_capturing(&registry, ["dagr", "graph", "etl"]);
-    assert_eq!(code, ExitCode::Success, "graph of a well-formed flow succeeds");
+    assert_eq!(
+        code,
+        ExitCode::Success,
+        "graph of a well-formed flow succeeds"
+    );
 
     // What a single-flow `etl` binary emits for the same flow: build the same flow,
     // finish it into a pipeline, and run the *same* `graph_verb`.
@@ -283,7 +287,9 @@ fn validate_clean_flow_succeeds() {
         "a clean assembly exits Success from validate"
     );
     assert!(
-        String::from_utf8_lossy(&out).to_lowercase().contains("valid")
+        String::from_utf8_lossy(&out)
+            .to_lowercase()
+            .contains("valid")
             || String::from_utf8_lossy(&out)
                 .to_lowercase()
                 .contains("succeeded"),

@@ -352,13 +352,9 @@ impl RunnableFlow {
         // The stable-name-aware flow registrar captures `T`/`T::Input`/`T::Output`'s
         // author-declared stable names into the pipeline node (so the built pipeline
         // is C20-emittable) while binding the same edges `register` does.
-        let handle = self.flow.register_named::<T, D>(
-            &name,
-            &task,
-            deps.clone(),
-            None::<String>,
-            policy,
-        );
+        let handle =
+            self.flow
+                .register_named::<T, D>(&name, &task, deps.clone(), None::<String>, policy);
         self.push_data_runner::<T, D>(&name, task, deps, policy, handle);
         handle
     }
