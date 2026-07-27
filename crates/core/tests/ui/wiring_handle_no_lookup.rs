@@ -1,6 +1,6 @@
-// UI compile-failure fixture — ticket T12 (024), case `wiring_handle_no_lookup`.
+// UI compile-failure fixture — case `wiring_handle_no_lookup`.
 //
-// PROVES (C2; arch.md `### C2 · Handle`): there is NO API to retrieve a node's
+// PROVES: there is NO API to retrieve a node's
 // output handle by name, index, or string key. This is the REAL authoring
 // surface (`dagr_core::flow::Flow` / `dagr_core::flow::Pipeline`): neither the
 // builder nor the finalized pipeline exposes a `get(name)` / `lookup(index)` /
@@ -11,9 +11,9 @@
 // acceptance criterion, and it is why a cycle stays inexpressible: without a
 // lookup there is no way to name a node that has not yet been registered.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 

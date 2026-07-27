@@ -1,5 +1,5 @@
-//! The C8 run context — what every task invocation is told about the run it is
-//! part of (arch.md `### C8 · Run context`).
+//! The run context — what every task invocation is told about the run it is
+//! part of.
 //!
 //! [`RunContext`] is a **read-only, hand-constructable handle** passed into every
 //! [`Task::run`](crate::task::Task::run). It carries everything a task may know
@@ -9,16 +9,16 @@
 //! a [logging span](LogSpan), and accessors for the [resource registry](ResourceRegistry)
 //! and the [durable scratch store](ScratchStore). A teardown node's context
 //! additionally exposes the [terminal states](CoveredNodeStates) of the nodes it
-//! covers (C17), so cleanup can no-op when setup never ran.
+//! covers, so cleanup can no-op when setup never ran.
 //!
 //! # It is a capability surface, not an execution engine
 //!
 //! Every public method is a **read**. There is no API here to modify the graph,
 //! reorder work, register or rescind a resource, or influence scheduling — and no
 //! route back to the runtime or scheduler. The context holds **no mutable shared
-//! state** the task can reach. This is C8's no-authority contract, and it is
+//! state** the task can reach. This is the no-authority contract, and it is
 //! load-bearing: dagr is not a scheduler and the graph's shape never changes at
-//! runtime (arch.md "What this is not, permanently").
+//! runtime.
 //!
 //! # The data interval is caller-supplied and tool-opaque
 //!
@@ -35,34 +35,30 @@
 //! A `RunContext` can be built by hand in a plain unit test — **no runtime, no
 //! store, no registry, no clock, no network** — via [`RunContext::builder`] (full
 //! control of every field) or [`RunContext::for_test`] (a fully-populated
-//! zero-argument default). This is the C8 acceptance criterion that feeds the
-//! single-task test kit (C28 / T60): a single task can be exercised in isolation
-//! with a context constructed entirely in-process.
+//! zero-argument default): a single task can be exercised in isolation with a
+//! context constructed entirely in-process.
 //!
-//! # Seams landing with later tickets
+//! # The registry and scratch accessors
 //!
-//! Two accessors are **additive seams** whose *substance* arrives with later
-//! tickets, marked inline:
+//! Two accessors reach shared, run-scoped state:
 //!
-//! - [`RunContext::resources`] — the [`ResourceRegistry`] (C9). Landed here as a
-//!   stable, honestly-empty seam; type-keyed retrieval, newtype disambiguation,
-//!   secret wrapping, and bootstrap validation are **T30**'s.
-//! - [`RunContext::scratch`] — the [`ScratchStore`] (C18). The **local durable
-//!   store** now lands under **T53**: opaque-byte key-value persistence,
-//!   run/node namespacing with enforced cross-node isolation, atomic
-//!   crash-safe writes, and the on-success cleanup hook, physically under the run
-//!   store at `<base>/<pipeline>/<run-id>/scratch/<node>/`. A context built with
-//!   **no run store** (the C8 hand-built path) carries an honestly-unwired store
-//!   that never pretends to persist. Resume copy-forward is **T54b**'s.
+//! - [`RunContext::resources`] — the [`ResourceRegistry`]: type-keyed retrieval,
+//!   newtype disambiguation, secret wrapping, and bootstrap validation.
+//! - [`RunContext::scratch`] — the [`ScratchStore`], the **local durable store**:
+//!   opaque-byte key-value persistence, run/node namespacing with enforced
+//!   cross-node isolation, atomic crash-safe writes, and the on-success cleanup
+//!   hook, physically under the run store at
+//!   `<base>/<pipeline>/<run-id>/scratch/<node>/`. A context built with **no run
+//!   store** (the hand-built path) carries an honestly-unwired store that never
+//!   pretends to persist.
 //!
-//! The [`CoveredNodeStates`] shape is defined here; the **runtime-side population**
-//! of covered states (teardown ordering, the fresh uncancelled signal, the
-//! teardown deadline) is finished under **C17 / T52**.
+//! The [`CoveredNodeStates`] shape is defined here; the runtime populates covered
+//! states (teardown ordering, the fresh uncancelled signal, the teardown
+//! deadline).
 //!
-//! The [`ResourceRequirements`] declaration plumbing is also landed here: a node
-//! records the resource types it requires at registration in a form bootstrap
-//! (T30) can validate against a registry and a graph artifact (C20) can later
-//! render.
+//! The [`ResourceRequirements`] declaration plumbing also lives here: a node
+//! records the resource types it requires at registration in a form bootstrap can
+//! validate against a registry and a graph artifact can later render.
 
 use std::any::{type_name, Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
@@ -71,12 +67,12 @@ use std::sync::Arc;
 
 use crate::handle::NodeId;
 
-/// A run's identity (arch.md `### C8`; C19 mints a `UUIDv7` at bootstrap,
-/// operator-overridable). A dagr-owned, opaque newtype so task authors program
+/// A run's identity — the runtime mints a `UUIDv7` at bootstrap,
+/// operator-overridable. A dagr-owned, opaque newtype so task authors program
 /// against a dagr type; the framework does not interpret its contents here.
 ///
 /// Hand-constructable in tests via [`RunId::new`]; the runtime mints the real
-/// value at bootstrap (T-later), which is **not** this ticket's concern.
+/// value at bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RunId(String);
 
@@ -95,8 +91,8 @@ impl RunId {
     }
 }
 
-/// A pipeline's identity (arch.md `### C8`). A dagr-owned, opaque newtype;
-/// hand-constructable in tests via [`PipelineId::new`].
+/// A pipeline's identity. A dagr-owned, opaque newtype; hand-constructable in
+/// tests via [`PipelineId::new`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PipelineId(String);
 
@@ -115,8 +111,7 @@ impl PipelineId {
     }
 }
 
-/// A **caller-supplied, tool-opaque** pair of values recorded verbatim
-/// (arch.md `### C8`, "The data interval").
+/// A **caller-supplied, tool-opaque** pair of values recorded verbatim.
 ///
 /// The framework **never** parses, orders, validates, normalizes, computes,
 /// advances, or persists an interval — a backfill is the *caller* looping over
@@ -158,39 +153,35 @@ impl DataInterval {
     }
 }
 
-/// The **read-only** cancellation signal a task observes (arch.md `### C8`,
-/// `### C16`).
+/// The **read-only** cancellation signal a task observes.
 ///
 /// This is the **task-facing** half: it offers **only** observation
 /// ([`is_cancelled`](Self::is_cancelled)) — there is deliberately **no** method to
-/// cancel the run from here, consistent with C8's "no route back to the
-/// scheduler." The run-scoped token and its per-attempt children, future-drop
-/// cancellation of await-bound work, and cooperative-only marking of
-/// blocking/compute work are wired by the runner (C14 / C16, T20 / T21 / T35) via
-/// a [`CancellationSource`]; per the T2 async-runtime ADR the eventual backing is
-/// `tokio_util::sync::CancellationToken`, but the type task authors see is this
-/// dagr-owned wrapper, never a bare tokio type.
+/// cancel the run from here, consistent with the "no route back to the
+/// scheduler" contract. The run-scoped token and its per-attempt children,
+/// future-drop cancellation of await-bound work, and cooperative-only marking of
+/// blocking/compute work are wired by the runner via a [`CancellationSource`];
+/// the eventual backing is `tokio_util::sync::CancellationToken`, but the type
+/// task authors see is this dagr-owned wrapper, never a bare tokio type.
 ///
-/// # T20/T35 seam
-///
-/// The internal representation here is a simple shared flag, enough to satisfy
-/// C8's hand-constructability and observation contract with **no runtime**. When
-/// the runner lands (T20/T35) the backing becomes the real cancellation token;
-/// this task-facing surface — observe-only, no lever — does not change.
+/// The internal representation here is a simple shared flag, enough to satisfy the
+/// hand-constructability and observation contract with **no runtime**. When the
+/// runner is wired in the backing becomes the real cancellation token; this
+/// task-facing surface — observe-only, no lever — does not change.
 #[derive(Debug, Clone)]
 pub struct CancellationSignal {
     flag: Arc<AtomicBool>,
     // The parent run token, present when this signal came from a per-attempt
-    // child (C16 / T35): a task observes cancellation when its own attempt token
-    // is cancelled OR the run token it descends from is cancelled.
+    // child: a task observes cancellation when its own attempt token is cancelled
+    // OR the run token it descends from is cancelled.
     parent: Option<Arc<CancellationSource>>,
 }
 
 impl CancellationSignal {
     /// Whether cancellation has been signalled. This is the **only** thing a task
     /// may do with the signal: observe it and return promptly (recorded
-    /// `cancelled`) or not (recorded `abandoned` — C16). There is no lever to
-    /// cancel the run from the task side.
+    /// `cancelled`) or not (recorded `abandoned`). There is no lever to cancel the
+    /// run from the task side.
     ///
     /// A signal derived from a per-attempt [child](CancellationSource::child)
     /// observes cancellation when either its own attempt token or the run token it
@@ -207,16 +198,16 @@ impl CancellationSignal {
 /// between this source and the observe-only [`CancellationSignal`] is exactly
 /// what makes the task-facing side a read channel and not a lever. A test flips
 /// cancellation with [`cancel`](Self::cancel) to exercise a task's observation of
-/// it; the runner does the same on the cancellation path (C16).
+/// it; the runner does the same on the cancellation path.
 ///
-/// # Run-scoped token with per-attempt children (C16 / T35)
+/// # Run-scoped token with per-attempt children
 ///
 /// A source is the **run-scoped token** the driver owns; [`child`](Self::child)
 /// hands each spawned attempt its **per-attempt child**. Cancelling the run
 /// ([`cancel`](Self::cancel) on the run source) cancels **every live child**
 /// exactly once (the children observe the same flip), and a second cancel changes
 /// nothing ([`is_cancelled`](Self::is_cancelled) is idempotent). Cancelling a
-/// **child** ([`cancel`](Self::cancel) on the child — the per-attempt path a C12
+/// **child** ([`cancel`](Self::cancel) on the child — the per-attempt path a
 /// timeout uses) cancels **only that child**: its siblings and the parent run
 /// source stay uncancelled, so a single attempt's cancellation is never mistaken
 /// for the run being cancelled.
@@ -240,8 +231,8 @@ impl CancellationSource {
         Self::default()
     }
 
-    /// A **per-attempt child** of this run source (C16 / T35). The child is
-    /// cancelled when *this* source is cancelled (a run cancel reaches every live
+    /// A **per-attempt child** of this run source. The child is cancelled when
+    /// *this* source is cancelled (a run cancel reaches every live
     /// child) or when the child itself is cancelled; cancelling the child does
     /// **not** cancel this parent or any sibling. Any number of children may be
     /// derived; each is independent on its own flag but shares the parent's.
@@ -283,41 +274,37 @@ impl CancellationSource {
     }
 }
 
-/// Why the run was cancelled (arch.md `### C16`; C26 exit-code precedence).
+/// Why the run was cancelled.
 ///
-/// The cancellation core (T35) records the **origin** of a cancellation so the
-/// later exit-code logic (C26 / T55) can prefer *run failure over cancellation*:
-/// a cancellation triggered by a failure under stop-on-first-failure must not mask
-/// the failure, whereas an externally-originated interrupt with no run failure is
-/// reported as a cancellation. This ticket only *records* the origin; it does not
-/// own the exit-code mapping.
+/// The cancellation core records the **origin** of a cancellation so the
+/// exit-code logic can prefer *run failure over cancellation*: a cancellation
+/// triggered by a failure under stop-on-first-failure must not mask the failure,
+/// whereas an externally-originated interrupt with no run failure is reported as a
+/// cancellation. This type only *records* the origin; it does not own the
+/// exit-code mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CancellationOrigin {
-    /// A node ended failure-like under [stop-on-first-failure](crate::flow::FailureMode)
-    /// (C15 / T34), which routed through the cancellation core. The run failure
-    /// wins over the cancellation in the C26 precedence.
+    /// A node ended failure-like under [stop-on-first-failure](crate::flow::FailureMode),
+    /// which routed through the cancellation core. The run failure wins over the
+    /// cancellation in the exit-code precedence.
     FailureUnderStop,
     /// An external interrupt (an operator/orchestrator termination signal). The
-    /// **wiring** of an OS signal to this origin is **T36**; T35 records the origin
-    /// value so the entry point exists and is exercised.
+    /// runtime wires an OS signal to this origin.
     ExternalInterrupt,
 }
 
-/// The **dagr-owned** logging span a task's attempt runs inside (arch.md
-/// `### C8`, `### C25`).
+/// The **dagr-owned** logging span a task's attempt runs inside.
 ///
 /// Every attempt runs beneath a span carrying run / node / attempt identity, so
-/// every line emitted under it is attributable without timestamp correlation
-/// (C25). This is a dagr-owned handle (per the T2 ADR: context-exposed types are
-/// dagr-owned wherever practical), carrying the identity the span is keyed on.
+/// every line emitted under it is attributable without timestamp correlation.
+/// This is a dagr-owned handle (context-exposed types are dagr-owned wherever
+/// practical), carrying the identity the span is keyed on.
 ///
-/// # C25 seam
-///
-/// The **subscriber integration** — structured-vs-human output, third-party line
-/// capture, secret scrubbing on framework paths — is C25's, not this ticket's.
 /// This type fixes only the span's *identity payload* and its placement on the
-/// context; the tracing wiring lands with logging integration.
+/// context. The **subscriber integration** — structured-vs-human output,
+/// third-party line capture, secret scrubbing on framework paths — is handled by
+/// the logging integration.
 #[derive(Debug, Clone)]
 pub struct LogSpan {
     run: RunId,
@@ -345,28 +332,27 @@ impl LogSpan {
     }
 }
 
-/// A value **marked secret** when placed in the resource registry (arch.md
-/// `### C9`, "Secrets"): credentials, tokens, keys, or any material that must
-/// never leak onto a framework-controlled output path.
+/// A value **marked secret** when placed in the resource registry: credentials,
+/// tokens, keys, or any material that must never leak onto a framework-controlled
+/// output path.
 ///
 /// # No `Debug` / `Display` path — by construction
 ///
 /// `Secret<T>` implements **neither** [`Debug`](std::fmt::Debug) nor
 /// [`Display`](std::fmt::Display), so the framework — which reaches values only
 /// through those formatters — cannot render the wrapped material even by
-/// accident. This is the *type-system* half of the C9 secret guarantee: a
-/// framework `{:?}` or `{}` on a `Secret` (or on a registry holding one) fails to
+/// accident. This is the *type-system* half of the secret guarantee: a framework
+/// `{:?}` or `{}` on a `Secret` (or on a registry holding one) fails to
 /// **compile**, not merely at runtime. The compile-fail cases
 /// `tests/ui/secret_no_debug.rs` and `tests/ui/secret_no_display.rs` pin it.
 ///
-/// # The guarantee boundary (per C25)
+/// # The guarantee boundary
 ///
 /// The guarantee covers **framework-controlled** output paths. A task author who
 /// pulls the inner value out with [`expose`](Self::expose) and formats it into
 /// **their own** log line is **outside** the guarantee — dagr cannot scrub a
-/// string the author built themselves. That boundary is stated in arch.md `### C25`;
-/// end-to-end framework log-line redaction is T45's, and it builds on this
-/// wrapper and the [`redacted`](Self::redacted) sentinel hook.
+/// string the author built themselves. End-to-end framework log-line redaction
+/// builds on this wrapper and the [`redacted`](Self::redacted) sentinel hook.
 ///
 /// # Example
 ///
@@ -398,14 +384,14 @@ impl<T> Secret<T> {
 
     /// Deliberately expose the wrapped value to **authorized** code. Calling this
     /// is the author's explicit act of stepping outside the redaction guarantee
-    /// for this value (arch.md C25); the framework never calls it.
+    /// for this value; the framework never calls it.
     pub const fn expose(&self) -> &T {
         &self.inner
     }
 
     /// The **sentinel** the framework substitutes for a secret on any output path
-    /// it controls — the redaction hook C25 / T45 emits in place of the value. It
-    /// is a fixed marker that contains none of the secret's bytes.
+    /// it controls — the redaction hook emits it in place of the value. It is a
+    /// fixed marker that contains none of the secret's bytes.
     #[must_use]
     #[allow(
         clippy::unused_self,
@@ -416,7 +402,7 @@ impl<T> Secret<T> {
     }
 }
 
-/// The error registry **construction** reports (arch.md `### C9`).
+/// The error registry **construction** reports.
 ///
 /// The registry keys resources by their concrete type, so registering a second
 /// resource of the **literally identical** type is ambiguous — the framework
@@ -449,8 +435,8 @@ impl std::fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-/// The immutable, type-keyed **resource registry** (arch.md `### C9 · Resource
-/// registry`) — dependency injection for long-lived external clients.
+/// The immutable, type-keyed **resource registry** — dependency injection for
+/// long-lived external clients.
 ///
 /// # What it is
 ///
@@ -462,7 +448,7 @@ impl std::error::Error for RegistryError {}
 /// contents); a task reaches it read-only through
 /// [`RunContext::resources`](crate::context::RunContext::resources).
 ///
-/// # Type-keyed, no string lookup (the C2 philosophy)
+/// # Type-keyed, no string lookup
 ///
 /// Resources are keyed by their **concrete type** and retrieved by type with
 /// [`get`](Self::get) — no string key, no runtime type check on the happy path.
@@ -473,7 +459,7 @@ impl std::error::Error for RegistryError {}
 /// # Newtype disambiguation (worked example)
 ///
 /// Two resources of the *same underlying type* are distinguished by wrapping each
-/// in a distinct **newtype** — the same no-string-lookup pattern C2 uses:
+/// in a distinct **newtype** — the same no-string-lookup pattern used throughout:
 ///
 /// ```
 /// use dagr_core::context::ResourceRegistry;
@@ -511,15 +497,13 @@ impl std::error::Error for RegistryError {}
 /// Secret material is wrapped in [`Secret`] before registration, which has no
 /// `Debug`/`Display` path, so the framework never renders it onto a
 /// framework-controlled output path (the guarantee boundary is stated on
-/// [`Secret`] and in arch.md C25).
+/// [`Secret`]).
 ///
-/// # Backward-compatible empty registry (T16 seam)
+/// # Empty registry
 ///
-/// [`ResourceRegistry::default`] yields the **honestly-empty** registry T16's
-/// [`RunContext`] carries: [`get`](Self::get) is [`None`] for every type and
-/// [`is_empty`](Self::is_empty) is `true`. The accessor signatures are unchanged
-/// from the T16 seam, so every existing T16/T20/T24 caller keeps compiling and
-/// passing.
+/// [`ResourceRegistry::default`] yields the **honestly-empty** registry a
+/// hand-built [`RunContext`] carries: [`get`](Self::get) is [`None`] for every
+/// type and [`is_empty`](Self::is_empty) is `true`.
 #[derive(Clone, Default)]
 pub struct ResourceRegistry {
     // Type-keyed store of long-lived clients. `Arc` so a clone is a cheap shared
@@ -557,7 +541,7 @@ impl ResourceRegistry {
 
     /// Whether the registry holds no resources. The [default](Self::default) and a
     /// zero-registration [`build`](ResourceRegistryBuilder::build) are both empty
-    /// (the T16-compatible honest-empty registry).
+    /// (the honest-empty registry).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty()
@@ -569,13 +553,12 @@ impl ResourceRegistry {
         self.resources.len()
     }
 
-    /// **Bootstrap validation** (arch.md `### C9`): check this registry against the
-    /// per-node declared [resource requirements](ResourceRequirements), *before*
-    /// any node executes.
+    /// **Bootstrap validation**: check this registry against the per-node declared
+    /// [resource requirements](ResourceRequirements), *before* any node executes.
     ///
     /// `declarations` is the set of `(node, requirements)` pairs the pipeline
-    /// declared (surfaced from C8 / T16). Validation collects **every** declared
-    /// requirement whose resource type is **not** registered and, for each such
+    /// declared. Validation collects **every** declared requirement whose resource
+    /// type is **not** registered and, for each such
     /// missing type, **every** node that declared a requirement on it. If any
     /// requirement is unmet the result is [`Err`] carrying a [`BootstrapFailure`]
     /// — the **bootstrap-failure artifact**, distinct from an assembly failure,
@@ -583,9 +566,8 @@ impl ResourceRegistry {
     /// recorded**. If every declared requirement is satisfied the result is
     /// [`Ok`] and execution may proceed.
     ///
-    /// This produces the failure *value*; wiring it into the run/artifact emission
-    /// (C20 / C22) and the driver bootstrap phase is a later ticket's — this
-    /// ticket only produces it and asserts it is produced.
+    /// This produces the failure *value*; the artifact emitter and driver
+    /// bootstrap phase consume it.
     ///
     /// # Errors
     ///
@@ -637,8 +619,8 @@ impl std::fmt::Debug for ResourceRegistry {
     }
 }
 
-/// The builder for a [`ResourceRegistry`] (arch.md `### C9`) — the **only** place
-/// a resource is added, used once in the developer's `main`.
+/// The builder for a [`ResourceRegistry`] — the **only** place a resource is
+/// added, used once in the developer's `main`.
 ///
 /// Each [`register`](Self::register) either accepts the resource (returning the
 /// builder to chain) or rejects it as an **ambiguous duplicate**
@@ -699,13 +681,12 @@ impl ResourceRegistryBuilder {
     }
 }
 
-/// The overall outcome a bootstrap phase records (arch.md `### C9`; the run's
-/// shape). Distinct from an **assembly** failure: assembly is the pure pass (C7 /
-/// T14), bootstrap is the fail-fast startup phase that validates the registry
-/// against declared requirements *after* assembly and *before* any node runs.
+/// The overall outcome a bootstrap phase records. Distinct from an **assembly**
+/// failure: assembly is the pure pass, bootstrap is the fail-fast startup phase
+/// that validates the registry against declared requirements *after* assembly and
+/// *before* any node runs.
 ///
-/// This is the outcome the downstream artifact emitter (C20 / C22) renders; this
-/// ticket produces the value and asserts it is produced, it does not render it.
+/// This is the outcome the downstream artifact emitter renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BootstrapOutcome {
@@ -718,9 +699,8 @@ pub enum BootstrapOutcome {
 }
 
 /// One missing declared resource, for the [bootstrap-failure
-/// artifact](BootstrapFailure) (arch.md `### C9`): the resource type that was
-/// declared but never registered, and **every** node that declared a requirement
-/// on it.
+/// artifact](BootstrapFailure): the resource type that was declared but never
+/// registered, and **every** node that declared a requirement on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingResourceError {
     resource_type_name: &'static str,
@@ -754,11 +734,10 @@ impl std::fmt::Display for MissingResourceError {
     }
 }
 
-/// The **bootstrap-failure artifact** produced when bootstrap validation fails
-/// (arch.md `### C9`): the fail-fast startup outcome, distinct from an assembly
-/// failure, that names every missing resource and its requiring nodes and records
-/// that **zero attempts** ran — no node executed. A downstream emitter (C20 /
-/// C22) renders it; this ticket produces it.
+/// The **bootstrap-failure artifact** produced when bootstrap validation fails:
+/// the fail-fast startup outcome, distinct from an assembly failure, that names
+/// every missing resource and its requiring nodes and records that **zero
+/// attempts** ran — no node executed. A downstream emitter renders it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootstrapFailure {
     errors: Vec<MissingResourceError>,
@@ -780,9 +759,9 @@ impl BootstrapFailure {
     }
 
     /// The number of attempts recorded — **always zero** for a bootstrap failure,
-    /// because bootstrap fails *before any node executes* (arch.md C9: never a
-    /// mid-run surprise). The run also never hangs: this is a synchronous,
-    /// terminating check.
+    /// because bootstrap fails *before any node executes* (never a mid-run
+    /// surprise). The run also never hangs: this is a synchronous, terminating
+    /// check.
     #[must_use]
     #[allow(
         clippy::unused_self,
@@ -810,12 +789,11 @@ impl std::fmt::Display for BootstrapFailure {
 impl std::error::Error for BootstrapFailure {}
 
 /// **Surface** the declared resource requirements as flat `(node, type-name)`
-/// pairs (arch.md `### C9`, "Declared requirements appear in the graph artifact").
+/// pairs, so they appear in the graph artifact.
 ///
-/// This exposes every declared requirement in a stable, renderable form so a
-/// downstream **graph-artifact** test (C20) can assert they appear — independent
-/// of whether they are satisfied. This ticket only *surfaces* them; rendering the
-/// artifact is C20 / C22.
+/// This exposes every declared requirement in a stable, renderable form so the
+/// downstream **graph artifact** can assert they appear — independent of whether
+/// they are satisfied.
 #[must_use]
 pub fn surface_requirements(
     declarations: &[(NodeId, ResourceRequirements)],
@@ -829,21 +807,20 @@ pub fn surface_requirements(
     surfaced
 }
 
-// The **durable scratch store** (C18) and its error surface now live in
-// [`crate::scratch`], landed by T53. They are re-exported here so the C8 context
-// seam — `RunContext::scratch` returning `&ScratchStore` — keeps the exact type
-// path every existing caller uses (`dagr_core::context::ScratchStore` /
-// `ScratchError`), unchanged from the T16 seam.
+// The **durable scratch store** and its error surface live in
+// [`crate::scratch`]. They are re-exported here so the context seam —
+// `RunContext::scratch` returning `&ScratchStore` — keeps the exact type path
+// every caller uses (`dagr_core::context::ScratchStore` / `ScratchError`).
 pub use crate::scratch::{ScratchError, ScratchStore};
 
-/// A node's **terminal state**, from arch.md's normative taxonomy (Vocabulary —
-/// "Terminal states"). Every node ends a run in exactly one of these.
+/// A node's **terminal state**, from the normative taxonomy of terminal states.
+/// Every node ends a run in exactly one of these.
 ///
-/// This ticket needs the taxonomy for the [teardown extension](CoveredNodeStates):
-/// a teardown node reads the terminal states of the nodes it covers so cleanup
-/// can no-op when setup never ran (C17). The names are the exact canonical ones;
-/// the readiness tracker, failure policy, and run artifact (C11 / C15 / C22) that
-/// *assign* these states are later tickets — this enum only carries them.
+/// The taxonomy is needed for the [teardown extension](CoveredNodeStates): a
+/// teardown node reads the terminal states of the nodes it covers so cleanup can
+/// no-op when setup never ran. The names are the exact canonical ones; the
+/// readiness tracker, failure policy, and run artifact *assign* these states —
+/// this enum only carries them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerminalState {
     /// The task returned a value; the slot was filled. *(success-like)*
@@ -866,22 +843,20 @@ pub enum TerminalState {
     /// Was asked to cancel and never returned within the grace period; its thread
     /// was left behind. *(failure-like)*
     Abandoned,
-    /// Not executed in this run; resume (C27) carried its prior success forward.
+    /// Not executed in this run; resume carried its prior success forward.
     /// *(success-like)*
     SatisfiedFromPrior,
 }
 
-/// The **teardown-only** view of covered nodes' terminal states (arch.md
-/// `### C8`, `### C17`).
+/// The **teardown-only** view of covered nodes' terminal states.
 ///
 /// A teardown node's context additionally exposes the terminal states of the
 /// nodes it covers, so cleanup can **no-op when setup never ran**. This type
-/// defines the *shape* of that extension and is hand-constructable for tests;
-/// the **runtime-side population** of covered states — teardown ordering, the
-/// fresh uncancelled signal, the teardown deadline — is completed under **C17 /
-/// T52**. A **non-teardown** context carries no [`CoveredNodeStates`] at all
-/// ([`RunContext::covered_terminal_states`] returns [`None`]), which is how the
-/// absence of a covered set is represented.
+/// defines the *shape* of that extension and is hand-constructable for tests; the
+/// runtime populates covered states — teardown ordering, the fresh uncancelled
+/// signal, the teardown deadline. A **non-teardown** context carries no
+/// [`CoveredNodeStates`] at all ([`RunContext::covered_terminal_states`] returns
+/// [`None`]), which is how the absence of a covered set is represented.
 #[derive(Debug, Clone, Default)]
 pub struct CoveredNodeStates {
     // Keyed by NodeId (Eq + Hash, not Ord — a HashMap, not a BTreeMap): this is a
@@ -897,8 +872,8 @@ impl CoveredNodeStates {
         Self::default()
     }
 
-    /// Record a covered node's terminal state (builder-style). Used by C17 / T52
-    /// to populate the set from the runtime, and by tests to hand-construct one.
+    /// Record a covered node's terminal state (builder-style). Used by the runtime
+    /// to populate the set, and by tests to hand-construct one.
     #[must_use]
     pub fn with(mut self, node: NodeId, state: TerminalState) -> Self {
         self.states.insert(node, state);
@@ -925,9 +900,9 @@ impl CoveredNodeStates {
     }
 }
 
-/// One declared resource requirement: a node's dependency on a resource *type*
-/// (arch.md `### C9`). Carries the type's identity for validation and its
-/// author-declared type name for rendering.
+/// One declared resource requirement: a node's dependency on a resource *type*.
+/// Carries the type's identity for validation and its author-declared type name
+/// for rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceRequirement {
     type_id: TypeId,
@@ -944,30 +919,27 @@ impl ResourceRequirement {
         }
     }
 
-    /// The required type's identity — what bootstrap (T30) keys registry
-    /// validation on.
+    /// The required type's identity — what bootstrap keys registry validation on.
     #[must_use]
     pub fn type_id(&self) -> TypeId {
         self.type_id
     }
 
-    /// The required type's name, for rendering into the graph artifact (C20 /
-    /// T30). Informational only — identity is [`type_id`](Self::type_id).
+    /// The required type's name, for rendering into the graph artifact.
+    /// Informational only — identity is [`type_id`](Self::type_id).
     #[must_use]
     pub fn type_name(&self) -> &'static str {
         self.type_name
     }
 }
 
-/// The **resource-requirement declaration plumbing** (arch.md `### C9`): the set
-/// of resource types a node declares it requires at registration.
+/// The **resource-requirement declaration plumbing**: the set of resource types a
+/// node declares it requires at registration.
 ///
 /// This is the mechanism a node uses to record its required resource types so
-/// **bootstrap (T30)** can validate the registry against the declared
-/// requirements — a missing resource is a startup failure, never a mid-run
-/// surprise — and so those declarations can later surface in the **graph artifact
-/// (C20)**. This ticket lands only the *declaration* and its queryable form; the
-/// registry itself, and the bootstrap validation against it, are **T30**.
+/// **bootstrap** can validate the registry against the declared requirements — a
+/// missing resource is a startup failure, never a mid-run surprise — and so those
+/// declarations can later surface in the **graph artifact**.
 ///
 /// A node declaring nothing reports an [empty](Self::is_empty) requirement set;
 /// declarations are additive and do not affect a context's other fields.
@@ -1012,15 +984,15 @@ impl ResourceRequirements {
         self.required.is_empty()
     }
 
-    /// The declared requirements, in a stable order — the form bootstrap (T30)
-    /// validates and a graph artifact (C20) renders.
+    /// The declared requirements, in a stable order — the form bootstrap validates
+    /// and a graph artifact renders.
     pub fn iter(&self) -> impl Iterator<Item = &ResourceRequirement> {
         self.required.values()
     }
 }
 
 /// The **read-only** handle every task invocation is told about the run it is
-/// part of (arch.md `### C8 · Run context`).
+/// part of.
 ///
 /// See the [module docs](self) for the full contract: it carries run / pipeline /
 /// node identity, the current attempt and the maximum, the run's parameters, an
@@ -1052,23 +1024,22 @@ impl RunContext {
     /// no parameters, no data interval, a fresh uncancelled signal, empty seams,
     /// non-teardown) until set on the returned [`RunContextBuilder`].
     ///
-    /// This is the C8 hand-construction path — **no runtime, no store, no
-    /// registry, no clock, no network** — that feeds the single-task test kit
-    /// (C28 / T60). The runtime constructs and threads the *real* context (T20 /
-    /// C14); that is out of scope here.
+    /// This is the hand-construction path — **no runtime, no store, no registry,
+    /// no clock, no network** — that feeds the single-task test kit. The runtime
+    /// constructs and threads the *real* context.
     #[must_use]
     pub fn builder(run: RunId, pipeline: PipelineId, node: NodeId) -> RunContextBuilder {
         RunContextBuilder::new(run, pipeline, node)
     }
 
     /// A fully-populated context for exercising a single task in isolation, with
-    /// **no arguments** and **no runtime running** (arch.md C8 / C28). Every field
-    /// is present: recognizable placeholder identities, attempt 1 of 1, no
-    /// parameters, no data interval, a fresh uncancelled signal, the honest
-    /// registry/scratch seams, and no covered-states set (non-teardown).
+    /// **no arguments** and **no runtime running**. Every field is present:
+    /// recognizable placeholder identities, attempt 1 of 1, no parameters, no data
+    /// interval, a fresh uncancelled signal, the honest registry/scratch seams, and
+    /// no covered-states set (non-teardown).
     ///
-    /// This is the seam T9's task tests already call and T60 builds on. For a
-    /// context with specific field values, use [`RunContext::builder`].
+    /// This is the seam a task's own tests call and the single-task test kit builds
+    /// on. For a context with specific field values, use [`RunContext::builder`].
     #[must_use]
     pub fn for_test() -> Self {
         Self::builder(
@@ -1098,9 +1069,9 @@ impl RunContext {
     }
 
     /// The current attempt number — carries the retry count in a form logs and
-    /// artifacts consume (arch.md C8; it increments across retries, driven by the
-    /// runner, C14 / T22). It is **not** fixed or defaulted-away: every
-    /// invocation, including the first attempt of the first node, carries it.
+    /// artifacts consume (it increments across retries, driven by the runner). It
+    /// is **not** fixed or defaulted-away: every invocation, including the first
+    /// attempt of the first node, carries it.
     #[must_use]
     pub fn attempt(&self) -> u32 {
         self.attempt
@@ -1117,8 +1088,8 @@ impl RunContext {
     /// match what was supplied.
     ///
     /// Parameters are carried **opaquely**: the framework does not interpret them
-    /// (they are parsed at bootstrap, after the pure assembly phase — C7 / C26)
-    /// and this accessor only hands the task back the value it was given, by type.
+    /// (they are parsed at bootstrap, after the pure assembly phase) and this
+    /// accessor only hands the task back the value it was given, by type.
     #[must_use]
     pub fn parameters<P: Any>(&self) -> Option<&P> {
         self.parameters.as_ref().and_then(|p| p.downcast_ref::<P>())
@@ -1126,7 +1097,7 @@ impl RunContext {
 
     /// The run's optional [data interval](DataInterval), or [`None`] when none was
     /// supplied. **Caller-supplied and tool-opaque** — returned exactly as
-    /// supplied; no framework code path interprets its contents (arch.md C8).
+    /// supplied; no framework code path interprets its contents.
     #[must_use]
     pub fn data_interval(&self) -> Option<&DataInterval> {
         self.data_interval.as_ref()
@@ -1134,27 +1105,27 @@ impl RunContext {
 
     /// The **observe-only** [cancellation signal](CancellationSignal). A task may
     /// observe it and return promptly; there is no lever here to cancel the run
-    /// (arch.md C8: no route back to the scheduler).
+    /// (no route back to the scheduler).
     #[must_use]
     pub fn cancellation(&self) -> &CancellationSignal {
         &self.cancellation
     }
 
-    /// The [logging span](LogSpan) this attempt runs inside (arch.md C8 / C25).
+    /// The [logging span](LogSpan) this attempt runs inside.
     #[must_use]
     pub fn span(&self) -> &LogSpan {
         &self.span
     }
 
-    /// The [resource-registry accessor](ResourceRegistry) — a **stable seam**;
-    /// the concrete registry (C9) lands with **T30** (see [`ResourceRegistry`]).
+    /// The [resource registry](ResourceRegistry) this run shares with every task,
+    /// read-only.
     #[must_use]
     pub fn resources(&self) -> &ResourceRegistry {
         &self.resources
     }
 
-    /// The node's [durable scratch store](ScratchStore) (C18 / T53): a per-run,
-    /// per-node key-value store of opaque bytes under the run store, with enforced
+    /// The node's [durable scratch store](ScratchStore): a per-run, per-node
+    /// key-value store of opaque bytes under the run store, with enforced
     /// cross-node isolation, atomic crash-safe writes, and a success-time cleanup
     /// hook. A value written on one attempt is readable on the next. A context
     /// built with **no run store** carries an honestly-unwired store that never
@@ -1165,27 +1136,25 @@ impl RunContext {
     }
 
     /// The terminal states of the nodes a **teardown** node covers, or [`None`]
-    /// for a non-teardown context (arch.md C8 / C17). A teardown reads these so
-    /// cleanup can no-op when setup never ran; the runtime-side population is
-    /// finished under **C17 / T52** (see [`CoveredNodeStates`]).
+    /// for a non-teardown context. A teardown reads these so cleanup can no-op when
+    /// setup never ran; the runtime populates them (see [`CoveredNodeStates`]).
     #[must_use]
     pub fn covered_terminal_states(&self) -> Option<&CoveredNodeStates> {
         self.covered_terminal_states.as_ref()
     }
 
-    /// The run's **per-run temp directory** (arch.md `### C16`; C16/T36), or
-    /// [`None`] when the context was hand-built with no run store (the C8 test
-    /// path).
+    /// The run's **per-run temp directory**, or [`None`] when the context was
+    /// hand-built with no run store (the test path).
     ///
     /// Everything a task writes **locally** — scratch files, intermediates it
-    /// materializes on the local filesystem before persisting a durable reference
-    /// (C2 output ownership) — goes under this directory. The convention confines a
-    /// run's local debris so it can be reclaimed: a cooperative task that observes
-    /// cancellation within grace removes what it wrote here, and the whole directory
-    /// is removed by the run's end or by the **next** invocation regardless of how
-    /// the prior process ended (arch.md C16). The directory lives under the run-store
-    /// base at `<base>/<pipeline>/<run-id>/tmp/`; the runtime creates it at bootstrap
-    /// and threads it here. This is the *path*, not a handle — a task uses ordinary
+    /// materializes on the local filesystem before persisting a durable reference —
+    /// goes under this directory. The convention confines a run's local debris so it
+    /// can be reclaimed: a cooperative task that observes cancellation within grace
+    /// removes what it wrote here, and the whole directory is removed by the run's
+    /// end or by the **next** invocation regardless of how the prior process ended.
+    /// The directory lives under the run-store base at
+    /// `<base>/<pipeline>/<run-id>/tmp/`; the runtime creates it at bootstrap and
+    /// threads it here. This is the *path*, not a handle — a task uses ordinary
     /// filesystem operations under it.
     #[must_use]
     pub fn temp_dir(&self) -> Option<&std::path::Path> {
@@ -1193,13 +1162,13 @@ impl RunContext {
     }
 }
 
-/// The hand-construction builder for a [`RunContext`] (arch.md C8 / C28).
+/// The hand-construction builder for a [`RunContext`].
 ///
 /// Obtained from [`RunContext::builder`]. Fields not set take sensible,
 /// spec-consistent defaults; [`build`](Self::build) yields the immutable context.
 /// This is the **no-runtime** path — nothing here touches the filesystem, the
 /// clock, the network, or a registry — that a plain unit test and the single-task
-/// test kit (T60) use to exercise a task in isolation.
+/// test kit use to exercise a task in isolation.
 #[derive(Debug, Clone)]
 pub struct RunContextBuilder {
     run: RunId,
@@ -1275,12 +1244,12 @@ impl RunContextBuilder {
         self
     }
 
-    /// Supply the [resource registry](ResourceRegistry) (C9) this run shares with
-    /// every task. Omit it for the honest-empty registry (the default), which
+    /// Supply the [resource registry](ResourceRegistry) this run shares with every
+    /// task. Omit it for the honest-empty registry (the default), which
     /// [`RunContext::resources`] reports as [empty](ResourceRegistry::is_empty).
-    /// The runtime threads the real registry here at bootstrap (T-later); a test
-    /// hands in one built by [`ResourceRegistry::builder`], which is how a task is
-    /// exercised against a fake resource with no change to the task code.
+    /// The runtime threads the real registry here at bootstrap; a test hands in one
+    /// built by [`ResourceRegistry::builder`], which is how a task is exercised
+    /// against a fake resource with no change to the task code.
     #[must_use]
     pub fn resources(mut self, resources: ResourceRegistry) -> Self {
         self.resources = resources;
@@ -1288,13 +1257,13 @@ impl RunContextBuilder {
     }
 
     /// Supply the **run-store base** under which this context's node reaches its
-    /// [durable scratch store](ScratchStore) (C18 / T53). The store resolves to
+    /// [durable scratch store](ScratchStore). The store resolves to
     /// `<base>/<pipeline>/<run-id>/scratch/<node>/` from the run / pipeline / node
-    /// identity this context already carries (T0.6 §3, §9).
+    /// identity this context already carries.
     ///
     /// The runtime threads the resolved run-store base here at bootstrap; a test
     /// hands in a temp base to exercise the real store with **no runtime running**
-    /// (the C8 single-task path). Omit it for the honestly-unwired store (the
+    /// (the single-task path). Omit it for the honestly-unwired store (the
     /// default), whose reads report absent-of-store and whose writes report a
     /// retry-eligible fault — it never pretends to persist.
     #[must_use]
@@ -1304,7 +1273,7 @@ impl RunContextBuilder {
     }
 
     /// Mark this as a **teardown** context by supplying the terminal states of the
-    /// nodes it covers (arch.md C17). Omit it for a non-teardown context, which
+    /// nodes it covers. Omit it for a non-teardown context, which
     /// [`RunContext::covered_terminal_states`] reports as [`None`].
     #[must_use]
     pub fn covered_terminal_states(mut self, covered: CoveredNodeStates) -> Self {
@@ -1312,11 +1281,10 @@ impl RunContextBuilder {
         self
     }
 
-    /// Supply the run's **per-run temp directory** (arch.md C16), reachable by a
-    /// task through [`RunContext::temp_dir`]. The runtime threads the real
-    /// `<base>/<pipeline>/<run-id>/tmp/` path here at bootstrap (C16 / T36); omit it
-    /// for the no-run-store hand-built context (the C8 test path), which reports
-    /// [`None`].
+    /// Supply the run's **per-run temp directory**, reachable by a task through
+    /// [`RunContext::temp_dir`]. The runtime threads the real
+    /// `<base>/<pipeline>/<run-id>/tmp/` path here at bootstrap; omit it for the
+    /// no-run-store hand-built context (the test path), which reports [`None`].
     #[must_use]
     pub fn temp_dir(mut self, temp_dir: std::path::PathBuf) -> Self {
         self.temp_dir = Some(temp_dir);
@@ -1339,9 +1307,8 @@ impl RunContextBuilder {
             attempt: self.attempt,
         };
         // Resolve the node's durable scratch store from the run/pipeline/node
-        // identity and the supplied run-store base (T0.6 §3, §9). With no base
-        // (the C8 hand-built path) the store is honestly unwired — it never
-        // pretends to persist.
+        // identity and the supplied run-store base. With no base (the hand-built
+        // path) the store is honestly unwired — it never pretends to persist.
         let scratch = match &self.scratch_root {
             Some(base) => ScratchStore::for_node(base, &self.pipeline, &self.run, self.node),
             None => ScratchStore::unwired(),

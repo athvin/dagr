@@ -1,18 +1,17 @@
-//! The C28 **single-task test kit** — the first of C28's three testing levels
-//! (arch.md `### C28 · Testing surface`).
+//! The **single-task test kit** — the first of the three testing levels.
 //!
 //! This is a **shipped** testing utility: downstream test code calls it to
 //! exercise **exactly one** [`Task`] in isolation, with a hand-built
-//! [`RunContext`] (C8) and fake resources (C9) — **no live network, no
+//! [`RunContext`] and fake resources — **no live network, no
 //! database, and no scheduler**. Synchronous tasks run with **no async runtime
 //! at all**; await-bound tasks run on a **plain test runtime the kit provides**,
 //! so the caller never stands up a runtime of their own.
 //!
 //! It ships inside the library — behind the default-on `test-kit` feature — so
-//! **no pipeline ever writes its own single-task harness** (arch.md C28
-//! acceptance). It builds directly on C8's hand-constructable [`RunContext`] and
-//! C9's [`ResourceRegistry`] fake-substitution path, which is the exact seam the
-//! full-pipeline harness (C28 / T62) reuses for the whole-run level — this kit
+//! **no pipeline ever writes its own single-task harness**. It builds directly
+//! on the hand-constructable [`RunContext`] and the
+//! [`ResourceRegistry`] fake-substitution path, which is the exact seam the
+//! full-pipeline harness reuses for the whole-run level — this kit
 //! forecloses none of that.
 //!
 //! # What you configure, what you capture
@@ -21,8 +20,8 @@
 //! test cares about (ergonomic defaults fill the rest), then drive the task and
 //! read the [`TaskOutcome`]:
 //!
-//! - **configure** — the fake [resource registry](SingleTaskTest::resources)
-//!   (C9), opaque [parameters](SingleTaskTest::parameters), the
+//! - **configure** — the fake [resource registry](SingleTaskTest::resources),
+//!   opaque [parameters](SingleTaskTest::parameters), the
 //!   [node identity](SingleTaskTest::node), the [attempt](SingleTaskTest::attempt)
 //!   / [max attempts](SingleTaskTest::max_attempts) (so a retry-shaped test can
 //!   drive attempt 2 by hand), an opaque [data interval](SingleTaskTest::data_interval),
@@ -32,10 +31,10 @@
 //! - **capture** — the classified [outcome](TaskOutcome) (produced
 //!   [output](TaskOutcome::output) *or* the classified [error](TaskOutcome::error)),
 //!   the observed [attempt number](TaskOutcome::attempt), the attempt's
-//!   [metrics](TaskOutcome::metrics) (C23), the [scratch store](TaskOutcome::scratch)
-//!   (C18), and a [framework-output dump](TaskOutcome::framework_output_dump) of
+//!   [metrics](TaskOutcome::metrics), the [scratch store](TaskOutcome::scratch),
+//!   and a [framework-output dump](TaskOutcome::framework_output_dump) of
 //!   the controlled context — the diagnostics the framework itself would render,
-//!   used to prove a marked secret never leaks (C9).
+//!   used to prove a marked secret never leaks.
 //!
 //! # It runs one task with **no driver or scheduler**
 //!
@@ -112,7 +111,7 @@ use crate::handle::NodeId;
 use crate::metrics::AttemptMetrics;
 use crate::task::Task;
 
-/// A configured single-task invocation (arch.md C28 single-task level).
+/// A configured single-task invocation.
 ///
 /// Construct with [`new`](Self::new), configure only what a test needs (every
 /// other field takes an ergonomic, spec-consistent default), then drive the task
@@ -217,7 +216,7 @@ impl<T: Task> SingleTaskTest<T> {
     }
 
     /// Supply the run's opaque [data interval](DataInterval), returned to the task
-    /// **exactly** as supplied — the kit interprets nothing (C8's opaque-interval
+    /// **exactly** as supplied — the kit interprets nothing (the opaque-interval
     /// invariant). Omit it for a run with no interval (the default).
     #[must_use]
     pub fn data_interval(mut self, interval: DataInterval) -> Self {
@@ -225,7 +224,7 @@ impl<T: Task> SingleTaskTest<T> {
         self
     }
 
-    /// Supply a fake [resource registry](ResourceRegistry) (C9) — built from
+    /// Supply a fake [resource registry](ResourceRegistry) — built from
     /// fakes via [`ResourceRegistry::builder`] — that the task retrieves resources
     /// from **with no change to the task's own code** versus production. Omit it
     /// for the honest-empty registry (the default).
@@ -245,7 +244,7 @@ impl<T: Task> SingleTaskTest<T> {
     }
 
     /// Supply a run-store base under which the task's node reaches a **wired**
-    /// [durable scratch store](ScratchStore) (C18), so a test can drive and then
+    /// [durable scratch store](ScratchStore), so a test can drive and then
     /// inspect scratch. Omit it for the honestly-unwired store (the default),
     /// which never pretends to persist.
     #[must_use]
@@ -279,7 +278,7 @@ impl<T: Task> SingleTaskTest<T> {
     }
 
     /// Drive a **synchronous** task's work to completion with **no async runtime
-    /// present at all** (arch.md C28: "synchronous tasks need no async runtime").
+    /// present at all** — a synchronous task needs no async runtime.
     ///
     /// The task's future is polled to completion on a minimal, dependency-free
     /// executor; a synchronous task body returns on the first poll. The returned
@@ -298,8 +297,8 @@ impl<T: Task> SingleTaskTest<T> {
     }
 
     /// Drive an **await-bound** task using the **plain test runtime the kit
-    /// provides** (arch.md C28: "await-bound tasks use a plain test runtime the
-    /// surface provides") — the caller stands up **no** runtime of their own.
+    /// provides** — an await-bound task uses a plain test runtime the
+    /// surface provides, and the caller stands up **no** runtime of their own.
     ///
     /// The task's future is driven to completion on the kit's small
     /// waker-backed executor, which correctly suspends and resumes a task that
@@ -314,9 +313,8 @@ impl<T: Task> SingleTaskTest<T> {
     }
 }
 
-/// The captured result of driving one task through the kit (arch.md C28
-/// single-task level): the classified outcome plus the observations a test
-/// asserts on.
+/// The captured result of driving one task through the kit: the classified
+/// outcome plus the observations a test asserts on.
 ///
 /// Read the produced value with [`output`](Self::output) / [`into_output`](Self::into_output)
 /// or the classified failure with [`error`](Self::error); the two are mutually
@@ -342,7 +340,7 @@ impl<O> TaskOutcome<O> {
         // controls for this attempt — the context's own `Debug` (which never
         // renders resource *values*, so a marked secret cannot leak through it),
         // its span identity, and the registry summary. This is the surface the
-        // C9 planted-sentinel test inspects.
+        // planted-sentinel test inspects.
         let framework_output_dump = format!(
             "context={ctx:?} span_run={} span_node={:?} span_attempt={} resources={:?}",
             ctx.span().run_id().as_str(),
@@ -396,7 +394,7 @@ impl<O> TaskOutcome<O> {
         self.attempt
     }
 
-    /// The attempt's captured [metrics](AttemptMetrics) (C23 seam). A plain
+    /// The attempt's captured [metrics](AttemptMetrics). A plain
     /// single-task run attaches none by default; a test can still read the set
     /// (empty task metrics, no fabricated framework metrics) and assert on it.
     #[must_use]
@@ -404,7 +402,7 @@ impl<O> TaskOutcome<O> {
         &self.metrics
     }
 
-    /// The node's [durable scratch store](ScratchStore) (C18) as the task saw it,
+    /// The node's [durable scratch store](ScratchStore) as the task saw it,
     /// so a test can inspect what the task wrote (when a
     /// [scratch root](SingleTaskTest::scratch_root) was supplied) or confirm the
     /// honest-empty seam (when it was not).
@@ -422,7 +420,7 @@ impl<O> TaskOutcome<O> {
 
     /// A rendered dump of the **framework-controlled** diagnostics for this
     /// attempt — the context's own `Debug`, its span identity, and the registry
-    /// summary — the surface a C9 planted-sentinel test asserts a marked secret
+    /// summary — the surface a planted-sentinel test asserts a marked secret
     /// never appears in. The kit renders resources only through the paths the
     /// framework controls (which never render a [`Secret`](crate::context::Secret)'s
     /// bytes), so this dump opens no new leak.
@@ -455,7 +453,7 @@ fn default_unit_input<I: 'static>() -> I {
 }
 
 /// A minimal, dependency-free, `unsafe`-free block-on — the **provided test
-/// runtime** the kit drives a task on (arch.md C28).
+/// runtime** the kit drives a task on.
 ///
 /// Built on the safe [`std::task::Wake`] trait rather than any async runtime, so
 /// the kit adds **no** dependency and proves the core is runtime-agnostic: a

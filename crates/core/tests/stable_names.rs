@@ -1,5 +1,4 @@
-//! Stable-name trait and stable-name capture — ticket T40 (the first consumer of
-//! the T0.7 stable-name contract). Written first, TDD.
+//! Stable-name trait and stable-name capture. Written first, TDD.
 //!
 //! These exercise the `dagr_core::stable_name` surface (the author-declared
 //! [`StableName`] constant, the [`is_well_formed`] well-formedness predicate, and
@@ -154,7 +153,8 @@ fn register_named_captures_input_and_output_names_in_order() {
 }
 
 /// A node registered through a **type-erased** registrar carries no stable names,
-/// so the C20 emitter can distinguish emittable from non-emittable nodes.
+/// so the graph-artifact emitter can distinguish emittable from non-emittable
+/// nodes.
 #[test]
 fn type_erased_registrar_captures_no_stable_names() {
     let mut flow = Flow::new();

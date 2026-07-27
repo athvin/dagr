@@ -1,7 +1,7 @@
-// UI compile-failure fixture — ticket T12 (024),
+// UI compile-failure fixture,
 // case `wiring_owned_receive_not_deliverable`.
 //
-// PROVES (C3; arch.md `### C3 · Data dependency`, C1 receive-mode): the TYPE
+// PROVES (the data-dependency receive-mode contract): the TYPE
 // system alone rejects an OWNED receive of a value that is not movable into
 // owned delivery. This is the REAL `dagr_core::task::Task`. A data input is
 // delivered by OWNED move (the default receive mode — a bare `Handle<T>`), which
@@ -15,12 +15,12 @@
 // The whole-graph multi-consumer ownership CONFLICT — the same value demanded
 // `owned` by two consumers, or an owned edge into a retrying node without
 // clone-on-read — is an ASSEMBLY error naming both consumers, NOT a compile
-// error, and is asserted by T14 (assembly validation), never here. This fixture
+// error, and is asserted by assembly validation, never here. This fixture
 // keeps only the type-system-decidable half of the model honest.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::task::Task;
 use dagr_core::{RunContext, TaskError};

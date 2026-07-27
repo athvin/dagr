@@ -1,22 +1,20 @@
-//! C5 node-policy tests — ticket T29 (039). Written first, TDD.
+//! Node-policy tests. Written first, TDD.
 //!
-//! These exercise the **full** C5 node-policy surface (arch.md `### C5 · Node
-//! policy`): the immutable per-node policy value, its conservative defaults, its
-//! attach-at-registration API, the full **effective policy** (defaulted values
-//! written out) that reaches the graph artifact, and the policy's participation
-//! in the two graph hashes (C21 / T0.7) — the policy hash vs. the structural
-//! fingerprint split.
+//! These exercise the **full** node-policy surface: the immutable per-node
+//! policy value, its conservative defaults, its attach-at-registration API, the
+//! full **effective policy** (defaulted values written out) that reaches the
+//! graph artifact, and the policy's participation in the two graph hashes — the
+//! policy hash vs. the structural fingerprint split.
 //!
-//! T29 **expands** the minimal `NodePolicy` seam T14 landed and T22's interim
+//! This **expands** the minimal `NodePolicy` seam assembly landed and the interim
 //! retry knob into one home: retries + backoff shape, per-attempt timeout, the
 //! declared per-pool cost vector (working memory / output residency split), the
-//! trigger rule (closed T0.4 set, sourced from the binding typestate), the
+//! trigger rule (a closed set, sourced from the binding typestate), the
 //! constrained execution-class override, group, retention, and durability.
 //!
-//! Downstream *consumption* of these knobs — admission/capacity (T31/C12),
-//! class dispatch (T33/C13), trigger-rule runtime (T34/C15), and the concrete
-//! BLAKE3 fingerprint algorithm and artifact schema (T40/T41/C21) — is out of
-//! scope; this ticket only defines the values they read.
+//! Downstream *consumption* of these knobs — admission/capacity, class dispatch,
+//! trigger-rule runtime, and the concrete BLAKE3 fingerprint algorithm and
+//! artifact schema — is out of scope; this only defines the values they read.
 
 use std::time::Duration;
 
@@ -64,7 +62,7 @@ impl Task for BlockingTask {
     }
 }
 
-/// A durable-contract-satisfying output type (T57 full contract).
+/// A durable-contract-satisfying output type.
 struct DurableBlob;
 impl DurableOutput for DurableBlob {
     fn serialize_reference(&self) -> String {
@@ -373,7 +371,7 @@ fn valid_execution_class_override_on_synchronous_work_assembles() {
 
 // ---------------------------------------------------------------------------
 // Invalid execution-class override on await-bound work fails assembly, naming
-// the node, and does not short-circuit T14's all-problems reporting.
+// the node, and does not short-circuit the all-problems reporting.
 // ---------------------------------------------------------------------------
 
 #[test]

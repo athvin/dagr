@@ -1,10 +1,10 @@
-//! C11 · Readiness tracker — the pure decision engine that decides **what is
-//! eligible to run, and when** (arch.md `### C11 · Readiness tracker`).
+//! Readiness tracker — the pure decision engine that decides **what is
+//! eligible to run, and when**.
 //!
 //! # The countdown model
 //!
 //! The tracker maintains a **per-node remaining-dependency countdown**, seeded
-//! from T14's precomputed [remaining-dependency
+//! from assembly's precomputed [remaining-dependency
 //! counts](crate::assembly::AssemblyArtifact::remaining_dependency_count). When
 //! any node reaches a terminal state, the driver calls
 //! [`notify_terminal`](ReadinessTracker::notify_terminal); each **dependent** of
@@ -17,18 +17,17 @@
 //! # The all-upstreams-terminal evaluation gate
 //!
 //! A node's trigger rule is evaluated **only once its countdown reaches zero** —
-//! never on a partial result (arch.md Vocabulary: *"a rule never fires early on a
-//! partial result"*). Until the last upstream reaches a terminal state, the node
+//! never on a partial result: a rule never fires early on a partial result.
+//! Until the last upstream reaches a terminal state, the node
 //! is neither ready nor propagated: it simply waits. This is what un-batches
 //! readiness — a node becomes ready the instant its own dependencies allow, never
 //! stalled behind an unrelated slow branch that happens to share a level.
 //!
-//! # Fires / can-never-fire → propagated state (the normative T0.4 table)
+//! # Fires / can-never-fire → propagated state (the normative table)
 //!
 //! Once every upstream is terminal, the node's rule is evaluated against the
 //! multiset of upstream terminal states by [`evaluate_rule`], **exactly** per the
-//! T0.4 decision record
-//! (`docs/implementation/010-T0.4-trigger-rule-and-state-tables.md`, §5):
+//! trigger-rule decision table:
 //!
 //! - A node whose rule **fires** becomes **ready** ([`Decision::Ready`]).
 //! - A node whose rule **can never fire** is **immediately assigned its
@@ -36,41 +35,43 @@
 //!   ([`Decision::PropagatedTerminal`]): `upstream-failed`, `upstream-skipped`, or
 //!   (for an `any-failed` contingency that never arose) `skipped`. The
 //!   `upstream-skipped` / `upstream-failed` assignments carry the **originating
-//!   node's identity** (Vocabulary; T0.4).
+//!   node's identity**.
 //!
-//! For `all-succeeded` (the only rule M1 wires onto runtime nodes; §5a): fires
+//! For `all-succeeded` (the only rule wired onto runtime nodes): fires
 //! when every upstream is success-like; otherwise `upstream-skipped` when every
 //! non-success upstream is skip-like, `cancelled` when every non-success upstream
 //! is stop-like, and `upstream-failed` otherwise (any failure-like upstream, or a
 //! cross-class mix). `satisfied-from-prior` counts **success-like**, so a resumed
-//! prior success satisfies a downstream `all-succeeded` (C11 "covered explicitly").
+//! prior success satisfies a downstream `all-succeeded` (a prior success is
+//! "covered explicitly").
 //!
 //! A **propagated-terminal assignment is itself a terminal notification** that
 //! cascades to that node's dependents, without any intervening execution — a
 //! failure that deadens a chain of `all-succeeded` nodes reaches the far end in a
 //! single [`notify_terminal`](ReadinessTracker::notify_terminal) call.
 //!
-//! # The full rule interface, `all-succeeded` behaviour in M1
+//! # The full rule interface, `all-succeeded` behaviour
 //!
-//! [`evaluate_rule`] accepts **all three** rules from T0.4's closed set
+//! [`evaluate_rule`] accepts **all three** rules from the closed set
 //! ([`AllSucceeded`](TriggerRule::AllSucceeded),
 //! [`AllTerminal`](TriggerRule::AllTerminal),
-//! [`AnyFailed`](TriggerRule::AnyFailed)), so T34 can enable `all-terminal` and
-//! `any-failed` **runtime firing** without reshaping the tracker. M1 exercises the
-//! `all-succeeded` fires / can-never-fire branches on runtime nodes; the other two
-//! table entries stay reachable through the same seam (their runtime firing —
-//! stop-mode contingency admission and the like — is T34, C15).
+//! [`AnyFailed`](TriggerRule::AnyFailed)), so `all-terminal` and
+//! `any-failed` **runtime firing** can be enabled without reshaping the tracker.
+//! The `all-succeeded` fires / can-never-fire branches run on runtime nodes; the
+//! other two table entries stay reachable through the same seam (their runtime
+//! firing — stop-mode contingency admission and the like — is wired separately).
 //!
 //! # Boundaries (what this is NOT)
 //!
 //! The tracker is a **pure decision engine**: no spawning, no scheduling, no
 //! timers, no event writing, no I/O. It consumes terminal-state notifications and
 //! emits ready-node and propagated-terminal decisions — nothing else. The run-loop
-//! driver (T24) admits and spawns work and feeds outcomes back; admission control
-//! (C12), failure-policy runtime (C15/T34), teardown (C17), and the event stream
-//! (C19) all belong to other tickets. The tracker's
-//! [`pending_count`](ReadinessTracker::pending_count) gives T24 the *"nothing
-//! pending"* half of the run-end condition; the *"in flight"* half is the driver's.
+//! driver admits and spawns work and feeds outcomes back; admission control,
+//! failure-policy runtime, teardown, and the event stream all belong elsewhere.
+//! The tracker's
+//! [`pending_count`](ReadinessTracker::pending_count) gives the driver the
+//! *"nothing pending"* half of the run-end condition; the *"in flight"* half is
+//! the driver's.
 
 use std::collections::BTreeMap;
 
@@ -81,7 +82,7 @@ use crate::flow::Pipeline;
 use crate::handle::NodeId;
 
 /// The **state class** a terminal state belongs to — the total four-class
-/// partition trigger rules are defined over (arch.md Vocabulary; T0.4 §3).
+/// partition trigger rules are defined over.
 ///
 /// Every one of the nine terminal states belongs to **exactly one** class, which
 /// is what makes [`evaluate_rule`] total over the taxonomy.
@@ -97,7 +98,7 @@ enum StateClass {
     Stop,
 }
 
-/// The state class of a terminal state (T0.4 §3 — the total partition).
+/// The state class of a terminal state (the total partition).
 const fn class_of(state: TerminalState) -> StateClass {
     match state {
         TerminalState::Succeeded | TerminalState::SatisfiedFromPrior => StateClass::Success,
@@ -111,7 +112,7 @@ const fn class_of(state: TerminalState) -> StateClass {
 }
 
 /// The outcome of evaluating a node's trigger rule against its upstreams' terminal
-/// states, once **every** upstream is terminal (T0.4 §5).
+/// states, once **every** upstream is terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleOutcome {
     /// The rule **fires**: the node becomes ready and executes.
@@ -126,17 +127,17 @@ pub enum RuleOutcome {
 }
 
 /// Evaluate a node's trigger `rule` against its `upstreams`' terminal states,
-/// **exactly** per T0.4's fires / can-never-fire decision table (§5).
+/// **exactly** per the fires / can-never-fire decision table.
 ///
 /// The caller must invoke this **only once every upstream is terminal** (the
-/// all-upstreams-terminal gate — arch.md Vocabulary); passing a partial picture
+/// all-upstreams-terminal gate); passing a partial picture
 /// would violate the invariant the table is total over. `upstreams` is the
 /// multiset of the node's upstreams' terminal states, in any order — the outcome
-/// depends only on the *classes* present (T0.4 §5), never on order.
+/// depends only on the *classes* present, never on order.
 ///
-/// The seam accepts **all three** rules from T0.4's closed set so `all-terminal`
+/// The seam accepts **all three** rules from the closed set so `all-terminal`
 /// and `any-failed` are reachable without reshaping the tracker (their *runtime
-/// firing* is T34); M1 wires only `all-succeeded` onto runtime nodes.
+/// firing* is wired separately); only `all-succeeded` is wired onto runtime nodes.
 ///
 /// # Panics
 ///
@@ -153,7 +154,7 @@ pub fn evaluate_rule(rule: TriggerRule, upstreams: &[TerminalState]) -> RuleOutc
     match rule {
         TriggerRule::AllSucceeded => eval_all_succeeded(upstreams),
         TriggerRule::AllTerminal => {
-            // §5b: fires whenever every upstream is terminal, regardless of class;
+            // Fires whenever every upstream is terminal, regardless of class;
             // no can-never-fire case, never propagates failure. The gate already
             // guarantees every upstream is terminal.
             RuleOutcome::Fires
@@ -162,7 +163,7 @@ pub fn evaluate_rule(rule: TriggerRule, upstreams: &[TerminalState]) -> RuleOutc
     }
 }
 
-/// T0.4 §5a — `all-succeeded`. Fires when every upstream is success-like;
+/// `all-succeeded`. Fires when every upstream is success-like;
 /// otherwise `upstream-skipped` (all non-success skip-like), `cancelled` (all
 /// non-success stop-like), or `upstream-failed` (any failure-like, or a
 /// cross-class mix).
@@ -200,7 +201,7 @@ fn eval_all_succeeded(upstreams: &[TerminalState]) -> RuleOutcome {
     }
 }
 
-/// T0.4 §5c — `any-failed`. Fires when at least one upstream is failure-like (a
+/// `any-failed`. Fires when at least one upstream is failure-like (a
 /// transitively `upstream-failed` upstream counts); otherwise the contingency
 /// never arose → `skipped`.
 fn eval_any_failed(upstreams: &[TerminalState]) -> RuleOutcome {
@@ -215,9 +216,9 @@ fn eval_any_failed(upstreams: &[TerminalState]) -> RuleOutcome {
 }
 
 /// One downstream decision a [`notify_terminal`](ReadinessTracker::notify_terminal)
-/// unlocked (C11 hand-off, T0.4 §8).
+/// unlocked.
 ///
-/// The driver (T24) acts on these: it admits and spawns a [`Ready`](Decision::Ready)
+/// The driver acts on these: it admits and spawns a [`Ready`](Decision::Ready)
 /// node, and records a [`PropagatedTerminal`](Decision::PropagatedTerminal) node's
 /// state directly (that node never executes). A propagated-terminal decision has
 /// already been folded back into the tracker's own state before it is returned, so
@@ -229,7 +230,7 @@ pub enum Decision {
     /// [`notify_terminal`](ReadinessTracker::notify_terminal).
     Ready(NodeId),
     /// The node's rule can never fire: it is **assigned a propagated terminal
-    /// state without executing** (C11; T0.4 §5). The driver records the state; it
+    /// state without executing**. The driver records the state; it
     /// must **not** run or re-notify the node.
     PropagatedTerminal {
         /// The node assigned the propagated state.
@@ -238,22 +239,22 @@ pub enum Decision {
         /// `cancelled`, or (for `any-failed`) `skipped`.
         state: TerminalState,
         /// The **originating node's identity** the propagation carries: the
-        /// upstream whose failure or skip made the rule unsatisfiable (Vocabulary;
-        /// T0.4). For a cascade, this is the immediate upstream that carried the
+        /// upstream whose failure or skip made the rule unsatisfiable. For a
+        /// cascade, this is the immediate upstream that carried the
         /// deciding class into this node.
         origin: NodeId,
     },
 }
 
 /// Per-node bookkeeping the tracker maintains, keyed by node name for
-/// determinism (node identity is name-derived — T0.7).
+/// determinism (node identity is name-derived).
 #[derive(Debug, Clone)]
 struct NodeState {
     /// The node's opaque identity (name-derived).
     id: NodeId,
-    /// The node's trigger rule (from the pipeline; T0.4 / T11).
+    /// The node's trigger rule (from the pipeline).
     rule: TriggerRule,
-    /// Remaining upstreams not yet terminal — the C11 countdown. Reaches zero when
+    /// Remaining upstreams not yet terminal — the countdown. Reaches zero when
     /// every upstream is terminal, gating rule evaluation.
     remaining: u32,
     /// The terminal states of upstreams that have already terminated, paired with
@@ -268,9 +269,9 @@ struct NodeState {
     dependents: Vec<String>,
 }
 
-/// The C11 **readiness tracker**: a pure state machine that, given upstream
+/// The **readiness tracker**: a pure state machine that, given upstream
 /// terminal-state notifications, decides the next ready nodes and the immediate
-/// propagated-terminal assignments (arch.md `### C11 · Readiness tracker`).
+/// propagated-terminal assignments.
 ///
 /// Build one from an immutable [`Pipeline`] and its [`AssemblyArtifact`] with
 /// [`new`](ReadinessTracker::new); read the starting frontier from
@@ -280,15 +281,15 @@ struct NodeState {
 /// [`pending_count`](ReadinessTracker::pending_count) for the *"nothing pending"*
 /// run-end signal. See the [module docs](self) for the countdown model, the
 /// all-upstreams-terminal gate, and the fires / can-never-fire → propagated-state
-/// mapping (T0.4 is the normative table).
+/// mapping.
 ///
 /// The tracker **spawns nothing, schedules nothing, times nothing, and writes no
-/// events** — it is the pure readiness half of the run loop; the driver (T24) owns
+/// events** — it is the pure readiness half of the run loop; the driver owns
 /// the rest.
 #[derive(Debug, Clone)]
 pub struct ReadinessTracker {
     /// Per-node bookkeeping, keyed by identity name (order-insensitive,
-    /// deterministic — the T0.7 canonical key).
+    /// deterministic — the canonical key).
     nodes: BTreeMap<String, NodeState>,
     /// The source frontier: nodes whose countdown was zero at construction (no
     /// dependencies), ready without any notification. In name order.
@@ -302,11 +303,11 @@ impl ReadinessTracker {
     /// Build a tracker over an immutable `pipeline` and its precomputed
     /// `artifact`.
     ///
-    /// The per-node countdown is seeded from T14's
+    /// The per-node countdown is seeded from assembly's
     /// [remaining-dependency counts](AssemblyArtifact::remaining_dependency_count),
     /// the dependents map and trigger rules are read from the pipeline's recorded
-    /// edges — **both** data edges and the node's structural **ordering** edges
-    /// (C4 / T50), which count toward the countdown exactly like data upstreams but
+    /// edges — **both** data edges and the node's structural **ordering** edges,
+    /// which count toward the countdown exactly like data upstreams but
     /// deliver no value — and the [initial-ready frontier](Self::initial_ready)
     /// collects every zero-dependency (source) node, ready from the start. The
     /// `pipeline` and `artifact` must describe the same assembled graph (pass the
@@ -317,25 +318,25 @@ impl ReadinessTracker {
         Self::new_with_ordering(pipeline, artifact, &BTreeMap::new())
     }
 
-    /// Build a tracker that additionally honours **run-level ordering upstreams**
-    /// (C15 / T34): `ordering` maps a node's name to the names of nodes it must
+    /// Build a tracker that additionally honours **run-level ordering upstreams**:
+    /// `ordering` maps a node's name to the names of nodes it must
     /// run *after* even though it consumes no value from them.
     ///
     /// This is the seam by which a **consume-nothing node with a non-default
     /// trigger rule** (`all-terminal` / `any-failed`) acquires the upstreams its
-    /// rule is evaluated against — the runtime firing of the non-default rules
-    /// (arch.md C15) that T18 left to T34. An ordering upstream counts toward the
+    /// rule is evaluated against — the runtime firing of the non-default rules. An
+    /// ordering upstream counts toward the
     /// node's countdown and contributes its terminal state to the picture
     /// [`evaluate_rule`] sees, exactly like a data upstream, but delivers **no
     /// value** — so it is the only kind of upstream a non-default-rule node may
-    /// have (data upstreams force `all-succeeded`, C3/C4). The graph-authoring
+    /// have (data upstreams force `all-succeeded`). The graph-authoring
     /// ordering-edge API, its compile-time attach rules, and its fingerprint /
-    /// render treatment are **T50**; this run-level seam seeds only the tracker's
+    /// render treatment live elsewhere; this run-level seam seeds only the tracker's
     /// dependency structure and touches neither the graph artifact nor the
     /// fingerprint.
     ///
     /// An empty `ordering` map yields exactly the same tracker as
-    /// [`new`](Self::new) — the seam is purely additive, so the M1 `all-succeeded`
+    /// [`new`](Self::new) — the seam is purely additive, so the `all-succeeded`
     /// data-edge behaviour is unchanged. An ordering entry naming an unknown
     /// upstream (not in the pipeline) is ignored, mirroring how [`new`](Self::new)
     /// ignores a data edge whose upstream is absent.
@@ -347,10 +348,10 @@ impl ReadinessTracker {
     ) -> Self {
         // Resolve each node's distinct, in-pipeline ordering upstreams (name-keyed,
         // deduped) — the extra upstreams beyond data edges. Two sources combine:
-        //   1. the node's STRUCTURAL ordering edges (C4 / T50) recorded on the
+        //   1. the node's STRUCTURAL ordering edges recorded on the
         //      pipeline itself — real graph shape, present in every run of this
         //      graph; and
-        //   2. the RUN-LEVEL `ordering` map (C15 / T34) — a runtime-only seam a
+        //   2. the RUN-LEVEL `ordering` map — a runtime-only seam a
         //      driver may add on top (an empty map contributes nothing).
         // Both are treated identically by readiness: an ordering upstream must be
         // terminal and contributes its terminal state to the rule picture, but
@@ -373,7 +374,7 @@ impl ReadinessTracker {
             ups
         };
 
-        // Teardown nodes (C17 / T52) are deliberately EXCLUDED from the readiness
+        // Teardown nodes are deliberately EXCLUDED from the readiness
         // graph: they run in the driver's dedicated post-loop teardown phase — on
         // every exit path, under a fresh uncancelled signal, bypassing admission —
         // not as part of the main frontier. Leaving them out here keeps them from
@@ -454,15 +455,15 @@ impl ReadinessTracker {
     }
 
     /// The **initial-ready frontier**: every node with zero dependencies, ready
-    /// from the start without any notification (C11). In deterministic name order.
-    /// This is the starting frontier the driver (T24) admits first.
+    /// from the start without any notification. In deterministic name order.
+    /// This is the starting frontier the driver admits first.
     #[must_use]
     pub fn initial_ready(&self) -> &[NodeId] {
         &self.initial_ready
     }
 
     /// The current **remaining-dependency countdown** for `node` — how many of its
-    /// upstreams have not yet reached a terminal state (C11) — or `None` if no node
+    /// upstreams have not yet reached a terminal state — or `None` if no node
     /// carries that identity. Reaches zero when every upstream is terminal, gating
     /// the node's trigger-rule evaluation.
     #[must_use]
@@ -471,8 +472,8 @@ impl ReadinessTracker {
     }
 
     /// Whether `node` has been **decided** — assigned a terminal state, either an
-    /// executed-terminal from the driver or a propagated-terminal by the tracker
-    /// (C11). A decided node is no longer pending.
+    /// executed-terminal from the driver or a propagated-terminal by the tracker.
+    /// A decided node is no longer pending.
     #[must_use]
     pub fn is_decided(&self, node: NodeId) -> bool {
         self.node_state(node).is_some_and(|s| s.decided.is_some())
@@ -480,15 +481,15 @@ impl ReadinessTracker {
 
     /// The **terminal state** `node` was decided with, or `None` if it is still
     /// pending (or no node carries that identity). Every node ends in exactly one
-    /// terminal state, assigned exactly once (Vocabulary).
+    /// terminal state, assigned exactly once.
     #[must_use]
     pub fn terminal_state(&self, node: NodeId) -> Option<TerminalState> {
         self.node_state(node).and_then(|s| s.decided)
     }
 
     /// The number of nodes still **pending** (not yet decided) — the driver's
-    /// *"nothing pending"* half of the run-end condition (C11; the *"in flight"*
-    /// half is the driver's, T24). Reaches zero exactly when every node has a
+    /// *"nothing pending"* half of the run-end condition (the *"in flight"*
+    /// half is the driver's). Reaches zero exactly when every node has a
     /// terminal state.
     #[must_use]
     pub fn pending_count(&self) -> usize {
@@ -496,13 +497,13 @@ impl ReadinessTracker {
     }
 
     /// Notify the tracker that `node` reached terminal `state` — the operation the
-    /// driver (T24) calls when a node reaches **any** terminal state (an
+    /// driver calls when a node reaches **any** terminal state (an
     /// executed-terminal outcome the driver observed).
     ///
     /// This records the node as decided, decrements every dependent's countdown,
     /// and — for each dependent whose countdown thereby reaches zero — evaluates
-    /// its trigger rule against the now-complete upstream picture (arch.md
-    /// Vocabulary: the all-upstreams-terminal gate). A dependent whose rule
+    /// its trigger rule against the now-complete upstream picture (the
+    /// all-upstreams-terminal gate). A dependent whose rule
     /// **fires** is returned as [`Decision::Ready`]; a dependent whose rule **can
     /// never fire** is assigned its propagated terminal state
     /// ([`Decision::PropagatedTerminal`]) *without executing*, and that assignment
@@ -511,7 +512,7 @@ impl ReadinessTracker {
     /// this notification unlocked, in deterministic name order.
     ///
     /// Notifying an **already-decided** node is a **no-op** returning no decisions
-    /// — a node's terminal state is decided exactly once (Vocabulary), so a
+    /// — a node's terminal state is decided exactly once, so a
     /// propagated node the tracker already assigned must not be re-notified into a
     /// second state. An unknown node id is likewise a no-op.
     pub fn notify_terminal(&mut self, node: NodeId, state: TerminalState) -> Vec<Decision> {
@@ -588,8 +589,8 @@ impl ReadinessTracker {
     }
 
     /// The originating-node identity a propagated `state` carries for `dep_name`:
-    /// the immediate upstream whose class decided the propagation (Vocabulary;
-    /// T0.4). For `upstream-failed`, the first failure-like upstream; for
+    /// the immediate upstream whose class decided the propagation. For
+    /// `upstream-failed`, the first failure-like upstream; for
     /// `upstream-skipped`, the first skip-like; for `cancelled`, the first
     /// stop-like; otherwise the deciding upstream best matching the propagated
     /// state's class. Deterministic: the earliest-recorded matching upstream.
@@ -631,7 +632,7 @@ impl ReadinessTracker {
 
 /// The number of distinct in-pipeline upstreams the `edges` reference — the
 /// fallback countdown seed when the artifact lacks a precomputed count (it never
-/// should, for a node that assembled). Mirrors T14's precomputation.
+/// should, for a node that assembled). Mirrors assembly's precomputation.
 fn distinct_upstream_count(pipeline: &Pipeline, edges: &[DataEdge]) -> u32 {
     let mut seen: Vec<NodeId> = Vec::new();
     for id in edges.iter().map(DataEdge::upstream) {

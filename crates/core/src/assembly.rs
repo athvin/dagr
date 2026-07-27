@@ -1,28 +1,25 @@
-//! C7 assembly — the total, pure validation-plus-precomputation pass that turns
-//! the immutable [`Pipeline`] (T13) into a validated, runtime-ready
-//! [`AssemblyArtifact`] (arch.md `### C7 · Flow assembly`).
+//! Flow assembly — the total, pure validation-plus-precomputation pass that turns
+//! the immutable [`Pipeline`] into a validated, runtime-ready
+//! [`AssemblyArtifact`].
 //!
 //! Assembly performs the checks the compiler cannot, and it reports **every**
-//! problem it finds — never just the first (arch.md C7: *"Assembly reports all
-//! problems it finds, not only the first"*). It then precomputes what the
+//! problem it finds — never just the first. It then precomputes what the
 //! runtime consumes and freezes it into the immutable artifact.
 //!
-//! # The assembly/bootstrap seam (T0.5)
+//! # The assembly/bootstrap seam
 //!
 //! Assembly is **pure**: it touches **no network, no filesystem, no clock, no
 //! credentials, and no parameter values**, so the graph is provably
-//! parameter-independent and emittable in an empty environment (arch.md C7;
-//! T0.5 ADR §2). The checks that need the actual machine — capacity/cost-fit, a
-//! missing declared resource, an invalid parameter — belong to **bootstrap**
-//! (T15/T24/T29), not here (T0.5 ADR §5, §7). This module deliberately makes
-//! **no** capacity/cost-fit check.
+//! parameter-independent and emittable in an empty environment. The checks that
+//! need the actual machine — capacity/cost-fit, a missing declared resource, an
+//! invalid parameter — belong to **bootstrap**, not here. This module
+//! deliberately makes **no** capacity/cost-fit check.
 //!
 //! The [`AssemblyArtifact`] exposes **no** path to a parameter value — there is
 //! no field or method that returns one — which is what makes "no parameter value
-//! is reachable during assembly" a structural fact rather than a convention
-//! (T0.5 ADR §2).
+//! is reachable during assembly" a structural fact rather than a convention.
 //!
-//! # What assembly validates (the assembly-side partition rows, T0.5 §7)
+//! # What assembly validates
 //!
 //! Each problem is reported as a distinct, complete [`Problem`]; assembly never
 //! short-circuits on the first:
@@ -31,59 +28,58 @@
 //!   declarations collided (both).
 //! - **Empty pipeline** — no nodes registered.
 //! - **Invalid execution-class override** — an await-bound task overridden to a
-//!   synchronous class (the disallowed direction per C5).
+//!   synchronous class (the disallowed direction).
 //! - **Durable-without-contract** — a node marked durable whose output type does
-//!   not implement the [`DurableOutput`] contract (C27 / T0.8).
+//!   not implement the [`DurableOutput`] contract.
 //! - **Ownership-mode conflict** — an owned (moved) demand on a value with more
 //!   than one consumer (naming producer, offending edge, and consumers), or an
-//!   owned edge into a retrying node with no clone-on-read opt-in (C3 / T0.2).
+//!   owned edge into a retrying node with no clone-on-read opt-in.
 //! - **Nonzero teardown cost** — a teardown node with a nonzero declared cost in
-//!   any pool (C17).
+//!   any pool.
 //!
 //! The **zero-consumer non-`()` output** condition is emitted as a [`Warning`],
 //! not an error: a node whose non-`()` output has zero consumers and is neither
 //! retained nor durable is usually a wiring mistake, but a legitimate effect-only
-//! node is common enough that it is not a failure (arch.md C7).
+//! node is common enough that it is not a failure.
 //!
-//! # What assembly precomputes (T0.5 §1)
+//! # What assembly precomputes
 //!
 //! Frozen into the [`AssemblyArtifact`], computed once: per-node
 //! [consumer count](AssemblyArtifact::consumer_count), per-node
 //! [remaining-dependency count](AssemblyArtifact::remaining_dependency_count)
-//! (the readiness countdown seed, C11), a valid
+//! (the readiness countdown seed), a valid
 //! [execution order](AssemblyArtifact::execution_order) (topological), and the
 //! [fingerprint slot](AssemblyArtifact::fingerprint) (structural fingerprint plus
-//! policy hash per T0.7).
+//! policy hash).
 //!
 //! # The fingerprint slot vs the fingerprint algorithm
 //!
-//! This module **computes** the C21 fingerprint slot using the T0.7 field
-//! composition — the structural fingerprint over the node set (identity names
-//! **and** author-declared stable task / input / output type names), the edge set
+//! This module **computes** the fingerprint slot from the field composition — the
+//! structural fingerprint over the node set (identity names **and**
+//! author-declared stable task / input / output type names), the edge set
 //! (with each data edge's carried type stable name and kind), and trigger rules;
 //! the policy hash over the residual effective-policy values — over a
 //! deterministic, registration-order-independent canonical byte encoding, stamped
-//! with the [`FINGERPRINT_ALGORITHM_VERSION`] (C21 / T41). The **artifact schema
-//! and renderers** (C20 / T40) live downstream. The digest is the dependency-free,
-//! deterministic FNV-1a the name-derived [`NodeId`] already uses; T0.7 §6 named
-//! BLAKE3, but its reopen condition anticipated the MIT-only supply-chain policy
-//! ruling BLAKE3 out (see [`FingerprintSlot`]), so **algorithm v1 is FNV-1a** —
-//! which satisfies every C21 determinism / cross-toolchain requirement.
+//! with the [`FINGERPRINT_ALGORITHM_VERSION`]. The **artifact schema and
+//! renderers** live downstream. The digest is the dependency-free, deterministic
+//! FNV-1a the name-derived [`NodeId`] already uses; an earlier plan named BLAKE3,
+//! but the MIT-only supply-chain policy rules BLAKE3 out (see [`FingerprintSlot`]),
+//! so **algorithm v1 is FNV-1a** — which satisfies every determinism /
+//! cross-toolchain requirement.
 //!
-//! # The full C5 node-policy value (T29)
+//! # The full node-policy value
 //!
-//! [`NodePolicy`] is the **full C5 node-policy value** (T29 expanded the minimal
-//! T14 seam): the durability flag, retention flag, retry count and
-//! [backoff](Backoff) shape (the shape migrated from T22's interim knob),
-//! per-attempt timeout, teardown flag, declared [cost vector](CostVector), and
-//! constrained execution-class override — each with its single conservative C5
-//! default. The trigger rule (set through the binding typestate, T0.4) and the
-//! group label (C6) are policy-adjacent knobs carried on the node rather than in
-//! this value; the resolved [`EffectivePolicy`] — the complete, defaults-written-out
-//! view — surfaces them alongside the policy fields and is what reaches the graph
-//! artifact (arch.md C5). The concrete artifact *schema* / renderers (T40) remain
-//! downstream; this module resolves the effective policy and feeds the right
-//! inputs into the C21 fingerprint slot (T41).
+//! [`NodePolicy`] is the **full node-policy value**: the durability flag,
+//! retention flag, retry count and [backoff](Backoff) shape, per-attempt timeout,
+//! teardown flag, declared [cost vector](CostVector), and constrained
+//! execution-class override — each with its single conservative default. The
+//! trigger rule (set through the binding typestate) and the group label are
+//! policy-adjacent knobs carried on the node rather than in this value; the
+//! resolved [`EffectivePolicy`] — the complete, defaults-written-out view —
+//! surfaces them alongside the policy fields and is what reaches the graph
+//! artifact. The concrete artifact *schema* / renderers remain downstream; this
+//! module resolves the effective policy and feeds the right inputs into the
+//! fingerprint slot.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -95,34 +91,34 @@ use crate::flow::{Pipeline, PipelineNode};
 use crate::handle::NodeId;
 use crate::task::ExecutionClass;
 
-/// The **fingerprint algorithm version** (arch.md C21; T0.7 §7 / T0.10).
+/// The **fingerprint algorithm version**.
 ///
-/// Both graph hashes are stamped with this identifier so a later reader (resume,
-/// C27; the structure-assertion API, C28) can distinguish a genuine topology
-/// difference from **"cannot compare"** — a fingerprint produced by a different
-/// algorithm version. Changing the canonical byte encoding, the structural /
-/// policy field split, or the hash function is an **algorithm-version bump**
-/// (T0.7 §7): it changes what the digest *means*, so this constant must move with
-/// it, and the change is a deliberate, reviewed act — never a silent swap.
+/// Both graph hashes are stamped with this identifier so a later reader (resume;
+/// the structure-assertion API) can distinguish a genuine topology difference
+/// from **"cannot compare"** — a fingerprint produced by a different algorithm
+/// version. Changing the canonical byte encoding, the structural / policy field
+/// split, or the hash function is an **algorithm-version bump**: it changes what
+/// the digest *means*, so this constant must move with it, and the change is a
+/// deliberate, reviewed act — never a silent swap.
 ///
-/// **v1** is the composition fixed by T0.7 (structural fingerprint over the node
-/// set + stable type names + edge set with carried types + trigger rules; policy
-/// hash over the residual effective policy) computed with the dependency-free
-/// FNV-1a digest this module carries (see [`FingerprintSlot`] for the hash-choice
-/// note).
+/// **v1** is the composition of the structural fingerprint (over the node set +
+/// stable type names + edge set with carried types + trigger rules) and the
+/// policy hash (over the residual effective policy), computed with the
+/// dependency-free FNV-1a digest this module carries (see [`FingerprintSlot`] for
+/// the hash-choice note).
 pub const FINGERPRINT_ALGORITHM_VERSION: u64 = 1;
 
 /// The **durable-output reference contract** a node's output type must implement
-/// to be marked durable (arch.md C27; T0.8 ADR §4).
+/// to be marked durable.
 ///
 /// A durable node's output value *is* a reference to where the value durably
-/// lives. Marking a node durable (C5) requires its output type to implement this
+/// lives. Marking a node durable requires its output type to implement this
 /// contract; a durable-marked node whose output type does **not** implement
 /// `DurableOutput` fails assembly with a [`ProblemKind::DurableWithoutContract`]
-/// problem naming the node (T0.8 ADR §5), reported alongside every other assembly
-/// problem (C7). A non-durable node demands nothing of its output type.
+/// problem naming the node, reported alongside every other assembly problem. A
+/// non-durable node demands nothing of its output type.
 ///
-/// # The two operations (T0.8 ADR §4)
+/// # The two operations
 ///
 /// - [`serialize_reference`](DurableOutput::serialize_reference) — produce a
 ///   **self-describing** reference to where the value durably lives (a storage
@@ -131,58 +127,55 @@ pub const FINGERPRINT_ALGORITHM_VERSION: u64 = 1;
 ///   *names* an already-written value. The reference is an owned UTF-8 `String`
 ///   (dagr-core is dependency-free — no `serde`); a `String` is trivially
 ///   serde-serializable downstream and round-trips through the artifact schema's
-///   opaque `durable_reference` slot (C22 / T39). dagr never interprets the
-///   reference's bytes — it serializes, records, existence-checks, and rehydrates
-///   them.
+///   opaque `durable_reference` slot. dagr never interprets the reference's bytes
+///   — it serializes, records, existence-checks, and rehydrates them.
 /// - [`rehydrate`](DurableOutput::rehydrate) — reconstruct the typed value from a
 ///   deserialized reference **later**, possibly in a different process (resume /
 ///   single-node replay). **Fallible** ([`RehydrateError`]) because the referent
 ///   may be gone, unreachable, or corrupt. The contract's async wrapping
-///   (reconstruction is I/O) is applied by **T58** at the resume call site where
-///   the runtime lives; the fallibility the contract fixes is here.
+///   (reconstruction is I/O) is applied at the resume call site where the runtime
+///   lives; the fallibility the contract fixes is here.
 ///
-/// # On the OUTPUT TYPE, not the task (T0.8 ADR §4 rationale)
+/// # On the OUTPUT TYPE, not the task
 ///
 /// The contract sits on the **output type** so any durable value is
 /// reconstructable **regardless of which node produced it** — single-node replay
-/// (C26) and demand-driven resume (C27) must rehydrate an input from a reference
-/// *without running the producing task*. This trait supersedes the T14 assembly
-/// **marker** (which had no methods): the durability policy flag plus the
-/// [`DurableWitness`] captured at the typed registration site still arm assembly's
-/// durable-without-contract check exactly as before.
+/// and demand-driven resume must rehydrate an input from a reference *without
+/// running the producing task*. The durability policy flag plus the
+/// [`DurableWitness`] captured at the typed registration site arm assembly's
+/// durable-without-contract check.
 ///
 /// # Scope boundaries this contract deliberately preserves
 ///
 /// - **Teardown-deleted outputs are not resume-safe.** If a teardown that covers a
 ///   durable node executed in the prior run, the node's durable output may have
 ///   been destroyed; resume treats such nodes as not satisfiable and re-executes
-///   them (arch.md C17 ↔ C27). Do not rely on a reference whose referent a teardown
-///   deletes.
+///   them. Do not rely on a reference whose referent a teardown deletes.
 /// - **In-memory outputs cannot be rehydrated.** A non-durable node produces an
 ///   in-memory value with no reference; a re-running consumer that demands it forces
-///   the producer to re-execute (arch.md C27). This is why the contract is required
+///   the producer to re-execute. This is why the contract is required
 ///   **only** on durable-marked nodes — it creates useful authoring pressure to make
-///   expensive stage boundaries produce durable, addressable outputs (C10).
+///   expensive stage boundaries produce durable, addressable outputs.
 ///
 /// The cheap existence **probe** (present / absent / cannot-determine) and the
-/// plan-time dangling refusal that consume references at resume are **T58**'s
-/// (T0.8 ADR §7); T57 lands declaration + recording + the serialize/rehydrate
-/// round-trip.
+/// plan-time dangling refusal that consume references at resume live at the
+/// resume call site; declaration, recording, and the serialize/rehydrate
+/// round-trip are this module's.
 pub trait DurableOutput {
     /// Produce the self-describing durable reference for an **already-written**
-    /// value (T0.8 ADR §4). Infallible: the value is in external storage by the
-    /// time this is called; this only *names* it. The returned `String` is
-    /// recorded verbatim in the attempt's artifact record (C22).
+    /// value. Infallible: the value is in external storage by the time this is
+    /// called; this only *names* it. The returned `String` is recorded verbatim
+    /// in the attempt's artifact record.
     fn serialize_reference(&self) -> String;
 
-    /// Reconstruct the typed value from a durable reference later (T0.8 ADR §4).
+    /// Reconstruct the typed value from a durable reference later.
     ///
     /// Fallible: the referent may be [absent](RehydrateError::is_absent) (a
     /// dangling reference), transiently unreachable, or corrupt. Given the same
     /// reference [`serialize_reference`](DurableOutput::serialize_reference)
     /// produced, this yields a value **equal** to the original (a lossless
     /// round-trip through a serialized reference). The async wrapping (I/O) is
-    /// T58's at the resume call site.
+    /// applied at the resume call site.
     ///
     /// # Errors
     ///
@@ -194,8 +187,7 @@ pub trait DurableOutput {
 }
 
 /// The **durable-contract witness** a node carries: whether its
-/// statically-known output type implements the [`DurableOutput`] contract (T0.8
-/// ADR §5).
+/// statically-known output type implements the [`DurableOutput`] contract.
 ///
 /// Stable Rust has no specialization, so a generic registrar cannot ask "does
 /// `T::Output` implement `DurableOutput`?" through its type parameter. The
@@ -204,9 +196,9 @@ pub trait DurableOutput {
 /// `T::Output: DurableOutput` and passes [`DurableWitness::Present`], while the
 /// ordinary policy path passes [`DurableWitness::Absent`]. A node whose policy
 /// marks it durable but whose witness is [`Absent`](DurableWitness::Absent) is an
-/// **assembly** failure (not a compile error) — exactly the partition T0.8 §5
-/// fixes: the durable flag can be set on any node, but only a node whose output
-/// type proves the contract carries a `Present` witness.
+/// **assembly** failure (not a compile error): the durable flag can be set on any
+/// node, but only a node whose output type proves the contract carries a
+/// `Present` witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DurableWitness {
     /// The output type is proven to implement the [`DurableOutput`] contract.
@@ -216,7 +208,7 @@ pub enum DurableWitness {
 }
 
 /// Detect whether a node's output type `T` is the unit type `()`, so assembly can
-/// skip the zero-consumer warning for a legitimate effect-only node (arch.md C7).
+/// skip the zero-consumer warning for a legitimate effect-only node.
 ///
 /// This uses [`TypeId`](std::any::TypeId) equality — a stable, generic way to
 /// recognize a concrete type through a type parameter (unlike a trait-bound
@@ -227,35 +219,34 @@ pub fn output_is_unit<T: 'static>() -> bool {
     std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>()
 }
 
-/// The declared **per-pool cost vector** for a node (T0.5 ADR §4).
+/// The declared **per-pool cost vector** for a node.
 ///
 /// One entry per admission pool in that pool's native unit: **bytes** for the
 /// memory pool (split into working memory and output residency), and a **thread
-/// count** for each thread pool (blocking, compute — T2). The conservative
-/// default is **zero across every pool** (T0.5 ADR §5), so a node with no stated
-/// cost behaves identically to one with an all-zero cost written out.
+/// count** for each thread pool (blocking, compute). The conservative default is
+/// **zero across every pool**, so a node with no stated cost behaves identically
+/// to one with an all-zero cost written out.
 ///
-/// Assembly reads this vector only to enforce the **nonzero-teardown-cost** rule
-/// (C17): a teardown node's declared cost must be zero. The **capacity/cost-fit**
-/// check (a cost no pool can satisfy) is **bootstrap's**, not assembly's — the
-/// machine is absent here (T0.5 ADR §5). T29 owns the full cost struct; this is
-/// the minimal shape assembly validates.
+/// Assembly reads this vector only to enforce the **nonzero-teardown-cost** rule:
+/// a teardown node's declared cost must be zero. The **capacity/cost-fit** check
+/// (a cost no pool can satisfy) is **bootstrap's**, not assembly's — the machine
+/// is absent here. This is the minimal shape assembly validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CostVector {
     /// Working memory in **bytes** — held for the attempt, released at its
-    /// terminal state (T0.5 ADR §4).
+    /// terminal state.
     working_memory: u64,
     /// Output residency in **bytes** — transferred to the output slot on
-    /// production, released when the last consumer is terminal (C10; T0.5 §4).
+    /// production, released when the last consumer is terminal.
     output_residency: u64,
-    /// Thread count drawn from the **blocking** pool (T2).
+    /// Thread count drawn from the **blocking** pool.
     blocking_threads: u32,
-    /// Thread count drawn from the **compute** pool (T2).
+    /// Thread count drawn from the **compute** pool.
     compute_threads: u32,
 }
 
 impl CostVector {
-    /// Whether every pool's entry is zero — the conservative default (T0.5 §5).
+    /// Whether every pool's entry is zero — the conservative default.
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.working_memory == 0
@@ -265,75 +256,71 @@ impl CostVector {
     }
 
     /// The declared **working-memory** cost in bytes — held for the attempt,
-    /// released at its terminal state (T0.5 §4). Zero by default.
+    /// released at its terminal state. Zero by default.
     #[must_use]
     pub fn working_memory(&self) -> u64 {
         self.working_memory
     }
 
     /// The declared **output-residency** cost in bytes — transferred to the
-    /// output slot on production, released when the last consumer is terminal
-    /// (C10; T0.5 §4). Zero by default; distinct from working memory (the memory
-    /// pool's two-way split).
+    /// output slot on production, released when the last consumer is terminal.
+    /// Zero by default; distinct from working memory (the memory pool's two-way
+    /// split).
     #[must_use]
     pub fn output_residency(&self) -> u64 {
         self.output_residency
     }
 
-    /// The declared **blocking-pool** thread count (T0.5 §4 / T2). Zero by
-    /// default.
+    /// The declared **blocking-pool** thread count. Zero by default.
     #[must_use]
     pub fn blocking_threads(&self) -> u32 {
         self.blocking_threads
     }
 
-    /// The declared **compute-pool** thread count (T0.5 §4 / T2). Zero by
-    /// default.
+    /// The declared **compute-pool** thread count. Zero by default.
     #[must_use]
     pub fn compute_threads(&self) -> u32 {
         self.compute_threads
     }
 }
 
-/// The **full C5 node-policy value** — the immutable per-node operational knobs,
-/// attached at registration and kept out of the task's logic (arch.md `### C5 ·
-/// Node policy`; T29 expands the minimal T14 seam).
+/// The **full node-policy value** — the immutable per-node operational knobs,
+/// attached at registration and kept out of the task's logic.
 ///
 /// It carries every author-settable policy field, each with its single
-/// documented conservative default applied uniformly (arch.md C5): **no retries**
+/// documented conservative default applied uniformly: **no retries**
 /// ([`retries`](NodePolicy::retries)), the retry [backoff](NodePolicy::backoff)
-/// shape (the shape migrated from T22's interim knob, consulted only when retries
-/// are granted), **no** per-attempt [timeout](NodePolicy::timeout), **zero**
-/// declared [cost](CostVector) on every pool (working memory / output residency /
-/// blocking / compute), the constrained execution-class
-/// [override](NodePolicy::execution_class) (default: the class the task
-/// declared), **not** [retained](NodePolicy::retained) (release the output once
-/// consumed), and **not** [durable](NodePolicy::durable). The teardown flag
-/// ([`teardown`](NodePolicy::teardown)) is carried alongside for the C17
+/// shape (consulted only when retries are granted), **no** per-attempt
+/// [timeout](NodePolicy::timeout), **zero** declared [cost](CostVector) on every
+/// pool (working memory / output residency / blocking / compute), the constrained
+/// execution-class [override](NodePolicy::execution_class) (default: the class the
+/// task declared), **not** [retained](NodePolicy::retained) (release the output
+/// once consumed), and **not** [durable](NodePolicy::durable). The teardown flag
+/// ([`teardown`](NodePolicy::teardown)) is carried alongside for the
 /// nonzero-cost check.
 ///
 /// # The trigger rule and the group label live *beside* the policy value
 ///
-/// Two C5-adjacent knobs are **not** fields of this struct, and deliberately so:
+/// Two policy-adjacent knobs are **not** fields of this struct, and deliberately
+/// so:
 ///
-/// - The **trigger rule** (T0.4) is set through the binding typestate
+/// - The **trigger rule** is set through the binding typestate
 ///   ([`NodeBinding`](crate::binding::NodeBinding)) so that a non-default rule is
 ///   *inexpressible* on a data-dependent node (a compile error, not a runtime
-///   check — arch.md §126). Putting a settable `trigger_rule` on `NodePolicy`
-///   would weaken that constraint, which T29 must not do. The **effective**
-///   trigger rule is exposed on the resolved [`EffectivePolicy`], sourced from the
-///   node's binding.
-/// - The **group label** (C6) is presentation metadata attached at registration
+///   check). Putting a settable `trigger_rule` on `NodePolicy` would weaken that
+///   constraint. The **effective** trigger rule is exposed on the resolved
+///   [`EffectivePolicy`], sourced from the node's binding.
+/// - The **group label** is presentation metadata attached at registration
 ///   (`register_*_in_group`) and excluded from node identity and both hashes; it
 ///   too surfaces on [`EffectivePolicy`], sourced from the node.
 ///
-/// # Which hash each field feeds (C21 / T0.7)
+/// # Which hash each field feeds
 ///
 /// The policy values (retries, backoff, timeout, costs, effective class,
 /// retention, durability) feed the **policy hash**; the trigger rule feeds the
 /// **structural fingerprint**; the group label feeds **neither**. A node with no
-/// stated policy hashes **identically** to one with every default written out
-/// (arch.md C5), because both resolve to the same effective values.
+/// stated policy hashes **identically** to one with every default written out,
+/// because both resolve to the same effective values.
 ///
 /// Set it fluently at registration with [`Flow::register_source_with`] /
 /// [`Flow::register_with`](crate::flow::Flow::register_with); the value is
@@ -353,12 +340,10 @@ pub struct NodePolicy {
 }
 
 impl Default for NodePolicy {
-    /// The conservative C5 defaults, applied uniformly (arch.md C5: *"no retries,
-    /// no timeout, zero declared cost, … release the output once consumed, not
-    /// durable"*): not durable, not retained, no retries, the default backoff
-    /// shape (never consulted under no retries), no per-attempt timeout, not a
-    /// teardown, zero cost, no class override (the class the task declared
-    /// stands).
+    /// The conservative defaults, applied uniformly: not durable, not retained,
+    /// no retries, the default backoff shape (never consulted under no retries),
+    /// no per-attempt timeout, not a teardown, zero cost, no class override (the
+    /// class the task declared stands).
     fn default() -> Self {
         Self {
             durable: false,
@@ -374,78 +359,76 @@ impl Default for NodePolicy {
 }
 
 /// The default retry [`Backoff`] shape carried by a policy with no retries — a
-/// small base with exponential growth and an effectively-uncapped ceiling,
-/// matching T22's interim `RetryConfig::default` backoff. It is never consulted
-/// under the no-retry default (the single attempt schedules no wait); it is the
-/// starting point an author refines with [`NodePolicy::backoff`].
+/// small base with exponential growth and an effectively-uncapped ceiling. It is
+/// never consulted under the no-retry default (the single attempt schedules no
+/// wait); it is the starting point an author refines with [`NodePolicy::backoff`].
 fn default_backoff() -> Backoff {
     Backoff::new(Duration::from_millis(100), 2.0, Duration::MAX)
 }
 
 impl NodePolicy {
-    /// A fresh policy carrying every conservative C5 default.
+    /// A fresh policy carrying every conservative default.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Mark the node's output **durable** (C27 / C5). Assembly rejects a durable
-    /// node whose output type does not implement [`DurableOutput`] (T0.8 §5). The
-    /// default is **not durable**.
+    /// Mark the node's output **durable**. Assembly rejects a durable node whose
+    /// output type does not implement [`DurableOutput`]. The default is **not
+    /// durable**.
     #[must_use]
     pub fn durable(mut self, durable: bool) -> Self {
         self.durable = durable;
         self
     }
 
-    /// Mark the node's output **retained** after its consumers finish (C10 / C5).
-    /// A retained zero-consumer node produces no zero-consumer warning. The
-    /// default is **not retained**.
+    /// Mark the node's output **retained** after its consumers finish. A retained
+    /// zero-consumer node produces no zero-consumer warning. The default is **not
+    /// retained**.
     #[must_use]
     pub fn retained(mut self, retained: bool) -> Self {
         self.retained = retained;
         self
     }
 
-    /// Set the node's **retry count** (C5 / C14): the number of retries *beyond*
-    /// the first attempt, so `retries(0)` is a single attempt (the default) and
+    /// Set the node's **retry count**: the number of retries *beyond* the first
+    /// attempt, so `retries(0)` is a single attempt (the default) and
     /// `retries(2)` allows three attempts total. An owned input edge into a node
     /// with a nonzero retry count fails assembly unless that edge opts into
-    /// clone-on-read (arch.md C1 "Ownership of inputs"). The default is **no
-    /// retries**. Retry configuration lives in exactly this one home — the attempt
-    /// runner reads it via [`retry_config`](NodePolicy::retry_config).
+    /// clone-on-read. The default is **no retries**. Retry configuration lives in
+    /// exactly this one home — the attempt runner reads it via
+    /// [`retry_config`](NodePolicy::retry_config).
     #[must_use]
     pub fn retries(mut self, retries: u32) -> Self {
         self.retries = retries;
         self
     }
 
-    /// Set the retry **backoff shape** (C5 / C14): the base delay, exponential
-    /// growth factor, and cap the retry loop waits between attempts (arch.md C14:
-    /// *"Backoff is exponential with jitter and a cap"*). This is the shape
-    /// migrated from T22's interim knob into the one policy home; it is consulted
-    /// only when [`retries`](NodePolicy::retries) grants a retry (a single attempt
-    /// waits nothing). The default is a small base, exponential growth, and an
-    /// effectively-uncapped ceiling (matching T22's interim `RetryConfig` backoff).
+    /// Set the retry **backoff shape**: the base delay, exponential growth factor,
+    /// and cap the retry loop waits between attempts (backoff is exponential with
+    /// jitter and a cap). It is consulted only when
+    /// [`retries`](NodePolicy::retries) grants a retry (a single attempt waits
+    /// nothing). The default is a small base, exponential growth, and an
+    /// effectively-uncapped ceiling.
     #[must_use]
     pub fn backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
         self
     }
 
-    /// Set the node's **per-attempt timeout** (C5 / T21): the wall-clock budget
-    /// each attempt has before it is [`timed-out`](crate::TerminalState::TimedOut).
-    /// The default is **no timeout** ([`None`]); use [`timeout_off`](NodePolicy::timeout_off)
+    /// Set the node's **per-attempt timeout**: the wall-clock budget each attempt
+    /// has before it is [`timed-out`](crate::TerminalState::TimedOut). The default
+    /// is **no timeout** ([`None`]); use [`timeout_off`](NodePolicy::timeout_off)
     /// to write the default out explicitly. The timeout is a policy value (it
-    /// feeds the policy hash); *arming* the real timer is the driver's (T24/T33),
-    /// which reads this budget.
+    /// feeds the policy hash); *arming* the real timer is the driver's, which
+    /// reads this budget.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
-    /// Write out the **no-timeout** default explicitly (C5): the node has no
+    /// Write out the **no-timeout** default explicitly: the node has no
     /// per-attempt timeout. Equivalent to leaving [`timeout`](NodePolicy::timeout)
     /// unset — a node with the default and one with the default written out here
     /// behave identically, including under the policy hash.
@@ -455,47 +438,47 @@ impl NodePolicy {
         self
     }
 
-    /// Mark the node a **teardown** node (C17). A teardown node's declared cost
-    /// must be zero — assembly rejects a nonzero-cost teardown (C17). The default
-    /// is **not a teardown**.
+    /// Mark the node a **teardown** node. A teardown node's declared cost must be
+    /// zero — assembly rejects a nonzero-cost teardown. The default is **not a
+    /// teardown**.
     #[must_use]
     pub fn teardown(mut self, teardown: bool) -> Self {
         self.teardown = teardown;
         self
     }
 
-    /// Set the declared **working-memory** cost in bytes (T0.5 §4).
+    /// Set the declared **working-memory** cost in bytes.
     #[must_use]
     pub fn working_memory(mut self, bytes: u64) -> Self {
         self.cost.working_memory = bytes;
         self
     }
 
-    /// Set the declared **output-residency** cost in bytes (T0.5 §4).
+    /// Set the declared **output-residency** cost in bytes.
     #[must_use]
     pub fn output_residency(mut self, bytes: u64) -> Self {
         self.cost.output_residency = bytes;
         self
     }
 
-    /// Set the declared **blocking-pool** thread count (T0.5 §4 / T2).
+    /// Set the declared **blocking-pool** thread count.
     #[must_use]
     pub fn blocking_threads(mut self, threads: u32) -> Self {
         self.cost.blocking_threads = threads;
         self
     }
 
-    /// Set the declared **compute-pool** thread count (T0.5 §4 / T2).
+    /// Set the declared **compute-pool** thread count.
     #[must_use]
     pub fn compute_threads(mut self, threads: u32) -> Self {
         self.cost.compute_threads = threads;
         self
     }
 
-    /// Override the node's **execution class** (C5). Synchronous work may move
-    /// between the blocking and compute classes; await-bound work **cannot** be
-    /// overridden to a synchronous class — an invalid override fails assembly
-    /// (C5). The default is **no override** (the class the task declared stands).
+    /// Override the node's **execution class**. Synchronous work may move between
+    /// the blocking and compute classes; await-bound work **cannot** be overridden
+    /// to a synchronous class — an invalid override fails assembly. The default is
+    /// **no override** (the class the task declared stands).
     #[must_use]
     pub fn execution_class(mut self, class: ExecutionClass) -> Self {
         self.class_override = Some(class);
@@ -531,18 +514,18 @@ impl NodePolicy {
     }
 
     /// The node's **per-attempt timeout** budget, or [`None`] for the no-timeout
-    /// default (C5 / T21). Named distinctly from the
-    /// [`timeout`](NodePolicy::timeout) builder.
+    /// default. Named distinctly from the [`timeout`](NodePolicy::timeout)
+    /// builder.
     #[must_use]
     pub fn timeout_budget(&self) -> Option<Duration> {
         self.timeout
     }
 
-    /// The [`RetryConfig`] the attempt runner (T22 [`run_with_retries`]) reads —
+    /// The [`RetryConfig`] the attempt runner ([`run_with_retries`]) reads —
     /// **derived** from this policy's [`retries`](NodePolicy::retries) and
     /// [`backoff`](NodePolicy::backoff), so retry configuration has exactly one
     /// authoring home (the policy) and the runner never carries a second,
-    /// independently-authored knob (C5; T29 migrates the interim T22 surface).
+    /// independently-authored knob.
     ///
     /// `retries(n)` maps to `n + 1` total attempts (the initial attempt plus `n`
     /// retries), so the no-retry default yields a single-attempt config.
@@ -576,20 +559,19 @@ impl NodePolicy {
     }
 }
 
-/// The **full effective policy** of a node — every C5 policy field resolved to
+/// The **full effective policy** of a node — every policy field resolved to
 /// its concrete value, defaulted fields **written out**, plus the two
 /// policy-adjacent knobs the [`NodePolicy`] value does not itself carry: the
 /// effective [trigger rule](EffectivePolicy::trigger_rule) (from the node's
-/// binding) and the [group label](EffectivePolicy::group) (C6).
+/// binding) and the [group label](EffectivePolicy::group).
 ///
-/// This is what reaches the **graph artifact** (arch.md C5: *"Every node's full
-/// effective policy appears in the graph artifact, including defaulted values"*):
-/// a no-policy node and an all-defaults node produce field-for-field equal
-/// effective policies. The concrete artifact *schema* and its renderers are T40's
-/// (Out of scope here); this is the resolved value T40 serializes and the two
-/// hashes (C21) run over.
+/// This is what reaches the **graph artifact** — every node's full effective
+/// policy appears there, including defaulted values: a no-policy node and an
+/// all-defaults node produce field-for-field equal effective policies. The
+/// concrete artifact *schema* and its renderers are out of scope here; this is
+/// the resolved value the artifact writer serializes and the two hashes run over.
 ///
-/// # Which hash each field feeds (C21 / T0.7)
+/// # Which hash each field feeds
 ///
 /// The policy values — [retries](EffectivePolicy::retry_count),
 /// [backoff](EffectivePolicy::backoff), [timeout](EffectivePolicy::timeout),
@@ -609,8 +591,8 @@ pub struct EffectivePolicy {
 
 impl EffectivePolicy {
     /// Resolve a node's full effective policy from its [`NodePolicy`] value, its
-    /// effective execution class (override applied, C5), its binding trigger rule
-    /// (T0.4), and its group label (C6). Crate-internal — produced by
+    /// effective execution class (override applied), its binding trigger rule, and
+    /// its group label. Crate-internal — produced by
     /// [`PipelineNode::effective_policy`](crate::flow::PipelineNode::effective_policy).
     pub(crate) fn resolve(
         policy: NodePolicy,
@@ -642,7 +624,7 @@ impl EffectivePolicy {
 
     /// The [`RetryConfig`] the attempt runner reads — derived from the effective
     /// [retry count](EffectivePolicy::retry_count) and
-    /// [backoff](EffectivePolicy::backoff), so retries have one home (C5 / T22).
+    /// [backoff](EffectivePolicy::backoff), so retries have one home.
     #[must_use]
     pub fn retry_config(&self) -> RetryConfig {
         self.policy.retry_config()
@@ -656,14 +638,14 @@ impl EffectivePolicy {
     }
 
     /// The declared per-pool [cost vector](CostVector) — one entry per admission
-    /// pool in its native unit, memory split into working / output residency
-    /// (T0.5 §4). Zero on every pool by default. Feeds the policy hash.
+    /// pool in its native unit, memory split into working / output residency.
+    /// Zero on every pool by default. Feeds the policy hash.
     #[must_use]
     pub fn cost(&self) -> CostVector {
         self.policy.cost()
     }
 
-    /// The node's **effective** execution class — the C5 override if one was set,
+    /// The node's **effective** execution class — the override if one was set,
     /// else the class the task declared (await-bound by default). Feeds the policy
     /// hash.
     #[must_use]
@@ -671,16 +653,16 @@ impl EffectivePolicy {
         self.effective_class
     }
 
-    /// The node's **effective trigger rule** (T0.4), sourced from the node's
-    /// binding — [`AllSucceeded`](TriggerRule::AllSucceeded) by default and the
-    /// only rule a data-dependent node can carry (arch.md §126). Feeds the
-    /// **structural fingerprint**, not the policy hash.
+    /// The node's **effective trigger rule**, sourced from the node's binding —
+    /// [`AllSucceeded`](TriggerRule::AllSucceeded) by default and the only rule a
+    /// data-dependent node can carry. Feeds the **structural fingerprint**, not
+    /// the policy hash.
     #[must_use]
     pub fn trigger_rule(&self) -> TriggerRule {
         self.trigger_rule
     }
 
-    /// The node's **group label** (C6), or [`None`] for the no-group default.
+    /// The node's **group label**, or [`None`] for the no-group default.
     /// Presentation metadata only — it feeds **neither** hash and is visible only
     /// as artifact/diagram organization.
     #[must_use]
@@ -688,7 +670,7 @@ impl EffectivePolicy {
         self.group.as_deref()
     }
 
-    /// Whether the node's output is **retained** after its consumers finish (C10):
+    /// Whether the node's output is **retained** after its consumers finish:
     /// kept until run end and redeemable by the embedding program. `false`
     /// (release once consumed) by default. Feeds the policy hash.
     #[must_use]
@@ -696,17 +678,17 @@ impl EffectivePolicy {
         self.policy.is_retained()
     }
 
-    /// Whether the node's output is **durable** (C27): its output type implements
-    /// the durable-reference contract and its reference survives the run. `false`
-    /// by default. Feeds the policy hash; arms the assembly durable-without-contract
+    /// Whether the node's output is **durable**: its output type implements the
+    /// durable-reference contract and its reference survives the run. `false` by
+    /// default. Feeds the policy hash; arms the assembly durable-without-contract
     /// check.
     #[must_use]
     pub fn is_durable(&self) -> bool {
         self.policy.is_durable()
     }
 
-    /// Whether the node is a **teardown** node (C17). Carried on the effective
-    /// policy for completeness; its declared cost must be zero (assembly rejects a
+    /// Whether the node is a **teardown** node. Carried on the effective policy
+    /// for completeness; its declared cost must be zero (assembly rejects a
     /// nonzero-cost teardown).
     #[must_use]
     pub fn is_teardown(&self) -> bool {
@@ -714,8 +696,7 @@ impl EffectivePolicy {
     }
 }
 
-/// The **kind** of an assembly [`Problem`] — one variant per assembly-side check
-/// (T0.5 ADR §7 partition table).
+/// The **kind** of an assembly [`Problem`] — one variant per assembly-side check.
 ///
 /// The enum is [`non_exhaustive`](https://doc.rust-lang.org/reference/attributes/type_system.html)
 /// so a later check can add a variant without a breaking change.
@@ -724,24 +705,23 @@ impl EffectivePolicy {
 pub enum ProblemKind {
     /// Two or more registrations collided under one node name. The [`Problem`]'s
     /// [`declaration_count`](Problem::declaration_count) reports how many
-    /// declarations collided (both), and the message names the duplicated name
-    /// (arch.md C7: *"names both declarations"*).
+    /// declarations collided (both), and the message names the duplicated name.
     DuplicateNodeName,
-    /// The pipeline registered no nodes at all (arch.md C7).
+    /// The pipeline registered no nodes at all.
     EmptyPipeline,
     /// A node's execution-class override is incompatible with the task's declared
-    /// work shape — an await-bound task overridden to a synchronous class (C5).
+    /// work shape — an await-bound task overridden to a synchronous class.
     InvalidExecutionClassOverride,
     /// A node is marked durable but its output type does not implement the
-    /// [`DurableOutput`] contract (C27 / T0.8).
+    /// [`DurableOutput`] contract.
     DurableWithoutContract,
     /// A receive-mode conflict: an owned (moved) demand on a value with more than
     /// one consumer, or an owned edge into a retrying node with no clone-on-read
-    /// opt-in (C3 / T0.2). The message identifies the node(s) and edge involved.
+    /// opt-in. The message identifies the node(s) and edge involved.
     OwnershipModeConflict,
     /// A teardown node declared a nonzero cost in some pool; a teardown's cost
     /// must be zero so its admission bypass stays consistent with the capacity
-    /// invariant (C17).
+    /// invariant.
     NonzeroTeardownCost,
 }
 
@@ -759,10 +739,9 @@ impl ProblemKind {
     }
 }
 
-/// One complete, distinct assembly problem (arch.md C7). Assembly collects every
-/// problem it finds into an [`AssemblyError`]; each carries its
-/// [`kind`](Problem::kind) and a complete human-readable
-/// [`message`](Problem::message).
+/// One complete, distinct assembly problem. Assembly collects every problem it
+/// finds into an [`AssemblyError`]; each carries its [`kind`](Problem::kind) and
+/// a complete human-readable [`message`](Problem::message).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     kind: ProblemKind,
@@ -800,11 +779,11 @@ impl Problem {
     }
 }
 
-/// One assembly **warning** — a condition assembly reports without failing
-/// (arch.md C7). Currently the sole warning is the zero-consumer non-`()` output:
-/// a node whose non-`()` output has zero consumers and is neither retained nor
-/// durable (usually a wiring mistake, but a legitimate effect-only node is common
-/// enough that it is not an error).
+/// One assembly **warning** — a condition assembly reports without failing.
+/// Currently the sole warning is the zero-consumer non-`()` output: a node whose
+/// non-`()` output has zero consumers and is neither retained nor durable
+/// (usually a wiring mistake, but a legitimate effect-only node is common enough
+/// that it is not an error).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Warning {
     message: String,
@@ -819,15 +798,14 @@ impl Warning {
 }
 
 /// The failure an [`assemble`](Pipeline::assemble) returns — the **complete**
-/// list of every problem assembly found, never just the first (arch.md C7).
+/// list of every problem assembly found, never just the first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssemblyError {
     problems: Vec<Problem>,
 }
 
 impl AssemblyError {
-    /// Every problem assembly found, each distinct and complete (arch.md C7:
-    /// *"Assembly reports all problems it finds, not only the first"*).
+    /// Every problem assembly found, each distinct and complete.
     #[must_use]
     pub fn problems(&self) -> &[Problem] {
         &self.problems
@@ -850,27 +828,25 @@ impl std::fmt::Display for AssemblyError {
 
 impl std::error::Error for AssemblyError {}
 
-/// The **fingerprint slot** — the C21 graph fingerprint: the structural
-/// fingerprint and the policy hash (arch.md `### C21 · Graph fingerprint`; T0.7
-/// ADR §§3–7), each stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
+/// The **fingerprint slot** — the graph fingerprint: the structural fingerprint
+/// and the policy hash, each stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
 ///
 /// The **structural fingerprint** covers the node set — each node's identity name
 /// **and** its author-declared stable task / input / output type names — the edge
 /// set (each data edge's endpoints, position, kind, and **carried type stable
-/// name**; each **ordering** edge's endpoints and kind, with no carried type —
-/// C4 / T50), and per-node trigger rules. These are the shape-determining inputs
-/// that gate resume (C27); a structural change (node add/remove/rename, rewire, add
-/// or remove an ordering edge, carried-type change, trigger-rule change) moves it.
-/// The **policy hash** covers
-/// the residual effective-policy values (retries, backoff, timeout, cost,
-/// effective class, retention, durability). Group labels (C6) and everything
-/// environmental — timestamps, hostnames, compiler/tool versions, generation
-/// time, git commit, lockfile hash — are in **neither** hash (T0.7 §5). Both are
+/// name**; each **ordering** edge's endpoints and kind, with no carried type),
+/// and per-node trigger rules. These are the shape-determining inputs that gate
+/// resume; a structural change (node add/remove/rename, rewire, add or remove an
+/// ordering edge, carried-type change, trigger-rule change) moves it. The
+/// **policy hash** covers the residual effective-policy values (retries, backoff,
+/// timeout, cost, effective class, retention, durability). Group labels and
+/// everything environmental — timestamps, hostnames, compiler/tool versions,
+/// generation time, git commit, lockfile hash — are in **neither** hash. Both are
 /// computed over a deterministic, registration-order-independent canonical byte
 /// encoding, so assembling the same source twice — on any machine or toolchain —
 /// yields identical digests, because every hashed input is author-declared.
 ///
-/// # Limitation — internal-logic changes are not detected (C21)
+/// # Limitation — internal-logic changes are not detected
 ///
 /// The fingerprint is composed from author-declared names, edges, trigger rules,
 /// and policy — **never** from a task's function body. **Changing a task's
@@ -884,26 +860,22 @@ impl std::error::Error for AssemblyError {}
 /// version marker on the task** (a version constant that *is* part of the
 /// declared interface and therefore *does* move the fingerprint) — visible,
 /// reviewable, obviously manual. This note is surfaced again for the readers that
-/// meet it: the resume verb (C27, T58) and the structure-assertion API (C28,
-/// T61).
+/// meet it: the resume verb and the structure-assertion API.
 ///
 /// # Hash function — dependency-free FNV-1a (algorithm v1)
 ///
-/// The T0.7 ADR §6 named BLAKE3 as the v1 hash function; its §Consequences reopen
-/// condition anticipated that BLAKE3 might prove **unavailable under the
-/// supply-chain policy**, in which case the choice is revisited rather than
-/// worked around locally. That is the case here: dagr's `deny.toml` allows the
-/// **MIT** license only, and `blake3` and its transitive dependencies
+/// An earlier plan named BLAKE3 as the v1 hash function, on the condition that it
+/// be revisited if BLAKE3 proved **unavailable under the supply-chain policy**
+/// rather than worked around locally. That is the case here: dagr's `deny.toml`
+/// allows the **MIT** license only, and `blake3` and its transitive dependencies
 /// (`arrayref` is BSD-2-Clause; `blake3` / `constant_time_eq` offer only
 /// CC0-1.0 / Apache-2.0 / MIT-0) cannot resolve to MIT and pull a `cc` build-time
 /// C dependency. So **algorithm v1 uses FNV-1a** — the dependency-free digest
-/// already in the tree ([`crate::handle::NodeId`], the T40 build script), which
-/// satisfies every C21 requirement (determinism, cross-toolchain byte-identity,
-/// and the change/no-change matrix) because it is pure integer arithmetic with no
-/// float, locale, or platform dependence. The deviation from the ADR's BLAKE3
-/// naming is recorded in `docs/implementation/DEVIATIONS.md`; adopting a
-/// different hash later is an [algorithm-version](FINGERPRINT_ALGORITHM_VERSION)
-/// bump.
+/// already in the tree ([`crate::handle::NodeId`], the artifact build script),
+/// which satisfies every fingerprint requirement (determinism, cross-toolchain
+/// byte-identity, and the change/no-change matrix) because it is pure integer
+/// arithmetic with no float, locale, or platform dependence. Adopting a different
+/// hash later is an [algorithm-version](FINGERPRINT_ALGORITHM_VERSION) bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FingerprintSlot {
     structural: u64,
@@ -913,16 +885,16 @@ pub struct FingerprintSlot {
 
 impl FingerprintSlot {
     /// The **structural fingerprint** digest (node set + stable type names, edge
-    /// set + carried types, trigger rules — T0.7 §3). Gates resume (C27); a
-    /// structural change moves it.
+    /// set + carried types, trigger rules). Gates resume; a structural change
+    /// moves it.
     #[must_use]
     pub fn structural(&self) -> u64 {
         self.structural
     }
 
-    /// The **policy hash** digest (residual effective policy — T0.7 §4). A
-    /// policy-only change moves this and not the structural fingerprint; a
-    /// divergence is a proceed-with-diff at resume, never a refusal (C21 / C27).
+    /// The **policy hash** digest (residual effective policy). A policy-only
+    /// change moves this and not the structural fingerprint; a divergence is a
+    /// proceed-with-diff at resume, never a refusal.
     #[must_use]
     pub fn policy(&self) -> u64 {
         self.policy
@@ -931,15 +903,14 @@ impl FingerprintSlot {
     /// The **algorithm version** these digests were computed under
     /// ([`FINGERPRINT_ALGORITHM_VERSION`]). Carried alongside the hashes wherever
     /// they appear so a later reader distinguishes "cannot compare" (a version
-    /// mismatch) from a genuine topology difference (T0.7 §7 / C21).
+    /// mismatch) from a genuine topology difference.
     #[must_use]
     pub fn algorithm_version(&self) -> u64 {
         self.algorithm_version
     }
 }
 
-/// The immutable, machine-independent output of pure assembly (arch.md C7; T0.5
-/// ADR §1).
+/// The immutable, machine-independent output of pure assembly.
 ///
 /// It carries the validated graph plus everything assembly precomputes — per-node
 /// [consumer counts](AssemblyArtifact::consumer_count), per-node
@@ -951,12 +922,12 @@ impl FingerprintSlot {
 ///
 /// It is **constructible with every external resource absent** and carries **no**
 /// parameter value, clock reading, filesystem or network state, or credential —
-/// there is deliberately **no** accessor that returns any of those (T0.5 §2).
+/// there is deliberately **no** accessor that returns any of those.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssemblyArtifact {
     /// Precomputed per-node consumer count, keyed by node name for determinism.
     consumer_counts: BTreeMap<String, u32>,
-    /// Precomputed per-node remaining-dependency count (the C11 countdown seed).
+    /// Precomputed per-node remaining-dependency count (the countdown seed).
     remaining_deps: BTreeMap<String, u32>,
     /// A valid topological execution order.
     order: Vec<NodeId>,
@@ -967,7 +938,7 @@ pub struct AssemblyArtifact {
     /// Non-fatal warnings (the zero-consumer non-`()` output warning).
     warnings: Vec<Warning>,
     /// The deterministic canonical byte form (the byte-identity comparison
-    /// surface, generation time aside — C20).
+    /// surface, generation time aside).
     canonical: Vec<u8>,
 }
 
@@ -979,8 +950,8 @@ impl AssemblyArtifact {
     }
 
     /// The precomputed **consumer count** for the node with this identity —
-    /// exact for every node before any execution begins (C10) — or `None` if no
-    /// node carries that identity.
+    /// exact for every node before any execution begins — or `None` if no node
+    /// carries that identity.
     #[must_use]
     pub fn consumer_count(&self, id: NodeId) -> Option<u32> {
         self.consumer_counts
@@ -990,8 +961,8 @@ impl AssemblyArtifact {
     }
 
     /// The precomputed **remaining-dependency count** for the node with this
-    /// identity — the readiness countdown seed (C11) — or `None` if no node
-    /// carries that identity.
+    /// identity — the readiness countdown seed — or `None` if no node carries that
+    /// identity.
     #[must_use]
     pub fn remaining_dependency_count(&self, id: NodeId) -> Option<u32> {
         self.remaining_deps
@@ -1008,7 +979,7 @@ impl AssemblyArtifact {
     }
 
     /// The [fingerprint slot](FingerprintSlot) — structural fingerprint plus
-    /// policy hash (C21 / T0.7).
+    /// policy hash.
     #[must_use]
     pub fn fingerprint(&self) -> FingerprintSlot {
         self.fingerprint
@@ -1016,8 +987,7 @@ impl AssemblyArtifact {
 
     /// The declared **environment-capture allowlist** — the set of environment
     /// variable names bootstrap is permitted to capture later. Empty by default;
-    /// assembly captured **no** values (arch.md C7 / C22). The actual capture is
-    /// bootstrap's (T24/T29).
+    /// assembly captured **no** values. The actual capture is bootstrap's.
     #[must_use]
     pub fn env_allowlist(&self) -> &[String] {
         &self.env_allowlist
@@ -1031,10 +1001,10 @@ impl AssemblyArtifact {
     }
 
     /// The deterministic **canonical byte form** — the surface over which
-    /// byte-identity is defined (C20). Assembling the same pipeline twice in one
-    /// process yields identical bytes (the generation-time field, owned by the
-    /// artifact writer T40, is not part of this pure-assembly slice). Registration
-    /// order does not affect it.
+    /// byte-identity is defined. Assembling the same pipeline twice in one process
+    /// yields identical bytes (the generation-time field, owned by the artifact
+    /// writer, is not part of this pure-assembly slice). Registration order does
+    /// not affect it.
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical
@@ -1042,14 +1012,14 @@ impl AssemblyArtifact {
 }
 
 impl Pipeline {
-    /// Run the C7 **assembly** pass over this immutable pipeline: validate every
+    /// Run the **assembly** pass over this immutable pipeline: validate every
     /// registration and precompute what the runtime needs, returning the
-    /// immutable [`AssemblyArtifact`] (arch.md `### C7 · Flow assembly`).
+    /// immutable [`AssemblyArtifact`].
     ///
     /// Assembly is **total and pure** — it reports **every** problem it finds
     /// (never just the first) and touches no network, filesystem, clock,
     /// credentials, or parameter values. It performs **no** capacity/cost-fit
-    /// check; that is deferred to bootstrap (T0.5 §5).
+    /// check; that is deferred to bootstrap.
     ///
     /// # Errors
     ///
@@ -1062,20 +1032,19 @@ impl Pipeline {
         assemble(self)
     }
 
-    /// The C21 graph [fingerprint](FingerprintSlot) — the structural fingerprint,
-    /// the policy hash, and the [algorithm version](FINGERPRINT_ALGORITHM_VERSION)
-    /// — computed directly from this pipeline (arch.md `### C21 · Graph
-    /// fingerprint`; T0.7 §§3–7).
+    /// The graph [fingerprint](FingerprintSlot) — the structural fingerprint, the
+    /// policy hash, and the [algorithm version](FINGERPRINT_ALGORITHM_VERSION) —
+    /// computed directly from this pipeline.
     ///
     /// This is the **reuse surface** downstream consumers bind against without
-    /// reaching into internals: the graph-artifact emitter (C20 / T40), the run
-    /// artifact (C22 / T42), and resume (C27 / T58) all read the same digests from
-    /// here rather than re-deriving the composition. It matches the slot
-    /// [`AssemblyArtifact::fingerprint`] carries — assembling and reading the slot,
-    /// or calling this directly, yield identical values.
+    /// reaching into internals: the graph-artifact emitter, the run artifact, and
+    /// resume all read the same digests from here rather than re-deriving the
+    /// composition. It matches the slot [`AssemblyArtifact::fingerprint`] carries —
+    /// assembling and reading the slot, or calling this directly, yield identical
+    /// values.
     ///
-    /// Computation is **pure** (T0.7 §8): it needs no credentials, no network, and
-    /// no run store — every hashed input is author-declared and available from the
+    /// Computation is **pure**: it needs no credentials, no network, and no run
+    /// store — every hashed input is author-declared and available from the
     /// assembled pipeline. Unlike [`assemble`](Pipeline::assemble) it performs no
     /// validation; a caller that needs the validated artifact assembles.
     #[must_use]
@@ -1085,7 +1054,7 @@ impl Pipeline {
 }
 
 /// The assembly pass. Collects every problem before returning, so a failure
-/// carries the complete list (arch.md C7).
+/// carries the complete list.
 fn assemble(pipeline: &Pipeline) -> Result<AssemblyArtifact, AssemblyError> {
     let mut problems: Vec<Problem> = Vec::new();
 
@@ -1155,8 +1124,8 @@ fn assemble(pipeline: &Pipeline) -> Result<AssemblyArtifact, AssemblyError> {
     })
 }
 
-/// C5 invalid-override check: await-bound work cannot move to a synchronous
-/// class; synchronous work may move between blocking and compute.
+/// Invalid-override check: await-bound work cannot move to a synchronous class;
+/// synchronous work may move between blocking and compute.
 fn check_execution_class_override(node: &PipelineNode, problems: &mut Vec<Problem>) {
     let Some(target) = node.policy().class_override() else {
         return;
@@ -1185,7 +1154,7 @@ fn check_execution_class_override(node: &PipelineNode, problems: &mut Vec<Proble
     }
 }
 
-/// C27 / T0.8 durable-without-contract check.
+/// Durable-without-contract check.
 fn check_durable_contract(node: &PipelineNode, problems: &mut Vec<Problem>) {
     if node.policy().is_durable() && !node.output_is_durable() {
         problems.push(Problem::new(
@@ -1202,7 +1171,7 @@ fn check_durable_contract(node: &PipelineNode, problems: &mut Vec<Problem>) {
     }
 }
 
-/// C17 nonzero-teardown-cost check.
+/// Nonzero-teardown-cost check.
 fn check_teardown_cost(node: &PipelineNode, problems: &mut Vec<Problem>) {
     if node.policy().is_teardown() && !node.policy().cost().is_zero() {
         problems.push(Problem::new(
@@ -1217,8 +1186,8 @@ fn check_teardown_cost(node: &PipelineNode, problems: &mut Vec<Problem>) {
     }
 }
 
-/// C3 / T0.2 ownership-mode conflicts: (1) an owned demand on a multi-consumer
-/// value, and (2) an owned edge into a retrying node with no clone-on-read.
+/// Ownership-mode conflicts: (1) an owned demand on a multi-consumer value, and
+/// (2) an owned edge into a retrying node with no clone-on-read.
 fn check_ownership_conflicts(pipeline: &Pipeline, problems: &mut Vec<Problem>) {
     // Build, per producer NAME (Ord, so the map is deterministic), the list of
     // (consumer name, mode) demands. `NodeId` is opaque (not Ord), so we key by
@@ -1295,7 +1264,7 @@ fn producer_name(pipeline: &Pipeline, id: NodeId) -> String {
         .map_or_else(|| format!("{id:?}"), |n| n.name().to_string())
 }
 
-/// Exact per-node consumer count (C10): how many downstream edges name this node
+/// Exact per-node consumer count: how many downstream edges name this node
 /// as their upstream. Keyed by node name for a deterministic map.
 fn precompute_consumer_counts(pipeline: &Pipeline) -> BTreeMap<String, u32> {
     let mut counts: BTreeMap<String, u32> = pipeline
@@ -1314,7 +1283,7 @@ fn precompute_consumer_counts(pipeline: &Pipeline) -> BTreeMap<String, u32> {
     counts
 }
 
-/// Per-node remaining-dependency count (C11 countdown seed): the number of
+/// Per-node remaining-dependency count (the countdown seed): the number of
 /// distinct upstream nodes each node depends on.
 fn precompute_remaining_deps(pipeline: &Pipeline) -> BTreeMap<String, u32> {
     let mut deps: BTreeMap<String, u32> = BTreeMap::new();
@@ -1347,9 +1316,9 @@ fn precompute_execution_order(pipeline: &Pipeline) -> Vec<NodeId> {
     let mut forward: BTreeMap<String, Vec<String>> =
         names.iter().map(|n| (n.clone(), Vec::new())).collect();
     for node in pipeline.nodes() {
-        // A node runs after BOTH its data upstreams and its ordering upstreams
-        // (C4 / T50): an ordering edge sequences without a value, but it still
-        // constrains topological order. Combine both, deduplicated.
+        // A node runs after BOTH its data upstreams and its ordering upstreams:
+        // an ordering edge sequences without a value, but it still constrains
+        // topological order. Combine both, deduplicated.
         let mut ups: Vec<NodeId> = node
             .data_edges()
             .iter()
@@ -1390,7 +1359,7 @@ fn precompute_execution_order(pipeline: &Pipeline) -> Vec<NodeId> {
 }
 
 /// Collect non-fatal warnings: a node whose non-`()` output has zero consumers
-/// and is neither retained nor durable (arch.md C7).
+/// and is neither retained nor durable.
 fn collect_warnings(pipeline: &Pipeline, consumer_counts: &BTreeMap<String, u32>) -> Vec<Warning> {
     let mut warnings = Vec::new();
     for node in pipeline.nodes() {
@@ -1419,14 +1388,14 @@ fn collect_warnings(pipeline: &Pipeline, consumer_counts: &BTreeMap<String, u32>
 // A single, fixed, unambiguously-framed byte encoding over the author-declared
 // data, ordered by a total, registration-order-independent key (node name; edge
 // (producer, consumer, position, kind, mode)). This is the surface over which
-// byte-identity is defined (C20) and the input the fingerprint digest runs on
-// (T0.7 §6). The concrete BLAKE3-v1 algorithm and the artifact wire schema are
-// T41/T40; this is the deterministic dependency-free placeholder they replace.
+// byte-identity is defined and the input the fingerprint digest runs on.
 // ---------------------------------------------------------------------------
 
-/// FNV-1a over bytes — the same dependency-free family `NodeId::from_name` uses.
-/// The fingerprint's real hash function (BLAKE3-v1) is T41's; this is a
-/// deterministic stand-in that makes "assemble twice → identical" true today.
+/// FNV-1a over bytes — the same dependency-free family `NodeId::from_name` uses,
+/// and the fingerprint's algorithm-v1 hash function (an earlier plan named
+/// BLAKE3, ruled out by the MIT-only supply-chain policy — see
+/// [`FingerprintSlot`]). It is deterministic, making "assemble twice → identical"
+/// hold on any machine.
 fn fnv1a(bytes: &[u8]) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -1439,7 +1408,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Length-prefix a field into `out` so two distinct field structures can never
-/// serialize to the same bytes (unambiguous framing — T0.7 §6).
+/// serialize to the same bytes (unambiguous framing).
 fn push_framed(out: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
     out.push(tag);
     out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
@@ -1447,7 +1416,7 @@ fn push_framed(out: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
 }
 
 /// The canonical byte encoding of the whole graph (structure + policy) — the
-/// byte-identity surface (C20). Deterministic and registration-order-independent.
+/// byte-identity surface. Deterministic and registration-order-independent.
 fn canonical_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     push_framed(&mut out, b'S', &structural_encoding(pipeline));
@@ -1456,14 +1425,13 @@ fn canonical_encoding(pipeline: &Pipeline) -> Vec<u8> {
     out
 }
 
-/// The structural encoding (T0.7 §3): the node set — each node's identity name
-/// **and** its author-declared stable task / input / output type names — the edge
-/// set (each **data** edge with its carried type stable name and kind, each
-/// **ordering** edge (C4 / T50) with its endpoints and kind but no carried type),
-/// and per-node trigger rules. This is exactly the resume-gating shape (C27) and
-/// nothing else:
-/// no policy value, no group label, no environmental input. Nodes and edges are
-/// emitted in a total, registration-order-independent order (node name; edge
+/// The structural encoding: the node set — each node's identity name **and** its
+/// author-declared stable task / input / output type names — the edge set (each
+/// **data** edge with its carried type stable name and kind, each **ordering**
+/// edge with its endpoints and kind but no carried type), and per-node trigger
+/// rules. This is exactly the resume-gating shape and nothing else: no policy
+/// value, no group label, no environmental input. Nodes and edges are emitted in
+/// a total, registration-order-independent order (node name; edge
 /// `(consumer, position, producer)`), so two assemblies of the same source yield
 /// identical bytes.
 fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
@@ -1471,10 +1439,10 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
     // Node set, ordered by name (pipeline.nodes() is already name-ordered).
     for node in pipeline.nodes() {
         push_framed(&mut out, b'n', node.name().as_bytes());
-        // Author-declared stable type names (T0.7 §3): the stable task name and
-        // the stable input/output type names are part of the resume-gating shape,
-        // so renaming a stable name — even with the Rust interface unchanged —
-        // moves the structural fingerprint. A node registered through a type-erased
+        // Author-declared stable type names: the stable task name and the stable
+        // input/output type names are part of the resume-gating shape, so renaming
+        // a stable name — even with the Rust interface unchanged — moves the
+        // structural fingerprint. A node registered through a type-erased
         // registrar carries none; its absence is framed distinctly (empty frames)
         // from a present-but-empty name so the two never collide.
         match node.stable_names() {
@@ -1493,14 +1461,14 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
                 push_framed(&mut out, b'T', &[]);
             }
         }
-        // Trigger rule is shape (T0.7 §3), so it lives in the structural half.
+        // Trigger rule is shape, so it lives in the structural half.
         push_framed(&mut out, b'r', &[trigger_rule_code(node)]);
     }
     // Edge set, ordered by (consumer name, position) — a total, order-independent
     // key. Each edge frames (consumer, producer name, position, kind, carried
     // type stable name). The carried type is the producer's declared stable output
-    // name — the stable name of the value type flowing along the edge (T0.7 §3) —
-    // so changing a data edge's carried type moves the structural fingerprint.
+    // name — the stable name of the value type flowing along the edge — so
+    // changing a data edge's carried type moves the structural fingerprint.
     let mut edges: Vec<(String, u64, String, Option<String>)> = Vec::new();
     for node in pipeline.nodes() {
         for edge in node.data_edges() {
@@ -1526,8 +1494,8 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
         push_framed(&mut out, b'c', consumer.as_bytes());
         push_framed(&mut out, b'p', producer.as_bytes());
         out.extend_from_slice(&position.to_le_bytes());
-        // Edge kind: data. Ordering edges (C4 / T50) are encoded distinctly in the
-        // separate section below, so a data edge's byte shape is unchanged.
+        // Edge kind: data. Ordering edges are encoded distinctly in the separate
+        // section below, so a data edge's byte shape is unchanged.
         out.push(b'd');
         // Carried type stable name, present-or-absent framed distinctly.
         match carried {
@@ -1535,15 +1503,15 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
             None => push_framed(&mut out, b'Y', &[]),
         }
     }
-    // Ordering-edge set (C4 / T50), ordered by (consumer name, producer name) — a
-    // total, order-independent key. An ordering edge is part of the graph SHAPE
-    // (arch.md §143), so it feeds the structural fingerprint: adding or removing
-    // one moves it, and a resume notices. It carries NO position and NO carried
-    // type (it sequences without a value), and its kind byte `O` differs from a
-    // data edge's `d`, so a data and an ordering edge between the same pair never
-    // collide. This section is appended only for edges that exist, so a graph with
-    // NO ordering edges produces byte-identical structural bytes to before T50 —
-    // no accidental fingerprint churn.
+    // Ordering-edge set, ordered by (consumer name, producer name) — a total,
+    // order-independent key. An ordering edge is part of the graph SHAPE, so it
+    // feeds the structural fingerprint: adding or removing one moves it, and a
+    // resume notices. It carries NO position and NO carried type (it sequences
+    // without a value), and its kind byte `O` differs from a data edge's `d`, so a
+    // data and an ordering edge between the same pair never collide. This section
+    // is appended only for edges that exist, so a graph with NO ordering edges
+    // produces byte-identical structural bytes to a graph that predates ordering
+    // edges — no accidental fingerprint churn.
     let mut ordering: Vec<(String, String)> = Vec::new();
     for node in pipeline.nodes() {
         for edge in node.ordering_edges() {
@@ -1566,12 +1534,12 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
     out
 }
 
-/// The policy encoding (T0.7 §4): the residual effective-policy values per node —
-/// retries, backoff shape, per-attempt timeout, cost, effective class, retention,
-/// durability — ordered by node name. Group labels are excluded (C6), as is the
+/// The policy encoding: the residual effective-policy values per node — retries,
+/// backoff shape, per-attempt timeout, cost, effective class, retention,
+/// durability — ordered by node name. Group labels are excluded, as is the
 /// trigger rule (it lives in the structural half). Defaulted policy encodes
 /// identically to a written-out default because both resolve to the same
-/// effective values (arch.md C5).
+/// effective values.
 fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     for node in pipeline.nodes() {
@@ -1614,17 +1582,17 @@ fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
 }
 
 /// A [`Duration`] as total nanoseconds — a total, deterministic scalar for the
-/// canonical encoding (T0.7 §6). `Duration::MAX` (the effectively-uncapped
-/// backoff cap) saturates to `u128::MAX`, which is fine: it is a fixed sentinel,
-/// so every uncapped schedule encodes identically.
+/// canonical encoding. `Duration::MAX` (the effectively-uncapped backoff cap)
+/// saturates to `u128::MAX`, which is fine: it is a fixed sentinel, so every
+/// uncapped schedule encodes identically.
 fn duration_nanos(d: Duration) -> u128 {
     d.as_nanos()
 }
 
 /// The env-allowlist encoding — names only, in declared order. It is neither in
 /// the structural nor the policy hash (both hashes exclude everything
-/// environmental — T0.7 §5); it lives in the canonical byte form only so the
-/// artifact's byte-identity surface reflects the declared allowlist.
+/// environmental); it lives in the canonical byte form only so the artifact's
+/// byte-identity surface reflects the declared allowlist.
 fn env_allowlist_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     for name in pipeline.env_allowlist() {
@@ -1633,8 +1601,8 @@ fn env_allowlist_encoding(pipeline: &Pipeline) -> Vec<u8> {
     out
 }
 
-/// Compute the C21 [`FingerprintSlot`] over the canonical structural / policy
-/// encodings (T0.7 §§3–7), stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
+/// Compute the [`FingerprintSlot`] over the canonical structural / policy
+/// encodings, stamped with the [`FINGERPRINT_ALGORITHM_VERSION`].
 ///
 /// Algorithm v1 uses the dependency-free FNV-1a digest (see [`FingerprintSlot`]
 /// for the hash-choice note). The encodings are total and

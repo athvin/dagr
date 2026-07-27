@@ -1,11 +1,10 @@
-//! The C23 **node metrics** facility (arch.md `### C23 · Node metrics`).
+//! The **node metrics** facility.
 //!
 //! Every attempt reports what it measured — rows read, bytes spilled, and the
 //! like — while the framework simultaneously contributes what only it can know:
 //! allocator-attributed peak memory, permit sizes, and phase timings. This
 //! module is that facility, kept **dependency-free** (it uses only `std`, so
-//! `dagr-core`'s review-gated dependency set is untouched — arch.md
-//! "Stability").
+//! `dagr-core`'s review-gated dependency set is untouched).
 //!
 //! # What it is
 //!
@@ -13,8 +12,8 @@
 //!
 //! - **Open by design.** A task attaches a named numeric measurement with
 //!   [`AttemptMetrics::attach`] — no framework enum, registry, or release is
-//!   required to accept a novel name (arch.md C23 "adding a new measurement must
-//!   never require a framework release").
+//!   required to accept a novel name (adding a new measurement must
+//!   never require a framework release).
 //! - **Numeric only.** A metric value is a [`MetricValue`] (a wrapped `f64`);
 //!   the attach API takes `impl Into<MetricValue>`, and only the numeric
 //!   primitives implement it — a `&str` or `bool` does not, so a non-numeric
@@ -45,7 +44,7 @@
 //! of attach order. Timing and peak-memory **values** are *observational*: they
 //! reflect a real run and are not deterministic across runs. They are reported
 //! in the run artifact but are **never** baked into a structural or policy
-//! fingerprint (C21) — the fingerprint is over the *graph and policy*, not over
+//! fingerprint — the fingerprint is over the *graph and policy*, not over
 //! an execution's measurements. This module produces no fingerprint input.
 //!
 //! # Peak memory: the attributing allocator
@@ -69,20 +68,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 // === Caps and the reserved prefix ==========================================
 
-/// The reserved framework-metric name prefix (arch.md C23). A **task** attaching
+/// The reserved framework-metric name prefix. A **task** attaching
 /// a metric whose name **starts with** this prefix fails at attach time
 /// ([`MetricError::ReservedPrefix`]); the framework's own metrics all live under
 /// it.
 pub const RESERVED_PREFIX: &str = "dagr.";
 
-/// The per-attempt cap on the number of distinct **task** measurements
-/// (arch.md C23). Task entries past this cap are truncated deterministically;
+/// The per-attempt cap on the number of distinct **task** measurements.
+/// Task entries past this cap are truncated deterministically;
 /// framework metrics (under [`RESERVED_PREFIX`]) are added on top and do not
 /// count against it.
 pub const MAX_ENTRIES: usize = 128;
 
 /// The per-attempt cap on the **encoded** size of the metric set, in bytes
-/// (arch.md C23: 16 KiB). "Encoded size" is a deterministic, serialization-
+/// (16 KiB). "Encoded size" is a deterministic, serialization-
 /// independent proxy: the sum over surviving entries of `name.len()` plus
 /// [`VALUE_ENCODED_BYTES`] (the UTF-8 name bytes plus a fixed budget for the
 /// numeric value). See [`AttemptMetrics::encoded_size`].
@@ -97,38 +96,38 @@ pub const VALUE_ENCODED_BYTES: usize = 8;
 
 // === Built-in metric names (units in the name; all under the reserved prefix) ==
 
-/// Allocator-attributed peak memory for the attempt, in bytes (arch.md C23).
+/// Allocator-attributed peak memory for the attempt, in bytes.
 pub const METRIC_PEAK_MEMORY_BYTES: &str = "dagr.peak_memory_bytes";
 
 /// The framework flag recording that this attempt's task metrics were truncated
 /// (1 when any cap fired, else 0). A count so it validates as a number.
 pub const METRIC_TRUNCATED: &str = "dagr.metrics.truncated_count";
-/// The number of task entries dropped by the entry-count cap (arch.md C23).
+/// The number of task entries dropped by the entry-count cap.
 pub const METRIC_TRUNCATED_DROPPED_ENTRIES: &str = "dagr.metrics.dropped_entries_count";
-/// The number of encoded bytes dropped by the byte-size cap (arch.md C23).
+/// The number of encoded bytes dropped by the byte-size cap.
 pub const METRIC_TRUNCATED_DROPPED_BYTES: &str = "dagr.metrics.dropped_bytes_count";
 
 /// The `dagr.permit.` namespace prefix under which per-pool admission-permit
-/// sizes are recorded (arch.md C23). Each entry is `dagr.permit.<pool_unit>`
+/// sizes are recorded. Each entry is `dagr.permit.<pool_unit>`
 /// (e.g. `dagr.permit.memory_bytes`, `dagr.permit.compute_threads`).
 pub const PERMIT_PREFIX: &str = "dagr.permit.";
 
-/// The `dagr.phase.` namespace prefix under which per-phase timings are recorded
-/// (arch.md C23). Each entry is `dagr.phase.<phase>_ns` (e.g.
+/// The `dagr.phase.` namespace prefix under which per-phase timings are recorded.
+/// Each entry is `dagr.phase.<phase>_ns` (e.g.
 /// `dagr.phase.executing_ns`).
 pub const PHASE_PREFIX: &str = "dagr.phase.";
 
 // === Errors ================================================================
 
-/// The error [`AttemptMetrics::attach`] reports (arch.md C23).
+/// The error [`AttemptMetrics::attach`] reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MetricError {
     /// A **task** attempted to attach a metric whose name begins with the
     /// reserved [`RESERVED_PREFIX`]. The attach failed loudly and immediately,
     /// the value was **not** recorded, and this carries the offending name so the
-    /// error can name it (arch.md C23: "fails loudly at attach time, naming the
-    /// offending metric").
+    /// error can name it — it fails loudly at attach time, naming the
+    /// offending metric.
     ReservedPrefix {
         /// The offending metric name (starts with [`RESERVED_PREFIX`]).
         metric: String,
@@ -151,7 +150,7 @@ impl std::error::Error for MetricError {}
 
 // === MetricValue (numeric only) ============================================
 
-/// A metric **value** — numeric only (arch.md C23). Wraps an `f64`; the attach
+/// A metric **value** — numeric only. Wraps an `f64`; the attach
 /// API takes `impl Into<MetricValue>`, and only the numeric primitives implement
 /// [`From`] into it, so a `&str` or `bool` value **fails to compile**. Integer
 /// inputs (`u64`, `i64`, `u32`, …) are carried losslessly within `f64`'s exact-
@@ -187,15 +186,15 @@ metric_value_from!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize, f32, f64)
 
 // === AttemptMetrics ========================================================
 
-/// The **open, unschematized per-attempt metric set** (arch.md C23).
+/// The **open, unschematized per-attempt metric set**.
 ///
 /// A task attaches numeric measurements with [`attach`](Self::attach); the
 /// runtime contributes framework measurements ([`set_peak_memory_bytes`](Self::set_peak_memory_bytes),
 /// [`set_permit_sizes`](Self::set_permit_sizes), [`set_phase_timings`](Self::set_phase_timings));
 /// [`finalize_task_metrics`](Self::finalize_task_metrics) applies the caps with
 /// deterministic recorded truncation. The collected set is read with
-/// [`collected`](Self::collected) and threaded into the attempt record so T42's
-/// fold carries it to the run artifact unmodified.
+/// [`collected`](Self::collected) and threaded into the attempt record so the
+/// artifact fold carries it to the run artifact unmodified.
 ///
 /// Hand-constructable for tests: `AttemptMetrics::new()`, attach, set framework
 /// fields, finalize, read.
@@ -219,8 +218,8 @@ impl AttemptMetrics {
         Self::default()
     }
 
-    /// Attach a task metric — an open, unschematized named numeric measurement
-    /// (arch.md C23). Re-attaching the same name overwrites (a metric is a
+    /// Attach a task metric — an open, unschematized named numeric measurement.
+    /// Re-attaching the same name overwrites (a metric is a
     /// single measurement, not an event log).
     ///
     /// # Errors
@@ -251,11 +250,11 @@ impl AttemptMetrics {
             .insert(METRIC_PEAK_MEMORY_BYTES.to_string(), numeric(bytes));
     }
 
-    /// Record the attempt's granted **admission-permit sizes** (arch.md C23) —
+    /// Record the attempt's granted **admission-permit sizes** —
     /// one framework metric per pool under [`PERMIT_PREFIX`], keyed
     /// `dagr.permit.<pool_unit>`. `pool_unit` carries its unit by convention
     /// (`memory_bytes`, `compute_threads`). This only *reads and reports* the
-    /// sizes an attempt was granted; it does not size pools (C12/C5).
+    /// sizes an attempt was granted; it does not size pools.
     pub fn set_permit_sizes(&mut self, sizes: &[(&str, u64)]) {
         for (pool_unit, size) in sizes {
             self.framework
@@ -263,7 +262,7 @@ impl AttemptMetrics {
         }
     }
 
-    /// Record the attempt's **phase timings** (arch.md C23) — one framework
+    /// Record the attempt's **phase timings** — one framework
     /// metric per phase under [`PHASE_PREFIX`], keyed `dagr.phase.<phase>_ns`.
     /// `phase` carries its `_ns` unit by convention. Observational (wall-derived
     /// durations); never a fingerprint input.
@@ -276,7 +275,7 @@ impl AttemptMetrics {
 
     /// Apply the entry-count and byte-size caps to the **task** metrics with a
     /// deterministic, order-independent truncation, and record the truncation as
-    /// framework metrics under the reserved prefix (arch.md C23).
+    /// framework metrics under the reserved prefix.
     ///
     /// The survivor rule is **keep the lexicographically-smallest names** up to
     /// the caps — a pure function of the *set* of names, so the same inputs
@@ -351,7 +350,7 @@ impl AttemptMetrics {
     /// The complete collected metric set — **task and framework entries both**,
     /// as `(name, value)` pairs in ascending name order (deterministic). This is
     /// the form threaded into the attempt record; the driver renders it into the
-    /// `attempt-outcome` record's open numeric `metrics` map, and T42's fold
+    /// `attempt-outcome` record's open numeric `metrics` map, and the artifact fold
     /// carries it to the run artifact **unmodified**.
     #[must_use]
     pub fn collected(&self) -> Vec<(String, f64)> {
@@ -404,7 +403,7 @@ static PROCESS_LIVE: AtomicU64 = AtomicU64::new(0);
 
 /// A `#[global_allocator]`-installable allocator that attributes allocations to
 /// the **running attempt** via task-local (thread-local) state, yielding a
-/// per-node peak (arch.md C23).
+/// per-node peak.
 ///
 /// It forwards every call unchanged to the [`System`] allocator and updates the
 /// current attempt's live/peak byte counts around it. Under concurrent nodes in
@@ -433,7 +432,7 @@ impl AttributingAllocator {
 
     /// Enter an **attempt scope** on the current thread: allocations made while
     /// the returned [`AttemptScope`] guard is live are attributed to *this*
-    /// attempt's live/peak counts (arch.md C23). The scope's live and peak start
+    /// attempt's live/peak counts. The scope's live and peak start
     /// at zero and track only allocations made under it. Dropping the guard
     /// leaves the attempt scope; nested scopes on one thread compose (the peak of
     /// an outer scope still reflects the inner scope's high-water while it was
@@ -474,7 +473,7 @@ impl AttributingAllocator {
     }
 
     /// The process-wide live allocated bytes (all threads) — a well-formedness
-    /// witness, **not** the per-attempt figure. Never used as the C23 peak.
+    /// witness, **not** the per-attempt figure. Never used as the reported peak.
     #[must_use]
     pub fn process_live_bytes() -> u64 {
         PROCESS_LIVE.load(Ordering::SeqCst)
@@ -491,7 +490,7 @@ impl Default for AttributingAllocator {
 /// live, allocations on this thread are attributed to the attempt; dropping it
 /// leaves the attempt scope (decrementing the nesting depth). Not `Send`: an
 /// attempt scope is bound to the thread that entered it, which is exactly the
-/// task-local attribution C23 requires.
+/// task-local attribution this facility requires.
 #[derive(Debug)]
 pub struct AttemptScope {
     // Not constructible outside this module; not Send/Sync (Cell is !Sync, and
@@ -553,9 +552,9 @@ fn on_dealloc(size: usize) {
 // re-enter itself.
 //
 // The workspace lint policy is `unsafe_code = "warn"` under `-D warnings`
-// (docs/lint-policy.md: "`unsafe` is not forbidden outright but every use is
-// surfaced for review"). Implementing `GlobalAlloc` is *inherently* `unsafe` —
-// the C23 attributing allocator cannot be expressed in safe Rust — so this one
+// (`unsafe` is not forbidden outright, but every use is surfaced for review).
+// Implementing `GlobalAlloc` is *inherently* `unsafe` — the attributing
+// allocator cannot be expressed in safe Rust — so this one
 // impl block carries a scoped, justified `allow`, the only `unsafe` in the
 // module.
 #[allow(

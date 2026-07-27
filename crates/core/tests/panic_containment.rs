@@ -1,20 +1,20 @@
-//! C14 panic-containment tests — ticket T23 (033). Written first, TDD.
+//! Panic-containment tests. Written first, TDD.
 //!
-//! These exercise the **panic-containment** facet of the C14 attempt runner
-//! (arch.md `### C14 · Attempt runner`, the **Panics** paragraph) that T20
-//! deferred: a task that panics must fail **only its own node**, be caught at
-//! the attempt boundary rather than unwind the run, be classified a **permanent**
-//! failure (never retried), reach the `failed` terminal state, have its panic
-//! message captured, and leave its output slot empty. It must attribute the
-//! panic to the correct node under concurrency (task-local state), emit exactly
-//! one attempt-outcome record, install its hook once (idempotently, chaining to
-//! a pre-existing hook), and the binary must refuse `panic = "abort"` at startup.
+//! These exercise the **panic-containment** facet of the attempt runner (the
+//! **Panics** paragraph) that the single-attempt runner deferred: a task that
+//! panics must fail **only its own node**, be caught at the attempt boundary
+//! rather than unwind the run, be classified a **permanent** failure (never
+//! retried), reach the `failed` terminal state, have its panic message captured,
+//! and leave its output slot empty. It must attribute the panic to the correct
+//! node under concurrency (task-local state), emit exactly one attempt-outcome
+//! record, install its hook once (idempotently, chaining to a pre-existing
+//! hook), and the binary must refuse `panic = "abort"` at startup.
 //!
-//! Scope discipline (T23): panic containment only. It composes with T21 timeout
-//! and T22 retry via the outcome classification; it forks no run-loop driver
-//! (T24) and no dispatch/concurrency (T33). The runner is runtime-agnostic — an
-//! `async fn` awaited on a plain no-runtime executor, with a hand-built
-//! `RunContext` (C8) and a capturing event sink (C19).
+//! Scope discipline: panic containment only. It composes with timeout and retry
+//! via the outcome classification; it forks no run-loop driver and no
+//! dispatch/concurrency. The runner is runtime-agnostic — an `async fn` awaited
+//! on a plain no-runtime executor, with a hand-built `RunContext` and a
+//! capturing event sink.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -65,7 +65,7 @@ impl Task for Succeeds {
     }
 }
 
-// --- Capturing event sink (C19-shaped, in-memory) ---------------------------
+// --- Capturing event sink (event-stream shaped, in-memory) ------------------
 
 #[derive(Default)]
 struct CapturingSink {
@@ -136,7 +136,8 @@ fn ctx_for(node: &str, attempt: u32, max: u32) -> RunContext {
 }
 
 /// A no-dependency, `unsafe`-free block-on — the runtime-agnostic executor the
-/// T20/T21/T22 tests use, proving panic containment needs no runtime.
+/// attempt-runner, timeout, and retry tests use, proving panic containment needs
+/// no runtime.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc as StdArc;
@@ -190,7 +191,7 @@ fn panicking_task_is_contained_and_fails_only_its_node() {
     assert_eq!(
         outcome.terminal_state(),
         TerminalState::Failed,
-        "a caught panic maps to the `failed` terminal state (arch.md Vocabulary)"
+        "a caught panic maps to the `failed` terminal state"
     );
     assert_eq!(sink.node_terminal(), Some(TerminalState::Failed));
     assert!(!slot.is_filled(), "a panicked attempt never fills the slot");
@@ -231,8 +232,7 @@ fn panic_message_is_captured() {
 
 /// A panicking node fails `failed` while an independent node runs to completion
 /// and ends `succeeded` — the panic did not take the run down (continue-
-/// independent semantics stand in for C15; here we prove the two attempts are
-/// isolated).
+/// independent semantics; here we prove the two attempts are isolated).
 #[test]
 fn independent_node_completes_after_a_panic() {
     install_panic_hook();
@@ -498,7 +498,7 @@ fn hook_installation_is_idempotent_and_thread_safe() {
 /// chaining check runs in a **child process** so it controls the install order
 /// deterministically (a pre-existing hook installed BEFORE the *first-ever*
 /// framework install) and is isolated from the process-wide hook state the other
-/// tests in this binary share. This mirrors the T15 determinism suite's child
+/// tests in this binary share. This mirrors the determinism suite's child
 /// pattern.
 const CHILD_CHAIN_VAR: &str = "DAGR_T23_CHAIN_CHILD";
 

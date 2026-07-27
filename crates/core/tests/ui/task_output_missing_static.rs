@@ -1,11 +1,11 @@
-// UI compile-failure sample — ticket T9 (019), C1 output-type bound (missing
+// UI compile-failure sample — the output-type bound (missing
 // `'static`).
 //
-// Output values must be `Send + Sync + 'static` (arch.md C1; T0.2 ADR). An
+// Output values must be `Send + Sync + 'static`. An
 // output type that borrows data is not `'static` and cannot outlive the attempt
 // to live in the slot, so it is rejected.
 //
-// The T8 harness compiles this STANDALONE with no `--extern dagr_core`, so the
+// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
 // real `Task` trait is unavailable; the exact output bound is reproduced with a
 // local `assert_output_bound`. `BorrowedOutput<'a>` borrows data and is
 // therefore not `'static`.

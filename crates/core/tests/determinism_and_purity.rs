@@ -1,38 +1,35 @@
-//! C7 **determinism and purity** tests — ticket T15 (026). Written first, TDD.
+//! **Determinism and purity** tests. Written first, TDD.
 //!
-//! These lock the two properties T14 (`crates/core/src/assembly.rs`) *promised*
-//! but a builder cannot self-certify (arch.md `### C7 · Flow assembly`, its
-//! "Acceptance criteria"):
+//! These lock the two properties of flow assembly (`crates/core/src/assembly.rs`)
+//! that a builder cannot self-certify:
 //!
 //! - **Determinism** — assembling the same pipeline twice in one process yields
-//!   byte-identical graph output (the generation-time field aside, per C20), and
+//!   byte-identical graph output (the generation-time field aside), and
 //!   registration order does not change the artifact.
 //! - **Purity** — assembly touches no network, filesystem, clock, credentials, or
-//!   parameter values (arch.md C7 "Assembly is pure"), so it succeeds in a fully
-//!   empty environment and reaches no parameter value.
+//!   parameter values, so it succeeds in a fully empty environment and reaches no
+//!   parameter value.
 //!
-//! They exercise **only** the public C7 surface (`dagr_core::flow::Pipeline::assemble`,
-//! `dagr_core::assembly::AssemblyArtifact`) and add **no** assembly behavior — the
-//! validation and precomputation itself is T14's, already landed. The fingerprint
-//! slot is a deterministic FNV-1a in-memory **stand-in** (BLAKE3-v1 is deferred to
-//! T41); these tests assert the determinism of the *current* fingerprint, never a
-//! specific hash algorithm (T15 Out of scope: fingerprint content is C21/T41).
+//! They exercise **only** the public assembly surface
+//! (`dagr_core::flow::Pipeline::assemble`, `dagr_core::assembly::AssemblyArtifact`)
+//! and add **no** assembly behavior — the validation and precomputation itself is
+//! already landed. The fingerprint slot is a deterministic FNV-1a in-memory
+//! **stand-in**; these tests assert the determinism of the *current* fingerprint,
+//! never a specific hash algorithm (fingerprint content is out of scope here).
 //!
 //! # Decision record — mechanical no-filesystem / no-network proof
 //!
-//! The ticket's open question: sandboxing, syscall audit, or review convention?
+//! The open question was: sandboxing, syscall audit, or review convention?
 //! **Decision: a std-only, in-process structural proof — a scrubbed-environment
 //! *child process* plus a negative control — not an OS sandbox and not a syscall
-//! auditor.** The full record lives in the ticket file (026), section "Open
-//! questions"; the short form:
+//! auditor.** The short form:
 //!
 //! - **Why not an OS sandbox** (seccomp/landlock/`birdcage`/`extrasafe`): those
-//!   are Linux-only (they do not cover the macOS CI tier, T70), and they pull a
+//!   are Linux-only (they do not cover the macOS CI tier), and they pull a
 //!   dependency into `dagr-core`, the deliberately dependency-free, review-gated
-//!   "live pipeline" crate (arch.md "Stability"). A one-off, non-portable, dep-
-//!   heavy mechanism is exactly what the ticket says the choice must **not** be —
-//!   T40 (graph artifact) and the criteria-matrix structural-determinism job reuse
-//!   this convention.
+//!   "live pipeline" crate. A one-off, non-portable, dep-heavy mechanism is
+//!   exactly what the choice must **not** be — the graph-artifact writer and the
+//!   structural-determinism job reuse this convention.
 //! - **Why not a syscall auditor** (strace/dtrace): OS-specific, cannot run in
 //!   process, and unavailable uniformly across the CI matrix.
 //! - **What we do instead**: assembly's *entire* input is an owned in-memory
@@ -63,18 +60,17 @@ use dagr_core::TaskError;
 // ---------------------------------------------------------------------------
 // The canonical fixture — one multi-node pipeline reused by every scenario:
 // data edges, an ordering-only branch, a group label, and a typed parameter
-// struct. (Ordering-only *edges* as a first-class C4 kind are T50; here the
-// "ordering-only" branch is a fan-out consumer whose own output has zero
-// consumers — an ordering/effect leaf — so the fixture stays within the C7
-// surface T14 exposes without reaching into T50.)
+// struct. (Here the "ordering-only" branch is a fan-out consumer whose own output
+// has zero consumers — an ordering/effect leaf — so the fixture stays within the
+// assembly surface without reaching into first-class ordering-only edges.)
 // ---------------------------------------------------------------------------
 
 /// A typed **parameter struct** the fixture "declares". Parameters are a
-/// bootstrap concern carried opaquely on the `RunContext` (C8), parsed *after*
+/// bootstrap concern carried opaquely on the `RunContext`, parsed *after*
 /// assembly — the flow/assembly surface has no parameter argument or accessor at
 /// all, which is what makes "no parameter value reachable during assembly" a
-/// structural fact (arch.md C7; T0.5 ADR §2). This struct exists only to prove a
-/// parameterised pipeline assembles with *no* parameter value supplied.
+/// structural fact. This struct exists only to prove a parameterised pipeline
+/// assembles with *no* parameter value supplied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FixtureParams {
     region: String,
@@ -86,7 +82,7 @@ struct Rows;
 struct Schema;
 struct Report;
 
-/// A durable-reference output type (implements the C27 contract; T57).
+/// A durable-reference output type (implements the durable-output contract).
 struct Snapshot;
 impl DurableOutput for Snapshot {
     fn serialize_reference(&self) -> String {
@@ -154,7 +150,7 @@ impl Task for MakeSnapshot {
 
 /// Build **and assemble** the canonical fixture pipeline. Every scenario calls
 /// this, so the fixture is defined once. The build is a pure value
-/// transformation; assembly is the pure C7 pass under test.
+/// transformation; assembly is the pure pass under test.
 ///
 /// Shape (all names are the identity, so registration order is not semantic):
 /// - `rows` (source, `MakeRows`) — fans out to `count` and `report`
@@ -192,17 +188,17 @@ fn build_fixture_flow() -> dagr_core::flow::Pipeline {
 
 /// The masked view over the pure-assembly byte-identity surface.
 ///
-/// C20 excludes the **generation-time** field from byte-identity comparisons.
-/// That field lives in the **T40 artifact header**, not in this pure-assembly
-/// slice: `AssemblyArtifact::canonical_bytes` is defined as *"the generation-time
-/// field, owned by the artifact writer T40, is not part of this pure-assembly
-/// slice"* (see the T14 rustdoc). So on today's surface the generation-time mask
-/// is the **empty** mask — there is no generation-time span to remove — and this
-/// helper is the single, documented place that fact is encoded, keeping the
-/// determinism tests forward-compatible: if a generation-time span is ever folded
-/// into this slice, only this function changes.
+/// The byte-identity comparison excludes the **generation-time** field. That field
+/// lives in the artifact header, not in this pure-assembly slice:
+/// `AssemblyArtifact::canonical_bytes` is defined so that the generation-time
+/// field, owned by the artifact writer, is not part of this pure-assembly slice.
+/// So on today's surface the generation-time mask is the **empty** mask — there is
+/// no generation-time span to remove — and this helper is the single, documented
+/// place that fact is encoded, keeping the determinism tests forward-compatible:
+/// if a generation-time span is ever folded into this slice, only this function
+/// changes.
 fn mask_generation_time(artifact: &AssemblyArtifact) -> Vec<u8> {
-    // No generation-time span exists in the pure-assembly slice today (T14).
+    // No generation-time span exists in the pure-assembly slice today.
     artifact.canonical_bytes().to_vec()
 }
 
@@ -235,9 +231,9 @@ fn two_in_process_assemblies_are_byte_identical() {
 
 /// Comparing the two serialized outputs **without** masking generation time still
 /// shows byte-identity: on the pure-assembly slice the generation-time field does
-/// not exist (it is the T40 header's, not assembly's), so the *only* thing the
-/// mask would ever remove is absent, and nothing else is non-deterministic. This
-/// guards against the mask silently hiding real drift.
+/// not exist (it is the artifact header's, not assembly's), so the *only* thing
+/// the mask would ever remove is absent, and nothing else is non-deterministic.
+/// This guards against the mask silently hiding real drift.
 #[test]
 fn generation_time_is_the_only_masked_difference() {
     let a = assemble_fixture();
@@ -261,8 +257,8 @@ fn generation_time_is_the_only_masked_difference() {
 // ===========================================================================
 
 /// Two builders register the identical node set and wiring in **different**
-/// registration orders (identity is the explicit name, so order is not semantic —
-/// C7/T13). Assembled and serialized (generation time masked), their output is
+/// registration orders (identity is the explicit name, so order is not semantic).
+/// Assembled and serialized (generation time masked), their output is
 /// byte-identical: canonical ordering is applied, not registration order.
 #[test]
 fn registration_order_does_not_change_the_artifact() {
@@ -551,9 +547,9 @@ fn negative_control_stray_filesystem_write_is_detected() {
 /// A parameterised pipeline (its tasks would read `FixtureParams` off the
 /// `RunContext` at run time) assembles with **no** parameter value supplied —
 /// because the flow/assembly surface has no parameter argument or accessor at
-/// all. Parameters are parsed only at bootstrap, after assembly (C7 §Behavior;
-/// T0.5 ADR §2), so there is no assembly-time API by which a node body or the
-/// assembler could read a parameter value.
+/// all. Parameters are parsed only at bootstrap, after assembly, so there is no
+/// assembly-time API by which a node body or the assembler could read a parameter
+/// value.
 #[test]
 fn no_parameter_value_is_reachable_during_assembly() {
     // The fixture's tasks are parameterised (MakeRows::run reads FixtureParams),
@@ -579,7 +575,7 @@ fn no_parameter_value_is_reachable_during_assembly() {
 // 8. Empty-environment determinism, combined.
 // ===========================================================================
 //
-// Determinism and purity hold *together* — the exact CI/PR condition C20 relies
+// Determinism and purity hold *together* — the exact CI/PR condition this relies
 // on. Two assemblies performed within a scrubbed child process produce
 // byte-identical output. We run BOTH assemblies inside one scrubbed child (so the
 // comparison itself happens under the empty environment) and have the child exit

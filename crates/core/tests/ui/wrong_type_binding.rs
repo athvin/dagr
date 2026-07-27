@@ -1,15 +1,15 @@
-// UI compile-failure sample (harness seed) — ticket T8 (007).
+// UI compile-failure sample (harness seed).
 //
-// This is the ONE worked sample the T8 harness ships. It is a throwaway,
+// This is the ONE worked sample the harness ships. It is a throwaway,
 // intentionally NON-COMPILING snippet — NOT a use of dagr's real authoring API
 // (handles, binding, the builder typestate), which does not exist yet and lands
-// in the M1 builder tickets (T9 onward). Its only job is to make the harness
-// prove itself against a diagnostic that mentions two distinct type names, as
-// C3 (a wrong-type binding is a compile error whose message names both the
-// expected and the supplied type) and C28 (assert only that both type names
-// appear) require. The real wiring compile-fail cases — cyclic construction,
+// in the later builder work. Its only job is to make the harness
+// prove itself against a diagnostic that mentions two distinct type names: a
+// wrong-type binding is a compile error whose message names both the
+// expected and the supplied type, and the harness asserts only that both type
+// names appear. The real wiring compile-fail cases — cyclic construction,
 // wrong-arity binding, a non-`all-succeeded` trigger rule on a data-consuming
-// node, the arity-ceiling curated diagnostic — are T12; they drop into this
+// node, the arity-ceiling curated diagnostic — arrive later; they drop into this
 // same `tests/ui/` directory with no harness changes.
 //
 // The two type names the harness keys on are `ExpectedWidget` (the declared /

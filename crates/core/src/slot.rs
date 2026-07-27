@@ -1,21 +1,19 @@
-//! The C10 **output slot** — where a node's produced value lives between its
-//! production and its last consumption (arch.md `### C10 · Output slot`).
+//! The **output slot** — where a node's produced value lives between its
+//! production and its last consumption.
 //!
 //! Each node owns **exactly one** slot, typed to that node's output, empty until
 //! the node succeeds. Downstream consumers hold a **direct, typed reference** to
-//! that slot ([`SlotRef<T>`]), established at assembly time (from T14), so a read
-//! is a direct access with **no map lookup and no runtime type check**. This
-//! module is the storage substrate the attempt runner (T20) fills and the
-//! bounded-memory chain test (T26) exercises; it is a typed container plus a
+//! that slot ([`SlotRef<T>`]), established at assembly time, so a read is a direct
+//! access with **no map lookup and no runtime type check**. This module is the
+//! storage substrate the attempt runner fills; it is a typed container plus a
 //! delivery discipline, **not** a scheduler.
 //!
-//! # Type-erasure strategy (the Open question, resolved)
+//! # Type-erasure strategy
 //!
 //! Heterogeneous slots — one per node, each a different output type — must be
 //! storable together (keyed by node) while every read stays lookup-free and
-//! type-check-free. The strategy, inherited from the **T0.2 output-ownership
-//! ADR** (§1: *"wrap once, hand out cheap clones"*) and the dagx erasure-boundary
-//! prior art, is:
+//! type-check-free. The strategy, following "wrap once, hand out cheap clones"
+//! and the dagx erasure-boundary prior art, is:
 //!
 //! - A produced value is **`Arc`-wrapped exactly once** at fill time and stored
 //!   behind the single crate-internal erasure boundary as
@@ -45,11 +43,11 @@
 //! loud read-before-fill defect below — never a task-visible error and never a
 //! path a correctly-wired graph reaches. No `unsafe` is used anywhere.
 //!
-//! # Delivery: the three T0.2 modes
+//! # Delivery: the three modes
 //!
-//! Delivery to a consumer is one of the three modes the T0.2 ADR locked, decided
-//! per edge at assembly and recorded on the [`ReceiveMode`](crate::binding::ReceiveMode)
-//! this module *honours* (it does not adjudicate — that is assembly's job, T14):
+//! Delivery to a consumer is one of three modes, decided per edge at assembly and
+//! recorded on the [`ReceiveMode`](crate::binding::ReceiveMode) this module
+//! *honours* (it does not adjudicate — that is assembly's job):
 //!
 //! - **sole-consumer-owns** ([`Slot::owned_ref`] → [`ConsumerLease::take`]): the
 //!   value is **moved out** of the slot; after the move the framework has no copy
@@ -72,9 +70,8 @@
 //! return** (the [`ConsumerLease`] guard dropping), not on the terminal-state
 //! decision ([`ConsumerLease::mark_terminal`]): an **abandoned-but-running
 //! (zombie)** consumer keeps its read access and its counted residency until its
-//! closure returns (arch.md C10; T0.2 ADR §7). A **retained** node keeps its
-//! value until run end regardless of consumers, redeemable afterward via
-//! [`RedemptionHandle::redeem`].
+//! closure returns. A **retained** node keeps its value until run end regardless
+//! of consumers, redeemable afterward via [`RedemptionHandle::redeem`].
 //!
 //! # Residency accounting (single-count, honest)
 //!
@@ -82,24 +79,25 @@
 //! declared **output residency** transfers from the producing attempt into the
 //! slot at fill time and is released **exactly once** at *actual* slot release
 //! (which waits for zombies), never once per consumer. The [`ResidencyLedger`]
-//! is the accounting hook the memory pool (C12) and the run artifact (C23)
-//! consume, including [peak](ResidencyLedger::peak) measured residency. "Memory
-//! reclaimed" means returned to the allocator (the stored `Arc` is dropped), not
-//! necessarily to the OS.
+//! is the accounting hook the memory pool and the run artifact consume, including
+//! [peak](ResidencyLedger::peak) measured residency. "Memory reclaimed" means
+//! returned to the allocator (the stored `Arc` is dropped), not necessarily to
+//! the OS.
 //!
 //! # What lives elsewhere
 //!
 //! - **Filling the slot from a real attempt outcome** and emitting attempt
-//!   records is the runner (T20 / C14); this module exposes the fill/read/release
-//!   surface it drives.
+//!   records is the runner's; this module exposes the fill/read/release surface
+//!   it drives.
 //! - **Timeout classification, abandonment decisions, and permit-release timing**
-//!   are C14/C12 (T21, the T0.3 spike); this module only honours the
+//!   live in the runner and admission controller; this module only honours the
 //!   residency/reachability pinning a zombie consumer imposes.
 //! - **Memory-pool capacity, admission ordering**, and the **run artifact's
-//!   rendered numbers** are C12/C23; this module only exposes the accounting
-//!   hooks they consume.
-//! - **Durable/addressable outputs and rehydration** are C27; in-memory slots
-//!   deliberately cannot be rehydrated, and nothing here adds durability.
+//!   rendered numbers** live in the admission controller and artifact writer;
+//!   this module only exposes the accounting hooks they consume.
+//! - **Durable/addressable outputs and rehydration** live in the durable-output
+//!   contract; in-memory slots deliberately cannot be rehydrated, and nothing
+//!   here adds durability.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,9 +105,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::handle::NodeId;
 
-/// The **residency accounting hook** the memory pool (C12) and run artifact (C23)
-/// consume: the current counted output residency and the peak observed over the
-/// run (arch.md C10 *Memory accounting*).
+/// The **residency accounting hook** the memory pool and run artifact consume:
+/// the current counted output residency and the peak observed over the run.
 ///
 /// Output residency is counted **once per value** (not per consumer) — a slot's
 /// declared residency is added when the slot is filled and removed exactly once
@@ -140,7 +137,7 @@ impl ResidencyLedger {
 
     /// The current counted output residency in bytes — the sum of the declared
     /// residency of every slot that is filled-and-not-yet-released. This is the
-    /// live figure the admission controller (C12) reads.
+    /// live figure the admission controller reads.
     #[must_use]
     pub fn current(&self) -> u64 {
         self.current.load(Ordering::SeqCst)
@@ -148,7 +145,7 @@ impl ResidencyLedger {
 
     /// The **peak** measured output residency in bytes — the maximum concurrent
     /// counted residency observed since this ledger was created. This is the
-    /// figure the run artifact (C23) folds as *peak measured slot residency*.
+    /// figure the run artifact folds as *peak measured slot residency*.
     #[must_use]
     pub fn peak(&self) -> u64 {
         self.peak.load(Ordering::SeqCst)
@@ -156,12 +153,12 @@ impl ResidencyLedger {
 
     /// Charge `bytes` of residency (a slot was filled). Updates the peak.
     ///
-    /// `pub(crate)` so the C12 admission controller ([`crate::admission`]) can
-    /// mint an output-residency **slot lease** against the same shared ledger a
-    /// slot fills through (the working-vs-residency split, C12/C10): the transfer
-    /// of residency from the producing attempt to the output slot charges this
-    /// ledger, and the pool's counted memory folds it in. Slots charge it from
-    /// `Slot::fill`; the admission controller charges it at the residency transfer.
+    /// `pub(crate)` so the admission controller ([`crate::admission`]) can mint an
+    /// output-residency **slot lease** against the same shared ledger a slot fills
+    /// through (the working-vs-residency split): the transfer of residency from
+    /// the producing attempt to the output slot charges this ledger, and the
+    /// pool's counted memory folds it in. Slots charge it from `Slot::fill`; the
+    /// admission controller charges it at the residency transfer.
     pub(crate) fn charge(&self, bytes: u64) {
         let new = self.current.fetch_add(bytes, Ordering::SeqCst) + bytes;
         // Raise the peak to at least the new current (monotone, race-safe).
@@ -172,18 +169,17 @@ impl ResidencyLedger {
     /// caller's (a slot releases its residency exactly once).
     ///
     /// `pub(crate)` for the same reason as [`charge`](Self::charge): the admission
-    /// controller's slot lease drops when the slot actually releases (per C10,
-    /// after every consumer — including a zombie consumer — has returned), which
-    /// returns those bytes to the memory pool.
+    /// controller's slot lease drops when the slot actually releases (after every
+    /// consumer — including a zombie consumer — has returned), which returns those
+    /// bytes to the memory pool.
     pub(crate) fn release(&self, bytes: u64) {
         self.current.fetch_sub(bytes, Ordering::SeqCst);
     }
 }
 
 /// The refusal returned when a [`Slot`] that is already filled is filled again —
-/// the **once-writable** invariant (arch.md C10). It carries the **rejected**
-/// value back so the caller can discard it; the slot's original value is
-/// unchanged.
+/// the **once-writable** invariant. It carries the **rejected** value back so the
+/// caller can discard it; the slot's original value is unchanged.
 #[derive(Debug)]
 pub struct FillError<T> {
     rejected: T,
@@ -210,7 +206,7 @@ impl<T: std::fmt::Debug> std::error::Error for FillError<T> {}
 
 /// Why a post-run [redemption](RedemptionHandle::redeem) found no value —
 /// distinguishing a **retained** value (redeemable) from the two non-redeemable
-/// cases (arch.md C10: *"released ones are not"* redeemable).
+/// cases (released values are not redeemable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RedeemError {
     /// The node was **not retained** and its value was **released** after its
@@ -242,9 +238,8 @@ impl std::fmt::Display for RedeemError {
 impl std::error::Error for RedeemError {}
 
 /// What the slot currently holds behind the type-erasure boundary. The value is
-/// `Arc`-wrapped exactly once (T0.2 ADR §1) so shared-read fan-out is O(1) and
-/// the same value is stored regardless of consumer count (single-count
-/// residency).
+/// `Arc`-wrapped exactly once so shared-read fan-out is O(1) and the same value
+/// is stored regardless of consumer count (single-count residency).
 enum Content {
     /// Never filled: reading is a framework defect (read-before-fill).
     Empty,
@@ -272,7 +267,7 @@ struct Inner {
     retained: bool,
     /// The declared output residency in bytes, charged once at fill.
     residency: u64,
-    /// The shared run-wide residency ledger (C12/C23 accounting hook).
+    /// The shared run-wide residency ledger (the accounting hook).
     ledger: Arc<ResidencyLedger>,
     /// What the slot holds.
     content: Content,
@@ -285,8 +280,8 @@ struct Inner {
     /// How many consumers have returned (leases opened and then dropped). Release
     /// requires this to reach the total consumer count — the closure-return gate.
     returned_count: u32,
-    /// The exact total consumer count (from T14). Release needs both
-    /// `terminal_count` and `returned_count` to reach this.
+    /// The exact total consumer count (precomputed at assembly). Release needs
+    /// both `terminal_count` and `returned_count` to reach this.
     total_consumers: u32,
     /// Whether the residency has already been released (release-exactly-once).
     residency_released: bool,
@@ -322,10 +317,10 @@ impl Inner {
     }
 }
 
-/// A typed, once-writable **output slot** for one node's output (arch.md C10).
+/// A typed, once-writable **output slot** for one node's output.
 ///
-/// Created for a node with its [identity](NodeId), name, exact consumer count
-/// (from T14), `retained` flag, declared output residency, and the shared
+/// Created for a node with its [identity](NodeId), name, exact consumer count,
+/// `retained` flag, declared output residency, and the shared
 /// [`ResidencyLedger`]. Empty until [`fill`](Slot::fill)ed; a second fill is
 /// refused. Consumers are wired at assembly time by minting a typed
 /// [`SlotRef<T>`] with [`shared_ref`](Slot::shared_ref) /
@@ -343,12 +338,12 @@ impl<T: Send + Sync + 'static> Slot<T> {
     ///
     /// - `node` / `name`: the node's identity and registration name (the name is
     ///   what the read-before-fill defect message contains).
-    /// - `consumers`: the **exact** consumer count precomputed at assembly (T14).
+    /// - `consumers`: the **exact** consumer count precomputed at assembly.
     ///   Release waits until this many consumers are terminal-and-returned.
-    /// - `retained`: whether the node's output is retained until run end (C5/C10).
+    /// - `retained`: whether the node's output is retained until run end.
     /// - `residency`: the declared output residency in bytes, charged once at
     ///   fill and released once at actual release.
-    /// - `ledger`: the shared run-wide residency accounting hook (C12/C23).
+    /// - `ledger`: the shared run-wide residency accounting hook.
     #[must_use]
     pub fn new(
         node: NodeId,
@@ -383,8 +378,8 @@ impl<T: Send + Sync + 'static> Slot<T> {
     }
 
     /// **Fill** the slot with the produced value — the once-writable write the
-    /// runner (T20) performs on a node's success. The value is `Arc`-wrapped once
-    /// and its declared residency is charged to the ledger (single-count).
+    /// runner performs on a node's success. The value is `Arc`-wrapped once and
+    /// its declared residency is charged to the ledger (single-count).
     ///
     /// # Errors
     ///
@@ -411,7 +406,7 @@ impl<T: Send + Sync + 'static> Slot<T> {
         matches!(self.lock().content, Content::Filled(_))
     }
 
-    /// Mint a **shared-read** consumer reference (T0.2 multi-consumer-shared-read):
+    /// Mint a **shared-read** consumer reference (multi-consumer-shared-read):
     /// the consumer reads the value as an `Arc<T>` for the duration of its
     /// attempt. The reference is a **direct typed link** — no lookup.
     #[must_use]
@@ -423,10 +418,10 @@ impl<T: Send + Sync + 'static> Slot<T> {
         }
     }
 
-    /// Mint a **sole-consumer-owns** consumer reference (T0.2 sole-consumer-owns):
-    /// the consumer takes the value by move via [`ConsumerLease::take`]. Legal
-    /// only when this node has exactly one consumer (assembly enforces that, T14);
-    /// this module honours the mode.
+    /// Mint a **sole-consumer-owns** consumer reference: the consumer takes the
+    /// value by move via [`ConsumerLease::take`]. Legal only when this node has
+    /// exactly one consumer (assembly enforces that); this module honours the
+    /// mode.
     #[must_use]
     pub fn owned_ref(&self) -> SlotRef<T> {
         SlotRef {
@@ -436,7 +431,7 @@ impl<T: Send + Sync + 'static> Slot<T> {
         }
     }
 
-    /// Mint a **clone-on-read** consumer reference (T0.2 per-edge clone-on-read):
+    /// Mint a **clone-on-read** consumer reference (per-edge clone-on-read):
     /// each attempt receives a fresh `T` via [`SlotRef::clone_value`]. Requires
     /// `T: Clone` (the only mode that does).
     #[must_use]
@@ -449,8 +444,8 @@ impl<T: Send + Sync + 'static> Slot<T> {
     }
 
     /// Mint the **redemption handle** for a `retained` node: exchanged for the
-    /// value once the run has ended (arch.md C10). For a non-retained node the
-    /// handle's [`redeem`](RedemptionHandle::redeem) reports the value as
+    /// value once the run has ended. For a non-retained node the handle's
+    /// [`redeem`](RedemptionHandle::redeem) reports the value as
     /// [`Released`](RedeemError::Released) (or [`NeverFilled`](RedeemError::NeverFilled)).
     #[must_use]
     pub fn redemption_handle(&self) -> RedemptionHandle<T> {
@@ -467,9 +462,9 @@ impl<T: Send + Sync + 'static> Slot<T> {
     }
 }
 
-/// Which T0.2 delivery mode a [`SlotRef`] was minted for — the
+/// Which delivery mode a [`SlotRef`] was minted for — the
 /// [`ReceiveMode`](crate::binding::ReceiveMode) its edge declared, carried on the
-/// reference so the runner (T20) knows which delivery method to call
+/// reference so the runner knows which delivery method to call
 /// ([`read`](SlotRef::read) / [`enter`](SlotRef::enter)+[`take`](ConsumerLease::take)
 /// / [`clone_value`](SlotRef::clone_value)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,9 +479,9 @@ pub enum DeliveryMode {
 }
 
 /// A **typed consumer reference** to an upstream node's output slot, established
-/// at assembly time (arch.md C10; from T14). It carries the concrete output type
-/// `T`, so a read is a **direct access with no map lookup and no runtime type
-/// check** — a mismatched-type wiring is impossible to construct (see the [module
+/// at assembly time. It carries the concrete output type `T`, so a read is a
+/// **direct access with no map lookup and no runtime type check** — a
+/// mismatched-type wiring is impossible to construct (see the [module
 /// docs](self)).
 ///
 /// A `SlotRef<T>` can be minted **only** from a [`Slot<T>`] of the same `T`, via
@@ -499,8 +494,8 @@ pub struct SlotRef<T> {
 }
 
 impl<T: Send + Sync + 'static> SlotRef<T> {
-    /// The [`DeliveryMode`] this reference was minted for — the T0.2 receive mode
-    /// its edge declared. The runner (T20) reads it to know whether to deliver by
+    /// The [`DeliveryMode`] this reference was minted for — the receive mode its
+    /// edge declared. The runner reads it to know whether to deliver by
     /// [`read`](SlotRef::read) (shared), [`take`](ConsumerLease::take) (owned), or
     /// [`clone_value`](SlotRef::clone_value) (clone-on-read).
     #[must_use]
@@ -514,9 +509,9 @@ impl<T: Send + Sync + 'static> SlotRef<T> {
     /// # Panics
     ///
     /// Panics loudly — a **framework defect** naming the offending node — if the
-    /// slot has not been filled (read-before-fill; arch.md C10). This is never a
-    /// task error and never a path a correctly-wired graph reaches: a data edge
-    /// implies upstream success, so the slot is filled before any consumer reads.
+    /// slot has not been filled (read-before-fill). This is never a task error and
+    /// never a path a correctly-wired graph reaches: a data edge implies upstream
+    /// success, so the slot is filled before any consumer reads.
     #[must_use]
     pub fn read(&self) -> Arc<T> {
         let inner = lock(&self.inner);
@@ -559,11 +554,11 @@ impl<T: Send + Sync + 'static> SlotRef<T> {
 }
 
 /// A **consumer lease** over an upstream slot for the duration of one consuming
-/// attempt's closure (arch.md C10). Holding it keeps the value reachable and its
-/// residency counted; dropping it records the **closure return** — the second,
+/// attempt's closure. Holding it keeps the value reachable and its residency
+/// counted; dropping it records the **closure return** — the second,
 /// zombie-critical half of the release gate.
 ///
-/// A lease delivers the value through exactly the T0.2 mode its edge declared:
+/// A lease delivers the value through exactly the mode its edge declared:
 /// [`read`](ConsumerLease::read) (shared), [`take`](ConsumerLease::take) (owned
 /// move), or a clone via the reference's [`clone_value`](SlotRef::clone_value).
 /// [`mark_terminal`](ConsumerLease::mark_terminal) records the terminal-state
@@ -607,7 +602,7 @@ impl<T: Send + Sync + 'static> ConsumerLease<T> {
                     // — infallible by construction (the reference's `T` is the
                     // stored type) — then move the value out. The sole owner is
                     // provably the only strong holder (owned mode is legal only for
-                    // a single-consumer slot, T14), so `try_unwrap` succeeds.
+                    // a single-consumer slot), so `try_unwrap` succeeds.
                     let typed: Arc<T> = arc.downcast::<T>().unwrap_or_else(|_| {
                         unreachable!(
                             "output slot type-erasure invariant violated on take (framework \
@@ -683,8 +678,7 @@ impl<T> Drop for ConsumerLease<T> {
 }
 
 /// The **post-run redemption handle** for a `retained` node: exchanged for the
-/// value once the run has ended (arch.md C10 — *"the handle can be exchanged for
-/// the value once the run has ended"*). Minted with [`Slot::redemption_handle`].
+/// value once the run has ended. Minted with [`Slot::redemption_handle`].
 ///
 /// For a retained node whose slot was filled, [`redeem`](RedemptionHandle::redeem)
 /// returns the value (and releases its through-run-end residency exactly once).

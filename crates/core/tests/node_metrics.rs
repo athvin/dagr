@@ -1,12 +1,12 @@
-//! C23 · Node metrics — ticket T44 (055). Written first, TDD.
+//! Node metrics. Written first, TDD.
 //!
 //! Exercises the open, unschematized per-attempt metrics facility that
-//! `dagr_core::metrics` provides (arch.md `### C23 · Node metrics`): the attach
-//! API on an attempt's metric set, numeric-only values, the reserved `dagr.`
-//! prefix, the entry-count and byte-size caps with deterministic recorded
-//! truncation, the framework-contributed measurements (peak memory, permit
-//! sizes, phase timings), and the instrumented per-attempt allocator whose
-//! peak is attributed via task-local state (not process RSS).
+//! `dagr_core::metrics` provides: the attach API on an attempt's metric set,
+//! numeric-only values, the reserved `dagr.` prefix, the entry-count and
+//! byte-size caps with deterministic recorded truncation, the
+//! framework-contributed measurements (peak memory, permit sizes, phase
+//! timings), and the instrumented per-attempt allocator whose peak is attributed
+//! via task-local state (not process RSS).
 //!
 //! # `unsafe` note
 //!
@@ -261,7 +261,7 @@ fn every_builtin_metric_name_follows_the_units_in_name_convention() {
     m.finalize_task_metrics();
 
     // Documented unit suffixes; every built-in (dagr.-prefixed non-flag) name
-    // carries one of them, per docs/conventions/metric-naming.md.
+    // carries one of them.
     let unit_suffixes = ["_bytes", "_ns", "_threads", "_count", "_entries"];
     for (k, _) in m.collected() {
         if !k.starts_with(RESERVED_PREFIX) {

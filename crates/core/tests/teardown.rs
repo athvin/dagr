@@ -1,16 +1,15 @@
-//! Registration/assembly tests for **C17 teardown nodes** (ticket T52 / 064),
-//! written first (TDD). These exercise the *authoring* seam a teardown node uses:
-//! a consume-nothing node registered with [`Flow::register_teardown`], ordered
-//! after an explicit covered set, carrying the `all-terminal` rule and the
-//! teardown policy flag — plus the [`Pipeline::teardown_covered_nodes`] query the
-//! driver's teardown phase (and the future resume seed, C27) reads.
+//! Registration/assembly tests for **teardown nodes**, written first (TDD).
+//! These exercise the *authoring* seam a teardown node uses: a consume-nothing
+//! node registered with [`Flow::register_teardown`], ordered after an explicit
+//! covered set, carrying the `all-terminal` rule and the teardown policy flag —
+//! plus the [`Pipeline::teardown_covered_nodes`] query the driver's teardown
+//! phase (and the future resume seed) reads.
 //!
 //! The *runtime* half (the driver running teardown after the main graph under a
 //! fresh signal, failure isolation, admission bypass) is exercised by the
 //! `dagr-cli` integration tests (`teardown_nodes.rs`); the *nonzero-cost assembly
 //! rejection* and the *covered-states context exposure* already have tests
-//! (`assembly.rs`, `run_context.rs`) and are reused as-is per this ticket's Out of
-//! scope.
+//! (`assembly.rs`, `run_context.rs`) and are reused as-is.
 
 use dagr_core::assembly::{NodePolicy, ProblemKind};
 use dagr_core::binding::TriggerRule;
@@ -20,7 +19,7 @@ use dagr_core::task::Task;
 use dagr_core::{RunContext, TaskError};
 
 // A trivial consume-nothing task — the shape both a covered node and a teardown
-// node take here (a teardown consumes nothing, C4/C17).
+// node take here (a teardown consumes nothing).
 struct Unit;
 impl Task for Unit {
     type Input = ();
@@ -32,8 +31,8 @@ impl Task for Unit {
 
 /// A teardown registered over a covered set is a **consume-nothing `all-terminal`
 /// teardown-policy node ordered after exactly the covered nodes** — the four
-/// facts C17 depends on, all set by one registrar so an author cannot get them
-/// out of step.
+/// facts a teardown depends on, all set by one registrar so an author cannot get
+/// them out of step.
 #[test]
 fn register_teardown_is_all_terminal_teardown_ordered_after_covered() {
     let mut flow = Flow::new();
@@ -54,7 +53,7 @@ fn register_teardown_is_all_terminal_teardown_ordered_after_covered() {
     );
     // Fires on all-terminal, so it runs after covered nodes end in ANY state.
     assert_eq!(node.trigger_rule(), TriggerRule::AllTerminal);
-    // Ordered after exactly the covered nodes (backward-reference discipline, C4).
+    // Ordered after exactly the covered nodes (backward-reference discipline).
     let covered: Vec<NodeId> = node
         .ordering_edges()
         .iter()
@@ -68,9 +67,9 @@ fn register_teardown_is_all_terminal_teardown_ordered_after_covered() {
     pipeline.assemble().expect("zero-cost teardown assembles");
 }
 
-/// The covered-set query the driver's teardown phase and the resume seed (C27)
-/// read: every teardown maps to the names of the nodes it covers. A pipeline with
-/// no teardown reports an empty map (backward-compat).
+/// The covered-set query the driver's teardown phase and the resume seed read:
+/// every teardown maps to the names of the nodes it covers. A pipeline with no
+/// teardown reports an empty map (backward-compat).
 #[test]
 fn teardown_covered_nodes_reports_each_teardowns_covered_set() {
     let mut flow = Flow::new();
@@ -97,7 +96,7 @@ fn teardown_covered_nodes_reports_each_teardowns_covered_set() {
 
 /// A teardown given a **nonzero** cost is still rejected at assembly with the
 /// distinct, review-visible `NonzeroTeardownCost` problem naming the node — the
-/// `register_teardown` seam does not smuggle around C12's capacity invariant.
+/// `register_teardown` seam does not smuggle around the capacity invariant.
 #[test]
 fn register_teardown_with_nonzero_cost_is_rejected_at_assembly() {
     let mut flow = Flow::new();

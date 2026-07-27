@@ -1,6 +1,6 @@
-// UI compile-failure fixture — ticket T50 (062), case `wiring_ordering_cycle_back_edge`.
+// UI compile-failure fixture — case `wiring_ordering_cycle_back_edge`.
 //
-// PROVES (C2/C4; arch.md `### C2 · Handle`, `### C4 · Ordering dependency`): an
+// PROVES: an
 // ORDERING-edge cycle cannot be closed AFTER THE FACT either — a back-edge is as
 // inexpressible as a self-edge. This is the REAL authoring API
 // (`dagr_core::flow::Flow`, `Flow::register_source_ordered_after`,
@@ -8,14 +8,14 @@
 // AFTER "a", requires naming `b`'s handle inside "a"'s ordering argument — but "b"
 // does not exist there yet (it is the return value of a LATER registration), and
 // there is NO after-the-fact edge API to add an ordering edge once "a" is
-// registered (arch.md §141: "no API exists to add an edge between two existing
+// registered ("no API exists to add an edge between two existing
 // nodes afterward"). The forward reference is a use of an undeclared binding
 // (E0425), so the back-edge cannot be written. The cycle guarantee extends across
-// BOTH edge kinds (C2/C4); the data-edge counterpart is `wiring_data_cycle_back_edge`.
+// BOTH edge kinds; the data-edge counterpart is `wiring_data_cycle_back_edge`.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;

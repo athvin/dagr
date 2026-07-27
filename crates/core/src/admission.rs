@@ -1,5 +1,5 @@
-//! The C12 **admission controller** — bounded capacity pools and the permit
-//! lifecycle (arch.md `### C12 · Admission controller`; ticket T31).
+//! The **admission controller** — bounded capacity pools and the permit
+//! lifecycle.
 //!
 //! # What this module owns
 //!
@@ -28,13 +28,12 @@
 //! - **zombie accounting** — [`mark_zombie`](AdmissionController::mark_zombie)
 //!   registers an abandoned-but-running attempt as a live zombie whose cost stays
 //!   counted against every pool until the closure **actually returns** (the permit
-//!   drops), never before — the honest ledger the T0.3 ADR mandates;
+//!   drops), never before — an honest ledger;
 //! - **the working-memory vs output-residency split** — working memory is held for
 //!   the attempt and released at its terminal state; output residency **transfers**
 //!   to the output slot when the value is produced and is charged as a **slot
 //!   lease** ([`ResidencyLease`](crate::slot)) against the same memory pool until
-//!   the slot actually releases (which, per C10, waits for zombie consumers to
-//!   return);
+//!   the slot actually releases (which waits for zombie consumers to return);
 //! - **permit-wait vs execution timing** — [`begin_wait`](AdmissionController::begin_wait)
 //!   records the waiting phase separately from the executing phase;
 //! - **the undeclared-cost warning** — [`warn_if_undeclared`](AdmissionController::warn_if_undeclared)
@@ -42,16 +41,16 @@
 //!   real constraint;
 //! - **the reporting seam** — [`zombie_report`](AdmissionController::zombie_report)
 //!   surfaces the count of live zombies and the per-pool cost each pins, in the
-//!   shape T42/C23 folds side by side with measured cost.
+//!   shape the run artifact folds side by side with measured cost.
 //!
-//! # The T0.3 ADR contract this implements verbatim
+//! # The permit-lifecycle contract this implements verbatim
 //!
-//! The permit lifecycle is exactly the one the T0.3 ADR (009) §2, §3, §9 fixed:
+//! The permit lifecycle is:
 //! `try_admit(node, cost) -> Option<Permit>` (all-or-nothing across pools); a
 //! `Permit` whose `Drop` returns cost to every pool; `mark_zombie(&permit)`
 //! registering a `{node, per-pool cost}` record **without** releasing;
 //! `zombie_report()`; and the invariant that counted cost (zombies included) never
-//! exceeds capacity at any instant. The load-bearing trick is the ADR's own: the
+//! exceeds capacity at any instant. The load-bearing trick: the
 //! permit is moved **into** the blocking/compute closure, so "the work has
 //! returned" is *definitionally* "the permit was dropped" — the ledger structurally
 //! cannot release what is still running, with no watchdog and no join that blocks
@@ -66,19 +65,18 @@
 //! current remaining capacity, and a refused node waits until a *release* (a permit
 //! drop) frees capacity — never on a timer. This keeps CI deterministic (no
 //! wall-clock, no network) and is why the controller carries no async-runtime
-//! dependency: `dagr-core` depends on nothing (the workspace ADR T1), and this
+//! dependency: `dagr-core` depends on nothing, and this
 //! module holds to that — it is a synchronous, `unsafe`-free ledger the driver
-//! (T24) drives from its framework runtime.
+//! drives from its framework runtime.
 //!
 //! # Scope
 //!
-//! This ticket takes pool capacities as an **input** and pins them for tests;
+//! This module takes pool capacities as an **input** and pins them for tests;
 //! deriving them from container limits (cgroup v2 → v1 → host, the headroom
-//! default, the pinning flag, too-big-node rejection at bootstrap) is **T32**.
-//! Execution-class *dispatch* (routing a node onto the compute-vs-blocking pool by
-//! its class) is **T33**; this module provides the pools and permits, not the class
-//! routing policy. The exhaustive permit-release outcome matrix is **T37**; the
-//! event/artifact fold of the declared-vs-measured cost is **T42/C23**. This
+//! default, the pinning flag, too-big-node rejection at bootstrap) is handled by
+//! the bootstrap limit-detection layer. Execution-class *dispatch* (routing a node
+//! onto the compute-vs-blocking pool by its class) is handled separately; this
+//! module provides the pools and permits, not the class routing policy. This
 //! controller is per-run and in-process — there is no scheduler, no cross-process
 //! capacity coordination, and no runtime-mutable pool set (a permanent non-goal).
 
@@ -90,27 +88,26 @@ use crate::assembly::CostVector;
 use crate::execution::ZombieObserver;
 use crate::slot::ResidencyLedger;
 
-/// The set of admission pools a node's declared cost is a vector over (arch.md
-/// C12; the C5 [`CostVector`] dimensions).
+/// The set of admission pools a node's declared cost is a vector over (the
+/// [`CostVector`] dimensions).
 ///
 /// The stated minimum is a **memory** pool and **thread** pools. Memory is a
 /// single pool measured in **bytes** (the working-memory and output-residency
-/// halves of the C5 cost both draw from it); the two thread pools are the
-/// **blocking** and **compute** pools from T2, measured in a **thread count**.
+/// halves of the cost both draw from it); the two thread pools are the
+/// **blocking** and **compute** pools, measured in a **thread count**.
 ///
 /// The set is **fixed at compile time and never runtime-mutable** (a permanent
 /// non-goal): this enum is the extension point, and adding a pool is a spec-driven
-/// source change, never a runtime knob. Resolving T31's open question toward the
-/// stated minimum, exactly these three pools ship in v1 (see the ticket's Open
-/// questions).
+/// source change, never a runtime knob. Exactly these three pools ship in v1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Pool {
     /// The memory pool, in **bytes**. Both working memory (held for the attempt)
     /// and output residency (the slot lease) are charged against it.
     Memory,
-    /// The blocking thread pool, in a **thread count** (T2 `spawn_blocking`).
+    /// The blocking thread pool, in a **thread count** (the `spawn_blocking`
+    /// pool).
     BlockingThreads,
-    /// The compute thread pool, in a **thread count** (T2 the dedicated pool).
+    /// The compute thread pool, in a **thread count** (the dedicated pool).
     ComputeThreads,
 }
 
@@ -120,10 +117,11 @@ impl Pool {
     pub const ALL: [Pool; 3] = [Pool::Memory, Pool::BlockingThreads, Pool::ComputeThreads];
 }
 
-/// The **pinned total capacity** of each pool (arch.md C12).
+/// The **pinned total capacity** of each pool.
 ///
-/// This ticket takes capacities as an input and pins them (the bootstrap
-/// derivation from container limits is T32). The default is a fully **unconstrained**
+/// This takes capacities as an input and pins them (the bootstrap
+/// derivation from container limits lives in the limit-detection layer). The
+/// default is a fully **unconstrained**
 /// controller — every pool has effectively unlimited capacity — so a run with no
 /// pinned constraint admits everything, which is what keeps the memory-constrained
 /// warning ([`AdmissionController::warn_if_undeclared`]) scoped to genuinely
@@ -200,18 +198,18 @@ impl PoolCapacities {
 }
 
 /// A node's **declared per-pool cost** — the demand it makes on each pool
-/// ([`Pool`]), in that pool's native unit (arch.md C12; the C5 [`CostVector`]).
+/// ([`Pool`]), in that pool's native unit (the [`CostVector`] dimensions).
 ///
 /// Memory splits into **working memory** (held for the attempt, released at its
 /// terminal state) and **output residency** (transferred to the output slot when
-/// the value is produced — the slot lease, C10). The thread costs are counts drawn
+/// the value is produced — the slot lease). The thread costs are counts drawn
 /// from the blocking and compute pools. Every field defaults to **zero** (the
-/// conservative C5 default), so a node with no declared cost demands nothing.
+/// conservative default), so a node with no declared cost demands nothing.
 ///
-/// This is the admission-side mirror of the C5 [`CostVector`]; build one directly
+/// This is the admission-side mirror of the [`CostVector`]; build one directly
 /// with the builder methods, or from a policy's cost vector with
 /// [`from_cost_vector`](PoolCost::from_cost_vector) — the controller reads a node's
-/// declared cost through C5 without duplicating its definition.
+/// declared cost through the cost vector without duplicating its definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PoolCost {
     working_memory: u64,
@@ -221,13 +219,13 @@ pub struct PoolCost {
 }
 
 impl PoolCost {
-    /// A zero cost — no demand on any pool (the conservative C5 default).
+    /// A zero cost — no demand on any pool (the conservative default).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Read a node's declared cost from its C5 [`CostVector`] (T29) — the
+    /// Read a node's declared cost from its [`CostVector`] — the
     /// controller consumes the declared-cost vectors without duplicating their
     /// definition.
     #[must_use]
@@ -248,7 +246,7 @@ impl PoolCost {
     }
 
     /// Set the **output-residency** demand in bytes (the slot lease — transferred
-    /// to the output slot when the value is produced, C10).
+    /// to the output slot when the value is produced).
     #[must_use]
     pub fn output_residency(mut self, bytes: u64) -> Self {
         self.output_residency = bytes;
@@ -271,7 +269,8 @@ impl PoolCost {
 
     /// The declared **working-memory** demand in bytes. (The setter and getter
     /// cannot share a name in Rust, so the getters carry a `_bytes` /
-    /// `_thread_count` suffix while the builder setters mirror the C5 field names.)
+    /// `_thread_count` suffix while the builder setters mirror the cost-vector
+    /// field names.)
     #[must_use]
     pub fn working_memory_bytes(&self) -> u64 {
         self.working_memory
@@ -299,7 +298,7 @@ impl PoolCost {
     /// what a permit charges the memory pool on admission (output residency is
     /// charged separately, as the slot lease, at production — not on admission).
     ///
-    /// `pub(crate)` so the T32 [`limits`](crate::limits) bootstrap check can read a
+    /// `pub(crate)` so the [`limits`](crate::limits) bootstrap check can read a
     /// node's per-pool demand against the derived pool totals without duplicating
     /// the mapping.
     #[must_use]
@@ -313,11 +312,12 @@ impl PoolCost {
 }
 
 /// One live-zombie record: the node and the per-pool cost its abandoned-but-running
-/// closure still pins (arch.md C12; T0.3 ADR §7).
+/// closure still pins.
 ///
 /// The report is a list of these, from which the live-zombie count and per-pool
-/// pinned totals are derivable — the shape C19 folds into a zombie-at-exit event
-/// and C22/C23 fold into the declared-vs-measured juxtaposition (T42).
+/// pinned totals are derivable — the shape the event stream folds into a
+/// zombie-at-exit event and the artifact folds into the declared-vs-measured
+/// juxtaposition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZombieRecord {
     /// The zombie node's author-declared identity name.
@@ -326,7 +326,7 @@ pub struct ZombieRecord {
     pub pinned: ZombieCost,
 }
 
-/// The per-pool cost a live zombie pins, in a form the artifact folds (T42/C23).
+/// The per-pool cost a live zombie pins, in a form the artifact folds.
 /// Mirrors the admission-side [`PoolCost`] but is the *reported* shape (the
 /// working-memory bytes the attempt drew, plus its thread counts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -357,9 +357,9 @@ impl ZombieCost {
 }
 
 /// The **zombie-cost report** — the count of live zombies and the per-pool cost
-/// each pins (arch.md C12; T0.3 ADR §7).
+/// each pins.
 ///
-/// This is the stable reporting seam T37 asserts against and T42/C23 fold. It
+/// This is the stable reporting seam the artifact folds. It
 /// surfaces only the **declared** side (each zombie's pinned per-pool cost); no
 /// measured-vs-declared comparison is computed here.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -371,12 +371,12 @@ pub struct ZombieReport {
 }
 
 /// A warning that a node declared **no** memory cost while the memory pool is a
-/// **genuine constraint** (arch.md C12: "a memory-constrained run warns about
-/// nodes with no declared cost").
+/// **genuine constraint** (a memory-constrained run warns about nodes with no
+/// declared cost).
 ///
 /// The controller emits one only for a constrained run; an unconstrained run does
 /// not warn (there is no ceiling to blow past). Surfaced so the driver can log it;
-/// the event/artifact wiring is C19/C23.
+/// the event/artifact wiring lives in the driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndeclaredCostWarning {
     node: String,
@@ -414,7 +414,7 @@ impl std::fmt::Display for UndeclaredCostWarning {
 /// The counted cost of a pool is `total − remaining`. Working-memory and thread
 /// costs are charged here on `try_admit` and returned on `Permit::drop`. Output
 /// residency is **not** charged here — it is counted by the shared
-/// [`ResidencyLedger`] (the slot lease, C10), which the memory pool's *counted*
+/// [`ResidencyLedger`] (the slot lease), which the memory pool's *counted*
 /// figure adds in when reporting so a zombie consumer holding the slot open keeps
 /// the bytes counted.
 struct Inner {
@@ -429,7 +429,7 @@ struct Inner {
     /// The waiting queue: nodes offered but not yet admitted, oldest first (the
     /// oldest-ready-first discipline). Each carries its declared cost.
     waiters: VecDeque<Waiter>,
-    /// The shared output-residency ledger (C10). The memory pool's *counted* figure
+    /// The shared output-residency ledger. The memory pool's *counted* figure
     /// includes this so the slot lease is honestly charged against total memory;
     /// `None` when no slots participate (an unconstrained/threads-only controller).
     residency: Option<Arc<ResidencyLedger>>,
@@ -468,7 +468,8 @@ impl Inner {
     /// exceeds a pool's total in some dimension can never be admitted, no matter how
     /// much capacity is released; distinguishing that from a merely-full pool is what
     /// lets the driver reject a can-never-fit node rather than strand it forever
-    /// (arch.md C12 termination guard; the full bootstrap rejection is T32).
+    /// (the termination guard; the full bootstrap rejection lives in the
+    /// limit-detection layer).
     fn fits_total(&self, cost: &PoolCost) -> bool {
         Pool::ALL
             .iter()
@@ -497,7 +498,7 @@ impl Inner {
 
     /// The **counted** cost of `pool` — `total − remaining`, plus, for the memory
     /// pool, the live output residency (the slot lease) so a zombie consumer that
-    /// holds a slot open keeps its bytes honestly counted (C12/C10).
+    /// holds a slot open keeps its bytes honestly counted.
     fn counted(&self, pool: Pool) -> u64 {
         let charged = self.caps.total(pool) - self.remaining(pool);
         match pool {
@@ -508,7 +509,7 @@ impl Inner {
 
     /// The index of the next waiter to admit under the **oldest-ready-first with
     /// bounded bypass** discipline, or [`None`] if no waiter can be admitted without
-    /// risking the oldest waiter (arch.md C12).
+    /// risking the oldest waiter.
     ///
     /// If the oldest waiter (index 0) fits, it is admitted — the oldest is never
     /// bypassed. If it does **not** fit, a younger waiter may **bypass** it, but
@@ -536,7 +537,7 @@ impl Inner {
 // The admission controller
 // ===========================================================================
 
-/// The runtime **admission controller** (arch.md C12; T31). Cheaply cloneable —
+/// The runtime **admission controller**. Cheaply cloneable —
 /// every clone shares the same ledger via an [`Arc`], so the driver hands clones
 /// to the pieces that admit, release, and report against one run's pools.
 #[derive(Clone)]
@@ -561,7 +562,7 @@ impl AdmissionController {
         }
     }
 
-    /// Link the shared output-residency [`ResidencyLedger`] (C10) into the memory
+    /// Link the shared output-residency [`ResidencyLedger`] into the memory
     /// pool's **counted** figure, so a slot lease charges the same memory pool as
     /// working memory. The slot fills through this ledger (`Slot::fill`); the
     /// controller reads it to keep the pool's counted total honest — a zombie
@@ -578,15 +579,15 @@ impl AdmissionController {
             .expect("admission ledger mutex not poisoned")
     }
 
-    /// **Try to admit** `node` at `cost` — all-or-nothing across every pool
-    /// (arch.md C12; T0.3 ADR §9). Returns a held [`Permit`] if `cost` fits every
+    /// **Try to admit** `node` at `cost` — all-or-nothing across every pool.
+    /// Returns a held [`Permit`] if `cost` fits every
     /// pool's current remaining capacity, or [`None`] if any pool cannot satisfy it
     /// — in which case **no** pool's capacity is consumed (no partial hold), so the
     /// node simply waits for a release.
     ///
     /// The returned permit is held for the whole attempt; dropping it returns the
     /// cost to every pool it drew from. Moving the permit **into** the attempt's
-    /// closure (the T0.3 ownership trick) is what makes permit-held-until-return
+    /// closure (the ownership trick) is what makes permit-held-until-return
     /// fall out of Rust's ownership — the ledger cannot release what is still
     /// running.
     #[must_use]
@@ -606,7 +607,7 @@ impl AdmissionController {
 
     /// Whether `cost` **could ever be admitted** — its declared demand does not
     /// exceed any pool's **total** capacity, so a completely empty pool would admit
-    /// it (arch.md C12). A cost that exceeds a pool's total in some dimension can
+    /// it. A cost that exceeds a pool's total in some dimension can
     /// **never** fit no matter how many permits release, so a node with such a cost
     /// waiting in the driver's pending queue would be stranded forever and never
     /// reach a terminal state — breaking the "every reachable node reaches a terminal
@@ -614,16 +615,17 @@ impl AdmissionController {
     /// node a defined non-success terminal instead of silently stranding it.
     ///
     /// This is only the **defensive driver-level guard**: the full bootstrap-time
-    /// rejection of too-big nodes (with the resolved container-limit capacities) is
-    /// deferred to **T32**. `false` means "reject — this can never fit".
+    /// rejection of too-big nodes (with the resolved container-limit capacities)
+    /// lives in the limit-detection layer. `false` means "reject — this can never
+    /// fit".
     #[must_use]
     pub fn can_ever_fit(&self, cost: &PoolCost) -> bool {
         self.lock().fits_total(cost)
     }
 
     /// A human-readable reason a `cost` can never be admitted — the first pool whose
-    /// **total** capacity `cost` exceeds, with the demanded and total figures
-    /// (arch.md C12). Returns [`None`] when `cost` could fit an empty pool (so there
+    /// **total** capacity `cost` exceeds, with the demanded and total figures.
+    /// Returns [`None`] when `cost` could fit an empty pool (so there
     /// is nothing to explain). This is the honest message the driver records on the
     /// node's non-success terminal so the run's outcome reflects *why* the node could
     /// never run — not a silent strand.
@@ -658,8 +660,7 @@ impl AdmissionController {
     }
 
     /// **Poll** the waiting queue and admit every waiter the oldest-ready-first
-    /// discipline allows *right now*, returning their held [`Permit`]s (arch.md
-    /// C12).
+    /// discipline allows *right now*, returning their held [`Permit`]s.
     ///
     /// The discipline: walk the queue oldest-first. The **oldest waiter** is
     /// admitted whenever it fits. A younger (bypass) waiter is admitted **only**
@@ -691,8 +692,8 @@ impl AdmissionController {
     }
 
     /// **Mark** `permit`'s attempt as abandoned-but-running — register a live
-    /// zombie whose cost stays counted until the closure actually returns (arch.md
-    /// C12; T0.3 ADR §2). This does **not** release anything: the permit is still
+    /// zombie whose cost stays counted until the closure actually returns. This
+    /// does **not** release anything: the permit is still
     /// held (by the running closure), so the cost remains charged; the release
     /// happens only when the permit drops. Registering the zombie lets the ledger
     /// *report* the abandoned cost independently and defers the node's retry while
@@ -710,8 +711,8 @@ impl AdmissionController {
     }
 
     /// The **zombie-cost report** — the count of live zombies and the per-pool cost
-    /// each pins (arch.md C12; T0.3 ADR §7). The stable reporting seam T37 asserts
-    /// against and T42/C23 fold side by side with measured cost.
+    /// each pins. The stable reporting seam the artifact folds side by side with
+    /// measured cost.
     #[must_use]
     pub fn zombie_report(&self) -> ZombieReport {
         let inner = self.lock();
@@ -747,14 +748,14 @@ impl AdmissionController {
         Pool::ALL.iter().all(|&pool| inner.counted(pool) == 0)
     }
 
-    /// **Transfer** `bytes` of output residency to the producing node's slot lease
-    /// (arch.md C12/C10): the value was produced, so its declared residency moves
+    /// **Transfer** `bytes` of output residency to the producing node's slot lease:
+    /// the value was produced, so its declared residency moves
     /// from the attempt to the output slot and is charged against the **same memory
     /// pool** as working memory, held until the slot **actually** releases (the
     /// returned [`ResidencyLease`] drops). In the real path the transfer happens
     /// inside `Slot::fill` against the shared [`ResidencyLedger`]; this seam mints a
     /// lease against that same ledger so the driver can hold it for the slot's
-    /// lifetime (per C10, past every consumer's return, including zombie consumers).
+    /// lifetime (past every consumer's return, including zombie consumers).
     ///
     /// If no residency ledger was linked ([`with_residency_ledger`](Self::with_residency_ledger)),
     /// one is created lazily on first transfer so the memory pool's counted figure
@@ -775,7 +776,7 @@ impl AdmissionController {
     }
 
     /// **Warn** if `node` declared no memory cost while the memory pool is a genuine
-    /// constraint (arch.md C12). Returns a [`UndeclaredCostWarning`] naming the node
+    /// constraint. Returns a [`UndeclaredCostWarning`] naming the node
     /// only when the memory pool is constrained *and* the node's working-memory
     /// demand is zero; otherwise [`None`] — an unconstrained run never warns, and a
     /// node with a declared memory cost never warns.
@@ -791,9 +792,9 @@ impl AdmissionController {
         }
     }
 
-    /// Begin recording a node's **permit-wait vs execution** phases (arch.md C12:
-    /// "Time spent waiting for a permit is recorded separately from time spent
-    /// executing"). Returns a [`PhaseTiming`] the caller fills with the measured
+    /// Begin recording a node's **permit-wait vs execution** phases: time spent
+    /// waiting for a permit is recorded separately from time spent
+    /// executing. Returns a [`PhaseTiming`] the caller fills with the measured
     /// wait and execution intervals — the durations are **injected** (measured by
     /// the caller's clock), never read from a wall clock here, so the split stays
     /// deterministic and runtime-agnostic.
@@ -807,8 +808,8 @@ impl AdmissionController {
     }
 }
 
-/// [`AdmissionController`] observes its own live zombies (arch.md C12; T0.3 ADR
-/// §5): a timed-out blocking/compute node's retry is deferred while any zombie is
+/// [`AdmissionController`] observes its own live zombies: a timed-out
+/// blocking/compute node's retry is deferred while any zombie is
 /// live, and the runner reads that through this port. `has_live_zombie` is `true`
 /// while the controller holds any unreturned zombie record.
 impl ZombieObserver for AdmissionController {
@@ -822,7 +823,7 @@ impl ZombieObserver for AdmissionController {
 // ===========================================================================
 
 /// A held **admission permit** — the working memory and thread capacity a node
-/// drew from the pools for the whole attempt (arch.md C12; T0.3 ADR §2, §9).
+/// drew from the pools for the whole attempt.
 ///
 /// The permit is held for the whole attempt and **released on `Drop`**: dropping
 /// it returns its cost to every pool it drew from. That is the entire lifecycle —
@@ -830,7 +831,7 @@ impl ZombieObserver for AdmissionController {
 /// cancellation the guard drops at the terminal state and the capacity is restored.
 /// For a **timed-out blocking/compute** attempt, the permit is moved **into** the
 /// still-running closure, so the cost stays counted until the closure returns and
-/// drops it (the T0.3 ownership trick — the ledger structurally cannot release what
+/// drops it (the ownership trick — the ledger structurally cannot release what
 /// is still running). Marking the attempt a zombie ([`AdmissionController::mark_zombie`])
 /// records the abandoned cost for reporting without releasing.
 pub struct Permit {
@@ -869,7 +870,7 @@ impl Drop for Permit {
         // The closure has returned: drop this node's live-zombie record if present.
         // Only the first matching record is removed, pairing one return with one
         // mark (a node's retry is deferred until its previous closure returns, so a
-        // node has at most one live zombie at a time — T0.3 ADR §5).
+        // node has at most one live zombie at a time).
         if let Some(pos) = inner.zombies.iter().position(|z| z.node == self.node) {
             inner.zombies.remove(pos);
         }
@@ -890,11 +891,11 @@ impl std::fmt::Debug for Permit {
 
 /// A held **output-residency slot lease** — the memory a produced value pins in
 /// its output slot, charged against the memory pool from production until the slot
-/// **actually** releases (arch.md C12/C10; T0.3 ADR §4).
+/// **actually** releases.
 ///
 /// Distinct from a [`Permit`]: working memory is released at the attempt's terminal
 /// state (the permit drops), but output residency is **not** — it transfers to the
-/// slot and is held as this lease until the slot releases, which per C10 waits for
+/// slot and is held as this lease until the slot releases, which waits for
 /// every consumer (including a **zombie** consumer whose thread has not returned).
 /// A **retained** value's lease is held until run end. Dropping the lease returns
 /// its bytes to the shared [`ResidencyLedger`], which the memory pool's counted
@@ -945,8 +946,8 @@ impl std::fmt::Debug for ResidencyLease {
 // Permit-wait vs execution phase timing
 // ===========================================================================
 
-/// The **wait vs execution phase split** for one attempt (arch.md C12: permit-wait
-/// time recorded separately from execution time).
+/// The **wait vs execution phase split** for one attempt: permit-wait
+/// time recorded separately from execution time.
 ///
 /// The two durations are **injected** (the caller measures them with its own
 /// clock), so the split is deterministic and this core adds no wall-clock read. A

@@ -1,23 +1,20 @@
-//! C6 groups — the headline group-model tests, ticket T51 (063). Written first,
-//! TDD.
+//! Groups — the headline group-model tests. Written first, TDD.
 //!
-//! These exercise the **real** C6 group model (arch.md `### C6 · Group`) on top of
-//! the T13 registration/builder surface (`dagr_core::flow`) and the T14/T29
-//! assembly pass (`dagr_core::assembly`). A group label is *presentation metadata
-//! only*: it is a flat label attached to a node (groups do **not** nest,
-//! arch.md line 170), it is **excluded from node identity** and from **both**
-//! graph-fingerprint hashes (C21, arch.md line 456), and it carries **no**
-//! execution semantics. Removing or renaming every group changes no execution
-//! behaviour (execution order, consumer/dependency counts) and neither hash.
+//! These exercise the **real** group model on top of the registration/builder
+//! surface (`dagr_core::flow`) and the assembly pass (`dagr_core::assembly`). A
+//! group label is *presentation metadata only*: it is a flat label attached to a
+//! node (groups do **not** nest), it is **excluded from node identity** and from
+//! **both** graph-fingerprint hashes, and it carries **no** execution semantics.
+//! Removing or renaming every group changes no execution behaviour (execution
+//! order, consumer/dependency counts) and neither hash.
 //!
-//! The dependency tickets already assert the pieces T51 sits on: the group slot
-//! and its exclusion from identity (T13, `flow_builder.rs`), the single-node
-//! neither-hash exclusion (T29, `node_policy.rs::group_is_in_neither_hash`), and
-//! the diagram-clustering facet (T46, `render` crate). This suite adds the
-//! *headline* C6 acceptance the coverage matrix defers to T51: whole-pipeline
-//! fingerprint neutrality, removal-changes-no-behaviour, name uniqueness across
-//! grouping (a duplicate name in different groups is an assembly error naming both
-//! declarations), and reorder-stability under grouping.
+//! Sibling suites already assert the pieces this one sits on: the group slot and
+//! its exclusion from identity (`flow_builder.rs`), the single-node neither-hash
+//! exclusion (`node_policy.rs::group_is_in_neither_hash`), and the
+//! diagram-clustering facet (`render` crate). This suite adds the *headline* group
+//! acceptance: whole-pipeline fingerprint neutrality, removal-changes-no-behaviour,
+//! name uniqueness across grouping (a duplicate name in different groups is an
+//! assembly error naming both declarations), and reorder-stability under grouping.
 
 use dagr_core::assembly::ProblemKind;
 use dagr_core::flow::Flow;
@@ -121,8 +118,8 @@ fn ungrouped(_name: &str) -> Option<&'static str> {
 
 /// **Group excluded from the fingerprint.** Two otherwise-identical pipelines —
 /// one fully ungrouped, one where every node carries a group label — produce
-/// byte-for-byte-equal structural fingerprints AND policy hashes (arch.md C6
-/// line 456; C21). Grouping is presentation metadata in neither hash.
+/// byte-for-byte-equal structural fingerprints AND policy hashes. Grouping is
+/// presentation metadata in neither hash.
 #[test]
 fn group_is_excluded_from_both_fingerprint_hashes() {
     let bare = build_diamond(ungrouped).fingerprint();
@@ -151,8 +148,8 @@ fn group_is_excluded_from_both_fingerprint_hashes() {
 
 /// **Rename changes no fingerprint.** Capture a grouped pipeline's fingerprint,
 /// then rename every group label (same members, fresh labels) and reassemble:
-/// both hashes are unchanged from the captured values (arch.md C6; C21 line 465
-/// *"A group rename changes neither hash"*).
+/// both hashes are unchanged from the captured values — a group rename changes
+/// neither hash.
 #[test]
 fn renaming_every_group_changes_neither_hash() {
     let before = build_diamond(grouped).fingerprint();
@@ -177,9 +174,9 @@ fn renaming_every_group_changes_neither_hash() {
 /// **Removal changes no fingerprint and no behaviour.** Remove all group labels
 /// (leave every node ungrouped) and reassemble: both fingerprint hashes are
 /// unchanged, and the precomputed execution order and consumer/dependency counts
-/// are identical to the grouped version (arch.md C6 *"Removing … every group
-/// changes no execution behaviour and no fingerprint"*). Groups are strictly
-/// presentation — they never touch scheduling or readiness.
+/// are identical to the grouped version — removing every group changes no
+/// execution behaviour and no fingerprint. Groups are strictly presentation — they
+/// never touch scheduling or readiness.
 #[test]
 fn removing_every_group_changes_no_fingerprint_and_no_behaviour() {
     let grouped_art = build_diamond(grouped)
@@ -201,14 +198,14 @@ fn removing_every_group_changes_no_fingerprint_and_no_behaviour() {
         "removing groups must not move the policy hash"
     );
 
-    // Execution order is identical (precomputed topological order, C11).
+    // Execution order is identical (precomputed topological order).
     assert_eq!(
         grouped_art.execution_order(),
         bare_art.execution_order(),
         "removing groups must not change the execution order"
     );
 
-    // Consumer and remaining-dependency counts are identical per node (C10/C11):
+    // Consumer and remaining-dependency counts are identical per node:
     // grouping never re-partitions the dependency graph.
     for name in ["rows", "schema", "report", "count"] {
         let id = NodeId::from_name(name);
@@ -240,9 +237,8 @@ fn removing_every_group_changes_no_fingerprint_and_no_behaviour() {
 /// **Group is not part of node identity.** Registering a node with a given name
 /// inside one group and a second node with the *same* name in a *different* group
 /// in the same builder is a duplicate-node-name **assembly error** — names are
-/// unique across the whole pipeline regardless of grouping (arch.md C6 *"Node
-/// names are unique across the whole pipeline regardless of grouping"*). The
-/// report names the duplicated name and states that both declarations collided.
+/// unique across the whole pipeline regardless of grouping. The report names the
+/// duplicated name and states that both declarations collided.
 #[test]
 fn same_name_in_different_groups_is_a_duplicate_assembly_error() {
     let mut flow = Flow::new();
@@ -273,7 +269,7 @@ fn same_name_in_different_groups_is_a_duplicate_assembly_error() {
         msg.contains("dup"),
         "the report must name the duplicated node: {msg}"
     );
-    // Both declarations collided (the "names both declarations" C7/C6 contract).
+    // Both declarations collided (the "names both declarations" contract).
     assert_eq!(
         dups[0].declaration_count(),
         Some(2),
@@ -289,7 +285,7 @@ fn same_name_in_different_groups_is_a_duplicate_assembly_error() {
 /// **Reorder-stability holds with groups.** Two builders register the *same*
 /// grouped nodes in different declaration orders. Assembling both yields identical
 /// node identities and identical structural fingerprints and policy hashes —
-/// grouping does not reintroduce order sensitivity (arch.md C6; the C7/C21
+/// grouping does not reintroduce order sensitivity (the
 /// registration-order-independence guarantee holds under grouping).
 #[test]
 fn reorder_stability_holds_with_groups() {

@@ -1,11 +1,11 @@
-// UI compile-failure sample — ticket T9 (019), C1 output-type bound (missing
+// UI compile-failure sample — the output-type bound (missing
 // `Sync`).
 //
 // Output values must be `Send + Sync + 'static` so concurrent consumers can
-// read a shared slot value (arch.md C1; T0.2 ADR). This sample declares an
+// read a shared slot value. This sample declares an
 // output type that is `Send + 'static` but NOT `Sync` and shows it is rejected.
 //
-// The T8 harness compiles this STANDALONE with no `--extern dagr_core`, so the
+// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
 // real `Task` trait is unavailable; the exact output bound (`Send + Sync +
 // 'static`) is reproduced with a local `assert_output_bound`. `Cell<u32>` is
 // `Send + 'static` but `!Sync`, so it violates the bound.

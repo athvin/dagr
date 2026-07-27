@@ -1,22 +1,20 @@
-//! C11 readiness-tracker tests — ticket T18 (028). Written first, TDD.
+//! Readiness-tracker tests. Written first, TDD.
 //!
 //! These exercise the **real** readiness tracker in [`dagr_core::readiness`]: the
 //! pure decision engine that, given upstream terminal-state notifications, decides
-//! the next ready nodes and the immediate propagated-terminal assignments —
-//! governed by C11 (arch.md `### C11 · Readiness tracker`) and evaluating against
-//! the normative fires / can-never-fire decision table fixed by T0.4
-//! (`docs/implementation/010-T0.4-trigger-rule-and-state-tables.md`).
+//! the next ready nodes and the immediate propagated-terminal assignments, and
+//! evaluates against the normative fires / can-never-fire decision table.
 //!
-//! The tracker consumes T14's precomputed dependency structure
+//! The tracker consumes the precomputed dependency structure
 //! ([`dagr_core::assembly::AssemblyArtifact`]) and the immutable
 //! [`Pipeline`](dagr_core::flow::Pipeline). It never spawns, schedules, times, or
 //! writes events — every scenario drives it directly with synthetic pipelines and
 //! injected terminal outcomes (no real task execution, no runtime, no clock).
 //!
-//! M1 wires and tests the `all-succeeded` path; the rule-evaluation seam accepts
-//! all three T0.4 rules (`all-succeeded`, `all-terminal`, `any-failed`) so T34 can
-//! enable the other two without reshaping the tracker (see the pure-seam tests at
-//! the bottom).
+//! The rule-evaluation seam accepts all three trigger rules (`all-succeeded`,
+//! `all-terminal`, `any-failed`); the default `all-succeeded` path and the pure
+//! seam for the other two are both exercised (see the pure-seam tests at the
+//! bottom).
 
 use std::collections::BTreeMap;
 
@@ -116,7 +114,7 @@ fn diamond() -> Pipeline {
     let mut flow = Flow::new();
     let s = flow.register_source("source", &MakeRows);
     // `source` fans out to two consumers, so each edge takes shared read access
-    // (an owned multi-consumer demand fails assembly — C1 ownership of inputs).
+    // (an owned multi-consumer demand fails assembly).
     let a: Handle<Report> = flow.register("mid-a", &FromRows, s.shared());
     let b: Handle<Report> = flow.register("mid-b", &FromRows, s.shared());
     let _j: Handle<Report> = flow.register("sink", &JoinTwo, (a, b));
@@ -148,8 +146,8 @@ impl Task for MakeReport {
 // Countdown seeding + source frontier.
 // ===========================================================================
 
-/// Countdown seeds from T14's precomputed dependency counts; sources appear in
-/// the initial-ready frontier; nothing else is ready yet. (C11 · def-of-done line 1, 8.)
+/// Countdown seeds from the precomputed dependency counts; sources appear in the
+/// initial-ready frontier; nothing else is ready yet.
 #[test]
 fn countdown_seeds_from_precomputed_dependency_counts() {
     let pipeline = diamond();
@@ -167,7 +165,7 @@ fn countdown_seeds_from_precomputed_dependency_counts() {
 }
 
 /// Source nodes are ready without any notification: two independent sources are
-/// both in the initial frontier and the sink is not. (C11 · def-of-done line 8.)
+/// both in the initial frontier and the sink is not.
 #[test]
 fn source_nodes_are_ready_without_any_notification() {
     let pipeline = join_of_two();
@@ -186,7 +184,7 @@ fn source_nodes_are_ready_without_any_notification() {
 // ===========================================================================
 
 /// Notifying the source `succeeded` decrements exactly its dependents (both
-/// middles → ready) and nothing else; the source becomes decided. (C11 · def-of-done 1,3.)
+/// middles → ready) and nothing else; the source becomes decided.
 #[test]
 fn decrement_on_terminal_unlocks_the_exact_dependents() {
     let pipeline = diamond();
@@ -212,7 +210,7 @@ fn decrement_on_terminal_unlocks_the_exact_dependents() {
 
 /// A rule is NOT evaluated on a partial result: notifying only the first of a
 /// join's two upstreams drops the countdown to one and neither readies nor
-/// propagates the sink. (C11 · def-of-done 2 — the all-upstreams-terminal gate.)
+/// propagates the sink (the all-upstreams-terminal gate).
 #[test]
 fn rule_is_not_evaluated_on_a_partial_result() {
     let pipeline = join_of_two();
@@ -232,7 +230,7 @@ fn rule_is_not_evaluated_on_a_partial_result() {
 
 /// `all-succeeded` fires when the LAST upstream completes: with one upstream
 /// already succeeded (countdown one), notifying the second `succeeded` drops the
-/// countdown to zero, the rule fires, and the sink is emitted ready. (C11 · def-of-done 3.)
+/// countdown to zero, the rule fires, and the sink is emitted ready.
 #[test]
 fn all_succeeded_fires_when_the_last_upstream_completes() {
     let pipeline = join_of_two();
@@ -251,12 +249,12 @@ fn all_succeeded_fires_when_the_last_upstream_completes() {
 }
 
 // ===========================================================================
-// `all-succeeded` can-never-fire → propagated terminal (T0.4 §5a table).
+// `all-succeeded` can-never-fire → propagated terminal.
 // ===========================================================================
 
 /// Can-never-fire → `upstream-failed`, carrying the failed upstream's identity:
-/// a two-upstream `all-succeeded` node with one `failed` and one `succeeded`.
-/// (C11 · def-of-done 4,5,6; T0.4 §5a "otherwise".)
+/// a two-upstream `all-succeeded` node with one `failed` and one `succeeded` (the
+/// "otherwise" branch).
 #[test]
 fn all_succeeded_can_never_fire_upstream_failed() {
     let pipeline = join_of_two();
@@ -285,7 +283,7 @@ fn all_succeeded_can_never_fire_upstream_failed() {
 
 /// Can-never-fire → `upstream-skipped` when every non-success upstream is
 /// skip-like, carrying the originating skip node. One `skipped` (originated) and
-/// one `succeeded`. (C11 · def-of-done 4,5,6; T0.4 §5a all-skip-like row.)
+/// one `succeeded` (the all-skip-like row).
 #[test]
 fn all_succeeded_can_never_fire_upstream_skipped() {
     let pipeline = join_of_two();
@@ -301,7 +299,7 @@ fn all_succeeded_can_never_fire_upstream_skipped() {
 }
 
 /// A propagated `upstream-skipped` upstream is itself skip-like, so a downstream
-/// `all-succeeded` still propagates `upstream-skipped`. (T0.4 §3 state classes.)
+/// `all-succeeded` still propagates `upstream-skipped`.
 #[test]
 fn propagated_upstream_skipped_counts_skip_like() {
     let pipeline = join_of_two();
@@ -316,7 +314,7 @@ fn propagated_upstream_skipped_counts_skip_like() {
 }
 
 /// Can-never-fire → `cancelled` when every non-success upstream is stop-like:
-/// one `cancelled` and one `succeeded`. (C11 · def-of-done 4; T0.4 §5a all-stop-like row.)
+/// one `cancelled` and one `succeeded` (the all-stop-like row).
 #[test]
 fn all_succeeded_can_never_fire_cancelled() {
     let pipeline = join_of_two();
@@ -333,7 +331,7 @@ fn all_succeeded_can_never_fire_cancelled() {
 
 /// Mixed non-success classes → `upstream-failed` (the "otherwise" branch): three
 /// upstreams ending `succeeded`, `skipped`, and `failed`. The non-success set is
-/// neither all-skip-like nor all-stop-like. (C11 · def-of-done 5; T0.4 §5a "otherwise".)
+/// neither all-skip-like nor all-stop-like.
 #[test]
 fn mixed_non_success_classes_propagate_upstream_failed() {
     let mut flow = Flow::new();
@@ -362,7 +360,7 @@ fn mixed_non_success_classes_propagate_upstream_failed() {
 // ===========================================================================
 
 /// A resumed prior success satisfies a downstream `all-succeeded`: one upstream
-/// `succeeded`, the other `satisfied-from-prior`; the join fires. (C11 · def-of-done 7.)
+/// `succeeded`, the other `satisfied-from-prior`; the join fires.
 #[test]
 fn satisfied_from_prior_counts_success_like() {
     let pipeline = join_of_two();
@@ -386,7 +384,7 @@ fn satisfied_from_prior_counts_success_like() {
 /// A propagated-terminal assignment is itself a terminal notification that
 /// cascades: A→B→C (all `all-succeeded`). Notifying A `failed` propagates
 /// `upstream-failed` to B, and that in turn propagates it to C — no intervening
-/// execution. (C11 · def-of-done 6.)
+/// execution.
 #[test]
 fn propagated_terminal_cascades() {
     let mut flow = Flow::new();
@@ -419,7 +417,7 @@ fn propagated_terminal_cascades() {
 
 /// A diamond with one slow branch does not batch into waves: the fast branch's
 /// independent descendant is emitted ready before the slow branch reaches any
-/// terminal state, and before the join is eligible. (C11 · def-of-done 9,10 — acceptance.)
+/// terminal state, and before the join is eligible.
 #[test]
 fn diamond_proves_no_wave_batching() {
     // source S; fast branch F and slow branch W both depend on S; F has an
@@ -464,7 +462,6 @@ fn diamond_proves_no_wave_batching() {
 
 /// Every node ends in exactly one terminal state, assigned exactly once: drive
 /// the cascade diamond to completion and confirm no node is decided twice.
-/// (C11 · def-of-done 12 — Vocabulary "exactly one, exactly once".)
 #[test]
 fn every_node_ends_in_exactly_one_terminal_state() {
     let pipeline = diamond();
@@ -490,7 +487,7 @@ fn every_node_ends_in_exactly_one_terminal_state() {
 }
 
 /// Re-notifying an already-decided node is rejected (no double assignment across
-/// executed-terminal and propagated-terminal paths). (C11 · def-of-done 12.)
+/// executed-terminal and propagated-terminal paths).
 #[test]
 fn a_decided_node_is_not_assigned_a_terminal_state_twice() {
     let pipeline = join_of_two();
@@ -516,7 +513,7 @@ fn a_decided_node_is_not_assigned_a_terminal_state_twice() {
 }
 
 /// Pending accounting reaches zero exactly when the last node becomes terminal,
-/// and is nonzero before that. (C11 · def-of-done 11 — the "nothing pending" signal.)
+/// and is nonzero before that (the "nothing pending" signal).
 #[test]
 fn pending_accounting_reports_run_completion() {
     let pipeline = diamond();
@@ -540,11 +537,11 @@ fn pending_accounting_reports_run_completion() {
 }
 
 // ===========================================================================
-// The pure rule-evaluation seam accepts all three T0.4 rules.
+// The pure rule-evaluation seam accepts all three rules.
 // ===========================================================================
 
 /// `all-succeeded` fires when every upstream is success-like (including a
-/// `satisfied-from-prior`), and propagates per the §5a table otherwise.
+/// `satisfied-from-prior`), and propagates otherwise.
 #[test]
 fn evaluate_rule_all_succeeded_matches_the_table() {
     // Fires: all success-like (with a satisfied-from-prior).
@@ -590,8 +587,7 @@ fn evaluate_rule_all_succeeded_matches_the_table() {
 }
 
 /// `all-terminal` always fires once every upstream is terminal, regardless of
-/// class, and never propagates failure — the seam is present though M1 does not
-/// wire it into a runtime node (T34 lights it up). (T0.4 §5b.)
+/// class, and never propagates failure.
 #[test]
 fn evaluate_rule_all_terminal_always_fires() {
     assert_eq!(
@@ -611,7 +607,7 @@ fn evaluate_rule_all_terminal_always_fires() {
 
 /// `any-failed` fires when at least one upstream is failure-like (including a
 /// transitively `upstream-failed` one), and is marked `skipped` when the
-/// contingency never arose. (T0.4 §5c.)
+/// contingency never arose.
 #[test]
 fn evaluate_rule_any_failed_matches_the_table() {
     assert_eq!(
@@ -633,15 +629,14 @@ fn evaluate_rule_any_failed_matches_the_table() {
 }
 
 // ===========================================================================
-// C15 · runtime firing of NON-DEFAULT rules over ordering-only upstreams (T34).
+// Runtime firing of NON-DEFAULT rules over ordering-only upstreams.
 //
 // A consume-nothing contingency node carries a non-default rule (`all-terminal`
-// / `any-failed`) and is ordered after other nodes. Ordering edges (T50) do not
-// exist yet, so the run-level ordering seam `ReadinessTracker::new_with_ordering`
-// seeds the countdown from ordering-only upstreams; the tracker then evaluates
-// the node's OWN rule (read from the pipeline) against that terminal picture,
-// exactly per T0.4's fires / can-never-fire table. These prove the tracker fires
-// the non-default rules at runtime — the facet T18 left to T34.
+// / `any-failed`) and is ordered after other nodes. The run-level ordering seam
+// `ReadinessTracker::new_with_ordering` seeds the countdown from ordering-only
+// upstreams; the tracker then evaluates the node's OWN rule (read from the
+// pipeline) against that terminal picture, exactly per the fires / can-never-fire
+// table. These prove the tracker fires the non-default rules at runtime.
 // ===========================================================================
 
 /// A run-level ordering map "node name -> ordering-upstream names".
@@ -657,8 +652,8 @@ fn order(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-/// Two independent sources plus a consume-nothing `any-failed` contingency node
-/// `notify`, ordered after both sources by the run-level ordering seam.
+/// Two independent sources plus a consume-nothing contingency node `notify`,
+/// ordered after both sources by the run-level ordering seam.
 fn any_failed_after_two(rule: TriggerRule) -> Pipeline {
     let mut flow = Flow::new();
     let _a: Handle<Report> = flow.register_source("up-a", &MakeReport);
@@ -675,7 +670,6 @@ fn any_failed_after_two(rule: TriggerRule) -> Pipeline {
 /// `any-failed` FIRES at runtime when an ordering upstream is failure-like: the
 /// contingency `notify` is ordered after `up-a` (failed) and `up-b` (succeeded);
 /// once both are terminal its `any-failed` rule fires and it becomes ready.
-/// (C15 · T0.4 §5c fires row — runtime.)
 #[test]
 fn any_failed_contingency_fires_on_a_failed_ordering_upstream() {
     let pipeline = any_failed_after_two(TriggerRule::AnyFailed);
@@ -702,7 +696,7 @@ fn any_failed_contingency_fires_on_a_failed_ordering_upstream() {
 
 /// `any-failed` contingency that NEVER AROSE → `skipped` at runtime: all ordering
 /// upstreams succeed, so the guarded contingency never arose and `notify` is
-/// marked `skipped` without executing. (C15 · T0.4 §5c never-arose row — runtime.)
+/// marked `skipped` without executing.
 #[test]
 fn any_failed_contingency_never_arose_is_skipped() {
     let pipeline = any_failed_after_two(TriggerRule::AnyFailed);
@@ -728,7 +722,7 @@ fn any_failed_contingency_never_arose_is_skipped() {
 /// `all-terminal` FIRES after an upstream failure — the cleanup node un-deadened:
 /// `cleanup` is ordered after `up-a` (failed) and `up-b` (succeeded); its
 /// `all-terminal` rule fires regardless of class and it is never `upstream-failed`.
-/// This is the entire reason non-default rules exist. (C15 · T0.4 §5b — runtime.)
+/// This is the entire reason non-default rules exist.
 #[test]
 fn all_terminal_cleanup_fires_after_an_upstream_failure() {
     let pipeline = any_failed_after_two(TriggerRule::AllTerminal);
@@ -755,7 +749,7 @@ fn all_terminal_cleanup_fires_after_an_upstream_failure() {
 /// `any-failed` fires on a TRANSITIVELY `upstream-failed` ordering upstream: the
 /// ordering upstream `mid` itself never ran (its own data upstream `root` failed,
 /// so `mid` ends `upstream-failed`), and the `any-failed` contingency counts that
-/// as failure-like and fires. (C15 · T0.4 §5c transitive row — runtime.)
+/// as failure-like and fires.
 #[test]
 fn any_failed_fires_on_a_transitive_upstream_failed() {
     let mut flow = Flow::new();
@@ -786,7 +780,7 @@ fn any_failed_fires_on_a_transitive_upstream_failed() {
 }
 
 /// The default `new` and `new_with_ordering` with an empty ordering map are
-/// identical — the seam is purely additive and does not change M1 behaviour.
+/// identical — the seam is purely additive and does not change behaviour.
 #[test]
 fn empty_ordering_map_matches_the_default_constructor() {
     let pipeline = diamond();

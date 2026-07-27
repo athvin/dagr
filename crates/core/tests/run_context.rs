@@ -1,12 +1,11 @@
-//! Behavioral unit tests for the C8 run context (ticket T16 / 022). Written
-//! first, TDD: every scenario constructs a [`RunContext`] **by hand** — no
-//! runtime, no store, no registry, no scheduler — and reads its accessors. This
-//! is the exact hand-constructability guarantee C8 makes and T60 (single-task
-//! test kit) leans on.
+//! Behavioral unit tests for the run context. Written first, TDD: every scenario
+//! constructs a [`RunContext`] **by hand** — no runtime, no store, no registry,
+//! no scheduler — and reads its accessors. This is the exact hand-constructability
+//! guarantee the context makes and the single-task test kit leans on.
 //!
-//! Each test mirrors one bullet of the ticket's Test plan. The context is a
-//! read-only capability surface: the tests confirm every field is populated,
-//! read back verbatim, and that no accessor is a lever back into scheduling.
+//! The context is a read-only capability surface: the tests confirm every field
+//! is populated, read back verbatim, and that no accessor is a lever back into
+//! scheduling.
 
 use std::sync::Arc;
 
@@ -177,8 +176,8 @@ fn hand_construction_requires_no_runtime() {
 }
 
 /// **`for_test` yields a usable, fully-populated context with no arguments.**
-/// The zero-argument path T9's tests already call stays valid and every field is
-/// present (no field silently absent).
+/// The zero-argument path the task-abstraction tests already call stays valid and
+/// every field is present (no field silently absent).
 #[test]
 fn for_test_yields_a_populated_context() {
     let ctx = RunContext::for_test();
@@ -196,7 +195,7 @@ fn for_test_yields_a_populated_context() {
 /// **Resource-requirement declaration is carried through to a queryable form.** A
 /// node that declares it requires a resource type reports that type; a node
 /// declaring nothing reports an empty requirement set. The reported form is one
-/// bootstrap (T30) can later validate against a registry.
+/// bootstrap can later validate against a registry.
 #[test]
 fn resource_requirements_are_carried_to_a_queryable_form() {
     struct ObjectStore;
@@ -218,7 +217,7 @@ fn resource_requirements_are_carried_to_a_queryable_form() {
     assert_eq!(none.len(), 0);
 
     // The declared types are enumerable in a stable, renderable form (feeds the
-    // graph artifact later, C20): each carries a type name.
+    // graph artifact later): each carries a type name.
     let names: Vec<&str> = declared
         .iter()
         .map(ResourceRequirement::type_name)
@@ -228,9 +227,9 @@ fn resource_requirements_are_carried_to_a_queryable_form() {
 }
 
 /// **Registry accessor seam is present and honestly unimplemented.** The accessor
-/// exists with a stable signature; because C9 (T30) is not landed here, it
-/// surfaces a clearly-empty / not-yet-available result, never a silently-wrong
-/// resource.
+/// exists with a stable signature; because the resource registry is not landed
+/// here, it surfaces a clearly-empty / not-yet-available result, never a
+/// silently-wrong resource.
 #[test]
 fn registry_accessor_seam_is_present_and_honestly_unimplemented() {
     struct SomeClient;
@@ -238,23 +237,25 @@ fn registry_accessor_seam_is_present_and_honestly_unimplemented() {
     let (ctx, _source) = full_context();
     let registry = ctx.resources();
 
-    // The seam exists and is honestly empty: no resource is fabricated. When T30
-    // lands, this test is updated to assert real type-keyed retrieval.
+    // The seam exists and is honestly empty: no resource is fabricated. When the
+    // resource registry lands, this test is updated to assert real type-keyed
+    // retrieval.
     assert!(registry.get::<SomeClient>().is_none());
     assert!(registry.is_empty());
 }
 
 /// **Scratch accessor seam is present and honestly unimplemented.** The accessor
-/// exists with a stable signature and, because C18 (T53) is not landed here,
-/// surfaces a documented not-yet-available result rather than pretending to
-/// persist.
+/// exists with a stable signature and, because the durable scratch store is not
+/// landed here, surfaces a documented not-yet-available result rather than
+/// pretending to persist.
 #[test]
 fn scratch_accessor_seam_is_present_and_honestly_unimplemented() {
     let (ctx, _source) = full_context();
     let scratch = ctx.scratch();
 
     // A read returns "not yet available", not a silent success or a fabricated
-    // value. When T53 lands, this becomes a read-after-write-across-attempts test.
+    // value. When the durable scratch store lands, this becomes a
+    // read-after-write-across-attempts test.
     let read = scratch.get(b"cursor");
     assert!(
         read.is_err(),

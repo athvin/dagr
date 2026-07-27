@@ -1,6 +1,6 @@
-// UI compile-failure fixture — ticket T5 (018), case `typed_handle_unforgeable`.
+// UI compile-failure fixture — case `typed_handle_unforgeable`.
 //
-// PROVES (C2): a handle is obtainable ONLY by registering a node — there is NO
+// PROVES: a handle is obtainable ONLY by registering a node — there is NO
 // escape hatch to FABRICATE one. The handle's own fields are private to the
 // module that defines it and there is no public constructor, so a struct-literal
 // from outside the module (the only other way to make one) fails to compile.
@@ -9,12 +9,12 @@
 // name/index/key: the ONLY currency is a handle a `register` call already
 // returned.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts
-// this sample FAILS to compile under the pinned toolchain (C28).
+// this sample FAILS to compile under the pinned toolchain.
 //
 // THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (typed handles land in T10). It models only the settled T5 decision that a
+// (typed handles land later). It models only the settled decision that a
 // handle is unforgeable by construction (private fields, no constructor).
 
 #![allow(dead_code)]
@@ -27,7 +27,7 @@ mod flow {
 
     // Handle carries identity + value type; BOTH fields (`id`, `_t`) are PRIVATE
     // and there is deliberately NO public constructor. A handle can only be
-    // produced INSIDE this module — i.e. by `register` (elided) — mirroring C2.
+    // produced INSIDE this module — i.e. by `register` (elided).
     pub struct Handle<T> {
         id: NodeId,
         _t: PhantomData<fn() -> T>,

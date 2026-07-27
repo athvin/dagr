@@ -1,54 +1,51 @@
-//! The task-facing error type — C1's classified failure surface.
+//! The task-facing error type — the classified failure surface.
 //!
 //! [`TaskError`] is the entire error vocabulary a pipeline author may *return*
 //! from a task's work. It is **three-valued, permanently**: retry-eligible
-//! failure, permanent failure, and deliberate (originated) skip. This is fixed
-//! by the T3 error-taxonomy ADR
-//! ([`docs/implementation/016-T3-error-taxonomy-adr.md`](https://github.com/athvin/dagr/blob/main/docs/implementation/016-T3-error-taxonomy-adr.md))
-//! and arch.md `### C1 · Task`: *"The error a task returns distinguishes at
-//! minimum: retry-eligible failure, permanent failure, and deliberate skip."*
+//! failure, permanent failure, and deliberate (originated) skip. The error a
+//! task returns distinguishes at minimum: retry-eligible failure, permanent
+//! failure, and deliberate skip.
 //!
 //! # What is deliberately absent
 //!
 //! Two runner classifications are **not** author-returnable and carry no
 //! constructor here:
 //!
-//! - **timeout** is decided by the per-attempt clock (C14), never by the task
-//!   body — an author who returns has not timed out, and one who timed out never
+//! - **timeout** is decided by the per-attempt clock, never by the task body —
+//!   an author who returns has not timed out, and one who timed out never
 //!   returns to report it.
 //! - **panic** is precisely the failure that *escaped* the author's `Result`; it
-//!   is caught at the framework's boundary (C14), never returned.
+//!   is caught at the framework's boundary, never returned.
 //!
 //! The framework-internal runner outcome taxonomy (a strict superset that adds
 //! timeout and panic, mapping each outcome to a terminal state) belongs to the
-//! attempt runner (C14 / T20), **not** to this author-facing surface. Keeping
-//! the two types distinct is what makes the superset boundary a type-level fact
-//! rather than a convention (T3 ADR §11).
+//! attempt runner, **not** to this author-facing surface. Keeping the two types
+//! distinct is what makes the superset boundary a type-level fact rather than a
+//! convention.
 
 use std::error::Error;
 use std::fmt;
 
 /// The classification a [`TaskError`] carries: one of exactly three classes.
 ///
-/// This mirrors the task-facing enum fixed by the T3 ADR and never grows a
-/// fourth author-returnable class (a new class would be a spec amendment, never
-/// a runtime knob). `Timeout` and `Panic` are deliberately absent — they are the
+/// This mirrors the fixed task-facing enum and never grows a fourth
+/// author-returnable class (a new class would be a spec amendment, never a
+/// runtime knob). `Timeout` and `Panic` are deliberately absent — they are the
 /// runner's to mint, not the author's to return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskErrorClass {
     /// A transient failure the framework may retry (an I/O blip, a rate limit, a
     /// contended lock). Author intent: *"try me again."* Whether another attempt
     /// is actually scheduled is the runner's decision, governed by the node's
-    /// retry budget (C14); once the budget is exhausted this resolves to the same
-    /// `failed` terminal state as a permanent failure (T3 ADR §6).
+    /// retry budget; once the budget is exhausted this resolves to the same
+    /// `failed` terminal state as a permanent failure.
     Retryable,
     /// A failure that retrying cannot fix (bad input, a violated invariant, a
     /// missing prerequisite). Author intent: *"do not retry me."*
     Permanent,
     /// The task decided there is nothing to do — an *originated* skip. Branching
-    /// is expressed in the task, not the graph (arch.md Vocabulary); the skip
-    /// propagates downstream as `upstream-skipped` (C15). Author intent: *"I am
-    /// declining to run."*
+    /// is expressed in the task, not the graph; the skip propagates downstream as
+    /// `upstream-skipped`. Author intent: *"I am declining to run."*
     Skip,
 }
 
@@ -56,14 +53,14 @@ pub enum TaskErrorClass {
 ///
 /// A `TaskError` is a [`TaskErrorClass`] plus a human-readable message and an
 /// optional underlying cause (preserved through [`Error::source`], so a failing
-/// attempt's structured error detail — recorded later in the run artifact by
-/// C22 — retains the original chain). Construct one with [`TaskError::retryable`],
+/// attempt's structured error detail — recorded later in the run artifact —
+/// retains the original chain). Construct one with [`TaskError::retryable`],
 /// [`TaskError::permanent`], or [`TaskError::skip`]; attach a source with the
 /// `*_from` constructors.
 ///
 /// The class is inspected with [`TaskError::class`] or the `is_*` predicates.
-/// There is no `Timeout` or `Panic` constructor: those are runner classifications
-/// (C14), not author returns (see the [module docs](self)).
+/// There is no `Timeout` or `Panic` constructor: those are runner
+/// classifications, not author returns (see the [module docs](self)).
 #[derive(Debug)]
 pub struct TaskError {
     class: TaskErrorClass,
@@ -98,8 +95,7 @@ impl TaskError {
     }
 
     /// A **retry-eligible** failure — a transient error the framework may retry
-    /// (subject to the node's retry budget, C14). Author intent: *"try me
-    /// again."*
+    /// (subject to the node's retry budget). Author intent: *"try me again."*
     #[must_use]
     pub fn retryable(message: impl Into<String>) -> Self {
         Self::new(TaskErrorClass::Retryable, message)
@@ -190,20 +186,20 @@ impl Error for TaskError {
 }
 
 /// The classification a [`RehydrateError`] carries when reconstructing a durable
-/// value from its reference fails (C27; T0.8 ADR §4). Three-valued, mirroring the
-/// existence-check outcomes T58 consumes: the referent is **absent**, a fetch was
-/// **transient**ly unreachable, or the fetched bytes were **corrupt**.
+/// value from its reference fails. Three-valued, mirroring the existence-check
+/// outcomes: the referent is **absent**, a fetch was **transient**ly
+/// unreachable, or the fetched bytes were **corrupt**.
 ///
 /// This is the *rehydrate* half of the durable-output contract. The *cheap
-/// existence probe* (present / absent / cannot-determine, T0.8 ADR §7) and the
-/// plan-time dangling refusal that reads this classification are **T58**'s; T57
-/// lands the fallible rehydrate side the contract's round-trip test exercises.
+/// existence probe* (present / absent / cannot-determine) and the plan-time
+/// dangling refusal that reads this classification are the resume planner's;
+/// this is the fallible rehydrate side the contract's round-trip test exercises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RehydrateClass {
     /// The referent is **gone** — a deleted object, a missing file, a `404`. A
     /// durable reference that rehydrates absent is a **dangling** reference; at
-    /// resume this fails the plan up front (T58), and at single-node replay it is
-    /// the "which input and why" refusal (C26).
+    /// resume this fails the plan up front, and at single-node replay it is the
+    /// "which input and why" refusal.
     Absent,
     /// A **transient**, retry-eligible fetch failure — the store was unreachable,
     /// timed out, or refused temporarily. Distinct from `Absent`: the value may
@@ -215,15 +211,14 @@ pub enum RehydrateClass {
 }
 
 /// The error [`DurableOutput::rehydrate`](crate::assembly::DurableOutput::rehydrate)
-/// returns when reconstructing a durable value from its reference fails (C27; T0.8
-/// ADR §4).
+/// returns when reconstructing a durable value from its reference fails.
 ///
 /// A `RehydrateError` is a [`RehydrateClass`] plus a human-readable message and an
 /// optional underlying cause (preserved through [`Error::source`]). The class is
-/// **load-bearing**: it is what lets T58 distinguish a dangling reference (fail
-/// the resume plan) from a transient fetch failure (retry) from corruption. The
-/// contract fixes rehydrate as **fallible** precisely because "the referent may be
-/// gone, unreachable, or corrupt" (T0.8 ADR §4).
+/// **load-bearing**: it is what lets the resume planner distinguish a dangling
+/// reference (fail the resume plan) from a transient fetch failure (retry) from
+/// corruption. The contract fixes rehydrate as **fallible** precisely because the
+/// referent may be gone, unreachable, or corrupt.
 #[derive(Debug)]
 pub struct RehydrateError {
     class: RehydrateClass,
@@ -279,7 +274,7 @@ impl RehydrateError {
     }
 
     /// Whether the referent is [absent](RehydrateClass::Absent) — a dangling
-    /// reference (what fails the resume plan up front, T58).
+    /// reference (what fails the resume plan up front).
     #[must_use]
     pub fn is_absent(&self) -> bool {
         self.class == RehydrateClass::Absent

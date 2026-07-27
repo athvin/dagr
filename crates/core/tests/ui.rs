@@ -1,21 +1,19 @@
-//! dagr's compile-failure (UI-test) harness — ticket T8 (007).
+//! dagr's compile-failure (UI-test) harness.
 //!
 //! # What this is
 //!
 //! The framework tests itself the way it asks pipelines to test themselves: a
 //! wrong-type binding must fail to *compile*, and the error message must name
-//! both the expected and the supplied type (arch.md **C3 · Data dependency**,
-//! **C28 · Testing surface**). This file is the single, canonical entry point
-//! of the harness that proves it. Every compile-failure case is a `.rs` sample
-//! in [`tests/ui/`](./ui) with a sibling `.stderr` snapshot; this runner
-//! discovers all of them, so later tickets (notably **T12**, the full wiring
-//! compile-fail suite) add cases by dropping files into that directory with **no
-//! changes to this harness**.
+//! both the expected and the supplied type. This file is the single, canonical
+//! entry point of the harness that proves it. Every compile-failure case is a
+//! `.rs` sample in [`tests/ui/`](./ui) with a sibling `.stderr` snapshot; this
+//! runner discovers all of them, so new wiring compile-fail cases are added by
+//! dropping files into that directory with **no changes to this harness**.
 //!
-//! At this milestone exactly one seed sample ships:
+//! A minimal seed sample ships:
 //! [`tests/ui/wrong_type_binding.rs`](./ui/wrong_type_binding.rs) — a throwaway,
 //! non-compiling snippet whose diagnostic names two distinct type names. It is
-//! not a use of dagr's real authoring API (that lands in T9+).
+//! not a use of dagr's real authoring API.
 //!
 //! # The assertion: both type names, nothing more
 //!
@@ -25,12 +23,12 @@
 //! ignored). The harness asserts only that:
 //!
 //! 1. the sample **fails to compile** — a sample that unexpectedly compiles is a
-//!    hard failure, so a no-op case can never masquerade as coverage (C2); and
+//!    hard failure, so a no-op case can never masquerade as coverage; and
 //! 2. **every** substring in the snapshot appears somewhere in the diagnostic.
 //!
 //! It never asserts exact prose, wording, note count, or span layout, so
-//! ordinary compiler-message churn does not break the suite (C3 message-quality
-//! clause; C28 "assert only that both type names appear").
+//! ordinary compiler-message churn does not break the suite (the assertion
+//! keys only on the required type-name substrings).
 //!
 //! # Pinned toolchain
 //!
@@ -39,7 +37,7 @@
 //! with the `rustc` that sits beside the `cargo` running the test (`$CARGO`),
 //! which under this workspace is exactly the pinned toolchain — so diagnostic
 //! output is deterministic. Multi-toolchain or multi-platform snapshot matrices
-//! are explicitly out of scope (T8 Out of scope).
+//! are explicitly out of scope.
 //!
 //! # Regenerating (blessing) a snapshot
 //!
@@ -59,8 +57,8 @@
 //!
 //! The ticket names a "trybuild/UI-test harness." `trybuild` (and `ui_test`)
 //! match a captured `.stderr` **exactly**, line by line, against a checked-in
-//! snapshot. That is directly incompatible with what C3 and C28 require and
-//! what the T8 Test plan demands ("prose churn does not break the suite"): the
+//! snapshot. That is directly incompatible with what this suite requires
+//! ("prose churn does not break the suite"): the
 //! assertion must key **only** on the two type-name substrings and tolerate
 //! wording, spans, and note count. There is no trybuild configuration that
 //! turns its exact-match into substring-only matching, so a trybuild-driven
@@ -71,13 +69,12 @@
 //! assertion the spec actually asks for. A welcome consequence: it adds **no**
 //! third-party dependency (the trybuild tree pulls `unicode-ident`, whose
 //! `(MIT OR Apache-2.0) AND Unicode-3.0` license would force a `Unicode-3.0`
-//! exception into `deny.toml`), keeping the core dependency set minimal
-//! (arch.md "Stability"). Recorded as a T8 design-decision resolution.
+//! exception into `deny.toml`), keeping the core dependency set minimal.
 //!
 //! # Toolchain-bump contract
 //!
-//! When the pinned toolchain in `rust-toolchain.toml` (a T7 policy artifact)
-//! changes, regenerate the snapshots **deliberately** through the blessing
+//! When the pinned toolchain in `rust-toolchain.toml` (the workspace toolchain
+//! policy) changes, regenerate the snapshots **deliberately** through the blessing
 //! command above and review the resulting diff before committing — the same
 //! way a source change is reviewed. Because the assertion keys only on the
 //! two type names and tolerates prose churn, most bumps require no
@@ -95,7 +92,7 @@ const BLESS_ENV: &str = "DAGR_BLESS";
 
 /// Directory (relative to this crate's manifest) holding the UI samples and
 /// their snapshots. A single directory keeps the harness discoverable and lets
-/// T12 add cases with no wiring changes.
+/// new cases be added with no wiring changes.
 const UI_DIR: &str = "tests/ui";
 
 /// Resolve the `rustc` that belongs to the toolchain running this test. Cargo
@@ -142,7 +139,7 @@ fn target_profile_dir() -> Option<PathBuf> {
 /// We prefer the canonical `deps/` rlib (newest, if several stale ones linger)
 /// and fall back to the uplifted copy, so the harness resolves the rlib the
 /// same way regardless of platform or which cargo command built it. This also
-/// benefits T12, which links the same rlib.
+/// benefits the real-API wiring samples, which link the same rlib.
 fn resolve_dagr_core_rlib(profile_dir: &Path) -> Option<PathBuf> {
     let deps = profile_dir.join("deps");
     let newest_hashed = fs::read_dir(&deps).ok().and_then(|entries| {
@@ -164,7 +161,7 @@ fn resolve_dagr_core_rlib(profile_dir: &Path) -> Option<PathBuf> {
 
 /// Whether `sample` references the real `dagr_core` crate (so it must be linked
 /// against the built rlib rather than compiled standalone). A self-contained
-/// throwaway sketch (the T5 fixtures) does not, and is compiled bare.
+/// throwaway sketch (the typed-handle fixtures) does not, and is compiled bare.
 fn needs_dagr_core(sample: &Path) -> bool {
     fs::read_to_string(sample).is_ok_and(|src| src.contains("dagr_core"))
 }
@@ -172,7 +169,7 @@ fn needs_dagr_core(sample: &Path) -> bool {
 /// Compile `sample` with the pinned `rustc`, emitting no artifact. Returns the
 /// combined diagnostic text and whether compilation *succeeded*. A sample that
 /// imports `dagr_core` is linked against the workspace-built rlib so the real
-/// authoring-API compile-fail cases (T11/T12) resolve their imports and produce
+/// authoring-API compile-fail cases resolve their imports and produce
 /// the *intended* diagnostic — never a spurious unresolved-import error.
 fn compile_sample(sample: &Path) -> (String, bool) {
     // A unique throwaway output path under the target dir so parallel/repeat
@@ -305,7 +302,7 @@ fn ui() {
 
         let (diagnostic, compiled) = compile_sample(sample);
 
-        // (C2) A compile-fail sample that unexpectedly compiles is a hard
+        // A compile-fail sample that unexpectedly compiles is a hard
         // failure — a no-op case must never pass as coverage. This check runs
         // even under blessing: we never bless a passing compile.
         assert!(
@@ -368,7 +365,7 @@ fn ui() {
 }
 
 /// The resolved toolchain equals the pin in `rust-toolchain.toml`, establishing
-/// the determinism the larger T12 suite relies on (T8 Test plan: "Pinned
+/// the determinism the full compile-fail suite relies on ("pinned
 /// toolchain governs output"). We read the pin from the workspace file and ask
 /// the resolved `rustc` for its version; the pinned channel must appear in it.
 #[test]

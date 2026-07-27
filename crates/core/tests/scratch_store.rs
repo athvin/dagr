@@ -1,12 +1,11 @@
-//! Behavioral tests for the **C18 durable scratch store** (local) — ticket T53 /
-//! 065. Written first, TDD: each test mirrors one bullet of the ticket's Test
-//! plan.
+//! Behavioral tests for the **durable scratch store** (local). Written first,
+//! TDD.
 //!
 //! Every test uses a **private per-test temp directory** under the OS temp dir,
 //! keyed by process id, a monotonic counter, and a nanosecond stamp, so parallel
 //! test threads never share a path (the shared-`/tmp` parallelism bug class that
 //! has bitten this repo's CI). The base is removed on drop. No runtime, no
-//! admission, no event stream — the C8 single-task path.
+//! admission, no event stream — the hand-built single-task path.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -308,8 +307,8 @@ fn write_failure_is_retry_eligible_task_failure_not_permanent_or_panic() {
         .expect_err("write must fail when the namespace cannot be created");
     assert!(matches!(err, ScratchError::Io { .. }));
 
-    // The failure converts to a RETRY-ELIGIBLE task failure (C4) — not permanent,
-    // not a panic — and carries enough context to name the failing operation.
+    // The failure converts to a RETRY-ELIGIBLE task failure — not permanent, not
+    // a panic — and carries enough context to name the failing operation.
     let task_err: TaskError = err.into();
     assert!(
         task_err.is_retryable(),
@@ -401,7 +400,7 @@ fn physical_layout_is_under_run_dir_and_per_node_namespaced() {
 }
 
 // ---------------------------------------------------------------------------
-// Hand-constructed context reaches scratch with no runtime running (C8).
+// Hand-constructed context reaches scratch with no runtime running.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -430,7 +429,7 @@ fn hand_constructed_context_reaches_scratch_with_no_runtime() {
 
 #[test]
 fn no_run_store_context_has_honestly_unwired_scratch() {
-    // The default C8 test context supplies no run store.
+    // The default test context supplies no run store.
     let ctx = RunContext::for_test();
     let scratch = ctx.scratch();
 

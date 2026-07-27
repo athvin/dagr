@@ -1,20 +1,18 @@
-//! C27 · Durable-output **reference contract** — ticket T57 (067). Written
-//! first, TDD.
+//! Durable-output **reference contract**. Written first, TDD.
 //!
-//! T0.8 (ADR 014) *decided* the contract; T14/T29 landed the assembly-witness
-//! marker `DurableOutput` and the durability policy flag. T57 **supersedes that
-//! marker with the full trait pair** (T0.8 ADR §4): a durable node's OUTPUT TYPE
-//! serializes a self-describing reference to where the value durably lives and
-//! rehydrates the typed value from that reference later. This suite exercises the
-//! contract's *shape* and its **serialize + rehydrate round-trip** — the "serialize
-//! side" this ticket owns. The existence-`probe` classification and the
-//! demand-driven resume that consume references are **T58**'s (out of scope here).
+//! Assembly earlier landed the assembly-witness marker `DurableOutput` and the
+//! durability policy flag. This suite covers **the full trait pair that
+//! supersedes that marker**: a durable node's OUTPUT TYPE serializes a
+//! self-describing reference to where the value durably lives and rehydrates the
+//! typed value from that reference later. It exercises the contract's *shape* and
+//! its **serialize + rehydrate round-trip** — the "serialize side". The
+//! existence-`probe` classification and the demand-driven resume that consume
+//! references are out of scope here.
 //!
 //! Core stays dependency-free: the reference is an owned UTF-8 `String` the task's
 //! own output type produces (a JSON blob, a storage key, a URL — the task's
 //! choice), trivially serde-serializable downstream and round-tripping through the
-//! artifact schema's opaque `durable_reference` slot. Recorded per ticket-067
-//! "Open questions".
+//! artifact schema's opaque `durable_reference` slot.
 
 use dagr_core::assembly::{DurableOutput, NodePolicy, ProblemKind};
 use dagr_core::flow::Flow;
@@ -100,8 +98,7 @@ impl Task for MakeRows {
 
 // ---------------------------------------------------------------------------
 // Serialize side of the contract, end to end: produce → serialize → rehydrate
-// yields an EQUAL typed value (T57 test plan: "Serialize side of the contract is
-// exercised end to end").
+// yields an EQUAL typed value.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -138,8 +135,8 @@ fn rehydrate_of_a_dangling_reference_is_a_typed_absent_error() {
         err.is_absent(),
         "a gone referent classifies as absent, not a transient/corruption error"
     );
-    // The error is a plain typed value carrying the reference in its message — feeds
-    // T58's plan-time refusal and C26's single-node-replay refusal.
+    // The error is a plain typed value carrying the reference in its message — it
+    // feeds the resume plan-time refusal and the single-node-replay refusal.
     assert!(
         err.to_string().contains("never/written"),
         "the error names the offending reference"
@@ -148,8 +145,8 @@ fn rehydrate_of_a_dangling_reference_is_a_typed_absent_error() {
 
 // ---------------------------------------------------------------------------
 // The contract is on the OUTPUT TYPE, not the task: a value can be rehydrated
-// from its reference WITHOUT the producing task (T0.8 ADR §4 rationale — what
-// makes single-node replay / resume able to rebuild an input it never produced).
+// from its reference WITHOUT the producing task — what makes single-node replay
+// / resume able to rebuild an input it never produced.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -166,7 +163,8 @@ fn rehydrate_needs_only_the_reference_not_the_producing_task() {
 
 // ---------------------------------------------------------------------------
 // The enriched contract still arms assembly's durable-without-contract check
-// (T57 supersedes the marker without regressing the T14 enforcement seam).
+// (the full trait pair supersedes the marker without regressing the assembly
+// enforcement seam).
 // ---------------------------------------------------------------------------
 
 #[test]

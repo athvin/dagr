@@ -1,13 +1,13 @@
-// UI compile-failure sample — ticket T9 (019), C1 exclusive `&mut self` work
+// UI compile-failure sample — the exclusive `&mut self` work
 // signature.
 //
 // The work takes the task EXCLUSIVELY (`&mut self`), which is what makes
 // sequential attempts safe without any synchronization written by the author
-// (arch.md C1; T0.2 ADR). Invoking the work through a SHARED reference must
+// (the task-type contract). Invoking the work through a SHARED reference must
 // therefore fail to compile — the mirror of the behavioral test that invokes
 // the work twice through `&mut self` and observes the mutation.
 //
-// The T8 harness compiles this STANDALONE with no `--extern dagr_core`, so the
+// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
 // real `Task` trait is unavailable; the `&mut self` work signature is
 // reproduced locally on a `TaskWork` trait (mirroring `Task::run`) implemented
 // by `MutableTask`. Calling that `&mut self` work through a `&MutableTask`

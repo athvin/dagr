@@ -1,19 +1,17 @@
-//! C14 single-attempt execution-core tests — ticket T20 (030). Written first, TDD.
+//! Single-attempt execution-core tests. Written first, TDD.
 //!
 //! These exercise the **real** single-attempt runner in
-//! [`dagr_core::execution`]: the load-bearing spine of the C14 attempt runner
-//! (arch.md `### C14 · Attempt runner`) that runs **one** attempt of **one**
-//! node end to end — open a span, record the admission phase marker, dispatch
-//! the already-placed work, await its outcome, classify it into the normative
-//! taxonomy (arch.md Vocabulary), fill the output slot (C10/T17) on success
+//! [`dagr_core::execution`]: the load-bearing spine of the attempt runner that
+//! runs **one** attempt of **one** node end to end — open a span, record the
+//! admission phase marker, dispatch the already-placed work, await its outcome,
+//! classify it into the normative taxonomy, fill the output slot on success
 //! only, and emit the ordered per-transition events plus exactly one
-//! attempt-outcome record (C19/T19) for every attempt.
+//! attempt-outcome record for every attempt.
 //!
-//! Scope discipline (T20): this is **single-attempt only** — no retry
-//! (T22), no timeout (T21), no panic catching (T23), no execution-class
-//! dispatch (T33). The runner is runtime-agnostic: an `async fn` awaited here
-//! on a plain executor, with a hand-built `RunContext` (C8, no runtime) and a
-//! capturing event sink (C19) whose records are asserted directly.
+//! Scope discipline: this is **single-attempt only** — no retry, no timeout, no
+//! panic catching, no execution-class dispatch. The runner is runtime-agnostic:
+//! an `async fn` awaited here on a plain executor, with a hand-built `RunContext`
+//! (no runtime) and a capturing event sink whose records are asserted directly.
 
 use std::sync::Arc;
 
@@ -75,11 +73,11 @@ impl Task for DecidesToSkip {
     }
 }
 
-// --- A capturing event sink (C19-shaped, in-memory) -------------------------
+// --- A capturing event sink (in-memory) -------------------------------------
 
 /// A capturing [`AttemptEventSink`] that records every emitted record in order,
-/// stamping a gapless, strictly-increasing sequence number — the in-memory
-/// stand-in for the C19 writer the ticket's test plan calls for.
+/// stamping a gapless, strictly-increasing sequence number — an in-memory
+/// stand-in for the event writer.
 #[derive(Default)]
 struct CapturingSink {
     records: Vec<(u64, AttemptEvent)>,
@@ -119,7 +117,7 @@ impl CapturingSink {
 const NODE: &str = "produce-report";
 
 /// A fresh, empty output slot for `Report` with a single consumer (enough for
-/// the runner's fill; consumer wiring is assembly's job — T14).
+/// the runner's fill; consumer wiring is assembly's job).
 fn fresh_slot() -> Slot<Report> {
     Slot::new(
         NodeId::from_name(NODE),
@@ -131,7 +129,7 @@ fn fresh_slot() -> Slot<Report> {
     )
 }
 
-/// Build a `RunContext` for `NODE` at the given attempt/max (C8 hand-build, no
+/// Build a `RunContext` for `NODE` at the given attempt/max (hand-built, no
 /// runtime).
 fn ctx_for(attempt: u32, max: u32) -> RunContext {
     RunContext::builder(
@@ -145,7 +143,7 @@ fn ctx_for(attempt: u32, max: u32) -> RunContext {
 }
 
 /// Drive one attempt of `task` to a decided outcome on a plain single-threaded
-/// executor (runtime-agnostic: the caller provides the runtime — T33 places).
+/// executor (runtime-agnostic: the caller provides the runtime).
 fn drive<T: Task<Input = (), Output = Report>>(
     mut task: T,
     ctx: &RunContext,
@@ -158,7 +156,7 @@ fn drive<T: Task<Input = (), Output = Report>>(
 /// A minimal no-dependency, `unsafe`-free block-on for the returned future.
 /// dagr-core is dependency-free, so tests use a tiny hand-rolled executor built
 /// on the safe [`std::task::Wake`] trait rather than pull a runtime — proving
-/// the core is runtime-agnostic (T2/T33 place; T20 only awaits).
+/// the core is runtime-agnostic (this test only awaits).
 fn futures_lite_block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc as StdArc;
@@ -306,9 +304,9 @@ fn permanent_failure_does_not_fill_the_slot() {
     );
 }
 
-/// A permanent error is NEVER classified retry-eligible (C14: a permanent error
-/// is not retried regardless of remaining attempts — the runner surfaces the
-/// distinction, even with attempts remaining).
+/// A permanent error is NEVER classified retry-eligible: a permanent error is not
+/// retried regardless of remaining attempts — the runner surfaces the
+/// distinction, even with attempts remaining.
 #[test]
 fn permanent_failure_is_not_retry_eligible_even_with_attempts_remaining() {
     let slot = fresh_slot();
@@ -428,7 +426,7 @@ fn every_outcome_yields_exactly_one_attempt_outcome_record() {
 
 /// Attempt number and maximum are carried through identity: the span, the
 /// per-transition events, and the outcome record all carry the same attempt
-/// number and maximum from the C8 context.
+/// number and maximum from the context.
 #[test]
 fn attempt_number_is_carried_through_identity() {
     let slot = fresh_slot();
@@ -554,7 +552,7 @@ fn node_terminal_record_carries_the_classified_state() {
 }
 
 /// Value type flows unchanged: the value read from the slot equals the produced
-/// value with no coercion, confirming the fill path preserves the slot type (C10).
+/// value with no coercion, confirming the fill path preserves the slot type.
 #[test]
 fn value_type_flows_unchanged() {
     let slot = fresh_slot();
@@ -611,7 +609,7 @@ fn runnable_in_isolation_with_no_runtime() {
 
 /// The span opens before the work runs: the work observes the attempt span
 /// carrying this node's identity active at the moment it executes, so any line
-/// it emits is attributable without correlating timestamps (C8/C25 surface).
+/// it emits is attributable without correlating timestamps.
 #[test]
 fn the_span_opens_before_the_work_runs() {
     use std::sync::atomic::{AtomicBool, Ordering};

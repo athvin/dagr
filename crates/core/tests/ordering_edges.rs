@@ -1,11 +1,10 @@
-//! C4 · Ordering-dependency tests — ticket T50 (062). Written first, TDD.
+//! Ordering-dependency tests. Written first, TDD.
 //!
 //! These exercise the **real** ordering-edge authoring surface and its effect on
-//! readiness, assembly, and the structural fingerprint (arch.md `### C4 · Ordering
-//! dependency`; the T0.9 mechanics ADR). An ordering edge sequences two nodes
-//! without carrying a value: the downstream waits for its ordering upstream's
-//! terminal state and receives **no** value, exactly the cleanup-after-publish /
-//! cache-warm-before-read shape.
+//! readiness, assembly, and the structural fingerprint. An ordering edge
+//! sequences two nodes without carrying a value: the downstream waits for its
+//! ordering upstream's terminal state and receives **no** value, exactly the
+//! cleanup-after-publish / cache-warm-before-read shape.
 //!
 //! Split of coverage:
 //! - **Authoring** (this file): declare ordering edges at registration against

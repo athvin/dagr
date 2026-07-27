@@ -1,7 +1,5 @@
-//! The **C18 durable scratch store** (local) — a per-run, per-node key-value
-//! store of opaque bytes, backed by the run store on local disk (arch.md
-//! `### C18 · Durable scratch store`; the placement/isolation/lifecycle contract
-//! is fixed by the T0.6 run-store ADR §9).
+//! The **durable scratch store** (local) — a per-run, per-node key-value
+//! store of opaque bytes, backed by the run store on local disk.
 //!
 //! # What it is (and is not)
 //!
@@ -13,11 +11,11 @@
 //! for values measured in **kilobytes** — cursors and checkpoints, not datasets.
 //!
 //! Scratch is **not a channel for passing data between nodes** — that is what
-//! typed data edges (C10) are for. It is scoped to **one node within one run**;
+//! typed data edges are for. It is scoped to **one node within one run**;
 //! there is deliberately no API by which one node can name, reach, or read
 //! another node's scratch (see [enforced isolation](#enforced-cross-node-isolation)).
 //!
-//! # Physical layout (T0.6 §3, §9)
+//! # Physical layout
 //!
 //! A node's scratch lives under the run store, inside that run's directory:
 //!
@@ -30,29 +28,28 @@
 //! directories and cannot collide, while the same node under two different runs
 //! resolves under two different `<run-id>` directories and cannot collide either.
 //! The `scratch/` subtree sits alongside the reserved `events.jsonl` /
-//! `graph.json` / `run.json` / `tmp/` names (T0.6 §3) and never touches them.
+//! `graph.json` / `run.json` / `tmp/` names and never touches them.
 //!
 //! # Durability (atomic writes)
 //!
 //! A write is **crash-safe** by the same discipline the event stream and the
-//! artifacts use (T0.6 §6; T27): the value is written to a **temporary file in
+//! artifacts use: the value is written to a **temporary file in
 //! the same directory**, the temp file is **fsynced**, then **atomically renamed**
 //! into place, and finally the **containing directory is fsynced** so the rename
 //! itself is durable. A crash at any point leaves either the old value or the new
 //! value on disk — never a torn one. A read observes the last completed write.
 //!
 //! When the operator has pointed the run-store base at storage that survives the
-//! container, scratch survives with it (the basis for T54a); on ephemeral local
+//! container, scratch survives with it; on ephemeral local
 //! disk it does not, and such a run is simply not resumable — that is the
-//! operator's one infrastructure choice (arch.md "The shape of a run"), not this
-//! store's concern.
+//! operator's one infrastructure choice, not this store's concern.
 //!
-//! # Survives a process restart (T54a)
+//! # Survives a process restart
 //!
 //! Because a write lands **through the run store on disk**, a value written by one
 //! process is readable, **byte-for-byte, by a later, separate process** that opens
 //! the same run directory — the store keeps no live in-process state a value
-//! depends on. This is the durability foundation resume (C27 / T58) stands on: a
+//! depends on. This is the durability foundation resume stands on: a
 //! checkpoint written before a process ends is still there after it. It is proven
 //! by `crates/core/tests/scratch_survives_restart.rs` against a **real** separate
 //! writing process (the `dagr-scratch-run` test-support harness) whose scratch a
@@ -68,25 +65,25 @@
 //! node's namespace. A key that another node wrote is simply **absent** through
 //! this handle.
 //!
-//! # Lifecycle (T0.6 §8, §9)
+//! # Lifecycle
 //!
 //! When a node reaches **terminal success**, its scratch is deleted (the
 //! checkpoints have served their purpose) via [`ScratchStore::remove_on_success`].
 //! Scratch of a node that did **not** succeed is **left in place** — nothing is
 //! deleted implicitly at run end; that retained scratch is exactly what a later
-//! resume (C27 / T54b) copies forward, and it is reclaimed only by the prune verb
-//! (C26). Neither resume copy-forward nor prune is this ticket's concern.
+//! resume copies forward, and it is reclaimed only by the prune verb. Neither
+//! resume copy-forward nor prune is this module's concern.
 //!
-//! **Retention is the operator's, and prune's, alone (T54a / T0.6 §8).** Stated
+//! **Retention is the operator's, and prune's, alone.** Stated
 //! as the operator-facing guarantee: after a run ends, a **succeeded** node's
 //! scratch is **gone**; a **non-succeeded** node's scratch (failed, timed-out,
 //! cancelled, skipped, or never-terminal) **survives the process restart** on
 //! disk and is **the operator's to prune**. The run-finished path performs no
-//! blanket cleanup, and no timer or subsequent run reclaims it — **prune (C26) is
+//! blanket cleanup, and no timer or subsequent run reclaims it — **prune is
 //! the sole implicit-deletion path**, and it reclaims retained scratch by removing
 //! the **whole per-run directory** `<base>/<pipeline>/<run-id>/`.
 //!
-//! # Failure classification (C4)
+//! # Failure classification
 //!
 //! Any read or write failure caused by the underlying store surfaces as a
 //! [`ScratchError::Io`], which converts to a **retry-eligible**
@@ -94,11 +91,11 @@
 //! than not, so the node's retry budget absorbs it. This is **distinct** from the
 //! "absent key" outcome, which is `Ok(None)` and **not** a failure.
 //!
-//! # Hand-construction for tests (C8)
+//! # Hand-construction for tests
 //!
 //! A store is reachable from a [`RunContext`](crate::context::RunContext) built
 //! entirely by hand under a temp run-store base, with **no runtime, admission, or
-//! event stream** present — the single-task test path C8 guarantees.
+//! event stream** present — the single-task test path.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -107,7 +104,7 @@ use crate::context::{PipelineId, RunId};
 use crate::error::TaskError;
 use crate::handle::NodeId;
 
-/// The reserved scratch subtree name under a run directory (T0.6 §3). Sits
+/// The reserved scratch subtree name under a run directory. Sits
 /// alongside the reserved `events.jsonl`, `graph.json`, `run.json`, and `tmp/`
 /// names and never collides with them.
 pub const SCRATCH_DIR_NAME: &str = "scratch";
@@ -134,8 +131,8 @@ impl ScratchOp {
     }
 }
 
-/// The error a [`ScratchStore`] read or write reports (arch.md `### C18`; T0.6
-/// §9 fixes it is a **retry-eligible** task failure).
+/// The error a [`ScratchStore`] read or write reports — a **retry-eligible**
+/// task failure.
 ///
 /// # This is not the "absent" outcome
 ///
@@ -149,7 +146,7 @@ impl ScratchOp {
 pub enum ScratchError {
     /// The underlying store failed on a scratch operation. Carries which
     /// operation failed and the underlying I/O error, so the caller can identify
-    /// the failing operation. Classified **retry-eligible** (C4).
+    /// the failing operation. Classified **retry-eligible**.
     Io {
         /// Which scratch operation surfaced the fault.
         op: ScratchOp,
@@ -177,7 +174,7 @@ impl std::error::Error for ScratchError {
 }
 
 impl From<ScratchError> for TaskError {
-    /// A scratch I/O failure is a **retry-eligible** task failure (C4; T0.6 §9):
+    /// A scratch I/O failure is a **retry-eligible** task failure:
     /// disk trouble is transient more often than not, so the node's retry budget
     /// absorbs it. The underlying I/O error is preserved as the error source.
     fn from(err: ScratchError) -> Self {
@@ -189,7 +186,7 @@ impl From<ScratchError> for TaskError {
     }
 }
 
-/// The durable, per-run, per-node **scratch store** handle (arch.md `### C18`).
+/// The durable, per-run, per-node **scratch store** handle.
 ///
 /// A handle addresses **exactly one** node's namespace under one run:
 /// `<base>/<pipeline>/<run-id>/scratch/<node>/`. It exposes opaque-byte
@@ -210,13 +207,13 @@ pub struct ScratchStore {
     // — cross-node isolation is enforced by construction (module docs).
     //
     // `None` is the honestly-unwired seam: a `RunContext` built with no run store
-    // (the C8 hand-built path that supplies no scratch root) carries a store that
+    // (the hand-built path that supplies no scratch root) carries a store that
     // reads absent and writes error, never pretending to persist.
     dir: Option<PathBuf>,
 }
 
 impl ScratchStore {
-    /// Resolve the store for one node under a run-store base (T0.6 §3, §9).
+    /// Resolve the store for one node under a run-store base.
     ///
     /// The namespace directory is `<base>/<pipeline>/<run-id>/scratch/<node>/`.
     /// The `<node>` segment is derived from the opaque [`NodeId`] as a stable hex
@@ -231,7 +228,7 @@ impl ScratchStore {
     }
 
     /// The honestly-unwired store a `RunContext` carries when it was built with no
-    /// run store (the C8 hand-built path). Reads report absent and writes report a
+    /// run store (the hand-built path). Reads report absent and writes report a
     /// retry-eligible I/O error — it never pretends to persist. The real store is
     /// wired via [`for_node`](Self::for_node).
     #[must_use]
@@ -241,8 +238,8 @@ impl ScratchStore {
 
     /// This node's scratch namespace directory
     /// (`<base>/<pipeline>/<run-id>/scratch/<node>/`), or [`None`] for an
-    /// unwired store. Exposed so a test can assert the physical layout (T53 Test
-    /// plan: "Physical layout is inside the run directory and namespaced"); it is
+    /// unwired store. Exposed so a test can assert the physical layout is inside
+    /// the run directory and namespaced; it is
     /// **not** a route to another node's namespace — it is this handle's own dir.
     #[must_use]
     pub fn namespace_dir(&self) -> Option<&Path> {
@@ -260,13 +257,13 @@ impl ScratchStore {
     /// Read the value previously written under `key`, or `Ok(None)` if no value
     /// was ever written under it (the **absent** outcome, distinct from a failure).
     ///
-    /// A value written on one attempt is readable on the next (arch.md C18). The
+    /// A value written on one attempt is readable on the next. The
     /// bytes are returned **exactly** as written, byte-for-byte.
     ///
     /// # Errors
     ///
     /// Returns [`ScratchError::Io`] (which converts to a **retry-eligible**
-    /// [`TaskError`], C4) if the underlying store fails to
+    /// [`TaskError`]) if the underlying store fails to
     /// read an existing value. A **missing** key is **not** an error — it is
     /// `Ok(None)`.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ScratchError> {
@@ -302,7 +299,7 @@ impl ScratchStore {
     /// # Errors
     ///
     /// Returns [`ScratchError::Io`] (which converts to a **retry-eligible**
-    /// [`TaskError`], C4) if the underlying store cannot
+    /// [`TaskError`]) if the underlying store cannot
     /// persist the value — an unwritable namespace, a full disk. Never a permanent
     /// failure and never a panic.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<(), ScratchError> {
@@ -327,7 +324,7 @@ impl ScratchStore {
     ///
     /// # Errors
     ///
-    /// Returns [`ScratchError::Io`] (retry-eligible, C4) if the underlying store
+    /// Returns [`ScratchError::Io`] (retry-eligible) if the underlying store
     /// fails to remove an existing value.
     pub fn remove(&self, key: &[u8]) -> Result<(), ScratchError> {
         let Some(dir) = self.dir.as_deref() else {
@@ -345,7 +342,7 @@ impl ScratchStore {
         }
     }
 
-    /// The **on-success lifecycle hook** (arch.md C18; T0.6 §9): delete this
+    /// The **on-success lifecycle hook**: delete this
     /// node's entire scratch namespace, invoked when the node reaches terminal
     /// **success**. After it, every key this node wrote reads back absent and the
     /// node's scratch storage location no longer exists on disk.
@@ -353,11 +350,11 @@ impl ScratchStore {
     /// This is called **only** for a succeeded node. Scratch of a node that did
     /// not succeed is **left in place** (nothing is deleted implicitly at run end)
     /// — that retained scratch is what a later resume copies forward and prune
-    /// (C26) reclaims. Removing an already-absent namespace is a harmless no-op.
+    /// reclaims. Removing an already-absent namespace is a harmless no-op.
     ///
     /// # Errors
     ///
-    /// Returns [`ScratchError::Io`] (retry-eligible, C4) if the underlying store
+    /// Returns [`ScratchError::Io`] (retry-eligible) if the underlying store
     /// fails to remove a present namespace directory.
     pub fn remove_on_success(&self) -> Result<(), ScratchError> {
         let Some(dir) = self.dir.as_deref() else {
@@ -373,25 +370,25 @@ impl ScratchStore {
         }
     }
 
-    /// **Resume scratch carry-forward** (arch.md `### C18`, line 391; C27 / T54b):
+    /// **Resume scratch carry-forward**:
     /// copy **one node's retained scratch** from the linked `prior` run's namespace
     /// into the `resumed` run's namespace, under the same run-store `base`, so a
     /// re-executing node **continues from its checkpoint** rather than starting over.
     ///
-    /// This is the scratch half of resume. The resume core (C27 / T58) computes the
+    /// This is the scratch half of resume. The resume core computes the
     /// re-execution set — the nodes it does *not* mark `satisfied-from-prior` — and
     /// the driver calls this **once per node in that set**, before the node is
     /// admitted. The re-executing node then reads its checkpoint through the
     /// ordinary [`get`](Self::get) context API, with no awareness that a copy
     /// happened and **no route to the prior run's directory**: the value is written
     /// under the resumed run id's own per-node namespace
-    /// (`<base>/<pipeline>/<resumed>/scratch/<node>/`), preserving the T53/T54a
+    /// (`<base>/<pipeline>/<resumed>/scratch/<node>/`), preserving the
     /// per-run/per-node namespacing.
     ///
     /// # Copy, not move — the prior run is retained
     ///
-    /// The prior run's scratch is **retained** (T54a: a non-succeeded node's scratch
-    /// is not deleted at run end) and is reclaimed only by prune (C26). Carry-forward
+    /// The prior run's scratch is **retained** (a non-succeeded node's scratch
+    /// is not deleted at run end) and is reclaimed only by prune. Carry-forward
     /// **copies** it and never consumes it: after this call the prior namespace still
     /// holds every value it did.
     ///
@@ -400,7 +397,7 @@ impl ScratchStore {
     /// The source and destination namespaces are both derived from **this same
     /// `node`**'s opaque identity fingerprint, so a node's carried-forward scratch
     /// lands only in its own resumed namespace — one node can never receive another's
-    /// (the C18 isolation criterion, enforced not conventional). Copying one node
+    /// (the isolation criterion, enforced not conventional). Copying one node
     /// reads and writes **only** that node's two directories.
     ///
     /// # Missing prior scratch is a clean empty carry, not an error
@@ -415,13 +412,13 @@ impl ScratchStore {
     ///
     /// This performs no resumability check of its own — it presupposes the prior
     /// run's store survived. A resume whose store is gone is refused up front by the
-    /// C27 gate (T58) and never reaches carry-forward, so this never fabricates a
+    /// resume gate and never reaches carry-forward, so this never fabricates a
     /// missing prior directory.
     ///
     /// # Errors
     ///
     /// Returns [`ScratchError::Io`] — which converts to a **retry-eligible**
-    /// [`TaskError`] (C4; arch.md line 393) — if reading a prior value or writing it
+    /// [`TaskError`] — if reading a prior value or writing it
     /// into the resumed namespace fails at the store level. The failure is the
     /// affected node's alone; it is neither a silent skip nor a whole-resume abort.
     pub fn carry_forward(
@@ -505,7 +502,7 @@ fn is_write_temp(file_name: &std::ffi::OsStr) -> bool {
 }
 
 /// Resolve the on-disk namespace directory for one node under one run
-/// (`<base>/<pipeline>/<run-id>/scratch/<node>/`, T0.6 §3, §9). A pure path
+/// (`<base>/<pipeline>/<run-id>/scratch/<node>/`). A pure path
 /// computation shared by [`ScratchStore::for_node`] and
 /// [`ScratchStore::carry_forward`]; it touches no filesystem.
 fn namespace_path(base: &Path, pipeline: &PipelineId, run: &RunId, node: NodeId) -> PathBuf {
@@ -517,15 +514,15 @@ fn namespace_path(base: &Path, pipeline: &PipelineId, run: &RunId, node: NodeId)
 
 /// Derive a stable, filesystem-safe segment for a node's namespace from its
 /// opaque [`NodeId`]. The id is an opaque `u64` fingerprint (name-derived,
-/// reorder-stable, rename-sensitive — T0.7); rendering it as fixed-width hex
+/// reorder-stable, rename-sensitive); rendering it as fixed-width hex
 /// gives a segment that is always valid on disk, is disjoint for distinct ids,
-/// and reveals no name (identity stays opaque — C2).
+/// and reveals no name (identity stays opaque).
 fn node_segment(node: NodeId) -> String {
     format!("{:016x}", node.namespace_fingerprint())
 }
 
 /// Render an identity string (pipeline / run) into a single path segment. The
-/// run-store layout (T0.6 §3) uses the identity strings directly as directory
+/// run-store layout uses the identity strings directly as directory
 /// names; this maps any character that is not filesystem-safe (a separator or a
 /// bare `.`/`..`) to `_` so an opaque, operator-supplied identity can never
 /// escape its directory or collide with a parent reference, while ordinary ids
@@ -568,7 +565,7 @@ fn encode_key(key: &[u8]) -> String {
 }
 
 /// Write `value` to `final_path` **durably and atomically** under `dir`
-/// (mirroring the event-stream / artifact discipline, T0.6 §6, T27):
+/// (mirroring the event-stream / artifact discipline):
 ///
 /// 1. write the bytes to a fresh temp file **in the same directory** (so the
 ///    rename is same-filesystem and therefore atomic),
@@ -588,7 +585,7 @@ fn atomic_write(dir: &Path, final_path: &Path, value: &[u8]) -> io::Result<()> {
     // A temp name unique to this write, in the SAME directory as the final file
     // so the rename stays on one filesystem (atomic). Uniqueness across concurrent
     // writers within one process is not required by the contract (one live attempt
-    // writes a node's scratch — T0.3), but a pid+counter base keeps two writes to
+    // writes a node's scratch), but a pid+counter base keeps two writes to
     // different keys from sharing a temp path.
     let tmp_name = format!(
         ".{}.tmp.{}.{}",
@@ -651,8 +648,8 @@ mod tests {
     fn path_segment_neutralizes_traversal() {
         assert_eq!(path_segment(""), "_");
         // A leading dot is escaped, so neither `.` nor `..` survives as a
-        // self/parent-reference segment; an interior dot (legitimate in ids like
-        // `T0.6`) is kept.
+        // self/parent-reference segment; an interior dot (legitimate in a
+        // dotted id) is kept.
         assert_eq!(path_segment("."), "_");
         assert_ne!(path_segment(".."), "..");
         assert!(!path_segment("..").starts_with('.'));

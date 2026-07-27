@@ -1,12 +1,12 @@
-//! Positive (compiles + runtime-shape) tests for the C3 typed data-dependency
-//! binding API — ticket T11 (021). Written first, TDD.
+//! Positive (compiles + runtime-shape) tests for the typed data-dependency
+//! binding API. Written first, TDD.
 //!
 //! These exercise the **real** binding API in [`dagr_core::binding`] (not a
-//! throwaway spike sketch): the sealed positional [`Deps`] encoding from the T5
-//! ADR (§3–§5, §7), the receive-mode recording from the T0.2 ownership model,
-//! and the trigger-rule typestate (§8). Compile-*success* and runtime-shape
-//! behaviour are ordinary library tests; the compile-*failure* half lives in the
-//! checked-in UI fixtures under [`tests/ui/`](./ui) (the T8 harness).
+//! throwaway spike sketch): the sealed positional [`Deps`] encoding, the
+//! receive-mode recording from the ownership model, and the trigger-rule
+//! typestate. Compile-*success* and runtime-shape behaviour are ordinary library
+//! tests; the compile-*failure* half lives in the checked-in UI fixtures under
+//! [`tests/ui/`](./ui).
 //!
 //! Their compilation is half the assertion: a regression that made any of these
 //! shapes stop compiling (single input takes `T` not `(T,)`; fan-out reuses a
@@ -154,9 +154,10 @@ fn fan_out_one_handle_many_consumers() {
 
 /// Receive mode is RECORDED, not adjudicated: an owned edge (the default) and an
 /// explicit clone-on-read edge are both accepted, and each edge carries its
-/// declared mode verbatim. C3 raises no error about consumer counts or retries
-/// — the type-vs-mode split (owned demand on a multi-consumer value; owned edge
-/// into a retrying node) is deliberately NOT rejected here (T14 exercises it).
+/// declared mode verbatim. Binding raises no error about consumer counts or
+/// retries — the type-vs-mode split (owned demand on a multi-consumer value;
+/// owned edge into a retrying node) is deliberately NOT rejected here; assembly
+/// exercises it.
 #[test]
 fn receive_mode_is_recorded_not_adjudicated() {
     let gamma: Handle<Gamma> = source("make-gamma", &MakeGamma);
@@ -173,16 +174,16 @@ fn receive_mode_is_recorded_not_adjudicated() {
     let (_shared_out, shared_node) = source_and_bind("shared", &ConsumeGamma, gamma.shared());
     assert_eq!(shared_node.data_edges()[0].mode(), ReceiveMode::Shared);
 
-    // C3 adjudicated nothing: even though `gamma` now has three consumers (a
+    // Binding adjudicated nothing: even though `gamma` now has three consumers (a
     // multi-consumer value), the owned demand above raised no error. That
-    // conflict is T14's to reject, not C3's.
+    // conflict is assembly's to reject, not binding's.
 }
 
 /// A data dependency implies BOTH ordering AND upstream success: the edge is
 /// recorded as a data edge (distinct kind), and the recorded structure reflects
 /// that the downstream depends on the upstream having succeeded (there is no
-/// value otherwise). This is the invariant readiness (C11) and slot wiring (C10)
-/// later rely on.
+/// value otherwise). This is the invariant readiness and slot wiring later rely
+/// on.
 #[test]
 fn data_edge_implies_ordering_and_success() {
     let alpha: Handle<Alpha> = source("make-alpha", &MakeAlpha);

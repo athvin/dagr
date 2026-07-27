@@ -1,7 +1,7 @@
-// UI compile-failure fixture — ticket T50 (062),
+// UI compile-failure fixture,
 // case `wiring_ordering_does_not_unlock_non_default_rule`.
 //
-// PROVES (C3/C4, Vocabulary; arch.md §52, §134): a *non-default* trigger rule
+// PROVES: a *non-default* trigger rule
 // (`all-terminal` / `any-failed`) is expressible ONLY on a node that consumes
 // NOTHING — and adding an ORDERING edge to a DATA-consuming node does NOT unlock
 // it. This is enforced at COMPILE time by the shape of the real authoring API
@@ -15,14 +15,14 @@
 // not `()`). There is deliberately no `..._ordered_after_with_trigger` variant on
 // the DATA registrars (`register` / `register_ordered_after`), so a data node has
 // no path to a non-default rule at all — an ordering edge on it (via
-// `register_ordered_after`) still leaves it locked to `all-succeeded` (C3).
+// `register_ordered_after`) still leaves it locked to `all-succeeded`.
 //
-// This is the ordering-edge-aware counterpart of the T5 typestate fixture
+// This is the ordering-edge-aware counterpart of the typed-handle typestate fixture
 // `typed_handle_non_default_rule_on_data_node`, now shown against the real API.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::binding::TriggerRule;
 use dagr_core::flow::Flow;

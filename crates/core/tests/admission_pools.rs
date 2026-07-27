@@ -1,15 +1,15 @@
-//! C12 · Admission pools and permit lifecycle (T31).
+//! Admission pools and permit lifecycle.
 //!
 //! These are the TDD acceptance tests for the runtime admission controller: the
 //! weighted capacity pools, all-or-nothing multi-pool acquisition, oldest-ready
-//! -first admission with bounded bypass, and the permit lifecycle the T0.3 ADR
-//! fixed (permit held for the whole attempt; abandoned-but-running cost counted
-//! until the closure returns; no leak across a whole run). Admission is driven by
-//! **counts, not sleeps**, so every scenario is deterministic in CI (no
-//! wall-clock, no network) — a pool at capacity makes an over-demand node wait
-//! until a release, and the release is an explicit call, never a timer.
+//! -first admission with bounded bypass, and the permit lifecycle (permit held
+//! for the whole attempt; abandoned-but-running cost counted until the closure
+//! returns; no leak across a whole run). Admission is driven by **counts, not
+//! sleeps**, so every scenario is deterministic in CI (no wall-clock, no
+//! network) — a pool at capacity makes an over-demand node wait until a release,
+//! and the release is an explicit call, never a timer.
 //!
-//! The mapped headline test for C12 is
+//! The headline test is
 //! [`admission_pools_hold_capacity_and_permits_release_without_leaking`].
 
 use std::sync::Arc;
@@ -28,7 +28,7 @@ fn mem_cost(bytes: u64) -> PoolCost {
 }
 
 // ===========================================================================
-// The mapped C12 headline test — a whole run ends with every pool back to full.
+// The headline test — a whole run ends with every pool back to full.
 // ===========================================================================
 
 /// **No permit leak across a whole run.** A controller admits a sequence of
@@ -432,7 +432,7 @@ fn working_memory_and_output_residency_are_charged_separately() {
 
     // The value is produced: output residency transfers to the slot lease. The
     // controller mints a residency lease against the shared ledger, standing in
-    // for the transfer `Slot::fill` performs into the same ledger (C10).
+    // for the transfer `Slot::fill` performs into the same ledger.
     let lease = ctrl.transfer_residency("producer", 3_000);
     assert_eq!(
         ctrl.counted(Pool::Memory),
@@ -450,8 +450,8 @@ fn working_memory_and_output_residency_are_charged_separately() {
     );
 
     // The slot actually releases (last consumer terminal-and-returned): the lease
-    // finally reclaims. The lease's drop mirrors the slot's own release timing
-    // (C10), which waits for zombie consumers to return.
+    // finally reclaims. The lease's drop mirrors the slot's own release timing,
+    // which waits for zombie consumers to return.
     drop(lease);
     assert_eq!(ctrl.counted(Pool::Memory), 0);
 }
@@ -584,13 +584,13 @@ fn an_undeclared_cost_node_warns_in_a_memory_constrained_run() {
 }
 
 // ===========================================================================
-// Declared-cost reporting seam (T42/C23) — declared side + zombie cost.
+// Declared-cost reporting seam — declared side + zombie cost.
 // ===========================================================================
 
 /// The reporting seam surfaces each node's declared per-pool cost and the current
-/// per-pool zombie cost, in the shape T42/C23 folds side by side with measured
-/// cost. No measured-vs-declared comparison is computed here; only the declared
-/// side and the live zombie cost are surfaced.
+/// per-pool zombie cost, in the shape the artifact folds side by side with
+/// measured cost. No measured-vs-declared comparison is computed here; only the
+/// declared side and the live zombie cost are surfaced.
 #[test]
 fn declared_cost_is_exposed_for_the_artifact_juxtaposition() {
     let ctrl = AdmissionController::new(
@@ -617,7 +617,7 @@ fn declared_cost_is_exposed_for_the_artifact_juxtaposition() {
     assert_eq!(alpha.pinned.blocking_threads(), 1);
     assert_eq!(alpha.pinned.compute_threads(), 0);
 
-    // The declared-cost of a node is derivable from its C5 policy cost vector
+    // The declared-cost of a node is derivable from its policy cost vector
     // without duplicating the definition (the controller reads NodePolicy::cost).
     let policy = NodePolicy::new().working_memory(300).blocking_threads(1);
     let declared = PoolCost::from_cost_vector(policy.cost());

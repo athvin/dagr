@@ -1,13 +1,12 @@
-//! Behavioral tests for the `#[task]` attribute macro (ticket T71 / 083),
-//! written first (TDD). They exercise the ergonomic authoring layer ADR 082
-//! decided on: `#[task]` on an inherent `impl` block expands to the exact
-//! `impl Task for Foo { … }` a task author writes by hand today.
+//! Behavioral tests for the `#[task]` attribute macro, written first (TDD). They
+//! exercise the ergonomic authoring layer: `#[task]` on an inherent `impl` block
+//! expands to the exact `impl Task for Foo { … }` a task author writes by hand
+//! today.
 //!
-//! This slice covers **only** zero-input (`Input = ()`) and single-input (bare
-//! `Input = T`) tasks in the `AwaitBound` execution class, with an optional
-//! `ctx: &RunContext` parameter, and enforcement that `run` returns
-//! `Result<T, TaskError>`. Multi-arity, execution-class arguments, and tuple
-//! wiring are T72; the quickstart rewrite and the `trybuild` corpus are T73.
+//! This file covers zero-input (`Input = ()`), single-input (bare `Input = T`),
+//! and multi-arity (2..=8, tuple `Input`) tasks, the execution class taken from
+//! the attribute argument, an optional `ctx: &RunContext` parameter, and
+//! enforcement that `run` returns `Result<T, TaskError>`.
 //!
 //! The macro is reached through `dagr_core::task` — the default-on `macros`
 //! feature re-exports `dagr_macros::task` as `dagr_core::task`, so an author
@@ -15,9 +14,9 @@
 //! is exactly what these tests assert is applicable to an inherent `impl`.
 //!
 //! Await-bound task futures are driven to completion with a tiny runtime-free
-//! block-on (the same poller `task_abstraction.rs` uses); the real runner is
-//! C14. What is under test is the *generated* `impl Task`, so each test compares
-//! the generated associated types / const and runs the generated body.
+//! block-on (the same poller `task_abstraction.rs` uses). What is under test is
+//! the *generated* `impl Task`, so each test compares the generated associated
+//! types / const and runs the generated body.
 
 use std::future::Future;
 use std::pin::pin;
@@ -186,7 +185,7 @@ fn hand_written_impl_still_works() {
     assert_eq!(out, 15);
 }
 
-// --- Multi-arity expansion (T72): 2..=8 inputs -> a tuple `type Input` -------
+// --- Multi-arity expansion: 2..=8 inputs -> a tuple `type Input` -------------
 //
 // The author writes ONE non-destructured tuple parameter (`input: (A, B)`), and
 // the macro maps it to `type Input = (A, B)` and emits `let (…) = input;` as the
@@ -272,7 +271,7 @@ fn eight_input_task_infers_eight_tuple_and_destructures_all_positions() {
     assert_eq!(out, 87_654_321);
 }
 
-// --- Execution class from the attribute argument (T72) ----------------------
+// --- Execution class from the attribute argument ----------------------------
 //
 // The class is taken from the ATTRIBUTE, never inferred from the body: bare
 // `#[task]` / `#[task()]` -> AwaitBound, `#[task(blocking)]` -> Blocking,
@@ -334,6 +333,6 @@ impl EmptyParensTask {
 fn task_empty_parens_sets_await_bound_from_the_attribute() {
     assert_eq!(EmptyParensTask::EXECUTION_CLASS, ExecutionClass::AwaitBound);
     // And bare `#[task]` (no parens) is likewise AwaitBound — re-asserted on the
-    // T71 single-input task, proving the default is unchanged.
+    // single-input task, proving the default is unchanged.
     assert_eq!(Stringify::EXECUTION_CLASS, ExecutionClass::AwaitBound);
 }

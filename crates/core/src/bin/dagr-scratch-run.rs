@@ -1,21 +1,21 @@
-//! `dagr-scratch-run` — a **test-support** harness for T54a (ticket 066): the
+//! `dagr-scratch-run` — a **test-support** harness for the
 //! scratch-survives-restart proof.
 //!
 //! # Why this exists
 //!
-//! T54a proves C18's durability half — that a node's scratch, written through the
+//! This proves the durable scratch store's durability half — that a node's
+//! scratch, written through the
 //! run store on disk, **survives a full process exit** and is readable by a
-//! **later, separate process** (arch.md `### C18 · Durable scratch store`; "The
-//! shape of a run" line 67; T0.6 §8, §9). The honest way to test that is to have a
+//! **later, separate process**. The honest way to test that is to have a
 //! **real, separate OS process** write the scratch and then **exit**, and a
 //! *different* process read it back afterward — not an in-process handle round
-//! trip (that is already T53's `scratch_store.rs`). This binary is that writing
-//! process. It mirrors T68's `dagr-crashy-run` rationale: checked-in, reusable
-//! test scaffolding, resolved by the integration test via
+//! trip (that is already covered by `scratch_store.rs`). This binary is that
+//! writing process. It mirrors the `dagr-crashy-run` rationale: checked-in,
+//! reusable test scaffolding, resolved by the integration test via
 //! `CARGO_BIN_EXE_dagr-scratch-run`, shipping in **no released binary**.
 //!
 //! It links only against `dagr_core` — no new dependency — so `dagr-core` stays
-//! dependency-free (arch.md "Stability").
+//! dependency-free.
 //!
 //! # What it does
 //!
@@ -29,8 +29,8 @@
 //!        hook** (`remove_on_success`) runs — the only per-node deletion at run
 //!        end;
 //!      - `fail` → the node ended **non-succeeded**, so **no cleanup runs**: run
-//!        end deletes nothing of its scratch, exactly the amended C18 rule
-//!        ("nothing is deleted implicitly at run end", arch.md line 393; T0.6 §8);
+//!        end deletes nothing of its scratch, exactly the rule that nothing is
+//!        deleted implicitly at run end;
 //!   3. writes an on-disk `ready` marker (atomically, write+rename) so the parent
 //!      test can synchronise on the scratch work being durably complete **without
 //!      a wall-clock sleep**, then **exits `0`**.
