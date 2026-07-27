@@ -63,6 +63,7 @@ use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::Task;
 
 use crate::driver::{drive, NodeRunner, RunConfig};
+use crate::run_store::{mint_run_id, FileSink, SystemClock};
 
 /// The run's **slot registry**: node [id](NodeId) → that node's type-erased output
 /// slot (`Arc<Slot<Output>>` boxed as `Arc<dyn Any + Send + Sync>`).
@@ -463,6 +464,56 @@ impl RunnableFlow {
         })
     }
 
+    /// **Assemble and run** the whole flow to a local run store in **one call** — no
+    /// hand-written sink, clock, or [`RunConfig`].
+    ///
+    /// This is the golden-path counterpart to the fully-explicit [`run`](Self::run):
+    /// it mints a fresh run id, opens the default local-file
+    /// [`FileSink`](crate::run_store::FileSink) at
+    /// `<base>/<pipeline_name>/<run-id>/events.jsonl` (creating the directories),
+    /// drives the flow with the wall-clock-derived
+    /// [`SystemClock`](crate::run_store::SystemClock) (so the artifact's durations are
+    /// real), and returns the [`RunReport`]. Advanced callers who need a custom sink, a
+    /// deterministic clock, or a tuned [`RunConfig`] keep using [`run`](Self::run); this
+    /// wraps it and adds no execution logic of its own.
+    ///
+    /// # Errors
+    /// - [`RunToStoreError::Store`] if the run store cannot be opened at `base` (an
+    ///   unwritable or inaccessible directory) — surfaced **before** assembly, since
+    ///   there is nowhere to record an artifact.
+    /// - [`RunToStoreError::Assembly`] if the flow does not assemble (a duplicate name,
+    ///   an illegal edge, …) — the same
+    ///   [`AssemblyError`](dagr_core::assembly::AssemblyError) [`run`](Self::run)
+    ///   returns. A run whose assembly succeeds always returns `Ok`; a node that fails
+    ///   at run time is reported through the [`RunReport`]'s outcome, not this `Result`.
+    pub fn run_to_store(
+        self,
+        pipeline_name: &str,
+        base: impl AsRef<str>,
+    ) -> Result<RunReport, RunToStoreError> {
+        let base = base.as_ref();
+        // Mint the id ONCE and thread it into both the sink's directory and the
+        // `RunConfig`, so the eagerly-created store directory and the driver's
+        // resolved stream path agree (the driver builds the path from `config.base`
+        // and the resolved run id).
+        let run_id = mint_run_id();
+        let sink = FileSink::create_in_store(base, pipeline_name, &run_id)
+            .map_err(RunToStoreError::Store)?;
+        let config = RunConfig::new(base).run_id(run_id);
+        self.run(pipeline_name, &config, sink, SystemClock::new())
+            .map_err(RunToStoreError::Assembly)
+    }
+
+    /// [`run_to_store`](Self::run_to_store) targeting the default local store base
+    /// ([`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE), `./dagr-runs`) —
+    /// the whole run in one call with no arguments beyond the pipeline name.
+    ///
+    /// # Errors
+    /// The same as [`run_to_store`](Self::run_to_store).
+    pub fn run_to_default_store(self, pipeline_name: &str) -> Result<RunReport, RunToStoreError> {
+        self.run_to_store(pipeline_name, crate::run_store::DEFAULT_STORE_BASE)
+    }
+
     /// **Finish** the flow into its immutable [`Pipeline`], consuming the flow — the
     /// live `&Pipeline` the *inspection* verbs (`graph`, `validate`) need without
     /// driving a run.
@@ -484,6 +535,43 @@ impl RunnableFlow {
     #[must_use]
     pub fn into_pipeline(self) -> Pipeline {
         self.flow.finish()
+    }
+}
+
+/// The failure modes of [`RunnableFlow::run_to_store`]: the run store could not be
+/// opened, or the flow did not assemble.
+///
+/// [`run`](RunnableFlow::run) collapses these into a single result (a run-store open
+/// failure surfaces through the sink, an assembly failure through the returned
+/// `Result`). The one-call [`run_to_store`](RunnableFlow::run_to_store) opens the
+/// store itself, so it keeps the two distinct — letting a caller map each to its own
+/// exit code (store-open → a sink failure, assembly → an assembly failure), exactly
+/// as the registry's hand-written run path does.
+#[derive(Debug)]
+pub enum RunToStoreError {
+    /// The run store could not be opened at the given base (an unwritable or
+    /// inaccessible directory). Carries the underlying [`std::io::Error`].
+    Store(std::io::Error),
+    /// The flow did not assemble (a duplicate name, an illegal edge, …). Carries the
+    /// underlying [`AssemblyError`](dagr_core::assembly::AssemblyError).
+    Assembly(dagr_core::assembly::AssemblyError),
+}
+
+impl std::fmt::Display for RunToStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Store(err) => write!(f, "the run store could not be opened: {err}"),
+            Self::Assembly(err) => write!(f, "the flow did not assemble: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RunToStoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store(err) => Some(err),
+            Self::Assembly(err) => Some(err),
+        }
     }
 }
 

@@ -55,12 +55,10 @@
 //! those directly). The artifact-only `render` / `fold` carry no flow and are
 //! dispatched by the binary directly, not here.
 
-use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use dagr_artifact::event_stream::{EventSink, MonotonicClock, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 #[cfg(doc)]
 use dagr_core::flow::Pipeline;
 
@@ -69,16 +67,16 @@ use crate::contract::{
 };
 use crate::graph::graph_verb;
 use crate::run_flow::RunnableFlow;
+// The run-store defaults (the local-file sink, the deterministic clock the registry
+// drives runs with, the default store base, and the run-id minter) live in one place
+// so this path and the one-call `RunnableFlow::run_to_store` agree. The registry
+// deliberately keeps injecting the deterministic `TickClock` (not `SystemClock`), so
+// its streams stay byte-identical.
+use crate::run_store::{mint_run_id, FileSink, TickClock, DEFAULT_STORE_BASE};
 
 /// The library-owned flag naming the run-store base for a `run <flow>` invocation
 /// (the reserved `--store`, [`reserved_flag_names`](crate::contract::reserved_flag_names)).
 const STORE_FLAG: &str = "--store";
-
-/// The default run-store base when `--store` is omitted — a relative directory
-/// under the current working directory, mirroring the examples' default
-/// (`quickstart.rs` uses `./quickstart-runs`). A real deployment always passes
-/// `--store`; the default keeps the ergonomic one-flow case runnable with no flag.
-const DEFAULT_STORE_BASE: &str = "./dagr-runs";
 
 /// A registered flow's **re-invokable factory** — called once per invocation to
 /// build a **fresh** [`RunnableFlow`] (the flow is consumed by
@@ -495,63 +493,4 @@ fn store_base(argv: &[std::ffi::OsString]) -> String {
         }
     }
     DEFAULT_STORE_BASE.to_string()
-}
-
-/// Mint a run identity for a registry-dispatched run. A wall-clock timestamp,
-/// process id, and a process-global monotonic counter together keep every
-/// invocation's store directory disjoint (concurrent-run disjointness) without an
-/// external UUID dependency — even two invocations within the same process and the
-/// same clock tick get distinct ids (the counter breaks the tie).
-fn mint_run_id() -> String {
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let seq = SEQ.fetch_add(1, Ordering::SeqCst);
-    format!("run-{}-{nanos}-{seq}", std::process::id())
-}
-
-// ===========================================================================
-// The internal on-disk event sink + monotonic clock the registry drives a flow with.
-// ===========================================================================
-
-/// A minimal append-only local-file event sink: appends each complete line to the
-/// run's `events.jsonl` and flushes to the OS. Mirrors every pipeline binary's own
-/// file sink (the run store is the operator's one job); the registry provides one so
-/// `run_registry` can drive a flow with no caller-supplied sink.
-struct FileSink {
-    file: File,
-}
-
-impl FileSink {
-    fn create(path: &std::path::Path) -> io::Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self { file })
-    }
-}
-
-impl EventSink for FileSink {
-    fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
-        self.file.write_all(line)?;
-        self.file.flush()
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
-    }
-}
-
-/// A monotonic clock advanced one tick per read — deterministic, wall-clock-free.
-/// Durations in the artifact are computed from these monotonic offsets.
-#[derive(Default)]
-struct TickClock {
-    n: AtomicU64,
-}
-
-impl MonotonicClock for TickClock {
-    fn elapsed_ns(&self) -> u64 {
-        self.n.fetch_add(1, Ordering::SeqCst)
-    }
 }

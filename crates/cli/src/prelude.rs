@@ -29,6 +29,14 @@ pub use crate::flow_builder::FlowBuilder;
 #[cfg(feature = "dag")]
 pub use crate::run::{run, DagRegistration};
 pub use crate::run_flow::RunnableFlow;
+/// The run-store defaults a hand-written driver reaches for: the default local-file
+/// [`FileSink`](crate::run_store::FileSink), the wall-clock
+/// [`SystemClock`](crate::run_store::SystemClock), and the
+/// [`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE) — so
+/// [`RunnableFlow::run`](crate::run_flow::RunnableFlow::run) needs no hand-written
+/// sink/clock. (The one-call [`run_to_store`](crate::run_flow::RunnableFlow::run_to_store)
+/// builds them for you; these are here for the explicit path.)
+pub use crate::run_store::{FileSink, SystemClock, DEFAULT_STORE_BASE};
 /// The `#[dag]` attribute macro (M6, T80) — the DAG-authoring sibling of `#[task]`.
 /// Carried in the prelude under the default-on `dag` feature so `use
 /// dagr_cli::prelude::*;` brings it into scope; absent under `--no-default-features`.

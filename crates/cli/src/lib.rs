@@ -39,6 +39,7 @@ pub mod registry;
 #[cfg(feature = "dag")]
 pub mod run;
 pub mod run_flow;
+pub mod run_store;
 pub mod scale_bench;
 pub mod signals;
 pub mod structure_snapshot;
@@ -67,6 +68,13 @@ pub use graph::{
 /// per DAG). Absent under `--no-default-features`.
 #[cfg(feature = "dag")]
 pub use run::{run, DagRegistration};
+pub use run_flow::RunToStoreError;
+/// The run-store defaults (the local-file event sink, the wall-clock and deterministic
+/// clocks, the default store base, and the run-id minter) — reusable so a hand-written
+/// driver, the registry, the `#[dag]` run path, and the one-call
+/// [`RunnableFlow::run_to_store`](run_flow::RunnableFlow::run_to_store) all share one
+/// implementation and no one hand-writes a `FileSink` again.
+pub use run_store::{mint_run_id, FileSink, SystemClock, TickClock, DEFAULT_STORE_BASE};
 pub use structure_snapshot::{
     assert_structure, bless_structure, StructureAssertError, StructureDiff, StructureSnapshot,
 };
