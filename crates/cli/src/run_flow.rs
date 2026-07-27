@@ -57,9 +57,10 @@ use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{
     run_attempt_caught, run_with_retries_caught, AttemptEventSink, NoJitter, RetryConfig,
 };
-use dagr_core::flow::Flow;
+use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::{Handle, NodeId};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
+use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::Task;
 
 use crate::driver::{drive, NodeRunner, RunConfig};
@@ -194,6 +195,12 @@ impl RunnableFlow {
     /// returning its output [`Handle`]. Runs a single attempt through the real
     /// caught attempt runner on the driver's per-attempt context (so its durable
     /// scratch namespace is reachable — T63).
+    ///
+    /// This uses the **type-erased** flow registrar, so the node carries **no**
+    /// author-declared stable names and is not emittable to the C20 graph artifact.
+    /// For a graph-emittable source (so `graph <flow>` / `validate <flow>` work
+    /// through [`crate::registry::run_registry`]), use the stable-name-aware
+    /// [`register_source_named`](Self::register_source_named) instead.
     #[must_use]
     pub fn register_source<T>(&mut self, name: impl Into<String>, task: T) -> Handle<T::Output>
     where
@@ -202,8 +209,51 @@ impl RunnableFlow {
     {
         let name = name.into();
         let handle = self.flow.register_source::<T>(&name, &task);
+        self.push_source_runner(&name, task, handle);
+        handle
+    }
+
+    /// Register a **stable-name-aware source** node (one whose task consumes
+    /// nothing) under `name`, returning its output [`Handle`].
+    ///
+    /// The graph-emittable counterpart of [`register_source`](Self::register_source):
+    /// it registers through the flow's stable-name-aware registrar (so the built
+    /// [`Pipeline`] records `T::STABLE_NAME` and `T::Output`'s stable name), which is
+    /// what lets `graph <flow>` emit the C20 artifact for a registry-hosted flow
+    /// ([`crate::registry::run_registry`]; ADR 086). The run behaviour is identical
+    /// to [`register_source`](Self::register_source) — a single caught attempt on the
+    /// driver's per-attempt context.
+    #[must_use]
+    pub fn register_source_named<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName + Send + 'static,
+        T::Output: StableName + Send + Sync + 'static,
+    {
+        let name = name.into();
+        // The stable-name-aware flow registrar captures `T`'s author-declared stable
+        // names into the pipeline node, so the built pipeline is C20-emittable.
+        let handle =
+            self.flow
+                .register_source_named::<T>(&name, &task, None::<String>, NodePolicy::new());
+        self.push_source_runner(&name, task, handle);
+        handle
+    }
+
+    /// Capture the runner factory + output-slot maker for a **source** node — the
+    /// run-plumbing shared by [`register_source`](Self::register_source) and
+    /// [`register_source_named`](Self::register_source_named) (which differ only in
+    /// whether the flow registration captured stable names).
+    fn push_source_runner<T>(&mut self, name: &str, task: T, handle: Handle<T::Output>)
+    where
+        T: Task<Input = ()> + Send + 'static,
+        T::Output: Send + Sync + 'static,
+    {
         let retry_config = NodePolicy::new().retry_config();
-        let node_name = name.clone();
+        let node_name = name.to_string();
         let factory: RunnerFactory = Box::new(move |registry: &SlotRegistry| {
             let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
             Box::new(GenericNodeRunner {
@@ -216,12 +266,11 @@ impl RunnableFlow {
             }) as Box<dyn NodeRunner>
         });
         self.runners.push(RegisteredRunner {
-            name: name.clone(),
+            name: name.to_string(),
             id: handle.id(),
-            make_slot: make_slot_boxed::<T::Output>(&name),
+            make_slot: make_slot_boxed::<T::Output>(name),
             factory,
         });
-        handle
     }
 
     /// Register a **data-dependent** node under `name`, binding `deps` (whose value
@@ -269,9 +318,67 @@ impl RunnableFlow {
         let handle = self
             .flow
             .register_with::<T, D>(&name, &task, deps.clone(), policy);
+        self.push_data_runner::<T, D>(&name, task, deps, policy, handle);
+        handle
+    }
+
+    /// Register a **stable-name-aware data-dependent** node under `name`, binding
+    /// `deps`, returning its output [`Handle`].
+    ///
+    /// The graph-emittable counterpart of [`register`](Self::register): it registers
+    /// through the flow's stable-name-aware registrar (so the built [`Pipeline`]
+    /// records the stable task name, the ordered stable input type names, and the
+    /// stable output type name), which is what lets `graph <flow>` emit the C20
+    /// artifact for a registry-hosted flow ([`crate::registry::run_registry`]; ADR
+    /// 086). The dependency binding (`D: Deps<Inputs = T::Input>`, the exact-type /
+    /// arity / acyclicity checks) and the run behaviour are identical to
+    /// [`register`](Self::register) — a single caught attempt through the real runner
+    /// (this node carries the default [`NodePolicy`]).
+    #[must_use]
+    pub fn register_named<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        deps: D,
+    ) -> Handle<T::Output>
+    where
+        T: Task + StableName + Send + 'static,
+        T::Input: StableInputNames + Clone + Send + 'static,
+        T::Output: StableName + Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
+        let name = name.into();
+        let policy = NodePolicy::new();
+        // The stable-name-aware flow registrar captures `T`/`T::Input`/`T::Output`'s
+        // author-declared stable names into the pipeline node (so the built pipeline
+        // is C20-emittable) while binding the same edges `register` does.
+        let handle =
+            self.flow
+                .register_named::<T, D>(&name, &task, deps.clone(), None::<String>, policy);
+        self.push_data_runner::<T, D>(&name, task, deps, policy, handle);
+        handle
+    }
+
+    /// Capture the runner factory + output-slot maker for a **data-dependent** node
+    /// — the run-plumbing shared by [`register_with`](Self::register_with) and
+    /// [`register_named`](Self::register_named) (which differ only in whether the
+    /// flow registration captured stable names).
+    fn push_data_runner<T, D>(
+        &mut self,
+        name: &str,
+        task: T,
+        deps: D,
+        policy: NodePolicy,
+        handle: Handle<T::Output>,
+    ) where
+        T: Task + Send + 'static,
+        T::Input: Clone + Send + 'static,
+        T::Output: Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
         let reader = deps.input_reader();
         let retry_config = policy.retry_config();
-        let node_name = name.clone();
+        let node_name = name.to_string();
         let factory: RunnerFactory = Box::new(move |registry: &SlotRegistry| {
             let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
             // Defer the input read to inside `run()`: by construction the driver only
@@ -291,12 +398,11 @@ impl RunnableFlow {
             }) as Box<dyn NodeRunner>
         });
         self.runners.push(RegisteredRunner {
-            name: name.clone(),
+            name: name.to_string(),
             id: handle.id(),
-            make_slot: make_slot_boxed::<T::Output>(&name),
+            make_slot: make_slot_boxed::<T::Output>(name),
             factory,
         });
-        handle
     }
 
     /// **Assemble and run** the whole flow in one call: finalize the pipeline,
@@ -356,6 +462,29 @@ impl RunnableFlow {
             inner: report,
             slots: registry,
         })
+    }
+
+    /// **Finish** the flow into its immutable [`Pipeline`], consuming the flow — the
+    /// live `&Pipeline` the *inspection* verbs (`graph`, `validate`) need without
+    /// driving a run (arch.md `### C7`; graph verb T40; ADR 086).
+    ///
+    /// [`run`](Self::run) **consumes** the flow and [`RunnableFlow`] is not `Clone`,
+    /// so one instance answers at most one verb; the registry ([`run_registry`])
+    /// therefore calls the flow's factory **once per verb** — `graph <flow>` builds a
+    /// fresh flow, calls this to obtain the pipeline, and emits the C20 artifact via
+    /// [`graph_verb`](crate::graph::graph_verb); `validate <flow>` builds another and
+    /// runs [`validate_verb`](crate::contract::validate_verb) over the pipeline. The
+    /// runner factories captured at registration are for *execution* only and are
+    /// dropped here; the returned pipeline carries the frozen node/edge structure the
+    /// inspection verbs read (and, when the nodes were registered through the
+    /// stable-name-aware surface — [`register_source_named`](Self::register_source_named)
+    /// / [`register_named`](Self::register_named) — the author-declared stable names
+    /// the C20 artifact records).
+    ///
+    /// [`run_registry`]: crate::registry::run_registry
+    #[must_use]
+    pub fn into_pipeline(self) -> Pipeline {
+        self.flow.finish()
     }
 }
 

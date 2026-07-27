@@ -4,8 +4,8 @@
 //! # Why this module exists
 //!
 //! Until now a dagr pipeline binary carried exactly **one** flow: the reference
-//! driver ([`crate`]'s `main`) reports "needs a pipeline-specific binary" for the
-//! pipeline-bound verbs, and a real pipeline crate wires each verb to its single
+//! driver ([`crate`]'s `main`) once reported "needs a pipeline-specific binary" for
+//! the pipeline-bound verbs, and a real pipeline crate wired each verb to its single
 //! assembled pipeline. There was no built-in way for one binary to offer
 //! `dagr run etl` versus `dagr run nightly` and select a flow by name. An operator
 //! asked for exactly that — define **many** named flows and pick one per
@@ -24,13 +24,38 @@
 //! pattern consistent with `run(self)` consuming the flow (ADR 086, rejected
 //! alternatives).
 //!
-//! # What this slice ships (T74)
+//! # What this module routes
 //!
-//! The registry type, the [`Cli::flow_name`](crate::contract::Cli::flow_name)
-//! contract extension (extracted in [`crate::contract::parse_cli`]), and the two
-//! verbs [`run_registry`] routes here — `list` and `run <flow>`. The
-//! remaining flow-selecting verbs (`graph`, `validate`, …) and the two-flow
-//! example binary are **T75** (`docs/implementation/088-T75-…`), not this slice.
+//! [`run_registry`] dispatches every flow-selecting verb over the registry:
+//!
+//! - `list` — print the registered flow names (T74).
+//! - `run <flow>` — build the selected flow, drive it, and map the
+//!   [`RunReport`](crate::run_flow::RunReport) through [`exit_code_for_run`] (T74).
+//! - `graph <flow>` — build the selected flow, finish it into a live [`Pipeline`]
+//!   ([`RunnableFlow::into_pipeline`]), and emit the C20 graph artifact via
+//!   [`graph_verb`] (T75).
+//! - `validate <flow>` — build the selected flow, finish it into a [`Pipeline`], and
+//!   run assembly (C7) only via [`validate_verb`], printing **every** problem (T75).
+//!
+//! # Per-verb exit-code fidelity (ADR 086)
+//!
+//! Each verb maps its **own** outcome to its C26 [`ExitCode`]: `run` goes through
+//! [`exit_code_for_run`] (which is reserved for a completed
+//! [`RunReport`](crate::run_flow::RunReport)); `graph` and `validate` return their
+//! **own** `ExitCode`/error types **directly** — a `graph` emit failure and a
+//! `validate` [`AssemblyFailure`](ExitCode::AssemblyFailure) never go through the
+//! run path. Selection failures (a multi-flow registry with no name, an unknown
+//! name) fail with [`InvalidUsage`](ExitCode::InvalidUsage) **before** the flow is
+//! ever built.
+//!
+//! # Out of scope for the registry (pipeline-bound verbs)
+//!
+//! `single-node` (C27 replay) and `prune` (run-store retention) select a flow but
+//! need per-invocation store/parameter/rehydration plumbing the registry does not
+//! own; the registry recognizes them and routes to a diagnostic pointing at the
+//! pipeline-specific verb bodies (arch.md `### C26`; the reference sample binary
+//! `dagr-t56-alpha` wires those directly). The artifact-only `render` / `fold`
+//! carry no flow and are dispatched by the binary directly, not here.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -38,10 +63,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, EVENTS_FILE_NAME};
+#[cfg(doc)]
+use dagr_core::flow::Pipeline;
 
 use crate::contract::{
-    exit_code_for_run, parse_cli, split_banner_flag, ExitCode, ParseOutcome, Verb,
+    exit_code_for_run, parse_cli, split_banner_flag, validate_verb, ExitCode, ParseOutcome, Verb,
 };
+use crate::graph::graph_verb;
 use crate::run_flow::RunnableFlow;
 
 /// The library-owned flag naming the run-store base for a `run <flow>` invocation
@@ -242,27 +270,158 @@ where
         }
     };
 
-    match cli.verb {
-        Verb::Run => match registry.select(cli.flow_name.as_deref()) {
-            Ok((name, factory)) => run_selected_flow(name, factory, &raw, out),
+    // Every flow-selecting verb resolves its flow through the SAME selection rules
+    // (single-flow default, name-required, unknown-name), then routes to its own
+    // verb body. Selection failures never reach the flow build.
+    let mut dispatch =
+        |verb_label: &str, action: FlowAction<W>| match registry.select(cli.flow_name.as_deref()) {
+            Ok((name, factory)) => action(name, factory, &raw, out),
             Err(message) => {
-                let _ = writeln!(out, "dagr: {message}");
+                let _ = writeln!(out, "dagr {verb_label}: {message}");
                 ExitCode::InvalidUsage
             }
-        },
-        // The remaining flow-selecting verbs (`graph`, `validate`, `single-node`,
-        // `prune`) and the artifact-only verbs are **not** this slice's — T75 routes
-        // them. Refuse them here with a defined code so the surface is honest.
-        other => {
+        };
+
+    match cli.verb {
+        Verb::Run => dispatch("run", run_selected_flow),
+        // `graph <flow>` builds a FRESH flow, finishes it into a live `&Pipeline`,
+        // and emits the C20 artifact — its own `ExitCode`, never via the run path.
+        Verb::Graph => dispatch("graph", graph_selected_flow),
+        // `validate <flow>` builds another fresh flow, finishes it into a `Pipeline`,
+        // and runs assembly-only — `AssemblyFailure` (3) comes straight from the verb.
+        Verb::Validate => dispatch("validate", validate_selected_flow),
+        // `single-node` / `prune` select a flow but need per-invocation store /
+        // parameter / rehydration plumbing the registry does not own. Recognize them
+        // and point at the pipeline-specific verb wiring rather than silently
+        // succeeding (ADR 086 "per-verb exit-code fidelity"; the sample binary
+        // `dagr-t56-alpha` wires those directly). Still refuse an unknown/absent flow
+        // name here first, so selection stays consistent across every verb.
+        verb @ (Verb::SingleNode | Verb::Prune) => {
+            match registry.select(cli.flow_name.as_deref()) {
+                Ok((name, _factory)) => {
+                    let v = verb.name();
+                    let _ = writeln!(
+                        out,
+                        "dagr {v}: the `{v}` verb selects flow `{name}` but needs the \
+                         pipeline-specific verb body (its store/parameter/replay plumbing is \
+                         not part of the registry entrypoint); wire it directly against the \
+                         selected flow's assembled pipeline (dagr_cli::contract / \
+                         dagr_cli::driver)",
+                    );
+                    ExitCode::InvalidUsage
+                }
+                Err(message) => {
+                    let _ = writeln!(out, "dagr {}: {message}", verb.name());
+                    ExitCode::InvalidUsage
+                }
+            }
+        }
+        // The artifact-only verbs (`render`, `fold`) and the `resume` stub carry no
+        // flow, so they are dispatched by the binary directly, never through the
+        // registry. A binary that delegates here for them is misrouting.
+        other @ (Verb::Render | Verb::Resume | Verb::Fold) => {
             let _ = writeln!(
                 out,
-                "the `{}` verb is not routed by this registry yet (T74 ships `run`/`list`; \
-                 the remaining flow-selecting verbs are T75)",
+                "dagr: the `{}` verb carries no flow and is not routed by the registry \
+                 (dispatch it directly — it needs no factory)",
                 other.name()
             );
             ExitCode::InvalidUsage
         }
     }
+}
+
+/// The signature every flow-selecting verb body shares: given the selected flow's
+/// `name` + `factory`, the invocation `argv`, and the diagnostic writer, build a
+/// fresh flow and produce the verb's own C26 [`ExitCode`]. A plain `fn` pointer so
+/// the `run`/`graph`/`validate` bodies and the inline `single-node`/`prune`
+/// diagnostic all coerce to one type the dispatcher can route.
+type FlowAction<W> = fn(&str, &FlowFactory, &[std::ffi::OsString], &mut W) -> ExitCode;
+
+/// Build the selected flow via its factory and emit its **C20 graph artifact**
+/// through [`graph_verb`] over the flow's live [`Pipeline`]
+/// ([`RunnableFlow::into_pipeline`]). The clock is read **once** for the
+/// generation-time field (the only byte-varying field, C20); every other byte is
+/// fixed per binary, so this is byte-identical to a single-flow binary's emission
+/// for the same flow. The exit code is the verb's **own**: `Success` on a clean
+/// emit, `AssemblyFailure` on a flow that cannot be emitted to the contract — never
+/// via [`exit_code_for_run`].
+fn graph_selected_flow<W: Write>(
+    name: &str,
+    factory: &FlowFactory,
+    _argv: &[std::ffi::OsString],
+    out: &mut W,
+) -> ExitCode {
+    // A fresh flow, built now, finished into the immutable pipeline the graph verb
+    // reads (never reused — `into_pipeline` consumes it).
+    let pipeline = factory().into_pipeline();
+    let generated_at = now_rfc3339();
+    match graph_verb(&pipeline, name, &generated_at, out) {
+        Ok(()) => ExitCode::Success,
+        Err(err) => {
+            let _ = writeln!(out, "dagr graph {name}: {err}");
+            // A structural emit failure (a node without stable names, a malformed
+            // stable name) is the graph's own fault, surfaced before any run —
+            // AssemblyFailure is the C26 code for "the graph itself is unusable".
+            ExitCode::AssemblyFailure
+        }
+    }
+}
+
+/// Build the selected flow via its factory and run **assembly (C7) only** through
+/// [`validate_verb`] over the flow's live [`Pipeline`]. Prints **every** problem and
+/// returns the verb's **own** code: `Success` on a clean assembly or
+/// [`AssemblyFailure`](ExitCode::AssemblyFailure) (3) otherwise — never via
+/// [`exit_code_for_run`], which is reserved for a completed
+/// [`RunReport`](crate::run_flow::RunReport).
+fn validate_selected_flow<W: Write>(
+    name: &str,
+    factory: &FlowFactory,
+    _argv: &[std::ffi::OsString],
+    out: &mut W,
+) -> ExitCode {
+    let pipeline = factory().into_pipeline();
+    let _ = name; // the flow's identity is not part of assembly (C7 is name-agnostic)
+    validate_verb(&pipeline, out)
+}
+
+/// Format the current wall-clock instant as an RFC 3339 UTC timestamp
+/// (`YYYY-MM-DDThh:mm:ssZ`) for the graph artifact's generation-time field.
+///
+/// This is the **only** byte-varying field of the artifact (C20), so it is not
+/// fingerprint-bound and needs no sub-second precision; a plain second-granularity
+/// UTC stamp keeps the registry free of a date-formatting dependency. Computed by
+/// the standard civil-from-days algorithm (Howard Hinnant's `civil_from_days`) so
+/// it is correct across leap years with no external crate.
+fn now_rfc3339() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Convert a count of days **since the Unix epoch** (1970-01-01) to a `(year,
+/// month, day)` civil date, via Howard Hinnant's public-domain `civil_from_days`
+/// algorithm. Written in unsigned arithmetic (valid for every non-negative Unix
+/// timestamp, i.e. every real generation time) so it needs no external crate and no
+/// lossy signed casts; it is correct across leap years and century rules.
+fn civil_from_days(z: u64) -> (u64, u64, u64) {
+    // Shift the epoch to 0000-03-01 (era-relative), the algorithm's origin.
+    let z = z + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097; // day-of-era, [0, 146_096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // year-of-era, [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day-of-year (Mar-based), [0, 365]
+    let mp = (5 * doy + 2) / 153; // Mar-based month index, [0, 11]
+    let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if month <= 2 { y + 1 } else { y };
+    (year, month, day)
 }
 
 /// Whether the first token after the program name (skipping the program name only)
