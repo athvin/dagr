@@ -9,10 +9,11 @@
 //! This is the **run store's** derived, opt-in index (arch.md "The shape of a
 //! run"), **not** a coordinating metadata store. It coordinates nothing: the
 //! event stream stays the source of truth and the index is a guaranteed
-//! projection of it. That carve-out is decided in **ADR 097 (T82)**; this crate
-//! (T83) ships only the crate, the schema, and a write-safe connection seam —
-//! the reader (`sync` reconcile, T84) and writer (live tee, T86) are separate
-//! tickets, and lineage columns are M8.
+//! projection of it. That carve-out is decided in **ADR 097 (T82)**. T83 shipped
+//! the crate, schema, and write-safe connection seam; **T84** adds the
+//! event→row [`mapping`] and the `sync` reconcile walk ([`mapping::sync_run_store`])
+//! that folds every run under a run store and upserts it idempotently. The live
+//! tee writer (T86) is a separate ticket, and lineage columns are M8.
 //!
 //! # The concurrency recipe (ADR 097 §3)
 //!
@@ -34,6 +35,7 @@
 //! guarantee is untouched, and the CLI reaches this crate only behind a
 //! default-off `metastore` feature.
 
+pub mod mapping;
 pub mod schema;
 pub mod store;
 

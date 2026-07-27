@@ -60,20 +60,30 @@ impl Drop for TempDir {
     }
 }
 
-/// An in-memory sink that just accumulates the appended bytes, so a test can
-/// build a fixture stream from the real writer without touching the filesystem.
-#[derive(Default)]
-struct VecSink {
-    bytes: Vec<u8>,
+/// A file-backed sink that appends each record to a run's `events.jsonl` on disk,
+/// so the fixture lands in the real `<base>/<pipeline>/<run-id>/events.jsonl`
+/// layout the run-store walk discovers.
+struct FileSink {
+    file: std::fs::File,
 }
 
-impl EventSink for VecSink {
+impl FileSink {
+    fn create(path: &Path) -> Self {
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("mk run dir");
+        let file = std::fs::File::create(path).expect("create events.jsonl");
+        Self { file }
+    }
+}
+
+impl EventSink for FileSink {
     fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
-        self.bytes.extend_from_slice(line);
-        Ok(())
+        use std::io::Write;
+        self.file.write_all(line)?;
+        self.file.flush()
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+        use std::io::Write;
+        self.file.flush()
     }
 }
 
@@ -112,22 +122,20 @@ fn write_run(
     base: &Path,
     pipeline: &str,
     run_id: &str,
-    emit: impl FnOnce(&mut EventStreamWriter<VecSink, TickClock>),
+    emit: impl FnOnce(&mut EventStreamWriter<FileSink, TickClock>),
 ) -> Vec<u8> {
+    let path = base.join(pipeline).join(run_id).join("events.jsonl");
     let mut writer = EventStreamWriter::new(
-        VecSink::default(),
+        FileSink::create(&path),
         TickClock::default(),
         RunId::from_operator(run_id),
         pipeline,
     )
     .with_wall_clock(|| "2026-07-27T00:00:00.000Z".to_string());
     emit(&mut writer);
-    // Extract the bytes by re-emitting into a fresh sink is not possible; instead
-    // reconstruct from the run path we write below. Simpler: the writer owns the
-    // sink, so we cannot borrow the Vec out. We therefore write to disk and read
-    // it back for the fold comparison.
+    // The writer owns the sink, so drop it to flush/close, then read the stream
+    // back off disk for the fold comparison.
     drop(writer);
-    let path = base.join(pipeline).join(run_id).join("events.jsonl");
     std::fs::read(&path).expect("read back the written stream")
 }
 
@@ -155,7 +163,7 @@ async fn opt_string(store: &MetaStore, sql: &str) -> Option<String> {
 
 /// Emit a two-node run with a retry on `b`: `a` succeeds, `b` fails once then
 /// succeeds (durable reference on the success), and a `run-finished(succeeded)`.
-fn emit_multi_node_with_retry(w: &mut EventStreamWriter<VecSink, TickClock>) {
+fn emit_multi_node_with_retry(w: &mut EventStreamWriter<FileSink, TickClock>) {
     w.run_started(header("pipe")).unwrap();
     // node a: ready, admitted, one attempt, succeeded, terminal.
     w.node_ready("a").unwrap();
@@ -209,7 +217,7 @@ fn emit_multi_node_with_retry(w: &mut EventStreamWriter<VecSink, TickClock>) {
 /// Given a fixture `events.jsonl` for a multi-node run with a retry, when `sync`
 /// folds and upserts it, then `dag_run` state/timing and every `node_attempt`
 /// (one row per attempt, correct `try_number`, phase durations, durable
-/// reference, satisfied_from_run) match the `RunArtifact` `fold_stream` produces,
+/// reference, `satisfied_from_run`) match the `RunArtifact` `fold_stream` produces,
 /// and `node_terminal` holds the latest state per node.
 #[tokio::test]
 async fn mapping_matches_fold_stream_for_a_multi_node_run_with_retry() {

@@ -91,6 +91,13 @@ pub fn migrations() -> Vec<String> {
         )"
         .to_string(),
         // --- dag_run: one row per run (run_id PK) -----------------------------
+        // A run is recorded from the moment it starts (`state='running'`), through
+        // its terminal outcome. `interrupted` distinguishes a crash-truncation from
+        // a deliberate cancellation (both read `state='cancelled'`; C22/fold);
+        // `resumed_from` carries resume lineage; `events_path` points back at the
+        // source stream this row was folded from; params/env are JSON blobs. The
+        // T84-added columns are ALSO applied idempotently to a pre-existing T83
+        // store via [`ADDITIVE_COLUMNS`], so both shapes converge (additive-only).
         format!(
             "CREATE TABLE IF NOT EXISTS dag_run (
             run_id          TEXT PRIMARY KEY,
@@ -99,24 +106,39 @@ pub fn migrations() -> Vec<String> {
             state           TEXT NOT NULL {run_state_check},
             started_ms      INTEGER NOT NULL,
             finished_ms     INTEGER,
+            interrupted     INTEGER NOT NULL DEFAULT 0,
+            resumed_from    TEXT,
+            events_path     TEXT,
             params_json     TEXT,
+            env_json        TEXT,
             meta_json       TEXT
         )"
         ),
         // --- node_attempt: one row per attempt, UNIQUE(run_id,node_id,try) ----
         // The run artifact carries one record per *attempt* (C22): retries are the
         // interesting capacity-planning signal. `state` is CHECK-constrained to the
-        // nine canonical terminal states.
+        // nine canonical terminal states. The rich fold fields (worker, phase
+        // durations, error/cost JSON, durable reference, resume/propagation
+        // lineage) are carried too — see [`ADDITIVE_COLUMNS`] for the pre-existing-
+        // store convergence path.
         format!(
             "CREATE TABLE IF NOT EXISTS node_attempt (
-            run_id       TEXT NOT NULL,
-            node_id      TEXT NOT NULL,
-            try_number   INTEGER NOT NULL,
-            state        TEXT NOT NULL {node_state_check},
-            started_ms   INTEGER,
-            finished_ms  INTEGER,
-            message      TEXT,
-            metrics_json TEXT,
+            run_id             TEXT NOT NULL,
+            node_id            TEXT NOT NULL,
+            try_number         INTEGER NOT NULL,
+            state              TEXT NOT NULL {node_state_check},
+            started_ms         INTEGER,
+            finished_ms        INTEGER,
+            message            TEXT,
+            metrics_json       TEXT,
+            worker             TEXT,
+            phase_durations_json TEXT,
+            error_json         TEXT,
+            cost_declared_json TEXT,
+            cost_measured_json TEXT,
+            durable_reference  TEXT,
+            satisfied_from_run TEXT,
+            originating_node   TEXT,
             UNIQUE (run_id, node_id, try_number)
         )"
         ),
@@ -151,4 +173,32 @@ pub const TABLES: [&str; 5] = [
     "dag_run",
     "node_attempt",
     "node_terminal",
+];
+
+/// Additive `(table, column, type-affinity)` columns the T84 mapping projects
+/// into that the T83 `CREATE TABLE` shapes did not name. Applied idempotently by
+/// [`MetaStore::open`](crate::MetaStore::open) as `ALTER TABLE … ADD COLUMN` **only
+/// when the column is absent** (`SQLite` has no `ADD COLUMN IF NOT EXISTS`), so a
+/// fresh store (which gets them from the widened `CREATE TABLE` below) and a
+/// pre-existing T83 store converge on the same shape without re-deciding it.
+///
+/// Evolution stays additive-only (arch.md C22 "schema evolution is bounded"): a
+/// reader of an older row sees the new columns as `NULL`, and nothing existing is
+/// dropped or retyped. The type affinity is `TEXT` for JSON blobs and identity
+/// strings, `INTEGER` for the boolean-as-0/1 `interrupted` flag.
+pub const ADDITIVE_COLUMNS: &[(&str, &str, &str)] = &[
+    // dag_run — the run-level fields T84 carries beyond the T83 shape.
+    ("dag_run", "interrupted", "INTEGER NOT NULL DEFAULT 0"),
+    ("dag_run", "resumed_from", "TEXT"),
+    ("dag_run", "events_path", "TEXT"),
+    ("dag_run", "env_json", "TEXT"),
+    // node_attempt — the rich per-attempt fold fields (arch.md C22 body).
+    ("node_attempt", "worker", "TEXT"),
+    ("node_attempt", "phase_durations_json", "TEXT"),
+    ("node_attempt", "error_json", "TEXT"),
+    ("node_attempt", "cost_declared_json", "TEXT"),
+    ("node_attempt", "cost_measured_json", "TEXT"),
+    ("node_attempt", "durable_reference", "TEXT"),
+    ("node_attempt", "satisfied_from_run", "TEXT"),
+    ("node_attempt", "originating_node", "TEXT"),
 ];

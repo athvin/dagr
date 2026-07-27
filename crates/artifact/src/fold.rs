@@ -453,6 +453,16 @@ impl RunArtifact {
             .get("captured_environment")
             .unwrap_or_else(|| EMPTY.get_or_init(|| Value::Object(serde_json::Map::new())))
     }
+    /// The originating (immediate-parent) run id this run resumed from, when it is
+    /// a resume — the `resume_lineage.run_id` the `run-started` header carries
+    /// (C22 resume lineage). `None` for a fresh run.
+    #[must_use]
+    pub fn header_resumed_from(&self) -> Option<&str> {
+        self.header
+            .get("resume_lineage")
+            .and_then(|v| v.get("run_id"))
+            .and_then(Value::as_str)
+    }
     /// The fold-reader version this artifact was produced by ([`FOLD_READER_VERSION`]).
     #[must_use]
     pub fn fold_reader_version(&self) -> &str {
