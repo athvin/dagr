@@ -451,7 +451,10 @@ fn every_adr_089_knob_flag_is_reserved() {
             reserved_flag_names().contains(&flag),
             "the library flag `{flag}` (ADR 089) must be reserved"
         );
-        let params = vec![ParamSpec::new(flag, "a parameter shadowing an ADR-089 knob")];
+        let params = vec![ParamSpec::new(
+            flag,
+            "a parameter shadowing an ADR-089 knob",
+        )];
         match dagr_cli::contract::check_reserved_collision(&params) {
             Err(LibraryFlagCollision { flag: got }) => assert_eq!(
                 got, flag,
@@ -471,7 +474,10 @@ fn the_generic_pool_flag_is_no_longer_reserved() {
         !reserved_flag_names().contains(&"pool"),
         "the generic `pool` entry was replaced by the specific `dagr.pool.*` flags"
     );
-    let params = vec![ParamSpec::new("pool", "an ordinary pipeline parameter named pool")];
+    let params = vec![ParamSpec::new(
+        "pool",
+        "an ordinary pipeline parameter named pool",
+    )];
     assert!(
         dagr_cli::contract::check_reserved_collision(&params).is_ok(),
         "`pool` is no longer a reserved library flag, so it must not collide"

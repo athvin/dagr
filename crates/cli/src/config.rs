@@ -424,7 +424,10 @@ mod tests {
         std::env::set_var(key, "42");
         let got = resolve::<u32>(None, key, 0).expect("a valid env value parses");
         std::env::remove_var(key);
-        assert_eq!(got, 42, "with no flag, the env value is parsed and returned");
+        assert_eq!(
+            got, 42,
+            "with no flag, the env value is parsed and returned"
+        );
     }
 
     #[test]
@@ -432,7 +435,10 @@ mod tests {
         let key = "DAGR_TEST_DEFAULT_UNSET";
         std::env::remove_var(key); // ensure unset
         let got = resolve::<u32>(None, key, 13).expect("the default path never errors");
-        assert_eq!(got, 13, "with neither flag nor env, the default is returned");
+        assert_eq!(
+            got, 13,
+            "with neither flag nor env, the default is returned"
+        );
     }
 
     #[test]
@@ -481,14 +487,20 @@ mod tests {
     fn duration_parses_bare_seconds_and_millis() {
         assert_eq!(parse_duration("10").expect("bare"), Duration::from_secs(10));
         assert_eq!(parse_duration("10s").expect("s"), Duration::from_secs(10));
-        assert_eq!(parse_duration("10ms").expect("ms"), Duration::from_millis(10));
+        assert_eq!(
+            parse_duration("10ms").expect("ms"),
+            Duration::from_millis(10)
+        );
     }
 
     #[test]
     fn duration_rejects_garbage() {
         assert!(parse_duration("").is_err());
         assert!(parse_duration("abc").is_err());
-        assert!(parse_duration("10m").is_err(), "minutes are not an accepted form");
+        assert!(
+            parse_duration("10m").is_err(),
+            "minutes are not an accepted form"
+        );
         assert!(parse_duration("1.5s").is_err(), "only integer magnitudes");
     }
 
@@ -535,12 +547,9 @@ mod tests {
     fn unknown_failure_mode_through_resolve_is_invalid_usage() {
         let key = "DAGR_TEST_FAILURE_MODE_BAD";
         std::env::set_var(key, "halt");
-        let err = resolve::<EnvFailureMode>(
-            None,
-            key,
-            EnvFailureMode(FailureMode::ContinueIndependent),
-        )
-        .expect_err("an unknown failure mode must error");
+        let err =
+            resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
+                .expect_err("an unknown failure mode must error");
         std::env::remove_var(key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(key));
@@ -550,12 +559,9 @@ mod tests {
     fn env_failure_mode_composes_with_resolve() {
         let key = "DAGR_TEST_FAILURE_MODE_OK";
         std::env::set_var(key, "stop-on-first-failure");
-        let got = resolve::<EnvFailureMode>(
-            None,
-            key,
-            EnvFailureMode(FailureMode::ContinueIndependent),
-        )
-        .expect("valid failure mode");
+        let got =
+            resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
+                .expect("valid failure mode");
         std::env::remove_var(key);
         assert_eq!(got.into_inner(), FailureMode::StopOnFirstFailure);
     }
