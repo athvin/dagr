@@ -48,7 +48,13 @@ fn run_example(example: &str, args: &[&str]) -> Run {
     let out = Command::new(env!("CARGO"))
         .current_dir(repo_root())
         .args([
-            "run", "--quiet", "-p", "dagr-cli", "--example", example, "--",
+            "run",
+            "--quiet",
+            "-p",
+            "dagr-cli",
+            "--example",
+            example,
+            "--",
         ])
         .args(args)
         .output()
@@ -129,7 +135,10 @@ fn many_dags_graph_emits_through_the_sugar() {
         graph.stderr
     );
     let json: serde_json::Value = serde_json::from_str(graph.stdout.trim()).unwrap_or_else(|e| {
-        panic!("graph alpha emits a JSON graph artifact: {e}\n{}", graph.stdout)
+        panic!(
+            "graph alpha emits a JSON graph artifact: {e}\n{}",
+            graph.stdout
+        )
     });
     let nodes: Vec<&str> = json["nodes"]
         .as_array()
@@ -155,10 +164,7 @@ fn many_dags_graph_emits_through_the_sugar() {
 #[test]
 fn cookbook_teaches_the_dag_contract() {
     let md = read_doc("docs/cookbook.md");
-    assert!(
-        md.contains("#[dag]"),
-        "the cookbook has a #[dag] section"
-    );
+    assert!(md.contains("#[dag]"), "the cookbook has a #[dag] section");
     assert!(
         md.contains("inventory = \"0.3\""),
         "the cookbook states the required `inventory = \"0.3\"` Cargo.toml line"
