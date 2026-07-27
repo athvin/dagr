@@ -8,6 +8,10 @@
 //! - `node_wrong_type.rs` — a `Handle<T>` bound into a `node` whose task declares a
 //!   *different* `Input` reds the build (the `Deps<Inputs = T::Input>` bound). The
 //!   `.stderr` snapshot shows the expected-vs-actual type names.
+//! - `depends_on_wrong_type.rs` — the same mis-wiring through the explicit
+//!   `f.task(..).depends_on(..)` builder reds the build too (it carries the identical
+//!   `Deps<Inputs = T::Input>` bound), pinning that the ergonomic spelling loses no
+//!   compile-time guarantee.
 //! - `source_without_stable_name.rs` — a task **without** `StableName` passed to the
 //!   graph-emittable `source` fails to compile (the `T: StableName` bound); the same
 //!   task through `source_erased` compiles (proven in the pass sample below).

@@ -87,6 +87,19 @@ fn build_via_facade() -> RunnableFlow {
     flow
 }
 
+/// Build the *same* DAG through the explicit `f.task(..).depends_on(..)` builder — the
+/// primary wiring surface. It delegates to the positional `f.node(..)`, so it must
+/// produce an identical structure.
+fn build_via_depends_on() -> RunnableFlow {
+    let mut flow = RunnableFlow::new();
+    {
+        let mut f = FlowBuilder::new(&mut flow);
+        let rows = f.source("extract", Extract { rows: 100 });
+        let _report = f.task("load", Load).depends_on(rows); // load DEPENDS ON extract
+    }
+    flow
+}
+
 /// Build the *same* DAG the hand-written, stable-name-aware way — the parity oracle.
 fn build_via_register_named() -> RunnableFlow {
     let mut flow = RunnableFlow::new();
@@ -123,6 +136,26 @@ fn facade_built_dag_is_structurally_identical_to_hand_written_named_form() {
         facade_snapshot.to_canonical_string(),
         hand_snapshot.to_canonical_string(),
         "the canonical structure bytes must match the hand-written form"
+    );
+}
+
+/// The explicit `f.task(..).depends_on(..)` builder produces the **identical**
+/// structure to the positional `f.node(..)` form it delegates to — the two spellings
+/// are the same registration, so `depends_on` adds ergonomics and loses nothing.
+#[test]
+fn depends_on_builder_is_identical_to_the_positional_node_form() {
+    let builder_pipeline = build_via_depends_on().into_pipeline();
+    let node_pipeline = build_via_facade().into_pipeline();
+
+    let builder_snapshot = StructureSnapshot::from_pipeline(&builder_pipeline, "etl")
+        .expect("depends_on DAG is emittable");
+    let node_snapshot =
+        StructureSnapshot::from_pipeline(&node_pipeline, "etl").expect("node DAG is emittable");
+
+    assert_eq!(
+        builder_snapshot.to_canonical_string(),
+        node_snapshot.to_canonical_string(),
+        "`f.task(..).depends_on(..)` must build the identical structure as `f.node(..)`"
     );
 }
 

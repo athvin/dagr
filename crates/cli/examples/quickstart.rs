@@ -50,14 +50,15 @@ impl Double {
     }
 }
 
-// --- Declare the DAG. `#[dag]` groups the tasks into a named flow: register the
-// source, then bind the sink to the source's typed handle. A wrong-typed binding is a
-// *compile* error, not a runtime surprise. This is the whole graph — two nodes, one
-// edge — and the flow's name defaults to the fn name (`quickstart`).
+// --- Declare the DAG. `#[dag]` groups the tasks into a named flow. `f.source` is a
+// root (no upstream); `f.task(..).depends_on(..)` makes a node downstream of another —
+// this reads "double depends on count", and the handle threads the edge. A wrong-typed
+// binding is a *compile* error, not a runtime surprise. This is the whole graph — two
+// nodes, one edge — and the flow's name defaults to the fn name (`quickstart`).
 #[dag]
 fn quickstart(f: &mut FlowBuilder) {
-    let counted = f.source("count", Count { up_to: 21 });
-    let _doubled = f.node("double", Double, counted);
+    let count = f.source("count", Count { up_to: 21 });
+    let _double = f.task("double", Double).depends_on(count);
 }
 
 // --- The whole binary is one line. `dagr_cli::run` discovers every `#[dag]`, builds

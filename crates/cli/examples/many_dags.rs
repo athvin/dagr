@@ -94,16 +94,17 @@ impl Aggregate {
 }
 
 /// The `alpha` DAG — a two-node `extract -> load` flow. `#[dag]` with no argument
-/// registers it under the **fn name** (`alpha`). Nodes are declared through the
-/// graph-emittable `source` / `node` pair, so `graph alpha` emits its artifact.
+/// registers it under the **fn name** (`alpha`). `f.source` declares the root and
+/// `f.task(..).depends_on(..)` the downstream node — `load` depends on `extract` — so
+/// `graph alpha` emits its artifact.
 ///
-/// Wrong wiring here would be a **compile** error — `FlowBuilder::node` returns the
-/// real `Handle<T>` and the `Deps` bound is exact-typed. The sink handle is unused
-/// (nothing consumes it), so bind it to `_` to satisfy `#[must_use]`.
+/// Wrong wiring here would be a **compile** error — `depends_on` returns the real
+/// `Handle<T>` and the `Deps` bound is exact-typed. The sink handle is unused (nothing
+/// consumes it), so bind it to `_` to satisfy `#[must_use]`.
 #[dag]
 fn alpha(f: &mut FlowBuilder) {
     let rows = f.source("extract", Extract { rows: 3 });
-    let _report = f.node("load", Load, rows);
+    let _report = f.task("load", Load).depends_on(rows);
 }
 
 /// The `beta` DAG — a single-node aggregation, a different graph shape. `#[dag]`
