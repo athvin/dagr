@@ -46,6 +46,16 @@ pub mod structure_snapshot;
 pub mod t63_demo;
 pub mod temp;
 
+/// The `#[dag]` attribute macro (M6, T80), re-exported here — the layer that already
+/// re-exports at the CLI boundary — behind the default-on `dag` feature, exactly as
+/// `dagr-core` re-exports `#[task]` behind its `macros` feature. Placing the re-export
+/// in `dagr-cli` (not `dagr-core`) keeps `dagr-core`'s zero-runtime-dependency
+/// guarantee untouched and introduces no `core → cli` cycle. It expands to
+/// `::dagr_cli::…` / `::inventory::…`, so a DAG-hosting binary depends on both
+/// `dagr-cli` and `inventory` (ADR 092). Absent under `--no-default-features`, which
+/// also drops the `inventory` edge the expansion targets.
+#[cfg(feature = "dag")]
+pub use dagr_macros::dag;
 pub use flow_builder::FlowBuilder;
 pub use graph::{
     emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,

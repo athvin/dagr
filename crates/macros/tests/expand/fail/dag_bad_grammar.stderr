@@ -1,0 +1,5 @@
+error: #[dag] accepts an optional `name = "…"` argument (a string literal) or none (`#[dag]` = the fn name)
+ --> tests/expand/fail/dag_bad_grammar.rs:8:7
+  |
+8 | #[dag(bogus)]
+  |       ^^^^^

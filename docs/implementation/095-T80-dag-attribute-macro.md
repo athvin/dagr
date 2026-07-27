@@ -51,7 +51,24 @@ Add a `#[dag]` attribute that keeps the user fn, generates a discovery-registere
 - [ ] CI is green on the ticket branch (fmt, clippy with warnings denied, tests, rustdoc lint, and cargo-audit/deny where configured).
 
 ## Open questions
-None.
+None. (tasks.md carries no `T80` `Q:` items — the M6 tickets are authored only under
+`docs/implementation`.) Two implementer-latitude points the ticket left unpinned were
+resolved during implementation and are recorded here per the open-questions duty:
+
+- **`dagr-cli`'s `dagr-macros` edge is unconditional, not gated behind `dag`.** The
+  ticket requires `dagr-cli` to depend on `dagr-macros` and to re-export `#[dag]`
+  behind `#[cfg(feature = "dag")]`; it does not say whether the *dependency* is
+  feature-gated. Resolved: the dependency is unconditional (only the `pub use` is
+  gated), mirroring `dagr-core`'s always-present `dagr-macros` edge for `#[task]`. A
+  proc-macro runs inside the compiler and is never linked, so this adds no runtime
+  cost, and it keeps the manifest simpler than an `optional`/`dep:` gate. The
+  `--no-default-features` build still drops the `#[dag]` re-export and the `inventory`
+  runtime edge — the DoD's zero-core-dep and no-default-features checks both pass.
+- **The generated factory is `#[doc(hidden)]`.** The ticket names the factory
+  (`__dag_factory_<name>`) but does not specify its visibility/docs. Resolved: emit it
+  as a private `fn` marked `#[doc(hidden)]` — it is machinery the `inventory::submit!`
+  references, not authoring surface, and the leading `__` + `#[doc(hidden)]` keep it
+  out of a user's rustdoc and out of the way of hand-written items.
 
 ## Out of scope
 - The `FlowBuilder` façade (**T78**) and the `DagRegistration` / `collect!` / `run` discovery machinery (**T79**) — dependencies of this ticket, not delivered here.

@@ -10,25 +10,30 @@
 //! # The auto-discovery surface (the `dag` feature)
 //!
 //! Under the default-on `dag` feature the prelude also carries the DAG
-//! auto-discovery surface (M6, ADR 092): [`run()`], the one-call entrypoint a
-//! DAG-hosting binary's `main` delegates to, and [`DagRegistration`], the record a
-//! binary submits per DAG (the `#[dag]` macro that emits those submissions lands in a
-//! later ticket). Both are absent under `--no-default-features`, which drops the
-//! `inventory` runtime dependency the discovery mechanism uses.
+//! auto-discovery surface (M6, ADR 092): the [`macro@dag`] attribute (declares a DAG
+//! over the [`FlowBuilder`] façade and auto-registers it), [`run()`], the one-call
+//! entrypoint a DAG-hosting binary's `main` delegates to, and [`DagRegistration`],
+//! the record `#[dag]` submits per DAG. All three are absent under
+//! `--no-default-features`, which drops the `inventory` runtime dependency the
+//! discovery mechanism uses.
 //!
-//! # What is deliberately *not* here yet
+//! # The one authoring import
 //!
-//! The `#[dag]` attribute macro belongs to a later ticket; when it lands it joins
-//! this prelude (the ADR pins `use dagr_cli::prelude::*;` as *the* one authoring
-//! import). Until then this prelude carries: declare tasks with [`Task`] (or the
-//! `#[task]` macro, re-exported by `dagr-core`), declare a DAG's nodes through
-//! [`FlowBuilder`], register the flow through [`RunnableFlow`], and — under the `dag`
-//! feature — declare DAGs with [`DagRegistration`] and run them with [`run()`].
+//! `use dagr_cli::prelude::*;` is *the* single authoring import (ADR 092): declare
+//! tasks with [`Task`] (or the `#[task]` macro, re-exported by `dagr-core`), declare a
+//! DAG's nodes through [`FlowBuilder`], register the flow through [`RunnableFlow`],
+//! and — under the `dag` feature — declare DAGs with the [`macro@dag`] attribute and
+//! run them with the one-line [`run()`].
 
 pub use crate::flow_builder::FlowBuilder;
 #[cfg(feature = "dag")]
 pub use crate::run::{run, DagRegistration};
 pub use crate::run_flow::RunnableFlow;
+/// The `#[dag]` attribute macro (M6, T80) — the DAG-authoring sibling of `#[task]`.
+/// Carried in the prelude under the default-on `dag` feature so `use
+/// dagr_cli::prelude::*;` brings it into scope; absent under `--no-default-features`.
+#[cfg(feature = "dag")]
+pub use dagr_macros::dag;
 
 pub use dagr_core::context::RunContext;
 pub use dagr_core::stable_name::{StableInputNames, StableName};
