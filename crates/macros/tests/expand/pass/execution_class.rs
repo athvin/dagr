@@ -1,6 +1,6 @@
 //! Compile-pass: each execution-class attribute form sets the corresponding
 //! `EXECUTION_CLASS` const, and the optional `ctx: &RunContext` parameter is
-//! accepted both with and without it (T73 test plan, "trybuild compile-pass").
+//! accepted both with and without it.
 //!
 //! - `#[task]`            -> `ExecutionClass::AwaitBound`
 //! - `#[task(blocking)]`  -> `ExecutionClass::Blocking`

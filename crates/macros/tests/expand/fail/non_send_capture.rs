@@ -1,9 +1,9 @@
 //! Compile-fail: a task struct captures a non-`Send` value (an `Rc`) held across
 //! the `run` body. A task value is moved onto a worker thread, so it must be
 //! `Send`; the natural borrow/`Send` diagnostic reds the build. This snapshot
-//! pins that diagnostic verbatim — the concrete example of ADR 082's "diagnostics
-//! may point at the `#[task]` site" limitation, cross-referenced from the
-//! cookbook "common mistakes" section.
+//! pins that diagnostic verbatim — the concrete example of the "diagnostics may
+//! point at the `#[task]` site" limitation, cross-referenced from the cookbook
+//! "common mistakes" section.
 
 use std::rc::Rc;
 

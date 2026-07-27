@@ -1,10 +1,9 @@
-//! `dagr-macros` — the optional, build-time-only proc-macro authoring layer
-//! (ADR 082, `docs/implementation/082-task-macro-adr.md`).
+//! `dagr-macros` — the optional, build-time-only proc-macro authoring layer.
 //!
 //! This crate exports one attribute, [`macro@task`], applied to an inherent
 //! `impl` block. It expands to the exact `impl Task for Foo { … }` a task author
 //! writes by hand today (`dagr_core::task::Task`), so an author can write only
-//! the `run` fn and have the four C1 declarations (input type, output type,
+//! the `run` fn and have the four declarations (input type, output type,
 //! execution class, work) generated.
 //!
 //! # It is a build-time crate — never linked into a binary
@@ -17,10 +16,10 @@
 //! dagr_macros::task;`), so `use dagr_core::task;` resolves it and
 //! `--no-default-features` turns it off. The expansion references only existing
 //! `dagr-core` items, so the produced program's **runtime** dependency graph is
-//! byte-for-byte unchanged — dagr-core's zero-runtime-dependency guarantee (ADR
-//! 081) is preserved.
+//! byte-for-byte unchanged — dagr-core's zero-runtime-dependency guarantee is
+//! preserved.
 //!
-//! # What this crate expands (T71 + T72)
+//! # What this crate expands
 //!
 //! - **Inputs → `type Input`.** Zero dependency inputs → `()`; one → the **bare**
 //!   value `T` (never `(T,)`); **2..=8** → the tuple `(A, B, …)`. A multi-input
@@ -36,7 +35,7 @@
 //!   `#[task(compute)]` → `Compute`.
 //! - **Optional `ctx: &RunContext`** (detected by type) and the
 //!   `Result<T, TaskError>` return requirement (a bare `-> T` is a
-//!   `compile_error!`) — unchanged from T71.
+//!   `compile_error!`).
 //!
 //! The **input-arity ceiling is 8**: a single tuple parameter of more than 8
 //! elements is not rejected by the macro — the tuple type flows through as
@@ -52,8 +51,6 @@
 //! (These `dagr_core` paths are written as plain code, not intra-doc links: this
 //! is a build-time proc-macro crate that does not depend on `dagr_core`, so its
 //! rustdoc cannot resolve links into it.)
-//!
-//! The quickstart rewrite and the `trybuild` corpus are **T73**.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -88,7 +85,7 @@ impl ExecClass {
 }
 
 /// The `#[task]` attribute — expands an inherent `impl` block into an
-/// `impl Task for Self` (ADR 082).
+/// `impl Task for Self`.
 ///
 /// Apply it to an inherent `impl` block that contains an `async fn run`; the
 /// macro reads the `run` signature and emits the trait implementation
@@ -128,7 +125,7 @@ pub fn task(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Parse the attribute argument into an [`ExecClass`]: empty (`#[task]` /
 /// `#[task()]`) → `AwaitBound`, the bare identifier `blocking` → `Blocking`, the
 /// bare identifier `compute` → `Compute`. Any other token is a spanned error
-/// naming the accepted grammar (ADR 082: the grammar is exactly
+/// naming the accepted grammar (the grammar is exactly
 /// `blocking`/`compute`/empty; other opt-in markers are out of scope).
 fn parse_exec_class(attr: TokenStream) -> syn::Result<ExecClass> {
     let attr = proc_macro2::TokenStream::from(attr);
@@ -176,8 +173,8 @@ fn expand(mut item: ItemImpl, class: ExecClass) -> syn::Result<proc_macro2::Toke
     // Take the `run` method out of the inherent impl: its body moves into the
     // generated trait `run`, and the inherent `run` is REMOVED so it cannot
     // shadow the trait method (an inherent method is preferred over a trait one
-    // by Rust's method resolution — dagx renames the user method for the same
-    // reason). Any OTHER inherent items the user wrote are preserved verbatim.
+    // by Rust's method resolution). Any OTHER inherent items the user wrote are
+    // preserved verbatim.
     let run = take_run(&mut item)?;
 
     // The generated `run` always carries the trait's receiver and context; the
@@ -205,7 +202,7 @@ fn expand(mut item: ItemImpl, class: ExecClass) -> syn::Result<proc_macro2::Toke
     };
 
     // The execution class comes from the attribute, emitted verbatim as the
-    // impl-level const — never inferred from the body (ADR 082).
+    // impl-level const — never inferred from the body.
     let exec_class = class.variant();
 
     // `async fn` in the trait impl desugars to the trait's `impl Future + Send`
@@ -329,8 +326,7 @@ fn input_shape(
 
 /// The `T` in a `-> Result<T, TaskError>` return type. A `run` that does not
 /// return `Result<_, TaskError>` is rejected with a message naming the required
-/// shape (ADR 082: the failure channel is explicit; custom error types are out
-/// of scope for M5).
+/// shape (the failure channel is explicit; custom error types are out of scope).
 fn result_ok_type(output: &ReturnType) -> syn::Result<Type> {
     let shape_err = |span| {
         syn::Error::new(

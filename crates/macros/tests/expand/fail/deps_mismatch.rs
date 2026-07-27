@@ -1,7 +1,7 @@
 //! Compile-fail: a registration whose bound handle type does **not** match the
 //! task's declared input — a deps type mismatch at the `RunnableFlow` seam. The
 //! `register` bound `D: Deps<Inputs = T::Input>` is the compile-time exact-type
-//! check (C3); binding a `Handle<String>` into a task whose `type Input = u64`
+//! check; binding a `Handle<String>` into a task whose `type Input = u64`
 //! reds the build. This snapshot shows the expected-vs-actual `Deps`/`Handle`
 //! types so a wrong wiring is a compile error, never a runtime surprise.
 
