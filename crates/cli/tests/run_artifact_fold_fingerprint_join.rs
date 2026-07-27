@@ -1,9 +1,9 @@
-//! C22 · Run-artifact **fold** — fingerprint-joins-to-graph-artifact test
-//! (ticket T42 / 053). Written first, TDD.
+//! Run-artifact **fold** — fingerprint-joins-to-graph-artifact test.
+//! Written first, TDD.
 //!
 //! The load-bearing join criterion: *"The run artifact's structural fingerprint
 //! equals the graph artifact's."* This test produces a graph artifact from a
-//! build fixture (via the T40 `emit_graph`), extracts its structural
+//! build fixture (via `emit_graph`), extracts its structural
 //! fingerprint, builds an event stream whose run-started header carries that
 //! same fingerprint, folds the stream into a run artifact, and asserts the two
 //! structural fingerprints are equal — the artifacts join on the same build.

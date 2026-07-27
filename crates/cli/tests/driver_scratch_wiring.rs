@@ -1,11 +1,11 @@
-//! C18 · **Driver scratch wiring** — ticket T63 (078). Written first, TDD.
+//! **Driver scratch wiring**. Written first, TDD.
 //!
-//! The M4 gate demo (T63) requires a task to reach its **durable scratch store**
-//! (C18) in a **real** `drive()` run — the shipped driver must thread the run-store
+//! A task must reach its **durable scratch store**
+//! in a **real** `drive()` run — the shipped driver must thread the run-store
 //! base into each attempt's (and each teardown's) `RunContext` so a node's scratch
 //! lands under `<base>/<pipeline>/<run-id>/scratch/<node>/`, exactly where a later
 //! resume's [`carry_forward`](dagr_core::scratch::ScratchStore::carry_forward) copies
-//! it. Before T63 the driver built its per-attempt/teardown context with **no**
+//! it. Earlier the driver built its per-attempt/teardown context with **no**
 //! scratch root (the honestly-unwired store), so scratch never persisted through a
 //! real run; these tests pin the wiring and its backward-compatibility.
 //!
@@ -71,7 +71,7 @@ impl Drop for TempBase {
 }
 
 // ===========================================================================
-// A deterministic clock + capturing sink (the C19 seam).
+// A deterministic clock + capturing sink (the injection seam).
 // ===========================================================================
 
 #[derive(Default)]
@@ -104,7 +104,7 @@ impl EventSink for MemorySink {
 }
 
 // ===========================================================================
-// Tasks that reach scratch through the ORDINARY C18 context API.
+// Tasks that reach scratch through the ORDINARY context API.
 // ===========================================================================
 
 /// A source that writes a distinctive value into its scratch under `key` (through
@@ -134,7 +134,7 @@ impl Task for Plain {
 }
 
 // ===========================================================================
-// A type-erased source runner over the real C14 caught attempt path.
+// A type-erased source runner over the real caught attempt path.
 // ===========================================================================
 
 struct SourceRunner<T: Task<Input = ()>> {
@@ -218,7 +218,7 @@ fn store_for(base: &Path, run: &str, node: &str) -> ScratchStore {
 // ===========================================================================
 
 /// **A task that writes scratch through the real `drive()` loop leaves its value on
-/// disk under the run's per-node namespace.** Before T63 the driver built the
+/// disk under the run's per-node namespace.** Earlier the driver built the
 /// attempt context with no scratch root, so this value was never persisted; the
 /// wiring is what the demo's checkpoint node depends on.
 #[test]

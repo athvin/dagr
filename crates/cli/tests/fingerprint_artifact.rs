@@ -1,8 +1,8 @@
-//! C21 · Graph fingerprint in the graph artifact — ticket T41 (052). Written
+//! Graph fingerprint in the graph artifact. Written
 //! first, TDD.
 //!
-//! These prove the two computed hashes (arch.md `### C21 · Graph fingerprint`;
-//! T0.7 §7) are wired into the **graph artifact header** (T40, `dagr_cli::graph`)
+//! These prove the two computed hashes are wired into the **graph artifact header**
+//! (`dagr_cli::graph`)
 //! in place of the reserved placeholder slots, that they equal the values
 //! computed directly from the assembled `Pipeline`, that the algorithm version is
 //! present and stable, and that **environmental inputs** (generation time, build
@@ -99,7 +99,7 @@ fn header(pipeline: &Pipeline, gen: &str, prov: &BuildProvenance) -> Value {
 
 /// The header carries the **computed** structural fingerprint, policy hash, and
 /// algorithm version — equal to the values computed directly from the flow — and
-/// no longer the `reserved-t41:*` placeholders (T0.7 §7).
+/// no longer the `reserved-t41:*` placeholders.
 #[test]
 fn header_carries_the_computed_fingerprints_equal_to_the_flow() {
     let pipeline = fixture_pipeline();
@@ -138,7 +138,7 @@ fn header_carries_the_computed_fingerprints_equal_to_the_flow() {
 }
 
 /// The formatted fingerprint strings are **version-prefixed** so a version
-/// mismatch is legible (T0.7 §7 / C21) — the algorithm version is embedded in the
+/// mismatch is legible — the algorithm version is embedded in the
 /// string as well as in the dedicated integer field.
 #[test]
 fn fingerprint_strings_are_version_prefixed() {
@@ -163,7 +163,7 @@ fn fingerprint_strings_are_version_prefixed() {
 /// Emitting the same flow under **different generation times** and **different
 /// build provenance** yields the **same** structural fingerprint and policy hash
 /// in the header — timestamps, provenance, and generation time do not feed either
-/// hash (T0.7 §5).
+/// hash.
 #[test]
 fn environmental_inputs_do_not_change_the_fingerprints() {
     let pipeline = fixture_pipeline();

@@ -1,4 +1,4 @@
-//! C17 · teardown nodes — ticket T52 (064). Written first, TDD.
+//! Teardown nodes. Written first, TDD.
 //!
 //! These drive the **real** run-loop ([`dagr_cli::driver::drive`]) end-to-end for
 //! teardown: a teardown node runs at run-end on **every** exit path (success,
@@ -30,7 +30,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam).
+// In-memory sink + clock (the injection seam).
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -188,7 +188,7 @@ impl Task for RecordingTeardown {
     async fn run(&mut self, c: &RunContext, _i: ()) -> Result<(), TaskError> {
         self.ran.store(true, Ordering::SeqCst);
         // The teardown's signal must be a FRESH, uncancelled one even when the run
-        // was cancelled — C17.
+        // was cancelled.
         self.saw_uncancelled
             .store(!c.cancellation().is_cancelled(), Ordering::SeqCst);
         if let Some(states) = c.covered_terminal_states() {
@@ -242,7 +242,7 @@ impl Task for TeardownSucceeds {
 }
 
 // ===========================================================================
-// Type-erased runners over the real C14 caught attempt path.
+// Type-erased runners over the real caught attempt path.
 // ===========================================================================
 
 struct SourceRunner<T: Task<Input = ()>> {
@@ -800,7 +800,7 @@ fn stream_shape(bytes: &[u8]) -> Vec<serde_json::Value> {
 /// teardown-phase records at all. This is the backward-compat guarantee: adding the
 /// teardown phase changed nothing on the no-teardown path. A linear chain
 /// (`a -> b`) is used so the admission order is deterministic — two *independent*
-/// sources race in the M1 loop, which is pre-existing driver behaviour, not a
+/// sources race in the run loop, which is pre-existing driver behaviour, not a
 /// teardown effect.
 #[test]
 fn no_teardown_pipeline_is_byte_identical() {

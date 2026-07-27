@@ -1,13 +1,13 @@
-//! C27 · Resumed-artifact **schema round-trip** — ticket T58 (070), written first
+//! Resumed-artifact **schema round-trip**, written first
 //! (TDD). Gated behind `schema-validation` (default OFF), the CI-/dev-scoped
-//! validator (T4 ADR 017 §4), like the T39/T42/T57 schema round-trips.
+//! validator, like the other schema round-trips.
 //!
 //! A REAL resumed run artifact produced by `resume_verb` — satisfied-from-prior
 //! nodes recorded with their originating run identity, durable references copied
 //! forward, and the header linked to both the immediate parent and the lineage
-//! root — validates against the UNMODIFIED published `schemas/run/v1.schema.json`
-//! (T39). T58 edits **no** schema: the `satisfied_from_run`, `resume_lineage`, and
-//! `durable_reference` slots were all published by T39; this proves the resume
+//! root — validates against the UNMODIFIED published `schemas/run/v1.schema.json`.
+//! This edits **no** schema: the `satisfied_from_run`, `resume_lineage`, and
+//! `durable_reference` slots were all published with the schema; this proves the resume
 //! recording emits into them validly. Teeth: a corrupted copy is rejected.
 
 #![cfg(feature = "schema-validation")]

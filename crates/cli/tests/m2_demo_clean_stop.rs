@@ -1,13 +1,13 @@
-//! **M2 demo · part 2 — clean stop under stop-on-first-failure** — ticket T38
-//! (049). Written first, TDD. **This is half of the M2 gate: the spec's "It
-//! survives" done-when for the clean-stop path, executed in CI.**
+//! **Demo · part 2 — clean stop under stop-on-first-failure.** Written first,
+//! TDD. **This is half of the gate: the spec's "It survives" done-when for the
+//! clean-stop path, executed in CI.**
 //!
-//! arch.md's **Build order** states M2 is *done when … an induced mid-run failure
-//! stops the run cleanly with nothing orphaned* (the overcommit half lives in
-//! `m2_demo_overcommit.rs`). This file is the clean-stop proof: a pipeline in
-//! **stop-on-first-failure** mode with an induced mid-run failure, driven through
-//! the **real** T24/T34/T35 run-loop driver ([`dagr_cli::driver::drive`]), asserting
-//! that the run stops cleanly — the failure propagates by trigger rule, the
+//! The "It survives" done-when is *… an induced mid-run failure stops the run cleanly
+//! with nothing orphaned* (the overcommit half lives in `m2_demo_overcommit.rs`).
+//! This file is the clean-stop proof: a pipeline in **stop-on-first-failure** mode
+//! with an induced mid-run failure, driven through the **real** run-loop driver
+//! ([`dagr_cli::driver::drive`]), asserting that the run stops cleanly — the
+//! failure propagates by trigger rule, the
 //! contingency fires, no default-rule work is admitted after the failure, every
 //! permit is released back to empty pools, and no temp file, thread, or in-flight
 //! event is left orphaned.
@@ -19,14 +19,14 @@
 //! mutation) is:
 //!
 //! - **`failing`** — the induced mid-run failure: a source that fails permanently
-//!   (C15 stop trigger). Ends `failed`.
+//!   (the stop trigger). Ends `failed`.
 //! - **`sibling`** — an unrelated in-flight sibling still executing when the failure
 //!   is observed. It cooperates with cancellation (returns promptly once the run
 //!   token flips), so it does not orphan a thread. Its own terminal is not asserted
 //!   (it may finish `succeeded` or be reclassified — the demo does not pin it).
 //! - **`data-dependent`** — a **direct data dependent** of `failing` (`all-succeeded`,
-//!   the only rule a data node may carry — C3). Its rule can no longer be satisfied,
-//!   so it is marked `upstream-failed` **without executing** (C15 propagation).
+//!   the only rule a data node may carry). Its rule can no longer be satisfied, so
+//!   it is marked `upstream-failed` **without executing** (rule-based propagation).
 //! - **`downstream-default`** — a downstream **default-rule** (`all-succeeded`)
 //!   consume-nothing node, ordered after `failing`, that has **not** yet been
 //!   admitted. Under stop mode it is never admitted after the failure and ends
@@ -34,42 +34,43 @@
 //! - **`contingency`** — a **consume-nothing** node with the non-default `any-failed`
 //!   rule, ordered after `failing`. Its rule fires on the final picture, so it
 //!   **executes** to `succeeded` even though the run is stopping — a notify/cleanup
-//!   contingency is exactly the work a stop is supposed to run (C15).
+//!   contingency is exactly the work a stop is supposed to run.
 //! - **`cleanup`** — a **consume-nothing** `all-terminal` cleanup node ordered after
 //!   `failing`. Its rule can still fire regardless of class, so it **executes** to
-//!   `succeeded` — propagation is by rule, not by blast radius (C15).
+//!   `succeeded` — propagation is by rule, not by blast radius.
 //!
-//! Run-level ordering (the T34 [`RunPlan::with_ordering`] seam that stands in for
-//! T50's graph ordering edges) attaches the consume-nothing nodes after `failing`;
+//! Run-level ordering (the [`RunPlan::with_ordering`] seam that stands in for graph
+//! ordering edges) attaches the consume-nothing nodes after `failing`;
 //! `data-dependent` is a real data edge.
 //!
 //! # How "all permits released" is observed without reaching into the driver
 //!
 //! The driver **owns** its [`AdmissionController`] internally and does not hand it
 //! out. The demo wires **one shared [`ResidencyLedger`]** into every node's output
-//! slot (the C10 accounting hook the run artifact folds as *peak measured slot
+//! slot (the accounting hook the run artifact folds as *peak measured slot
 //! residency*), and asserts the ledger's **current** counted residency is **zero**
 //! after the run reports terminal — every produced value's output residency was
 //! released. Working-memory permits release on `Permit::drop` at every terminal
-//! outcome by construction (the T0.3 ownership design, exhaustively proven by T37's
-//! permit-release matrix, which this demo consumes rather than re-proves); the demo
-//! confirms the run *terminated cleanly* (a leaked permit would have wedged a waiter
-//! and hung the run) and that the observable output-residency ledger is empty. This
+//! outcome by construction (the ownership design, exhaustively proven by the
+//! per-outcome permit-release matrix, which this demo consumes rather than
+//! re-proves); the demo confirms the run *terminated cleanly* (a leaked permit
+//! would have wedged a waiter and hung the run) and that the observable
+//! output-residency ledger is empty. This
 //! is the *"every pool back to full capacity — declared cost charged is zero"*
 //! end state, observed through the seam the driver actually exposes.
 //!
 //! # How "nothing orphaned" is observed
 //!
 //! - **No residual temp / no live thread:** the induced-failure task writes a file
-//!   under the run's per-run temp directory (C16, reached through
+//!   under the run's per-run temp directory (reached through
 //!   [`RunContext::temp_dir`]) before failing; after the run reports terminal the
 //!   demo asserts the whole per-run temp directory has been removed by the driver's
 //!   end-of-run cleanup (best-effort by design, but with only cooperative tasks it
 //!   is deterministic here), and that a **subsequent** invocation would reclaim it
 //!   regardless. The run pins its id so the temp path is predictable. Every task
 //!   cooperates with cancellation and returns, so no task closure is left running.
-//! - **Complete, gapless stream:** the demo walks the **real** recorded C19 stream
-//!   and asserts it is gapless (strictly-increasing sequence from `0`), with exactly
+//! - **Complete, gapless stream:** the demo walks the **real** recorded stream and
+//!   asserts it is gapless (strictly-increasing sequence from `0`), with exactly
 //!   one `node-terminal` per node and exactly one attempt-outcome record per attempt
 //!   (`attempt-started` count equals `attempt-succeeded` + `attempt-failed`), and no
 //!   dangling in-flight event (every `attempt-started` is paired with an outcome).
@@ -79,15 +80,16 @@
 //! Outcomes are scripted (a task either succeeds, fails, or cooperates with
 //! cancellation) and admission is serialized by pinning the memory pool so the
 //! `downstream-default` node is provably still pending when the stop lands — the
-//! same observable-signal discipline the merged T34/T35 tests use. No wall clock,
+//! same observable-signal discipline the merged run-loop tests use. No wall clock,
 //! no sleep drives ordering.
 //!
-//! # Scope (T38 — integration demo only)
+//! # Scope (integration demo only)
 //!
 //! Adds **no** framework surface. It does not re-prove the per-outcome permit-release
-//! matrix (T37) or the two-concurrent-runs guarantee (T67) — it consumes them. It
-//! renders nothing (artifacts/diagrams are M3, C20–C25); teardown-node lifecycle
-//! beyond what C15/C16 guarantee is M4 (C17) and out of scope.
+//! matrix or the two-concurrent-runs guarantee — it consumes them. It renders
+//! nothing (artifacts/diagrams are a separate concern — explaining a run from
+//! artifacts); teardown-node lifecycle beyond what the
+//! stop/cleanup guarantees cover is the operability concern and out of scope.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -127,7 +129,7 @@ const PIN: u64 = 10;
 const RESIDENCY: u64 = 128;
 
 // ===========================================================================
-// A capturing in-memory sink + monotonic clock (the C19 injection seam)
+// A capturing in-memory sink + monotonic clock (the event-stream injection seam)
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -164,7 +166,7 @@ impl MonotonicClock for TickClock {
 // ===========================================================================
 
 /// The induced mid-run failure: it writes a scratch file under the run's per-run
-/// temp directory (C16, reached through the context) — the "in-flight debris" whose
+/// temp directory (reached through the context) — the "in-flight debris" whose
 /// cleanup the demo asserts — then fails **permanently**, triggering the
 /// stop-on-first-failure. Because it fails cooperatively (it returns), it leaves no
 /// live thread; the per-run temp dir it wrote under is removed by the driver's
@@ -178,7 +180,7 @@ impl Task for FailsAfterWritingTemp {
     type Output = u64;
     async fn run(&mut self, c: &RunContext, _i: ()) -> Result<u64, TaskError> {
         // Everything a task writes locally goes under the run's per-run temp dir,
-        // reachable through the context (C16). Write debris there, then fail.
+        // reachable through the context. Write debris there, then fail.
         if let Some(dir) = c.temp_dir() {
             let scratch = dir.join("failing-scratch.tmp");
             let _ = std::fs::write(&scratch, b"in-flight debris");
@@ -211,7 +213,7 @@ impl Task for CooperativeSibling {
 /// cancelled, then returns — keeping the serialized `downstream-default` node
 /// provably pending (never admitted) across the pre-stop window, so the stop settles
 /// it before any permit it could grab is freed. Cooperative, bounded, no sleep. Its
-/// own terminal is not asserted. (Mirror of the merged T34/T35 helper.)
+/// own terminal is not asserted. (Mirror of the merged run-loop helper.)
 struct HoldsMemoryUntilCancelled;
 impl Task for HoldsMemoryUntilCancelled {
     type Input = ();
@@ -248,7 +250,7 @@ impl Task for PassThrough {
 }
 
 // ===========================================================================
-// Type-erased runners over the real C14 attempt path
+// Type-erased runners over the real attempt path
 // ===========================================================================
 
 struct SourceRunner<T: Task<Input = ()>> {
@@ -345,9 +347,9 @@ impl<T: Task<Input = u64>> Task for Bound<T> {
 }
 
 /// A consumer runner that opens a **real** [`ConsumerLease`] on its upstream slot,
-/// reads it, and holds the lease for the whole attempt — the genuine C10
-/// closure-return release gate (the same shape as the merged bounded-memory-chain
-/// consumer). Dropping the lease after the attempt returns is what releases the
+/// reads it, and holds the lease for the whole attempt — the genuine closure-return
+/// release gate (the same shape as the merged bounded-memory-chain consumer).
+/// Dropping the lease after the attempt returns is what releases the
 /// upstream slot's residency, so the shared ledger returns to zero. Used only by the
 /// release-mechanics proof.
 struct LeaseConsumerRunner {
@@ -375,7 +377,7 @@ impl NodeRunner for LeaseConsumerRunner {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TerminalState> + Send + 'a>> {
         let name = self.name.clone();
         let slot = Arc::clone(&self.slot);
-        // Open the lease and read (the real C10 consume path); the lease lives until
+        // Open the lease and read (the real consume path); the lease lives until
         // the attempt returns, then drops — releasing the upstream slot's residency.
         let lease = self.upstream.enter();
         let _ = lease.read();
@@ -392,7 +394,7 @@ impl NodeRunner for LeaseConsumerRunner {
 
 /// The **charge-then-release residency probe** runner (GAP 2 / `DoD` #11 non-vacuity).
 /// A node that succeeds while the run is stopping cleanly and, inside its own
-/// attempt, exercises the full C10 residency lifecycle against the **shared** run
+/// attempt, exercises the full residency lifecycle against the **shared** run
 /// ledger: it fills an internal producer slot declaring `RESIDENCY` bytes (charging
 /// the ledger — the ledger's peak rises above zero during this run), opens a **real**
 /// [`ConsumerLease`] on it and reads (holding the value live), runs its own success
@@ -430,7 +432,7 @@ impl NodeRunner for ResidencyProbeRunner {
         producer
             .fill(1)
             .expect("the probe's producer slot fills once");
-        // Open a real lease and read (the C10 consume path); the lease lives until the
+        // Open a real lease and read (the consume path); the lease lives until the
         // attempt returns, then drops — releasing the shared ledger back to zero.
         let lease = producer.shared_ref().enter();
         let _ = lease.read();
@@ -443,7 +445,7 @@ impl NodeRunner for ResidencyProbeRunner {
                 .await
                 .terminal_state();
             // Release the charged residency now that the consuming closure has
-            // returned (the second, zombie-critical half of the C10 release gate).
+            // returned (the second, zombie-critical half of the release gate).
             drop(lease);
             state
         })
@@ -512,17 +514,17 @@ const PIPELINE: &str = "m2-clean-stop";
 ///
 /// Determinism (CI fs race): `drive_clean_stop` is called by six test functions in
 /// this binary, and the two `m2_demo_*` binaries run concurrently under
-/// `--test-threads>1`. A single *fixed shared* base (`/tmp/dagr-t38-clean-stop`)
-/// with a *pinned* run id meant every concurrent drive resolved to the **same**
-/// `<base>/<pipeline>/<run-id>/tmp` path: one drive's synchronous end-of-run
-/// `cleanup_temp_dir` (a best-effort `remove_dir_all`, arch.md C16) could then race
-/// another drive's `create_temp_dir` / in-flight debris write on the *identical*
-/// subtree, and — because the cleanup is best-effort and swallows its error — leave
-/// the directory behind, red-flaking `nothing_orphaned_…`'s hard `assert!(!exists())`.
-/// A process-monotonic `AtomicU64` counter makes every base provably disjoint, so no
-/// two drives ever share — or delete — the same subtree. No production change: this
-/// only picks a private run-store base for the test, exactly the `temp_base()` fix
-/// already applied in `os_signals_flush_and_cleanup.rs`.
+/// `--test-threads>1`. A single *fixed shared* base with a *pinned* run id meant
+/// every concurrent drive resolved to the **same** `<base>/<pipeline>/<run-id>/tmp`
+/// path: one drive's synchronous end-of-run `cleanup_temp_dir` (a best-effort
+/// `remove_dir_all`) could then race another drive's `create_temp_dir` / in-flight
+/// debris write on the *identical* subtree, and — because the cleanup is best-effort
+/// and swallows its error — leave the directory behind, red-flaking
+/// `nothing_orphaned_…`'s hard `assert!(!exists())`. A process-monotonic `AtomicU64`
+/// counter makes every base provably disjoint, so no two drives ever share — or
+/// delete — the same subtree. No production change: this only picks a private
+/// run-store base for the test, exactly the `temp_base()` fix already applied in
+/// `os_signals_flush_and_cleanup.rs`.
 fn temp_base() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -610,7 +612,7 @@ fn build_runners(
     // completion *while the run is stopping cleanly*. Its runner charges the **same
     // shared ledger** (fills an internal residency slot declaring `RESIDENCY` bytes,
     // raising the ledger's peak above zero during this run) and then releases it (a
-    // **real** [`ConsumerLease`] opened, read, and dropped — the genuine C10
+    // **real** [`ConsumerLease`] opened, read, and dropped — the genuine
     // closure-return release gate), all inside its own successful attempt. Doing the
     // whole charge-then-release atomically inside one succeeding node makes the proof
     // immune to the stop's scheduling of any second node, while still exercising the
@@ -672,7 +674,7 @@ fn drive_clean_stop() -> CleanStop {
     let runners = build_runners(&ledger, &wrote);
 
     // The consume-nothing nodes are ordered after `failing` so their rules are
-    // evaluated against its terminal (the T34 run-level ordering seam). Also order
+    // evaluated against its terminal (the run-level ordering seam). Also order
     // `downstream-default` after `keeper` so admission serialization keeps it pending
     // until the stop lands. `data-dependent` needs no ordering entry (its data edge
     // already orders it).
@@ -714,7 +716,7 @@ fn drive_clean_stop() -> CleanStop {
 // Stream oracle
 // ===========================================================================
 
-/// A parsed C19 record's kind, optional node, and gapless sequence number.
+/// A parsed record's kind, optional node, and gapless sequence number.
 struct Rec {
     kind: String,
     node: Option<String>,
@@ -784,8 +786,8 @@ const ALL_NODES: [&str; 8] = [
 /// Under stop-on-first-failure, after the first terminal failure is observed the
 /// pending downstream **default-rule** node is never admitted and ends
 /// `upstream-failed` (its `all-succeeded` rule cannot fire on the failed upstream);
-/// the failing node ends `failed`; the overall outcome is failure (arch.md C15; M2
-/// done-when).
+/// the failing node ends `failed`; the overall outcome is failure (the
+/// "It survives" done-when).
 #[test]
 fn clean_stop_admits_no_further_default_rule_work() {
     let run = drive_clean_stop();
@@ -823,7 +825,7 @@ fn clean_stop_admits_no_further_default_rule_work() {
 /// A consume-nothing contingency with the non-default `any-failed` rule fires on
 /// the final picture and executes to `succeeded` even though the run is stopping —
 /// a failure-triggered notify/cleanup is exactly the work a stop should run, and
-/// stop mode does not cancel it (arch.md C15; M2 done-when).
+/// stop mode does not cancel it ("It survives" done-when).
 #[test]
 fn clean_stop_still_fires_the_contingency() {
     let run = drive_clean_stop();
@@ -849,7 +851,7 @@ fn clean_stop_still_fires_the_contingency() {
 /// The direct data dependent ends `upstream-failed` without executing (its
 /// `all-succeeded` rule can no longer be satisfied), while the `all-terminal`
 /// cleanup node still executes (its rule can still fire regardless of class) — every
-/// node in the run has exactly one terminal state (arch.md C15; M2 done-when).
+/// node in the run has exactly one terminal state ("It survives" done-when).
 #[test]
 fn propagation_is_by_rule_not_by_blast_radius() {
     let run = drive_clean_stop();
@@ -899,9 +901,9 @@ fn propagation_is_by_rule_not_by_blast_radius() {
 
 /// After the clean-stop run reports terminal, the shared residency ledger's current
 /// counted residency is **zero** — nothing is left charged on the failure,
-/// propagation, or cancellation paths (arch.md C12/C10, cross-checked against T37's
-/// matrix). The run also terminated with a definite outcome (it did not hang), so no
-/// working-memory permit leaked into a wedge.
+/// propagation, or cancellation paths (cross-checked against the per-outcome
+/// permit-release matrix). The run also terminated with a definite outcome (it did
+/// not hang), so no working-memory permit leaked into a wedge.
 #[test]
 fn all_permits_released_nothing_left_charged() {
     let run = drive_clean_stop();
@@ -939,8 +941,8 @@ fn all_permits_released_nothing_left_charged() {
 /// residency-ledger seam**. The ledger visibly charges the residency at fill and
 /// releases it back to **zero** once the sole consumer's closure returns — proving
 /// the "every pool back to full capacity" observable genuinely reflects release, not
-/// a slot that was never charged (arch.md C10; C12). Peak > 0 confirms the charge
-/// actually happened; current == 0 at end confirms the release.
+/// a slot that was never charged. Peak > 0 confirms the charge actually happened;
+/// current == 0 at end confirms the release.
 #[test]
 fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
     let ledger = ResidencyLedger::new();
@@ -952,7 +954,7 @@ fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
     pipeline.assemble().expect("assembles");
 
     // The producer carries residency and has one consumer; the receiver opens a real
-    // lease on it (the C10 closure-return release gate).
+    // lease on it (the closure-return release gate).
     let producer_slot = slot_on::<u64>("producer", 1, RESIDENCY, &ledger);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
@@ -1001,7 +1003,7 @@ fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
 /// After the run reports terminal: the per-run temp directory the failing task wrote
 /// under is cleaned up by the driver, and the event stream is complete and gapless
 /// with exactly one terminal state per node and exactly one attempt-outcome record
-/// per attempt — no dangling in-flight events (arch.md C16/C14/C19; M2 done-when).
+/// per attempt — no dangling in-flight events ("It survives" done-when).
 #[test]
 fn nothing_orphaned_no_residual_temp_complete_stream() {
     // `drive_clean_stop` uses a private, per-invocation run-store base (`temp_base`),
@@ -1025,9 +1027,9 @@ fn nothing_orphaned_no_residual_temp_complete_stream() {
     // After the run reports terminal, the per-run temp directory is cleaned up by the
     // driver's end-of-run reclamation, so no residual temp is orphaned.
     //
-    // The C16 end-of-run cleanup (`cleanup_temp_dir`, invoked synchronously in the
+    // The end-of-run cleanup (`cleanup_temp_dir`, invoked synchronously in the
     // driver's `finalize_shutdown` before `drive` returns) is **best-effort by
-    // design** (arch.md C16; `crates/cli/src/temp.rs`): the removal is a
+    // design** (`crates/cli/src/temp.rs`): the removal is a
     // `let _ = std::fs::remove_dir_all(path)` whose error is swallowed, because after
     // grace the process exits promptly rather than blocking on a directory a zombie
     // thread might momentarily hold. Under a loaded parallel runner that best-effort
@@ -1107,9 +1109,9 @@ fn nothing_orphaned_no_residual_temp_complete_stream() {
 // ===========================================================================
 
 /// The clean-stop demo produces the same terminal-state picture and the same
-/// failure verdict across repetitions, because the T32 pinning flag fixes the
-/// admission serialization and outcomes are scripted (arch.md C12/C15; M2 test
-/// plan: deterministic on any runner).
+/// failure verdict across repetitions, because the capacity-pinning flag fixes the
+/// admission serialization and outcomes are scripted (this test's plan:
+/// deterministic on any runner).
 #[test]
 fn clean_stop_is_deterministic() {
     let expected: &[(&str, &str)] = &[

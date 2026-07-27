@@ -1,18 +1,18 @@
-//! **System acceptance gate** — ticket T65 (080). Written first, TDD.
+//! **System acceptance gate.** Written first, TDD.
 //!
 //! This suite is the terminal acceptance proof: it asserts, against the **real**
-//! production code paths, the system-level acceptance criteria arch.md
-//! "System-level acceptance" names. It owns two of them directly — criterion 4's
-//! two machine halves — and closes the coverage claim of criterion 8:
+//! production code paths, the system-level acceptance criteria. It owns two of them
+//! directly — the two machine halves of the determinism criterion — and closes the
+//! coverage claim of the coverage-completeness criterion:
 //!
 //! - **`SL4a` · structural determinism.** The reference pipeline, assembled twice,
-//!   emits (through the **real** `dagr_cli::graph::emit_graph` C20 path) a
+//!   emits (through the **real** `dagr_cli::graph::emit_graph` path) a
 //!   byte-identical graph artifact once the sole generation-time header field is
 //!   masked, with identical structural fingerprint and identical policy hash. A
 //!   drift-injection negative control proves the comparison is a real byte
 //!   comparison, not a no-op — it reports the first differing byte offset.
 //! - **`SL4b` · interpretive determinism.** The reference pipeline is driven twice
-//!   through the **real** T62 full-pipeline fakes harness
+//!   through the **real** full-pipeline fakes harness
 //!   ([`dagr_cli::full_pipeline`]) with the same scripted outcomes (success, a
 //!   retryable-then-success, a permanent failure, a downstream join, and a
 //!   deliberate skip with propagation): identical per-node terminal states,
@@ -57,9 +57,9 @@ use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
 // ===========================================================================
 // The reference pipeline — the checked-in pipeline the acceptance gate drives.
 // A three-node linear pipeline (load → transform → publish) with a non-default
-// policy, mirroring the T64 criterion-6 reference pipeline's shape. It is
-// assembled through the framework's own `Flow` (node identity, typed handles,
-// dependency binding, and assembly are exactly the framework's).
+// policy, mirroring the documented reference pipeline's shape. It is assembled
+// through the framework's own `Flow` (node identity, typed handles, dependency
+// binding, and assembly are exactly the framework's).
 // ===========================================================================
 
 struct Loaded;
@@ -154,9 +154,9 @@ fn fixed_provenance() -> BuildProvenance {
     BuildProvenance::new("dagr-test-0.0.0", "0000000", "0000000000000000")
 }
 
-/// Emit the reference pipeline's graph artifact through the real `C20` emitter,
-/// then parse and mask the generation-time header field — the canonical
-/// comparison surface for structural determinism.
+/// Emit the reference pipeline's graph artifact through the real emitter, then
+/// parse and mask the generation-time header field — the canonical comparison
+/// surface for structural determinism.
 fn masked_reference_artifact(generated_at: &str) -> Value {
     let json = emit_graph(
         &reference_pipeline(),
@@ -191,7 +191,7 @@ fn first_diff_offset(a: &[u8], b: &[u8]) -> Option<usize> {
 // ===========================================================================
 
 /// **Structural determinism holds (`SL4a`).** The reference pipeline, assembled
-/// twice and emitted twice through the real `C20` emitter with the generation-time
+/// twice and emitted twice through the real emitter with the generation-time
 /// field masked, is byte-identical; the structural fingerprint and the policy
 /// hash are equal across the two assemblies. This is the covering test for
 /// `SL4a`.
@@ -213,8 +213,8 @@ fn structural_determinism_holds_across_builds() {
     );
 
     // Identical structural fingerprint and identical policy hash across the two
-    // assemblies (C20/C21). Read from the freshly-assembled pipelines' own
-    // fingerprint, the same value the emitter stamps into the header.
+    // assemblies. Read from the freshly-assembled pipelines' own fingerprint, the
+    // same value the emitter stamps into the header.
     let fp_a = reference_pipeline().fingerprint();
     let fp_b = reference_pipeline().fingerprint();
     assert_eq!(
@@ -358,11 +358,10 @@ fn structural_determinism_catches_a_spurious_drift() {
 // Test-plan scenario 11 — Interpretive determinism holds under replay.
 // ===========================================================================
 
-/// The T65 interpretive-determinism script: the mix the ticket names — a
-/// success, one retryable-then-success, one permanent failure, a downstream join,
-/// and a deliberate skip that propagates — run through the real T62 harness with
-/// fixed identity, parameters, and data interval so the run is a pure function of
-/// the script.
+/// The interpretive-determinism script: a success, one retryable-then-success, one
+/// permanent failure, a downstream join, and a deliberate skip that propagates —
+/// run through the real fakes harness with fixed identity, parameters, and data
+/// interval so the run is a pure function of the script.
 fn interpretive_replay() -> dagr_cli::full_pipeline::HarnessRun {
     FullPipelineTest::new(REFERENCE_PIPELINE_NAME)
         .run_id("t65-fixed-run-id")
@@ -383,7 +382,7 @@ fn interpretive_replay() -> dagr_cli::full_pipeline::HarnessRun {
 }
 
 /// **Interpretive determinism holds under replay (`SL4b`).** The reference pipeline,
-/// driven twice through the real T62 fakes harness with the same script, yields
+/// driven twice through the real fakes harness with the same script, yields
 /// identical per-node terminal states, identical originated-vs-propagated skip and
 /// failure markings, and a byte-identical normalized run artifact — through the
 /// real scheduler and the real fold.
@@ -724,10 +723,10 @@ fn repo_root() -> PathBuf {
 /// **The whole matrix round-trips against the live suite and the checklist
 /// (Test-plan scenario 14).** The shipped coverage-matrix verifier, run against
 /// the real checked-in matrix, the real `cargo test --workspace` inventory, and
-/// the version-controlled release checklist, passes — every machine criterion in
-/// `SL1`–`SL8` and `C1`–`C28` maps to a passing, existing test, every human criterion has
-/// a checklist line, and no criterion is `unmapped`. This demonstrates the product
-/// invariant holds simultaneously.
+/// the version-controlled release checklist, passes — every machine criterion
+/// (both the system-level and per-component criteria) maps to a passing, existing
+/// test, every human criterion has a checklist line, and no criterion is
+/// `unmapped`. This demonstrates the product invariant holds simultaneously.
 #[test]
 fn the_whole_matrix_round_trips_against_the_live_suite_and_checklist() {
     let root = repo_root();
@@ -762,8 +761,8 @@ fn the_whole_matrix_round_trips_against_the_live_suite_and_checklist() {
 
 /// **The verifier's own self-tests pass (Test-plan scenarios 1–8, 13).** The
 /// extended self-test harness covers the gate's failure modes — unmapped machine
-/// criterion, absent-from-matrix, duplicate, mapped-to-nonexistent, and (new in
-/// T65) mapped-to-failing-test and human-criterion-without-checklist — hermetically.
+/// criterion, absent-from-matrix, duplicate, mapped-to-nonexistent,
+/// mapped-to-failing-test, and human-criterion-without-checklist — hermetically.
 #[test]
 fn the_verifier_self_tests_pass() {
     let root = repo_root();

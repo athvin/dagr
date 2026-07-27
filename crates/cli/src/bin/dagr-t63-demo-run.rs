@@ -1,21 +1,21 @@
-//! `dagr-t63-demo-run` — the **M4 gate demo** driver, ticket T63 (078).
+//! `dagr-t63-demo-run` — the **kill/resume gate demo** driver.
 //!
 //! # Why this binary
 //!
-//! The M4 done-when — *"a pipeline killed mid-run resumes and skips completed
-//! durable work"* (arch.md Build order) — is proven end-to-end **through the shipped
+//! The done-when — *"a pipeline killed mid-run resumes and skips completed
+//! durable work"* — is proven end-to-end **through the shipped
 //! `drive()` loop**, not at node grain. This binary is the run under kill and the
 //! resume that follows: it assembles the reference pipeline (`dagr_cli::t63_demo`), a
 //! real durable stage boundary + a scratch-checkpointing node + a teardown, and
-//! drives it through the **real** T24 driver against a real on-disk event stream. The
+//! drives it through the **real** driver against a real on-disk event stream. The
 //! integration test (`crates/cli/tests/m4_demo_kill_resume_review.rs`) launches it,
 //! kills it abruptly mid-run (SIGKILL, no exit handler — the container-kill failure
 //! mode), then resumes.
 //!
-//! It composes **already-merged** M4 machinery through the shipped seams (adds no
-//! engine capability): the C18 scratch store and the driver's T63 scratch wiring, the
-//! C27 durable-output contract, the real `drive()` loop, the real C27
-//! `resume_verb` (`dagr_cli::contract`), and the T54b
+//! It composes **already-merged** machinery through the shipped seams (adds no
+//! engine capability): the scratch store and the driver's scratch wiring, the
+//! durable-output contract, the real `drive()` loop, the real
+//! `resume_verb` (`dagr_cli::contract`), and the
 //! `ScratchStore::carry_forward` (`dagr_core::scratch`). It ships in no released
 //! binary; it is checked-in scaffolding.
 //!
@@ -54,7 +54,7 @@ use dagr_core::handle::NodeId;
 use dagr_core::resume::ReferenceExistence;
 use dagr_core::scratch::ScratchStore;
 
-// === A real append-only local-file event sink (the C19 sink surface) =========
+// === A real append-only local-file event sink (the event-stream sink) =========
 
 /// A minimal append-only local-file sink: it appends each complete line to the run's
 /// `events.jsonl` and flushes to the OS (no fsync per append — the default sink's
@@ -102,7 +102,7 @@ fn stream_path(base: &str, run_id: &str) -> PathBuf {
         .join(EVENTS_FILE_NAME)
 }
 
-/// The run-artifact path a resumed run writes its `run.json` under (the T0.6 §3
+/// The run-artifact path a resumed run writes its `run.json` under (the
 /// reserved name, alongside `events.jsonl`).
 fn run_artifact_path(base: &str, run_id: &str) -> PathBuf {
     PathBuf::from(base)
@@ -217,8 +217,8 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
         }
     };
 
-    // (2) Run the REAL resume verb: the C27 gate + seed/closure/demand plan + the
-    //     resumed-artifact recording. The existence probe confirms the durable
+    // (2) Run the REAL resume verb: the durability gate + seed/closure/demand plan +
+    //     the resumed-artifact recording. The existence probe confirms the durable
     //     stage-boundary reference is present on disk (a cheap check before any skip).
     let options = ResumeOptions {
         new_run_id: new.to_string(),
@@ -237,7 +237,7 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
         }
     };
 
-    // (3) Carry scratch forward for every must-run node (the T54b real API), keyed by
+    // (3) Carry scratch forward for every must-run node (the real API), keyed by
     //     the SAME pipeline id the driver's scratch namespace uses.
     for node in plan.must_run() {
         if let Err(e) = ScratchStore::carry_forward(
@@ -434,11 +434,11 @@ impl EventSink for TeeSink {
 }
 
 /// Fold the resumed run's on-disk stream into its complete run artifact (the full
-/// node picture — re-executed + satisfied-from-prior), then overlay the C27
+/// node picture — re-executed + satisfied-from-prior), then overlay the
 /// resume-verb header's lineage, tool version, forced marker, and copied-forward
 /// durable references so the resulting `run.json` is **self-contained and
 /// lineage-correct** — exactly what a second-generation resume reads as its prior
-/// artifact (the multi-generation carry-forward, arch.md C27).
+/// artifact (the multi-generation carry-forward).
 fn complete_resumed_artifact(
     stream: &[u8],
     node_roster: &[String],

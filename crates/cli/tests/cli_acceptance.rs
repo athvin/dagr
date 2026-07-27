@@ -1,6 +1,6 @@
-//! C26 · **CLI acceptance suite** — ticket T56 (069). Written first, TDD.
+//! **CLI acceptance suite.** Written first, TDD.
 //!
-//! Black-box acceptance tests for the C26 command-line contract, driving **two**
+//! Black-box acceptance tests for the command-line contract, driving **two**
 //! structurally-distinct compiled sample-pipeline binaries (`dagr-t56-alpha`,
 //! `dagr-t56-beta`) as **subprocesses** and asserting only on the observable
 //! contract: the process **exit code**, captured **stdout/stderr**, and the
@@ -11,13 +11,13 @@
 //! The two sample pipelines differ structurally (alpha = a durable stage boundary
 //! `load → transform` plus a `standalone` no-input node; beta = the same boundary
 //! plus a `maybe-fail` node and a `decide-skip` node), so "every verb behaves
-//! identically across all pipelines" (arch.md C26) is a real claim, not a
-//! tautology. A parity helper asserts the library-owned surface (the verb set,
-//! the no-arg help shape, and the exit codes for the pipeline-independent
-//! scenarios) is byte-for-byte identical across the two binaries; node-specific
-//! scenarios run against the binary that legitimately carries that node.
+//! identically across all pipelines" is a real claim, not a tautology. A parity
+//! helper asserts the library-owned surface (the verb set, the no-arg help shape,
+//! and the exit codes for the pipeline-independent scenarios) is byte-for-byte
+//! identical across the two binaries; node-specific scenarios run against the
+//! binary that legitimately carries that node.
 //!
-//! # Coverage (keyed to the C26 exit-code table + the `DoD`)
+//! # Coverage (keyed to the exit-code table + the definition of done)
 //!
 //! - Verb parity: `graph`/`validate`/`render` accept the same verbs and flag
 //!   namespace and produce the same-shaped output across both binaries; the verb
@@ -36,8 +36,8 @@
 //!   replay-variant artifact.
 //! - `fold` on a crashed stream → interrupted artifact.
 //! - `prune` by count and by age, with nothing deleted implicitly beforehand.
-//! - The T55-deferred round-trip: a run records its parameters AND the verbatim
-//!   data-interval in the run-artifact header.
+//! - The round-trip: a run records its parameters AND the verbatim data-interval
+//!   in the run-artifact header.
 //!
 //! # Determinism / isolation (CI-flake history)
 //!
@@ -67,7 +67,7 @@ const BETA_PIPELINE: &str = "t56-beta";
 const ALPHA_PARAM: &str = "shard"; // int
 const BETA_PARAM: &str = "region"; // str
 
-// The C26 exit-code table (the single authoritative numbering; must match
+// The exit-code table (the single authoritative numbering; must match
 // `dagr_cli::contract::ExitCode::as_u8`).
 const SUCCESS: i32 = 0;
 const RUN_FAILURE: i32 = 1;
@@ -274,7 +274,7 @@ fn validate_enumerates_every_assembly_problem_for_both() {
 }
 
 // ===========================================================================
-// Exit-code table — one scenario per code, keyed to the C26 table.
+// Exit-code table — one scenario per code, keyed to the contract table.
 // ===========================================================================
 
 /// Success — a normal run in which every requested node succeeds exits success and
@@ -521,7 +521,7 @@ fn resume_stub_exits_the_resume_refusal_code_for_both() {
 /// A cancellation-code scenario exists in the table via the shared resume-refusal
 /// path; the *externally-originated cancellation* code (5) is asserted through the
 /// exhaustiveness meta-check below (the CLI boundary exposes it; the signal
-/// mechanics are C16/T35, out of scope here). This test documents that the code is
+/// mechanics are out of scope here). This test documents that the code is
 /// distinct and reachable via the table.
 #[test]
 fn the_cancellation_code_is_distinct_in_the_table() {
@@ -537,12 +537,12 @@ fn the_cancellation_code_is_distinct_in_the_table() {
 // Exhaustiveness meta-check — every table entry has a scenario.
 // ===========================================================================
 
-/// A meta-check enumerating the codes exercised by this suite against the C26
+/// A meta-check enumerating the codes exercised by this suite against the
 /// exit-code table: every entry has at least one black-box scenario. Adding a code
 /// to the table without a scenario breaks this test.
 #[test]
 fn every_exit_code_table_entry_has_a_scenario() {
-    // The C26 table: (code, the scenario in this file that exercises it).
+    // The exit-code table: (code, the scenario in this file that exercises it).
     let table: &[(i32, &str)] = &[
         (
             SUCCESS,
@@ -654,7 +654,7 @@ fn parameter_flag_collision_is_rejected_and_named_for_both() {
 }
 
 // ===========================================================================
-// The T55-deferred round-trip: parameters + verbatim data-interval in the header.
+// The round-trip: parameters + verbatim data-interval in the header.
 // ===========================================================================
 
 /// The distinctive `--data-interval` endpoints used by the round-trip test. These
@@ -666,7 +666,7 @@ const IV_START: &str = "2019-03-07T11:22:33Z";
 const IV_END: &str = "2019-03-08T00:00:00Z";
 
 /// Read the header's `data_interval` endpoints, tolerating either the `{start,end}`
-/// object shape (what the C19 writer emits) or a two-element array.
+/// object shape (what the event-stream writer emits) or a two-element array.
 fn header_interval_endpoints(header: &Value) -> (Option<String>, Option<String>) {
     let interval = &header["data_interval"];
     let start = interval["start"].as_str().or_else(|| {
@@ -685,9 +685,9 @@ fn header_interval_endpoints(header: &Value) -> (Option<String>, Option<String>)
 }
 
 /// A run records its parameters **and** the verbatim `data-interval` in the
-/// run-artifact header (the assertion T55 deferred to T56): drive the **real** run
-/// path (the general `run` branch that runs `drive()` and folds the emitted
-/// stream — NOT the hand-stamped `--durable-boundary` producer), passing a
+/// run-artifact header: drive the **real** run path (the general `run` branch that
+/// runs `drive()` and folds the emitted stream — NOT the hand-stamped
+/// `--durable-boundary` producer), passing a
 /// DISTINCTIVE interval, then read the emitted artifact and assert the interval
 /// round-trips verbatim (both endpoints, unchanged). Because the asserted value is
 /// absent from every hardcoded stamp, this FAILS if the flag is not threaded —

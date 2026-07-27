@@ -1,24 +1,24 @@
 //! run-a-Flow ergonomics — the operator-sanctioned public "run a `Flow` of real
-//! `Task`s → a completed run" seam (operator-approved 2026-07-24; ADR 081).
+//! `Task`s → a completed run" seam.
 //!
 //! # Why this suite exists
 //!
-//! arch.md C1 says a task author writes tasks + a flow and **never** writes
-//! scheduling or permit plumbing. Yet every milestone demo (m1/m2/m3/t56/t63) has,
+//! A task author writes tasks + a flow and **never** writes
+//! scheduling or permit plumbing. Yet every earlier demo has,
 //! until now, hand-written ~150 lines of type-erased `NodeRunner` impls per
 //! pipeline — a `Pin<Box<dyn Future<Output = TerminalState> + Send>>` that reads
 //! input `SlotRef`s, calls `run_attempt`/`run_with_retries_caught`, and fills the
-//! output slot. That is exactly the scheduling plumbing C1 says the author must not
+//! output slot. That is exactly the scheduling plumbing the author must not
 //! write. This suite pins the **new one-call path**: build a `RunnableFlow` of real
 //! `Task`s and run it with a single call, with **no** hand-written `NodeRunner`.
 //!
 //! # What it proves (the fidelity + end-to-end contract)
 //!
 //! - **Fidelity to the hand-wired path.** [`fidelity_auto_adapter_matches_hand_wired`]
-//!   mirrors the M1 three-node chain (`source → transform → sink`, the middle node
+//!   mirrors the three-node chain (`source → transform → sink`, the middle node
 //!   deterministically flaky with one retry) and asserts the NEW auto-adapter path
 //!   produces the **same** outcome, the **same** per-node terminal states, and the
-//!   **same** ordered event-stream transition shape as the hand-wired M1 demo —
+//!   **same** ordered event-stream transition shape as the hand-wired demo —
 //!   including `transform`'s two attempt cycles.
 //! - **End to end.** [`chain_runs_source_transform_sink_end_to_end`] drives a real
 //!   chain and asserts the expected artifact flows through and the run succeeds.
@@ -29,7 +29,7 @@
 //!   fails overall.
 //! - **A scratch-touching node works through the adapter.**
 //!   [`a_scratch_touching_node_runs_through_the_adapter`] proves a single-attempt
-//!   node reaches its real per-node durable scratch namespace (T63 wiring intact).
+//!   node reaches its real per-node durable scratch namespace (scratch wiring intact).
 //!
 //! Determinism: an injected in-memory sink + a monotonic tick clock; the one
 //! scratch test uses a PRIVATE temp dir. No wall-clock sleeps (the retry backoff
@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // ===========================================================================
-// Injection seams: an in-memory sink + a monotonic clock (C19) — the same
+// Injection seams: an in-memory sink + a monotonic clock — the same
 // deterministic seams the hand-wired demos use.
 // ===========================================================================
 
@@ -79,7 +79,7 @@ impl MonotonicClock for TickClock {
 }
 
 // ===========================================================================
-// The example tasks — pure `Task`s, no plumbing (identical to the M1 demo's).
+// The example tasks — pure `Task`s, no plumbing (identical to the hand-wired demo's).
 // ===========================================================================
 
 struct Source {
@@ -202,10 +202,10 @@ fn count(bytes: &[u8], kind: &str, node: &str) -> usize {
 }
 
 // ===========================================================================
-// Build the M1 chain through the NEW one-call `RunnableFlow` — no NodeRunner.
+// Build the three-node chain through the NEW one-call `RunnableFlow` — no NodeRunner.
 // ===========================================================================
 
-/// Build the flaky-retry M1 chain through the auto-adapter (no hand-written
+/// Build the flaky-retry three-node chain through the auto-adapter (no hand-written
 /// runner) and run it in ONE call, returning the recorded stream + outcome +
 /// the sink's produced value.
 fn run_via_auto_adapter() -> (Vec<u8>, RunOutcome, Option<u64>) {
@@ -265,15 +265,15 @@ fn chain_runs_source_transform_sink_end_to_end() {
 }
 
 /// **Fidelity.** The auto-adapter path produces the SAME ordered event-stream
-/// transition shape (kind + node + terminal state) as the hand-wired M1 demo's
-/// runner path. Because the M1 demo's shape is pinned by its own suite, matching
+/// transition shape (kind + node + terminal state) as the hand-wired demo's
+/// runner path. Because the hand-wired demo's shape is pinned by its own suite, matching
 /// it here proves the generic adapter reproduces, per node, exactly what the
 /// hand-written `SourceRunner`/`RetryingRunner`/`SinkRunner` did.
 #[test]
 fn fidelity_auto_adapter_matches_hand_wired() {
-    // The hand-wired M1 shape, taken verbatim from
+    // The hand-wired shape, taken verbatim from
     // `m1_demo_three_node_chain::m1_three_node_chain_with_retry_is_the_done_when`
-    // (the load-bearing M1 gate). Run-level anchors + the exact per-node cycles.
+    // (the load-bearing gate). Run-level anchors + the exact per-node cycles.
     let (bytes, _outcome, _produced) = run_via_auto_adapter();
     let got = shape(&bytes);
 
@@ -365,7 +365,7 @@ fn permanent_failure_propagates_downstream() {
     );
 }
 
-/// **A scratch-touching node runs through the adapter (T63 wiring intact).** A
+/// **A scratch-touching node runs through the adapter (scratch wiring intact).** A
 /// single-attempt node writes to and reads back its real per-node durable scratch
 /// namespace under the run store — proving the adapter builds a `NodeRunner` that
 /// works with the driver's real per-attempt context (`scratch_root` threaded
@@ -493,7 +493,7 @@ fn distinct_input_and_output_types_flow_through_the_adapter() {
 }
 
 // ===========================================================================
-// Multi-input tuple wiring (T72): a 2..=8-input node runs through RunnableFlow,
+// Multi-input tuple wiring: a 2..=8-input node runs through RunnableFlow,
 // assembling `Deps::into_edges` positionally into the declared tuple, honouring
 // each edge's declared receive mode, reading INSIDE run() (never at assembly).
 // ===========================================================================

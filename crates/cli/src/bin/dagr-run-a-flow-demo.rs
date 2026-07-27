@@ -1,10 +1,10 @@
 //! `dagr-run-a-flow-demo` — the reference driver that **runs a real `Flow` of
-//! real `Task`s through the new one-call `RunnableFlow` seam** (operator-approved
-//! 2026-07-24; ADR 081), writing a real on-disk `events.jsonl`.
+//! real `Task`s through the one-call `RunnableFlow` seam**, writing a real on-disk
+//! `events.jsonl`.
 //!
 //! # Why this binary exists
 //!
-//! arch.md C1 says a task author writes **tasks + a flow** and never writes the
+//! A task author writes **tasks + a flow** and never writes the
 //! scheduling/permit plumbing. Every prior milestone demo hand-wrote ~150 lines of
 //! type-erased `NodeRunner` impls per pipeline to drive a run. This binary is the
 //! demonstration that the run-a-Flow ergonomics remove that: it registers three
@@ -13,11 +13,11 @@
 //! wiring, no `RunPlan` assembly. The convenience path builds the type-erased
 //! runners generically (the registration-time adapter) and drives them through the
 //! same real `drive` loop the hand-wired demos use, so
-//! the on-disk stream is a genuine C19 run stream.
+//! the on-disk stream is a genuine run stream.
 //!
-//! The chain mirrors the M1 demo (`source → transform → sink`, the middle node
+//! The chain mirrors the earlier `source → transform → sink` demo (the middle node
 //! deterministically flaky with one retry), so this binary is the executable proof
-//! that the new seam runs a real chain — with a real retry — end to end.
+//! that the seam runs a real chain — with a real retry — end to end.
 //!
 //! # Determinism
 //!
@@ -33,7 +33,7 @@
 //! ```
 //! It writes `<base>/run-a-flow-demo/<run-id>/events.jsonl` and prints the overall
 //! outcome and the sink's produced value. Exit code `0` on a succeeded run, `1`
-//! otherwise (the C26 run-failure surface, reported by the driver).
+//! otherwise (the run-failure surface, reported by the driver).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -56,8 +56,8 @@ const TRANSFORM: &str = "transform";
 const SINK: &str = "sink";
 const SEED: u64 = 21;
 
-/// A minimal append-only local-file C19 sink: appends each complete line to the
-/// run's `events.jsonl` and flushes to the OS.
+/// A minimal append-only local-file event-stream sink: appends each complete line
+/// to the run's `events.jsonl` and flushes to the OS.
 struct FileSink {
     file: File,
 }
@@ -91,7 +91,7 @@ impl MonotonicClock for TickClock {
     }
 }
 
-// === The example tasks — pure `Task`s, no plumbing (the M1 chain) ============
+// === The example tasks — pure `Task`s, no plumbing (the demo chain) ==========
 
 /// The source: a no-input task producing a seed value; succeeds on its first try.
 struct Source {
@@ -150,7 +150,7 @@ fn main() -> ExitCode {
         .cloned()
         .unwrap_or_else(|| "demo-run".to_string());
 
-    // --- Build the M1 chain through the NEW one-call seam. No hand-written
+    // --- Build the chain through the one-call seam. No hand-written
     // `NodeRunner`, no manual slot wiring, no `RunPlan` — just real tasks + a flow.
     let mut flow = RunnableFlow::new();
     let source = flow.register_source(SOURCE, Source { value: SEED });
@@ -162,7 +162,7 @@ fn main() -> ExitCode {
     );
     let sink_handle = flow.register::<Sink, _>(SINK, Sink, transform);
 
-    // --- Open the real on-disk C19 sink and drive the whole flow in ONE call.
+    // --- Open the real on-disk sink and drive the whole flow in ONE call.
     let path = stream_path(&base, &run_id);
     let sink = match FileSink::create(&path) {
         Ok(s) => s,

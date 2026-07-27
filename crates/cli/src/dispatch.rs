@@ -1,46 +1,45 @@
-//! C13 · **Execution-class dispatch** — routing each dispatched attempt onto the
-//! thread execution surface named by its resolved execution class (arch.md
-//! `### C13 · Execution class dispatch`; T2 ADR 004 §2/§3/§5; ticket T33).
+//! **Execution-class dispatch** — routing each dispatched attempt onto the
+//! thread execution surface named by its resolved execution class.
 //!
-//! # The three surfaces (T2 ADR)
+//! # The three surfaces
 //!
-//! The [`Dispatcher`] owns the three execution surfaces the T2 ADR fixed, one per
+//! The [`Dispatcher`] owns three execution surfaces, one per
 //! [`ExecutionClass`](dagr_core::task::ExecutionClass):
 //!
 //! - **[`AwaitBound`](dagr_core::task::ExecutionClass::AwaitBound)** → the async
 //!   (tokio) **task runtime**. The attempt future is `spawn`ed onto the
 //!   multi-threaded `tasks` runtime and driven by its async workers — the natural
-//!   home for network calls and waiting (T2 §1).
+//!   home for network calls and waiting.
 //! - **[`Blocking`](dagr_core::task::ExecutionClass::Blocking)** → tokio's
-//!   **dedicated blocking pool** via `spawn_blocking` (T2 §2). A synchronous
+//!   **dedicated blocking pool** via `spawn_blocking`. A synchronous
 //!   closure runs there so it cannot starve the async workers, and — because a
 //!   `spawn_blocking` closure cannot be killed — its permit stays counted while it
-//!   is abandoned-but-running (C12/C14); the run loop never joins it.
+//!   is abandoned-but-running; the run loop never joins it.
 //! - **[`Compute`](dagr_core::task::ExecutionClass::Compute)** → a dedicated
-//!   fixed-size **`rayon::ThreadPool`** (T2 §3, the resolved open question — chosen
-//!   over a capped semaphore over `spawn_blocking`). A pool built with
-//!   `num_threads(N)` runs **at most N** closures concurrently regardless of how
-//!   many are submitted, so C13's "concurrently executing compute-class tasks never
-//!   exceed the compute pool's size" is *structural in the pool*, and the blocking
-//!   pool stays free for genuinely I/O-waiting work.
+//!   fixed-size **`rayon::ThreadPool`** (chosen over a capped semaphore over
+//!   `spawn_blocking`). A pool built with `num_threads(N)` runs **at most N**
+//!   closures concurrently regardless of how many are submitted, so "concurrently
+//!   executing compute-class tasks never exceed the compute pool's size" is
+//!   *structural in the pool*, and the blocking pool stays free for genuinely
+//!   I/O-waiting work.
 //!
-//! # What T33 owns, and what it consumes
+//! # What this module owns, and what it consumes
 //!
 //! This module owns **only** the class→surface routing and the compute-pool
-//! wiring. It **consumes** the pool sizes the C12 admission controller was pinned
-//! with (T31/T32): the compute pool is built to the pinned
+//! wiring. It **consumes** the pool sizes the admission controller was pinned
+//! with: the compute pool is built to the pinned
 //! [`compute_threads`](dagr_core::admission::PoolCapacities) capacity with the
-//! floor-of-one rule (T2 §3). It does **not** change T31 permit mechanics (the
+//! floor-of-one rule. It does **not** change the permit mechanics (the
 //! permit is still acquired by the loop and moved into the dispatched closure, so
-//! its drop releases the cost on the attempt's return) nor re-derive T32 sizing.
+//! its drop releases the cost on the attempt's return) nor re-derive the sizing.
 //!
-//! # Isolation (T2 §5) is preserved
+//! # Isolation is preserved
 //!
 //! The framework machinery (the loop, per-attempt timers, the event writer) runs
 //! on the **isolated framework runtime** the driver builds; none of the three task
 //! surfaces here are that runtime, so a task that jams every task/blocking/compute
-//! worker cannot stall a timeout firing or the event stream — the T24
-//! framework-survives-a-blocked-task guarantee (C13 acceptance) is unchanged.
+//! worker cannot stall a timeout firing or the event stream — the
+//! framework-survives-a-blocked-task guarantee is unchanged.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -59,7 +58,7 @@ const BLOCKING_WORKER_PREFIX: &str = "dagr-blocking";
 const COMPUTE_WORKER_PREFIX: &str = "dagr-compute";
 
 /// The three execution surfaces plus the isolated framework runtime, built once per
-/// run (arch.md C13; T2 ADR §2/§3/§5).
+/// run.
 ///
 /// The `Dispatcher` holds:
 /// - the **task runtime** (`tasks`) — a multi-threaded tokio runtime whose async
@@ -70,7 +69,9 @@ const COMPUTE_WORKER_PREFIX: &str = "dagr-compute";
 ///
 /// The isolated **framework** runtime that drives the run loop, timers, and the
 /// event writer is the driver's and is *not* held here — keeping it separate is
-/// exactly the T2 §5 isolation the dispatcher must not undermine.
+/// exactly the isolation the dispatcher must not undermine: the framework runtime
+/// stays off the task surfaces, so no task can stall the loop, timers, or the
+/// event writer.
 pub(crate) struct Dispatcher {
     tasks: tokio::runtime::Runtime,
     compute: rayon::ThreadPool,
@@ -78,14 +79,14 @@ pub(crate) struct Dispatcher {
 
 impl Dispatcher {
     /// Build the dispatcher's three surfaces from the run's pinned pool
-    /// [capacities](PoolCapacities) (T31/T32).
+    /// [capacities](PoolCapacities).
     ///
     /// - The **task runtime** is a multi-threaded tokio runtime with time enabled
     ///   (the per-attempt timeout deadline and the grace wait are `tokio::time`),
     ///   its async workers and blocking-pool threads named with the stable
     ///   surface prefixes so a running closure is attributable to its surface.
     /// - The **compute pool** is a `rayon::ThreadPool` sized to
-    ///   [`compute_threads`](PoolCapacities) with the **floor-of-one** rule (T2 §3):
+    ///   [`compute_threads`](PoolCapacities) with the **floor-of-one** rule:
     ///   `max(1, pinned)`, so even a zero/fractional pinned capacity yields one live
     ///   compute thread. The unconstrained default (`u32::MAX`) is clamped to the
     ///   host parallelism so the pool is a sane size when no capacity is pinned.
@@ -120,11 +121,11 @@ impl Dispatcher {
 
     /// Dispatch `attempt` — a future producing the attempt's result `R` — onto the
     /// surface named by `class`, invoking `on_done` with the produced result **on
-    /// that surface** once the attempt returns (arch.md C13; T2 §2/§3).
+    /// that surface** once the attempt returns.
     ///
     /// The future and the `on_done` callback are **moved into the dispatched
     /// closure**, so any permit-shaped guard the future carries is dropped on the
-    /// surface exactly when the attempt returns (the T0.3/T31 ownership trick is
+    /// surface exactly when the attempt returns (the ownership trick is
     /// preserved — this dispatcher changes routing, not permit mechanics).
     ///
     /// - **`AwaitBound`** — `attempt` is spawned onto the async task runtime and
@@ -144,7 +145,7 @@ impl Dispatcher {
         match class {
             ExecutionClass::AwaitBound => {
                 // Await-bound work is driven by the async workers of the task
-                // runtime — the natural home for waiting/network futures (T2 §1).
+                // runtime — the natural home for waiting/network futures.
                 self.tasks.spawn(async move {
                     let result = attempt.await;
                     on_done(result);
@@ -153,11 +154,10 @@ impl Dispatcher {
             ExecutionClass::Blocking => {
                 // Blocking work runs on tokio's dedicated blocking pool via
                 // `spawn_blocking` so a synchronous closure cannot starve the async
-                // workers (T2 §2). The (synchronous-shaped) attempt future is driven
+                // workers. The (synchronous-shaped) attempt future is driven
                 // to completion on the blocking thread with a park-based executor —
                 // no nested runtime, so the blocking thread genuinely owns the work
-                // and an unkillable closure keeps its thread (abandoned-but-running,
-                // C12/C14).
+                // and an unkillable closure keeps its thread (abandoned-but-running).
                 self.tasks.spawn_blocking(move || {
                     // tokio names its blocking-pool threads with the *same*
                     // `thread_name` as its async workers, so a blocking thread cannot
@@ -172,8 +172,8 @@ impl Dispatcher {
                 });
             }
             ExecutionClass::Compute => {
-                // Compute-bound work runs on the dedicated fixed-size rayon pool
-                // (T2 §3): the pool's `num_threads(N)` makes "never exceed N"
+                // Compute-bound work runs on the dedicated fixed-size rayon pool:
+                // the pool's `num_threads(N)` makes "never exceed N"
                 // structural. The attempt future is driven to completion on the
                 // compute thread with the same park-based executor.
                 self.compute.spawn(move || {
@@ -185,7 +185,7 @@ impl Dispatcher {
     }
 
     /// Shut the task runtime down **without joining** any abandoned-but-running
-    /// (zombie) blocking closure (arch.md C14; the same discipline the M1 loop used
+    /// (zombie) blocking closure (the same discipline the loop uses
     /// for its single tasks runtime). `Runtime::drop` would block forever on an
     /// unkillable busy blocking thread; `shutdown_background` returns immediately,
     /// leaving any zombie to be reaped at process exit (the driver already emitted
@@ -203,12 +203,12 @@ impl Dispatcher {
     }
 }
 
-/// The compute pool's thread count from the pinned capacity, with the T2 §3
+/// The compute pool's thread count from the pinned capacity, with the
 /// **floor-of-one** rule: `max(1, pinned)`. The unconstrained default
 /// (`u32::MAX`, meaning "not pinned") is clamped to the host parallelism so an
 /// unpinned run gets a CPU-sized pool rather than `u32::MAX` threads. The actual
-/// cgroup→host sizing that computes the pinned value is T32's; this only consumes
-/// it and applies the floor.
+/// cgroup→host sizing that computes the pinned value lives elsewhere; this only
+/// consumes it and applies the floor.
 fn compute_pool_size(caps: &PoolCapacities) -> usize {
     let pinned = caps.total(dagr_core::admission::Pool::ComputeThreads);
     if pinned == u64::from(u32::MAX) {
@@ -216,8 +216,8 @@ fn compute_pool_size(caps: &PoolCapacities) -> usize {
         // at one.
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
     } else {
-        // Pinned: honour it exactly, with the floor of one even at zero (T2 §3:
-        // "at least one thread even under a fractional CPU quota").
+        // Pinned: honour it exactly, with the floor of one even at zero — at
+        // least one thread even under a fractional CPU quota.
         usize::try_from(pinned).unwrap_or(usize::MAX).max(1)
     }
 }
@@ -246,7 +246,7 @@ thread_local! {
     static BLOCKING_SURFACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Classify the **current** thread's execution surface (arch.md C13). Used by
+/// Classify the **current** thread's execution surface. Used by
 /// observability/tests to attribute a running closure to its surface without a
 /// wall-clock: compute threads carry the compute prefix, blocking threads set the
 /// [`BLOCKING_SURFACE`] marker, and async workers carry the async prefix.
@@ -268,7 +268,7 @@ pub(crate) fn current_surface() -> Surface {
     }
 }
 
-/// The execution surface a unit of work ran on — the observable half of C13's
+/// The execution surface a unit of work ran on — the observable half of the
 /// class→surface routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Surface {
@@ -295,8 +295,8 @@ pub(crate) enum Surface {
 /// busy-spins) whenever a poll returns `Pending` and wakes on the future's waker.
 /// Running the attempt this way — rather than on a nested `Runtime::block_on` —
 /// keeps the blocking/compute thread genuinely occupied by the work, which is what
-/// makes an unkillable closure a real abandoned-but-running zombie (C12/C14) and
-/// keeps the async workers free (T2 §2). It uses only `std` (`Wake`/`Thread::park`),
+/// makes an unkillable closure a real abandoned-but-running zombie and
+/// keeps the async workers free. It uses only `std` (`Wake`/`Thread::park`),
 /// so it adds no runtime dependency and no `unsafe`.
 fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);

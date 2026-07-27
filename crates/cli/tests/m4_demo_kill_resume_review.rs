@@ -1,11 +1,10 @@
-//! The **M4 gate demo** — kill, resume, and review — ticket T63 (078). Written
-//! first, TDD.
+//! The **gate demo** — kill, resume, and review. Written first, TDD.
 //!
-//! This is the M4 milestone gate: arch.md's Build order fixes M4 (*"It is
-//! operable"*) done when *"a pipeline killed mid-run resumes and skips completed
-//! durable work, and a structural change to the graph is caught in code review."*
-//! These tests prove those two guarantees **end-to-end as CI tests**, composing the
-//! already-merged M4 machinery through the **shipped** driver — not at node grain:
+//! This is the operability gate: the spec fixes the *"It is operable"* done
+//! when *"a pipeline killed mid-run resumes and skips completed durable work, and a
+//! structural change to the graph is caught in code review."* These tests prove
+//! those two guarantees **end-to-end as CI tests**, composing the already-merged
+//! operability machinery through the **shipped** driver — not at node grain:
 //!
 //! - **Kill** — the `dagr-t63-demo-run` binary drives the reference pipeline through
 //!   the **real** `drive()` loop, writing a real on-disk event stream; once the
@@ -14,13 +13,13 @@
 //!   (SIGKILL — no exit handler, the container-kill failure mode). The surviving
 //!   stream folds into a complete, interrupted, resumable artifact.
 //! - **Resume** — the same binary reads the killed run's folded artifact, runs the
-//!   **real** C27 `resume_verb`, carries scratch forward (the **real** T54b
-//!   `carry_forward`), and drives the **must-run subset** through the **real**
-//!   `drive()` loop with the satisfied-from-prior nodes pre-seeded and the demanded
-//!   durable producer **rehydrated** into its consumer's slot. Every M4 done-when is
+//!   **real** `resume_verb`, carries scratch forward (the **real** `carry_forward`),
+//!   and drives the **must-run subset** through the **real** `drive()` loop with the
+//!   satisfied-from-prior nodes pre-seeded and the demanded durable producer
+//!   **rehydrated** into its consumer's slot. Every "It is operable" done-when is
 //!   asserted from what the shipped driver actually did.
 //! - **Review** — the reference pipeline's canonical structure fixture (produced
-//!   through the blessed C28 `bless_structure` flow) is checked against a rewiring
+//!   through the blessed `bless_structure` flow) is checked against a rewiring
 //!   and a group rename, each of which fails review with a structural diff, while a
 //!   clean rebuild does not and the group rename leaves the fingerprint byte-identical.
 //!
@@ -30,7 +29,7 @@
 //! consumer's received value is `Blob::rehydrate(reference)` of the reference the
 //! prior durable producer **serialized and the driver recorded**; the carried-forward
 //! checkpoint is the byte string the prior checkpoint node **wrote through its own
-//! C18 store** and the real `carry_forward` copied. Never a constant next to the
+//! durable store** and the real `carry_forward` copied. Never a constant next to the
 //! assertion.
 //!
 //! # Determinism + isolation
@@ -198,8 +197,8 @@ fn kill_mid_run_flushes_a_complete_resumable_artifact() {
         );
     }
 
-    // The durable stage boundary succeeded and recorded its reference (C27 / T57) —
-    // through the REAL driver's T63 durable-reference seam.
+    // The durable stage boundary succeeded and recorded its reference — through the
+    // REAL driver's durable-reference seam.
     assert_eq!(
         terminal_of(&records, "expensive").as_deref(),
         Some("succeeded"),
@@ -262,15 +261,15 @@ fn kill_mid_run_flushes_a_complete_resumable_artifact() {
 /// **Resuming the killed run through the real `resume_verb` + `drive()` skips the
 /// durable stage boundary, rehydrates its value into the re-executing consumer,
 /// carries the checkpoint's scratch forward, re-runs the teardown-covered producer,
-/// and completes successfully — the M4 done-when, end-to-end through the shipped
-/// driver.**
+/// and completes successfully — the "It is operable" done-when, end-to-end through
+/// the shipped driver.**
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "this is the single end-to-end M4 done-when assertion — one killed run resumed \
-              once, then every C17/C18/C27 outcome checked against what the shipped driver \
-              actually did; splitting it would re-run the (process-spawning) kill several times \
-              and scatter the one coherent picture"
+    reason = "this is the single end-to-end done-when assertion — one killed run resumed \
+              once, then every teardown, scratch, and resume outcome checked against what the \
+              shipped driver actually did; splitting it would re-run the (process-spawning) kill \
+              several times and scatter the one coherent picture"
 )]
 fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
     let base = TempBase::new("resume");
@@ -286,7 +285,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
 
     let terminals = &result["terminals"];
 
-    // (C27) The durable stage boundary is satisfied-from-prior — NOT re-executed.
+    // The durable stage boundary is satisfied-from-prior — NOT re-executed.
     assert_eq!(
         terminals["expensive"].as_str(),
         Some("SatisfiedFromPrior"),
@@ -303,7 +302,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
         "the resume plan left the durable stage boundary satisfied-from-prior"
     );
 
-    // (C27) The demanded durable producer is rehydrated, and the re-executing
+    // The demanded durable producer is rehydrated, and the re-executing
     // consumer receives the EXACT value the prior producer serialized — traced through
     // the real reference, not a constant.
     assert_eq!(
@@ -323,7 +322,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
         "the re-executing consumer succeeds over the rehydrated value"
     );
 
-    // (C18 / T54b) The must-run checkpoint node re-executes and observes its prior-run
+    // The must-run checkpoint node re-executes and observes its prior-run
     // scratch carried forward into the resumed namespace — it continued from the
     // checkpoint, not from zero.
     let must_run: Vec<&str> = result["must_run"]
@@ -348,8 +347,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
          counterpart wrote — carried forward, continuing from the checkpoint"
     );
 
-    // (C17 / C27) The teardown-covered producer is re-executed, never
-    // satisfied-from-prior.
+    // The teardown-covered producer is re-executed, never satisfied-from-prior.
     assert!(
         !satisfied.contains(&"inmem"),
         "the teardown-covered producer is never satisfied-from-prior"
@@ -365,7 +363,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
         "the teardown runs on resume under its fresh signal"
     );
 
-    // (C27) The cleanup-after-publish shape resumes correctly: publish is
+    // The cleanup-after-publish shape resumes correctly: publish is
     // satisfied-from-prior (undemanded, ordering-only), cleanup re-runs and its rule
     // fires on the success-like satisfied upstream.
     assert!(
@@ -379,7 +377,7 @@ fn resume_skips_durable_work_rehydrates_and_carries_scratch_forward() {
         "cleanup's rule fires on the satisfied publish and it succeeds"
     );
 
-    // (C27) The resumed run produces its own artifact, linked to parent + lineage
+    // The resumed run produces its own artifact, linked to parent + lineage
     // root, with the durable reference copied forward (self-contained).
     let artifact = &result["resumed_artifact"];
     assert_eq!(artifact["header"]["run_id"].as_str(), Some("run-resumed"));
@@ -447,7 +445,7 @@ fn multi_generation_resume_links_parent_and_lineage_root() {
 // ===========================================================================
 
 /// Bless the reference pipeline's canonical structure fixture under a private path
-/// (the blessed C28 update flow), returning it.
+/// (the blessed update flow), returning it.
 fn bless_reference_fixture(base: &TempBase) -> PathBuf {
     let fixture = base.path().join("reference.snapshot.json");
     bless_structure(
@@ -501,9 +499,9 @@ fn a_rewiring_is_caught_by_the_structure_fixture() {
 
 /// **A group rename is review-visible but does not touch the structural
 /// fingerprint.** Renaming the `publish` group leaves the graph identical except the
-/// group label; the structure test fails with a diff (review-visible per C6/C28),
-/// while the structural fingerprint is byte-identical across the rename — so resume
-/// across the rename would still be permitted.
+/// group label; the structure test fails with a diff (review-visible), while the
+/// structural fingerprint is byte-identical across the rename — so resume across the
+/// rename would still be permitted.
 #[test]
 fn a_group_rename_is_review_visible_but_fingerprint_neutral() {
     let base = TempBase::new("review-group");
@@ -532,8 +530,8 @@ fn a_group_rename_is_review_visible_but_fingerprint_neutral() {
         "the diff reports the group rename (publish -> shipping): {report}"
     );
 
-    // Companion (C6 / C21): the structural fingerprint is byte-identical across the
-    // rename — the label is excluded from identity, so resume is still permitted.
+    // Companion: the structural fingerprint is byte-identical across the rename —
+    // the label is excluded from identity, so resume is still permitted.
     let base_fp = dagr_cli::structure_snapshot::StructureSnapshot::from_pipeline(
         &assemble(base_groups, ConsumerFrom::Expensive),
         PIPELINE,

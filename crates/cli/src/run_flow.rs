@@ -1,19 +1,18 @@
-//! The **run-a-Flow** convenience seam (operator-approved 2026-07-24; ADR 081) —
-//! a public one-call path that runs a [`Flow`] of real [`Task`]s to a completed
-//! run **without** the author hand-writing any scheduling or permit plumbing.
+//! The **run-a-Flow** convenience seam — a public one-call path that runs a
+//! [`Flow`] of real [`Task`]s to a completed run **without** the author
+//! hand-writing any scheduling or permit plumbing.
 //!
-//! # Why this module exists (arch.md C1)
+//! # Why this module exists
 //!
-//! arch.md C1 says a task author writes **tasks + a flow** and *never* writes the
-//! scheduling/permit plumbing. Yet until now every milestone demo hand-wrote
-//! ~150 lines of type-erased [`NodeRunner`] impls per
-//! pipeline — a `Pin<Box<dyn Future<Output = TerminalState> + Send>>` per node
-//! that reads input [`SlotRef`]s, calls `run_attempt` /
-//! `run_with_retries_caught`, and
-//! fills the output [`Slot`]. That is exactly the plumbing C1 says the author must
-//! not write. [`RunnableFlow`] captures that plumbing **generically, once**, at
-//! registration time (where the concrete `Task` + `Input`/`Output` types are
-//! known), so the author registers real tasks and calls [`run`](RunnableFlow::run).
+//! A task author writes **tasks + a flow** and *never* writes the scheduling/permit
+//! plumbing. Without this seam every milestone demo hand-wrote ~150 lines of
+//! type-erased [`NodeRunner`] impls per pipeline — a
+//! `Pin<Box<dyn Future<Output = TerminalState> + Send>>` per node that reads input
+//! [`SlotRef`]s, calls `run_attempt` / `run_with_retries_caught`, and fills the
+//! output [`Slot`]. That is exactly the plumbing the author must not write.
+//! [`RunnableFlow`] captures that plumbing **generically, once**, at registration
+//! time (where the concrete `Task` + `Input`/`Output` types are known), so the
+//! author registers real tasks and calls [`run`](RunnableFlow::run).
 //!
 //! # How the generic adapter works (the crux)
 //!
@@ -41,7 +40,7 @@
 //! surface is untouched — the milestone demos and the `full_pipeline` fake harness
 //! still hand-write runners and still compile. The generic runners this module
 //! builds are ordinary `NodeRunner`s driven by the real
-//! [`drive`] loop, so the T63 `scratch_root` wiring and the
+//! [`drive`] loop, so the `scratch_root` wiring and the
 //! resume seam apply to them unchanged: a single-attempt node reaches its real
 //! per-node durable scratch namespace through the driver's per-attempt context.
 
@@ -104,7 +103,7 @@ struct RegisteredRunner {
 ///
 /// This wraps the driver's [`driver::RunReport`](crate::driver::RunReport) and
 /// additionally retains the run's output slots, so a caller can read a node's value
-/// after the run through [`output`](RunReport::output) — the value the M1 demo
+/// after the run through [`output`](RunReport::output) — the value a hand-wired demo
 /// otherwise reads by re-wiring a slot it kept a reference to.
 pub struct RunReport {
     inner: crate::driver::RunReport,
@@ -162,7 +161,7 @@ impl RunReport {
 
 /// The **run-a-Flow** builder — register real [`Task`]s with typed data
 /// dependencies, then run the whole flow in **one call** with no hand-written
-/// [`NodeRunner`] (arch.md C1; ADR 081).
+/// [`NodeRunner`].
 ///
 /// It wraps a [`Flow`] (so node identity, typed handles, dependency binding, and
 /// assembly are exactly the framework's) and, alongside each registration, captures
@@ -194,10 +193,10 @@ impl RunnableFlow {
     /// Register a **source** node (one whose task consumes nothing) under `name`,
     /// returning its output [`Handle`]. Runs a single attempt through the real
     /// caught attempt runner on the driver's per-attempt context (so its durable
-    /// scratch namespace is reachable — T63).
+    /// scratch namespace is reachable).
     ///
     /// This uses the **type-erased** flow registrar, so the node carries **no**
-    /// author-declared stable names and is not emittable to the C20 graph artifact.
+    /// author-declared stable names and is not emittable to the graph artifact.
     /// For a graph-emittable source (so `graph <flow>` / `validate <flow>` work
     /// through [`crate::registry::run_registry`]), use the stable-name-aware
     /// [`register_source_named`](Self::register_source_named) instead.
@@ -219,9 +218,9 @@ impl RunnableFlow {
     /// The graph-emittable counterpart of [`register_source`](Self::register_source):
     /// it registers through the flow's stable-name-aware registrar (so the built
     /// [`Pipeline`] records `T::STABLE_NAME` and `T::Output`'s stable name), which is
-    /// what lets `graph <flow>` emit the C20 artifact for a registry-hosted flow
-    /// ([`crate::registry::run_registry`]; ADR 086). The run behaviour is identical
-    /// to [`register_source`](Self::register_source) — a single caught attempt on the
+    /// what lets `graph <flow>` emit the graph artifact for a registry-hosted flow
+    /// ([`crate::registry::run_registry`]). The run behaviour is identical to
+    /// [`register_source`](Self::register_source) — a single caught attempt on the
     /// driver's per-attempt context.
     #[must_use]
     pub fn register_source_named<T>(
@@ -235,7 +234,7 @@ impl RunnableFlow {
     {
         let name = name.into();
         // The stable-name-aware flow registrar captures `T`'s author-declared stable
-        // names into the pipeline node, so the built pipeline is C20-emittable.
+        // names into the pipeline node, so the built pipeline is graph-emittable.
         let handle =
             self.flow
                 .register_source_named::<T>(&name, &task, None::<String>, NodePolicy::new());
@@ -328,10 +327,10 @@ impl RunnableFlow {
     /// The graph-emittable counterpart of [`register`](Self::register): it registers
     /// through the flow's stable-name-aware registrar (so the built [`Pipeline`]
     /// records the stable task name, the ordered stable input type names, and the
-    /// stable output type name), which is what lets `graph <flow>` emit the C20
-    /// artifact for a registry-hosted flow ([`crate::registry::run_registry`]; ADR
-    /// 086). The dependency binding (`D: Deps<Inputs = T::Input>`, the exact-type /
-    /// arity / acyclicity checks) and the run behaviour are identical to
+    /// stable output type name), which is what lets `graph <flow>` emit the graph
+    /// artifact for a registry-hosted flow ([`crate::registry::run_registry`]). The
+    /// dependency binding (`D: Deps<Inputs = T::Input>`, the exact-type / arity /
+    /// acyclicity checks) and the run behaviour are identical to
     /// [`register`](Self::register) — a single caught attempt through the real runner
     /// (this node carries the default [`NodePolicy`]).
     #[must_use]
@@ -351,7 +350,7 @@ impl RunnableFlow {
         let policy = NodePolicy::new();
         // The stable-name-aware flow registrar captures `T`/`T::Input`/`T::Output`'s
         // author-declared stable names into the pipeline node (so the built pipeline
-        // is C20-emittable) while binding the same edges `register` does.
+        // is graph-emittable) while binding the same edges `register` does.
         let handle =
             self.flow
                 .register_named::<T, D>(&name, &task, deps.clone(), None::<String>, policy);
@@ -466,12 +465,12 @@ impl RunnableFlow {
 
     /// **Finish** the flow into its immutable [`Pipeline`], consuming the flow — the
     /// live `&Pipeline` the *inspection* verbs (`graph`, `validate`) need without
-    /// driving a run (arch.md `### C7`; graph verb T40; ADR 086).
+    /// driving a run.
     ///
     /// [`run`](Self::run) **consumes** the flow and [`RunnableFlow`] is not `Clone`,
     /// so one instance answers at most one verb; the registry ([`run_registry`])
     /// therefore calls the flow's factory **once per verb** — `graph <flow>` builds a
-    /// fresh flow, calls this to obtain the pipeline, and emits the C20 artifact via
+    /// fresh flow, calls this to obtain the pipeline, and emits the graph artifact via
     /// [`graph_verb`](crate::graph::graph_verb); `validate <flow>` builds another and
     /// runs [`validate_verb`](crate::contract::validate_verb) over the pipeline. The
     /// runner factories captured at registration are for *execution* only and are
@@ -479,7 +478,7 @@ impl RunnableFlow {
     /// inspection verbs read (and, when the nodes were registered through the
     /// stable-name-aware surface — [`register_source_named`](Self::register_source_named)
     /// / [`register_named`](Self::register_named) — the author-declared stable names
-    /// the C20 artifact records).
+    /// the graph artifact records).
     ///
     /// [`run_registry`]: crate::registry::run_registry
     #[must_use]
@@ -539,10 +538,9 @@ where
 /// output slot, plus the [`RetryConfig`] derived from the node's policy. On
 /// [`run`](NodeRunner::run) it drives the node through the **real** attempt path:
 /// a single caught attempt on the driver's own per-attempt context (so scratch,
-/// temp-dir, and cancellation are threaded — T63) when the node does not retry, or
-/// the real bounded-retry loop otherwise. The emitted C14/C19 records are the
-/// genuine framework ones — this reproduces, not re-implements, the hand-wired
-/// behaviour.
+/// temp-dir, and cancellation are threaded) when the node does not retry, or the
+/// real bounded-retry loop otherwise. The emitted records are the genuine framework
+/// ones — this reproduces, not re-implements, the hand-wired behaviour.
 struct GenericNodeRunner<T: Task> {
     name: String,
     task: Option<T>,
@@ -614,9 +612,9 @@ where
         };
         Box::pin(async move {
             if retry_config.max_attempts() > 1 {
-                // The REAL bounded-retry loop (T22/T23). It mints its own per-attempt
-                // context off the driver's run/pipeline identity; the backoff timer
-                // resolves immediately (attempt-counter-driven, no wall-clock sleep).
+                // The REAL bounded-retry loop. It mints its own per-attempt context
+                // off the driver's run/pipeline identity; the backoff timer resolves
+                // immediately (attempt-counter-driven, no wall-clock sleep).
                 run_with_retries_caught(
                     bound,
                     &name,
@@ -632,7 +630,7 @@ where
                 .terminal_state()
             } else {
                 // A single caught attempt through the REAL runner on the DRIVER's
-                // context (scratch_root / temp_dir / cancellation threaded — T63).
+                // context (scratch_root / temp_dir / cancellation threaded).
                 let mut bound = bound;
                 run_attempt_caught(&mut bound, &name, ctx, &slot, sink)
                     .await

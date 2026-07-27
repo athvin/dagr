@@ -1,16 +1,15 @@
-//! Two-concurrent-runs disjointness test — ticket T67 (048). Written first, TDD.
+//! Two-concurrent-runs disjointness test. Written first, TDD.
 //!
-//! These exercise the **already-merged** system under test: the M1 run-loop
-//! driver [`dagr_cli::driver::drive`] (T24), the run-store contract (T0.6, the
-//! `<base>/<pipeline>/<run-id>/` layout), and the C19 event-stream writer (T19).
-//! No production behaviour is defined or changed here — this ticket **consumes**
-//! those components and proves one property against them:
+//! These exercise the **already-merged** system under test: the run-loop driver
+//! [`dagr_cli::driver::drive`], the run-store contract (the
+//! `<base>/<pipeline>/<run-id>/` layout), and the event-stream writer. No
+//! production behaviour is defined or changed here — this test **consumes** those
+//! components and proves one property against them:
 //!
 //! > Two simultaneous runs of one dagr binary on one machine coexist cleanly —
 //! > disjoint run identities, disjoint run-store directories, no shared or
 //! > colliding file, and two event streams that are each independently valid,
-//! > gapless, and safely concatenable-and-partitionable by run identity
-//! > (arch.md `### C19`, `## Operational model`).
+//! > gapless, and safely concatenable-and-partitionable by run identity.
 //!
 //! ## Why this is non-vacuous
 //!
@@ -52,7 +51,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// A capturing in-memory run-store sink + monotonic clock (C19 injection seam)
+// A capturing in-memory run-store sink + monotonic clock (injection seam)
 // ===========================================================================
 
 /// An in-memory [`EventSink`] capturing every appended line, so a test can parse
@@ -98,7 +97,7 @@ impl MonotonicClock for TickClock {
 // ===========================================================================
 
 /// A minimal parsed view of one record: its `event` kind, its `run_id`, its
-/// `seq`, and its `schema_version` — the envelope fields C19 requires on every
+/// `seq`, and its `schema_version` — the envelope fields required on every
 /// record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Record {
@@ -145,14 +144,14 @@ fn parse_records(bytes: &[u8]) -> Vec<Record> {
         .collect()
 }
 
-/// Assert a single run's stream is independently valid per C19: it parses, every
+/// Assert a single run's stream is independently valid: it parses, every
 /// record carries the expected identity and the schema version, it opens with a
 /// `run-started` and closes with a `run-finished`, and its sequence numbers are
 /// gapless and strictly increasing from `0`.
 fn assert_stream_is_valid(records: &[Record], expected_run_id: &str) {
     assert!(!records.is_empty(), "a completed run's stream is non-empty");
 
-    // Run-started opens, run-finished closes (C19: both a run-started and a
+    // Run-started opens, run-finished closes (both a run-started and a
     // run-finished record present, in that framing).
     assert_eq!(
         records.first().map(|r| r.kind.as_str()),
@@ -166,7 +165,7 @@ fn assert_stream_is_valid(records: &[Record], expected_run_id: &str) {
     );
 
     // Exactly one schema version across the stream, and it is a real (non-empty)
-    // version — every record carries the schema version (C19).
+    // version — every record carries the schema version.
     let schema_versions: BTreeSet<&str> =
         records.iter().map(|r| r.schema_version.as_str()).collect();
     assert_eq!(
@@ -181,7 +180,7 @@ fn assert_stream_is_valid(records: &[Record], expected_run_id: &str) {
         "the schema version is the real C19 event-stream schema id, found {schema_versions:?}"
     );
 
-    // Every record carries THIS run's identity (C19), and no foreign identity.
+    // Every record carries THIS run's identity, and no foreign identity.
     for rec in records {
         assert_eq!(
             rec.run_id, expected_run_id,
@@ -189,8 +188,8 @@ fn assert_stream_is_valid(records: &[Record], expected_run_id: &str) {
         );
     }
 
-    // Sequence numbers are gapless and strictly increasing from 0 within the run
-    // (C19). Records are in stored order, so seq must be exactly 0, 1, 2, ….
+    // Sequence numbers are gapless and strictly increasing from 0 within the run.
+    // Records are in stored order, so seq must be exactly 0, 1, 2, ….
     for (i, rec) in records.iter().enumerate() {
         assert_eq!(
             rec.seq, i as u64,
@@ -236,11 +235,11 @@ impl Task for GateThenSucceed {
 }
 
 // ===========================================================================
-// Type-erased node runners built on the real C14 attempt path
+// Type-erased node runners built on the real attempt path
 // ===========================================================================
 
 /// A no-input source runner: runs its task's single attempt through the real
-/// caught runner and reports the terminal state (the genuine C14 records).
+/// caught runner and reports the terminal state (the genuine attempt records).
 struct SourceRunner<T: Task<Input = ()>> {
     name: String,
     task: Option<T>,
@@ -322,7 +321,7 @@ impl<U: Send + Sync + Clone + 'static, T: Task<Input = U>> NodeRunner for MapRun
 }
 
 /// An owned no-input adapter over a one-input task (so the real single-attempt
-/// runner drives it and emits genuine C14 records).
+/// runner drives it and emits genuine attempt records).
 struct Bound<U, T> {
     inner: T,
     input: Option<U>,
@@ -462,8 +461,8 @@ fn drive_two_concurrently(
 /// run identities differ; each stream carries only its own identity and the
 /// schema version; each stream is independently valid, gapless, and framed by
 /// run-started/run-finished; and both reach the correct terminal outcome. This is
-/// the headline disjointness proof (C19: two simultaneous runs write disjoint
-/// files and both produce valid streams).
+/// the headline disjointness proof: two simultaneous runs write disjoint files and
+/// both produce valid streams.
 #[test]
 fn two_concurrent_auto_minted_runs_stay_disjoint() {
     let barrier = Arc::new(Barrier::new(2));
@@ -524,8 +523,8 @@ fn two_concurrent_auto_minted_runs_stay_disjoint() {
 /// partitioned by run identity. Asserted: partitioning yields exactly two groups
 /// matching the two identities; each group, read in stored order, equals that
 /// run's original stream record-for-record; and the split is order-independent
-/// because identity travels on every record (C19: records from concurrent runs
-/// can be concatenated and partitioned safely).
+/// because identity travels on every record — records from concurrent runs can be
+/// concatenated and partitioned safely.
 #[test]
 fn concurrent_streams_concatenate_and_partition_losslessly() {
     let barrier = Arc::new(Barrier::new(2));
@@ -592,9 +591,8 @@ fn concurrent_streams_concatenate_and_partition_losslessly() {
 /// directories exist under `<base>/<pipeline>/`, their run-id segments differ, the
 /// reported stream paths differ and each embeds its own id, and neither directory
 /// path is a prefix of the other (disjoint subtrees). This is the store-layout
-/// disjointness guarantee (C19: two simultaneous runs write disjoint files),
-/// proven with operator-supplied ids so it is not an artefact of `UUIDv7`
-/// monotonicity.
+/// disjointness guarantee — two simultaneous runs write disjoint files — proven
+/// with operator-supplied ids so it is not an artefact of `UUIDv7` monotonicity.
 #[test]
 fn concurrent_runs_write_disjoint_directories_under_a_shared_base() {
     let base = temp_base();
@@ -621,7 +619,7 @@ fn concurrent_runs_write_disjoint_directories_under_a_shared_base() {
     assert_ne!(report_a.run_id, report_b.run_id);
 
     // The two reported stream paths differ and each embeds its own run id under the
-    // shared base — the C19 `<base>/<pipeline>/<run-id>/…` layout.
+    // shared base — the `<base>/<pipeline>/<run-id>/…` layout.
     assert_ne!(
         report_a.stream_path, report_b.stream_path,
         "two concurrent runs report disjoint stream paths"

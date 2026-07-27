@@ -1,9 +1,8 @@
-//! Cross-toolchain **structural-determinism** fixture (arch.md system-level
-//! acceptance criterion 4(a); ticket T65 / `SL4a`).
+//! Cross-toolchain **structural-determinism** fixture.
 //!
 //! Prints, for the checked-in reference pipeline, the **masked graph artifact**
-//! (the full C20 artifact with the sole generation-time header field blanked) as
-//! canonical JSON on one line, followed by the two C21 fingerprint strings:
+//! (the full graph artifact with the sole generation-time header field blanked) as
+//! canonical JSON on one line, followed by the two fingerprint strings:
 //!
 //! ```text
 //! artifact={ ... canonical JSON, generation-time masked ... }
@@ -14,7 +13,7 @@
 //! CI builds and runs this example under **two different toolchains** and diffs
 //! the output byte-for-byte (`.github/workflows/ci.yml`, the
 //! `structural-determinism` job). A divergence fails the job — that is the
-//! executable form of `SL4a`'s "two builds of the same source produce identical
+//! executable form of the "two builds of the same source produce identical
 //! fingerprints AND byte-identical graph artifacts (generation time aside), on
 //! different toolchains" guarantee. It extends the fingerprint-only
 //! `cross-toolchain-fingerprint` job to the full graph artifact.
@@ -26,7 +25,7 @@
 //!
 //! This example depends only on the public `dagr_cli::graph` surface and
 //! `dagr_core`; it opens no run store, reads no environment, and takes no
-//! parameters (C7 / C20 pure assembly). The reference pipeline it builds is the
+//! parameters (pure assembly). The reference pipeline it builds is the
 //! same shape the `crates/cli/tests/system_acceptance_gate.rs` structural-
 //! determinism test drives, kept in sync by review.
 

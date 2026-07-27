@@ -1,15 +1,14 @@
-//! C12 admission-controller **driver integration** test — ticket T31 (041).
-//! Written first, TDD.
+//! Admission-controller **driver integration** test. Written first, TDD.
 //!
-//! This exercises the **real** T24 run-loop driver ([`dagr_cli::driver::drive`])
-//! with a **pinned** C12 memory pool, proving the admission point is wired into
+//! This exercises the **real** run-loop driver ([`dagr_cli::driver::drive`])
+//! with a **pinned** memory pool, proving the admission point is wired into
 //! the loop: a node whose declared cost does not fit the pool's remaining capacity
 //! **waits** until a running node releases its permit, then is admitted — the
 //! ledger returns to full at run end (no leak). Admission is controlled by
 //! **counts** (a pinned pool + declared costs), never sleeps, so it is
 //! deterministic in CI.
 //!
-//! The termination + event semantics T24/T25 own are unchanged: the run still ends
+//! The termination + event semantics are unchanged: the run still ends
 //! precisely when nothing is pending and nothing is in flight, and every node
 //! still reaches its terminal state. The only new behaviour is *when* a node is
 //! admitted — gated on capacity.
@@ -30,7 +29,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam)
+// In-memory sink + clock (the injection seam)
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -249,8 +248,9 @@ fn a_pinned_pool_admits_one_node_at_a_time_and_the_run_still_completes() {
 }
 
 /// With an **unconstrained** pool (the default), admission gates nothing: both
-/// zero-dependency nodes are admitted at once, exactly as the M1 driver behaved
-/// before T31 — the integration is behaviour-preserving unless a pool is pinned.
+/// zero-dependency nodes are admitted at once, exactly as the driver behaved
+/// before admission control existed — the integration is behaviour-preserving
+/// unless a pool is pinned.
 #[test]
 fn an_unconstrained_pool_admits_every_ready_node_at_once() {
     let (_pipeline, plan) = two_source_plan(1_000_000);
@@ -282,22 +282,18 @@ fn an_unconstrained_pool_admits_every_ready_node_at_once() {
 /// reported as complete — a silent violation of "every reachable node reaches a
 /// terminal state". The run must NOT exit silently with a stranded node.
 ///
-/// **Superseded by T32 (042).** When T31 shipped, the *full* bootstrap-time
-/// rejection of too-big nodes was deferred, so the driver caught this can-never-fit
-/// node with a defensive admission-time guard, folding it to a `Failed` terminal
-/// *inside* the loop. T32 makes the rejection authoritative and moves it **before**
-/// the loop: a too-big node now fails the run at **bootstrap**, before any node
-/// executes, with the distinct `bootstrap-failed` outcome (arch.md C12: "fails at
-/// bootstrap, not at admission time"). This test therefore asserts the T32
-/// behaviour — the run is rejected at bootstrap and nothing runs. The T31 driver
-/// guard (`can_ever_fit` / `reject_over_demand`) is retained unchanged as a
-/// defensive backstop but is not reached on the default drive path, because the
-/// bootstrap check intercepts first. The T32 owner-tests for this path live in
+/// A too-big node fails the run at **bootstrap**, before any node executes, with
+/// the distinct `bootstrap-failed` outcome ("fails at bootstrap, not at admission
+/// time"). This test asserts that behaviour — the run is rejected at bootstrap and
+/// nothing runs. The driver's defensive admission-time guard
+/// (`can_ever_fit` / `reject_over_demand`) is retained unchanged as a backstop but
+/// is not reached on the default drive path, because the bootstrap check intercepts
+/// first. The owner-tests for the bootstrap-rejection path live in
 /// `crates/cli/tests/container_limits_driver.rs`.
 #[test]
 fn an_over_demand_node_is_rejected_at_bootstrap_not_silently_stranded() {
     // Pool holds 1000 bytes total. "toobig" demands 5000 (> total → can never fit);
-    // "fits" demands 400. T32's bootstrap check rejects the run before the loop.
+    // "fits" demands 400. The bootstrap check rejects the run before the loop.
     let (_pipeline, plan) = over_demand_plan(5_000, 400);
     let sink = MemorySink::default();
     let report = drive(

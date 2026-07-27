@@ -1,7 +1,6 @@
 //! Build script embedding **build provenance** into the pipeline binary at build
-//! time (arch.md `### C20 · Graph artifact`; "Stability · Supply chain": *"build
-//! provenance (tool version, git commit, lockfile hash) is embedded in every
-//! binary and every artifact"*).
+//! time: build provenance (tool version, git commit, lockfile hash) is embedded
+//! in every binary and every artifact.
 //!
 //! It resolves three provenance values **once, at build time**, and exposes each
 //! as a `cargo::rustc-env` variable the crate reads through `env!` (so the value
@@ -24,7 +23,7 @@
 //! `git rev-parse HEAD` if git is on `PATH` (no fetch, no remote), reads a local
 //! file for the lockfile hash, and otherwise emits stable sentinels — so a build
 //! in an empty environment still produces a complete, byte-stable header, which is
-//! what lets the graph artifact emit in CI on every pull request (C20).
+//! what lets the graph artifact emit in CI on every pull request.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -46,7 +45,7 @@ fn main() {
     // Re-run when the resolved dependency set changes, so the lockfile hash stays
     // truthful. (Git-commit staleness across a rebuild without a source change is
     // acceptable provenance drift, not a correctness bug; the value is fixed per
-    // *built* binary, which is the C20 requirement.)
+    // *built* binary, which is what the graph-artifact provenance requires.)
     if let Some(lock) = workspace_lockfile_path() {
         println!("cargo:rerun-if-changed={}", lock.display());
     }

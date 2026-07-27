@@ -1,16 +1,15 @@
-//! C15 · failure policy, propagation, and trigger-rule runtime — ticket T34 (044).
-//! Written first, TDD.
+//! Failure policy, propagation, and trigger-rule runtime. Written first, TDD.
 //!
-//! These exercise the **real** T24/T34 run-loop driver ([`dagr_cli::driver::drive`])
+//! These exercise the **real** run-loop driver ([`dagr_cli::driver::drive`])
 //! end-to-end: a graph is assembled, driven through the real two-runtime loop, and
 //! asserted against the parsed event stream and the returned per-node terminal
-//! states — never internal state. They cover the C15 runtime that T18 (readiness
-//! evaluation) and T24 (the M1 loop that fired only `all-succeeded`) left to T34:
+//! states — never internal state. They cover the runtime that readiness evaluation
+//! and the minimal run loop (which fired only `all-succeeded`) left to this suite:
 //!
 //! - the runtime **firing of the non-default rules** `all-terminal` and
 //!   `any-failed` (a cleanup fires after an upstream failure; a contingency fires
 //!   on a failure and is `skipped` when none arose) — over the run-level ordering
-//!   seam that stands in for T50's graph ordering edges;
+//!   seam that stands in for graph ordering edges;
 //! - **failure propagation** by state class through the real driver (a failed
 //!   upstream deadens an `all-succeeded` downstream to `upstream-failed`; a skip to
 //!   `upstream-skipped`; a cancellation to `cancelled`);
@@ -39,7 +38,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam).
+// In-memory sink + clock (the injection seam).
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -194,7 +193,7 @@ impl Task for PassThrough {
 }
 
 // ===========================================================================
-// Type-erased runners over the real C14 attempt path.
+// Type-erased runners over the real attempt path.
 // ===========================================================================
 
 struct SourceRunner<T: Task<Input = ()>> {
@@ -326,13 +325,13 @@ fn config(mode: FailureMode) -> RunConfig {
 }
 
 // ===========================================================================
-// Runtime firing of the NON-DEFAULT rules (C15 · T0.4 §5b/§5c — runtime).
+// Runtime firing of the NON-DEFAULT rules.
 // ===========================================================================
 
 /// `all-terminal` cleanup fires after an upstream failure — verified under BOTH
 /// modes. The cleanup node is ordered after a failing source; its `all-terminal`
 /// rule fires regardless of class, so it EXECUTES and is never `upstream-failed`.
-/// This is the entire reason non-default rules exist. (C15 def-of-done: all-terminal.)
+/// This is the entire reason non-default rules exist.
 #[test]
 fn all_terminal_cleanup_fires_after_a_failure_in_both_modes() {
     for mode in [
@@ -395,7 +394,7 @@ fn all_terminal_cleanup_fires_after_a_failure_in_both_modes() {
 }
 
 /// `any-failed` contingency fires on a failure-like upstream: a consume-nothing
-/// notify node ordered after a failing source executes. (C15 def-of-done: any-failed.)
+/// notify node ordered after a failing source executes.
 #[test]
 fn any_failed_contingency_fires_on_a_failure() {
     let mut flow = Flow::new();
@@ -450,7 +449,7 @@ fn any_failed_contingency_fires_on_a_failure() {
 
 /// `any-failed` contingency that never arose → `skipped`: all ordering upstreams
 /// succeed, so the guarded contingency did not arise; the node ends `skipped`
-/// without executing, and the run is a success. (C15 def-of-done: any-failed skipped.)
+/// without executing, and the run is a success.
 #[test]
 fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
     let mut flow = Flow::new();
@@ -509,12 +508,12 @@ fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
 }
 
 // ===========================================================================
-// Failure propagation by state class through the real driver (§5a).
+// Failure propagation by state class through the real driver.
 // ===========================================================================
 
 /// A failing data upstream deadens an `all-succeeded` downstream to `upstream-failed`
-/// and the deadened node never executes. (C15 def-of-done: no node runs on a
-/// non-succeeded data dependency; propagated-state selection.)
+/// and the deadened node never executes. (No node runs on a non-succeeded data
+/// dependency; propagated-state selection.)
 #[test]
 fn failed_data_upstream_propagates_upstream_failed() {
     let mut flow = Flow::new();
@@ -565,7 +564,6 @@ fn failed_data_upstream_propagates_upstream_failed() {
 
 /// A skipping data upstream propagates `upstream-skipped` to its `all-succeeded`
 /// downstream, and the run reports overall success (only skips among non-successes).
-/// (C15 def-of-done: upstream-skipped; skip-only success.)
 #[test]
 fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
     let mut flow = Flow::new();
@@ -616,7 +614,7 @@ fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
 
 /// Continue-independent: an unrelated branch with no ancestral relationship to the
 /// failure runs to completion. `bad` fails; the independent chain `a`→`b` both
-/// succeed. (C15 def-of-done: continue-independent.)
+/// succeed.
 #[test]
 fn continue_independent_runs_unrelated_branch() {
     let mut flow = Flow::new();
@@ -668,11 +666,11 @@ fn continue_independent_runs_unrelated_branch() {
 }
 
 /// Stop-on-first-failure cancels a pending unrelated default-rule node. A firing
-/// `any-failed` contingency (zero cost, ordered after `bad`) still runs.
-/// (C15 def-of-done: stop admits no further default work; pending unrelated →
-/// cancelled; contingency still runs.)
+/// `any-failed` contingency (zero cost, ordered after `bad`) still runs. (Stop
+/// admits no further default work; pending unrelated → cancelled; contingency
+/// still runs.)
 ///
-/// Determinism (same observable-signal gating the C16 sibling
+/// Determinism (same observable-signal gating the sibling
 /// `stop_on_first_failure_routes_through_cancellation_core_with_failure_origin`
 /// uses): `later`'s `cancelled` terminal depends on the stop landing **before**
 /// `later` is admitted. `bad` fails and triggers the stop, but it cannot itself
@@ -783,8 +781,7 @@ fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
 
 /// A mixed graph exercising success, failure, propagated failure, propagated skip,
 /// and a firing all-terminal cleanup: every node — including those that never ran —
-/// appears with exactly one terminal state, and none appears twice. (C15 def-of-done:
-/// exactly one terminal state.)
+/// appears with exactly one terminal state, and none appears twice.
 #[test]
 fn every_node_has_exactly_one_terminal_state() {
     let mut flow = Flow::new();

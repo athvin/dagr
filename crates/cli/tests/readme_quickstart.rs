@@ -1,10 +1,9 @@
-//! **README quickstart — verbatim, CI-verified** (arch.md "Documentation";
-//! system-level acceptance criterion 1; ticket T64).
+//! **README quickstart — verbatim, CI-verified.**
 //!
 //! The single machine-classed criterion 1 test: the README quickstart compiles
 //! and runs **verbatim** in CI, taking a Rust/cargo developer (no async
 //! experience) from an empty directory to a compiled, run, artifact-inspected
-//! two-node pipeline. It is the mapped test for `SL1` in the coverage matrix.
+//! two-node pipeline. It is the mapped test for system-level criterion 1.
 //!
 //! # Why the quickstart is extracted, not hand-maintained
 //!
@@ -122,9 +121,9 @@ fn readme_rust_block_matches_the_compiled_example_verbatim() {
     );
 }
 
-/// **The two tasks are authored with `#[task]`, plumbing-free (T73).** The
+/// **The two tasks are authored with `#[task]`, plumbing-free.** The
 /// quickstart is the canonical surface a reader copies first, so it must make
-/// arch.md C1's "declare four things, write no plumbing" claim demonstrably true:
+/// the "declare four things, write no plumbing" claim demonstrably true:
 /// `Count` and `Double` are `#[task]` inherent impls whose bodies are a single
 /// `run` fn, carrying **no** hand-written `type Input` / `type Output` /
 /// `EXECUTION_CLASS` lines (the macro supplies them). The registration and the
@@ -154,7 +153,7 @@ fn quickstart_tasks_are_authored_with_the_task_macro_and_carry_no_hand_written_p
         "`Double` is authored with `#[task]` on an inherent `impl` block"
     );
 
-    // The macro supplies the four C1 declarations, so neither node body may carry
+    // The macro supplies the four declarations, so neither node body may carry
     // a hand-written associated-type or execution-class line — that is exactly the
     // scaffolding the macro removes.
     assert!(

@@ -1,58 +1,56 @@
-//! C10 **bounded-memory chain** test — ticket T26 (036). Written first, TDD.
+//! **Bounded-memory chain** test. Written first, TDD.
 //!
-//! This is the "hundred-node authority" the output-slot ticket (T17) deferred to
-//! T26 (arch.md `### C10 · Output slot`, acceptance: *"Peak allocator-level memory
-//! across a long chain does not grow with the chain's length when nothing is
-//! retained — verified against a synthetic hundred-node chain."*). It proves that
-//! a long linear pipeline holds only a **bounded** number of in-flight slot values
-//! at a time regardless of chain length, exercising the **real** merged pieces —
-//! the T17 output slots ([`dagr_core::slot`]) driven to completion through the
-//! **real** T24 run-loop driver ([`dagr_cli::driver::drive`]) — never a
-//! re-implementation.
+//! This is the "hundred-node authority" for the output-slot behaviour, whose
+//! acceptance is: *"Peak allocator-level memory across a long chain does not grow
+//! with the chain's length when nothing is retained — verified against a synthetic
+//! hundred-node chain."* It proves that a long linear pipeline holds only a
+//! **bounded** number of in-flight slot values at a time regardless of chain
+//! length, exercising the **real** merged pieces — the output slots
+//! ([`dagr_core::slot`]) driven to completion through the **real** run-loop driver
+//! ([`dagr_cli::driver::drive`]) — never a re-implementation.
 //!
 //! # Two independent memory instruments, both allocator-level (never RSS)
 //!
-//! Per arch.md C10's memory-accounting rule (*"tests measure allocator-level
-//! residency, not process RSS"*) this test reads memory two ways, both of which
-//! are allocator-level and deterministic — **no** process RSS, no wall-clock, no
-//! OS reclamation is consulted:
+//! Per the memory-accounting rule (*"tests measure allocator-level residency, not
+//! process RSS"*) this test reads memory two ways, both of which are
+//! allocator-level and deterministic — **no** process RSS, no wall-clock, no OS
+//! reclamation is consulted:
 //!
-//! 1. The [`ResidencyLedger`] **peak counted residency** (T17): a deterministic
-//!    integer, the sum of the declared output residency of every slot that is
-//!    filled-and-not-yet-released, sampled at its high-water mark. This is the C10
-//!    accounting hook the run artifact (C23) folds as *peak measured slot
-//!    residency*. It is exact and noise-free — the primary bounded-peak assertion.
+//! 1. The [`ResidencyLedger`] **peak counted residency**: a deterministic integer,
+//!    the sum of the declared output residency of every slot that is
+//!    filled-and-not-yet-released, sampled at its high-water mark. This is the
+//!    accounting hook the run artifact folds as *peak measured slot residency*. It
+//!    is exact and noise-free — the primary bounded-peak assertion.
 //! 2. An [instrumented global allocator](Counting) confined to **this test
 //!    binary** (never wired in as the production allocator) that records current
 //!    and high-water **live allocated bytes**. It measures what the program has
-//!    handed back to the allocator, not what the OS reclaimed — the arch.md C10
-//!    distinction. Because a run through the whole driver allocates unrelated
-//!    bookkeeping (two tokio runtimes, the event stream), the per-value payload is
-//!    made large enough (`PAYLOAD` bytes) that the slot values dominate the
-//!    live-bytes signal, and the assertion carries margin for that bounded,
-//!    chain-length-**independent** noise while a real leak (~`N`·`PAYLOAD`) blows
-//!    straight through it.
+//!    handed back to the allocator, not what the OS reclaimed. Because a run
+//!    through the whole driver allocates unrelated bookkeeping (two tokio runtimes,
+//!    the event stream), the per-value payload is made large enough (`PAYLOAD`
+//!    bytes) that the slot values dominate the live-bytes signal, and the assertion
+//!    carries margin for that bounded, chain-length-**independent** noise while a
+//!    real leak (~`N`·`PAYLOAD`) blows straight through it.
 //!
 //! # Why the peak is bounded through the real driver
 //!
 //! Each test node consumes its single upstream through a real
 //! [`ConsumerLease`](dagr_core::slot::ConsumerLease) (`enter()` → `read()` → the
-//! lease drops when the node's closure returns), so the genuine C10 release rule
-//! fires: node *i-1*'s value is released the instant node *i*'s sole-consumer
-//! closure returns. A linear chain is admitted one node at a time (each node
-//! depends on its predecessor's terminal state — C11), so at the high-water mark
-//! at most a small, constant handful of values are concurrently live (the
-//! just-produced value plus the one being handed to the immediate downstream),
-//! independent of chain length. A regression that released on last-read, or forgot
-//! to drop the value, would leave every node's value live and the peak would scale
-//! with `N` — which is exactly what these assertions bite on (see
+//! lease drops when the node's closure returns), so the genuine release rule fires:
+//! node *i-1*'s value is released the instant node *i*'s sole-consumer closure
+//! returns. A linear chain is admitted one node at a time (each node depends on its
+//! predecessor's terminal state), so at the high-water mark at most a small,
+//! constant handful of values are concurrently live (the just-produced value plus
+//! the one being handed to the immediate downstream), independent of chain length.
+//! A regression that released on last-read, or forgot to drop the value, would
+//! leave every node's value live and the peak would scale with `N` — which is
+//! exactly what these assertions bite on (see
 //! `peak_grows_with_length_when_release_is_defeated`, the in-test non-vacuity
 //! proof).
 //!
-//! Scope (T26): this is a correctness guard on **peak residency**, not a
-//! performance/throughput benchmark (T69), not RSS, not fan-out residency
-//! semantics or durable outputs (C27) — the chain has a single consumer per node
-//! and no abandoned/zombie consumers.
+//! Scope: this is a correctness guard on **peak residency**, not a
+//! performance/throughput benchmark, not RSS, not fan-out residency semantics or
+//! durable outputs — the chain has a single consumer per node and no
+//! abandoned/zombie consumers.
 //!
 //! # `unsafe` note
 //!
@@ -90,10 +88,10 @@ use dagr_core::TaskError;
 /// via the `#[global_allocator]` below and is never wired in as the production
 /// allocator (production uses the platform default). It measures **allocator-level
 /// residency** — bytes the program has requested and not yet returned to the
-/// allocator — **not** process RSS or any OS-level memory figure, per arch.md
-/// C10's accounting rule (*"'Memory reclaimed' means returned to the allocator,
-/// not necessarily to the operating system — tests measure allocator-level
-/// residency, not process RSS"*). `reset_peak` snaps the peak down to the current
+/// allocator — **not** process RSS or any OS-level memory figure, per the
+/// accounting rule (*"'Memory reclaimed' means returned to the allocator, not
+/// necessarily to the operating system — tests measure allocator-level residency,
+/// not process RSS"*). `reset_peak` snaps the peak down to the current
 /// live figure so a scenario can measure the high-water mark of the run it is
 /// about to drive, and `live` samples the current live bytes.
 struct Counting;
@@ -203,7 +201,7 @@ const PAYLOAD: u64 = 256 * 1024;
 /// The short chain length (the multi-length comparison's baseline).
 const SHORT: usize = 4;
 
-/// The long chain length — the arch.md "synthetic hundred-node chain" authority.
+/// The long chain length — the "synthetic hundred-node chain" authority.
 const LONG: usize = 100;
 
 /// A per-invocation **collision-proof** run-store base under the OS temp dir.
@@ -238,7 +236,7 @@ fn temp_base() -> String {
 }
 
 // ===========================================================================
-// A capturing in-memory sink + monotonic clock (the C19 injection seam)
+// A capturing in-memory sink + monotonic clock (the injection seam)
 // ===========================================================================
 
 /// An in-memory [`EventSink`] — the driver writes its stream here; the test only
@@ -296,7 +294,7 @@ impl Task for ChainSource {
 }
 
 /// A source runner that fills the first slot and reports its terminal state,
-/// driving the **real** single-attempt C14 runner (so residency is charged at the
+/// driving the **real** single-attempt runner (so residency is charged at the
 /// real fill).
 struct SourceRunner {
     name: String,
@@ -332,9 +330,9 @@ impl NodeRunner for SourceRunner {
 }
 
 /// A one-input chain node runner: it opens a real [`ConsumerLease`] on its single
-/// upstream slot (so the genuine C10 release rule fires when this closure
-/// returns), reads the predecessor's value, produces its own [`PAYLOAD`]-byte
-/// value, and fills its own slot — all through the **real** single-attempt runner.
+/// upstream slot (so the genuine release rule fires when this closure returns),
+/// reads the predecessor's value, produces its own [`PAYLOAD`]-byte value, and
+/// fills its own slot — all through the **real** single-attempt runner.
 ///
 /// The lease is entered *before* the attempt and dropped *after* it returns, which
 /// is precisely the closure-return gate that releases the upstream slot: with the
@@ -361,7 +359,7 @@ impl LinkRunner {
 
 /// A no-input adapter task that produces a fresh [`PAYLOAD`]-byte value — so the
 /// real `run_attempt` (which wants `Input = ()`) drives it and emits the genuine
-/// C14 records. It **retains nothing** of the predecessor's value: a chain node
+/// attempt records. It **retains nothing** of the predecessor's value: a chain node
 /// reads its input, does its work, and keeps none of the input in its own output.
 /// Keeping no clone is exactly what makes the *allocator-level* peak flat — the
 /// only live copy of a predecessor's bytes is the one in its slot, freed the
@@ -387,7 +385,7 @@ impl NodeRunner for LinkRunner {
         let name = self.name.clone();
         let slot = Arc::clone(&self.slot);
         // Enter the upstream lease (the closure-return gate) and read the
-        // predecessor's value — the real C10 consume path. The read is an O(1)
+        // predecessor's value — the real consume path. The read is an O(1)
         // `Arc` clone dropped immediately (we retain nothing of the input), so the
         // predecessor's bytes live only in its slot. The lease lives until this
         // future returns; when it drops, the upstream slot releases and those bytes
@@ -419,7 +417,7 @@ impl NodeRunner for LinkRunner {
 // ===========================================================================
 
 /// Build a fresh output slot for a chain node, sharing the run-wide `ledger`.
-/// `consumers` is the exact downstream count (T14); `retained` marks a
+/// `consumers` is the exact downstream count; `retained` marks a
 /// survive-to-run-end node; `residency` is the declared output residency in bytes.
 fn slot_for(
     name: &str,
@@ -455,7 +453,7 @@ impl Task for PassThrough {
 /// **zero-residency** value. Draining the last producer is what lets that
 /// producer's value release too (a non-retained slot releases only when a
 /// consumer's closure returns), so a fully non-retained chain leaves **zero**
-/// counted residency at run end — the honest C10 end state. The sink itself
+/// counted residency at run end — the honest end state. The sink itself
 /// declares no residency, so it never contributes to the measured peak.
 struct SinkRunner {
     name: String,
@@ -527,13 +525,13 @@ struct ChainRun {
 /// `residency` bytes of output residency (the sink declares none). If
 /// `retain_terminal` is set, the last producer (`node-{len-1}`) is marked retained
 /// (its value survives to run end and is redeemable). Drive to completion through
-/// the **real** T24 driver and return the observed [`ChainRun`].
+/// the **real** driver and return the observed [`ChainRun`].
 ///
 /// The trailing sink matters for the end-of-run accounting: a non-retained slot
 /// with no consumer never has its release gate triggered, so without a drain the
 /// last producer's value would linger counted. Draining it makes a fully
-/// non-retained chain end at zero counted residency, exactly as C10 promises when
-/// every value is consumed and nothing is retained.
+/// non-retained chain end at zero counted residency, exactly as the release rule
+/// promises when every value is consumed and nothing is retained.
 fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
     assert!(len >= 2, "a chain needs at least a source and one link");
     let ledger = ResidencyLedger::new();
@@ -611,7 +609,7 @@ fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
 // ===========================================================================
 
 /// The hundred-node run's peak counted residency is within a small constant factor
-/// of the short run's — it does **not** grow with chain length (arch.md C10). The
+/// of the short run's — it does **not** grow with chain length. The
 /// [`ResidencyLedger`] peak is the exact, deterministic instrument.
 #[test]
 fn ledger_peak_is_flat_across_chain_length() {
@@ -645,8 +643,8 @@ fn ledger_peak_is_flat_across_chain_length() {
 
 /// The hundred-node run's peak counted residency is bounded by a small constant
 /// multiple of one value's size `PAYLOAD` (a handful of concurrently-live slots),
-/// **not** `LONG`·`PAYLOAD` (arch.md C10). The ceiling is an explicit constant a
-/// real regression would blow through.
+/// **not** `LONG`·`PAYLOAD`. The ceiling is an explicit constant a real regression
+/// would blow through.
 #[test]
 fn ledger_peak_bounded_by_a_few_values_not_the_whole_chain() {
     // At most a small constant number of values are ever concurrently live: the
@@ -674,10 +672,10 @@ fn ledger_peak_bounded_by_a_few_values_not_the_whole_chain() {
 // ===========================================================================
 
 /// The **per-run** high-water peak is within a small, chain-length-independent
-/// margin between the short and hundred-node runs — arch.md C10's headline. The
-/// load-bearing instrument is the DETERMINISTIC per-run [`ResidencyLedger`] peak
-/// (pollution-free); the instrumented allocator is consulted only as a tolerant,
-/// upward-only corroboration. Never RSS.
+/// margin between the short and hundred-node runs — the bounded-memory headline.
+/// The load-bearing instrument is the DETERMINISTIC per-run [`ResidencyLedger`]
+/// peak (pollution-free); the instrumented allocator is consulted only as a
+/// tolerant, upward-only corroboration. Never RSS.
 ///
 /// The driver's own bookkeeping (two tokio runtimes, the event stream) allocates a
 /// bounded amount that does **not** depend on chain length, so the difference
@@ -695,8 +693,8 @@ fn allocator_peak_is_flat_across_chain_length() {
 
     // Load-bearing: the DETERMINISTIC per-run ledger peak. Each run owns its ledger, so
     // this figure is exact, private, and untouched by any sibling thread. It proves the
-    // C10 headline directly — the hundred-node peak does not exceed the short peak by
-    // more than a value.
+    // bounded-memory headline directly — the hundred-node peak does not exceed the short
+    // peak by more than a value.
     let short_ledger_peak = drive_chain(SHORT, PAYLOAD, false).ledger_peak;
     let long_ledger_peak = drive_chain(LONG, PAYLOAD, false).ledger_peak;
     assert!(
@@ -738,9 +736,9 @@ fn allocator_peak_is_flat_across_chain_length() {
 /// After a chain run of non-retained nodes completes, the ledger's **current**
 /// counted residency is back to zero — every produced value's bytes returned to
 /// the allocator once its sole consumer reached a terminal state and its closure
-/// returned (arch.md C10), measured at the ledger, not RSS. A direct two-node slot
-/// pair proves the same at the **allocator** level: live bytes return to baseline
-/// (not elevated by even one value) once the sole consumer is terminal-and-returned.
+/// returned, measured at the ledger, not RSS. A direct two-node slot pair proves
+/// the same at the **allocator** level: live bytes return to baseline (not elevated
+/// by even one value) once the sole consumer is terminal-and-returned.
 #[test]
 fn value_released_after_sole_consumer_terminal_and_returned() {
     // Serialise: this test still reads the process-global live-bytes figure for a
@@ -753,17 +751,16 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
     // slot residency — it is a private instance, never touched by sibling harness
     // threads — so the assertions below depend solely on state this test controls.
     //
-    // The prior version's load-bearing bite read the PROCESS-GLOBAL `live()` allocator
-    // figure across a window (`baseline` before fill, `elevated` after) and asserted
-    // `elevated >= baseline + PAYLOAD/2`. Under CI parallelism a concurrent in-process
-    // `#[test]` (a sibling harness thread) frees memory in that window, so
-    // `elevated < baseline` despite this test's own value being live — the `alloc_guard`
-    // mutex only serialises the *guarded* tests against each other, never the allocator
-    // traffic of every OTHER test in the binary. That is the CI flake (run 30057266042).
-    // We re-anchor the intent — "the produced value's bytes are live while held,
-    // released after the sole consumer's terminal" — on the ledger, and keep the
-    // `live()` reads only as a signed, slack-tolerant sanity check that can never panic
-    // on a small negative delta. Allocator-level, never RSS.
+    // Reading the PROCESS-GLOBAL `live()` allocator figure across a window (`baseline`
+    // before fill, `elevated` after) and asserting `elevated >= baseline + PAYLOAD/2`
+    // is flaky: under CI parallelism a concurrent in-process `#[test]` (a sibling harness
+    // thread) frees memory in that window, so `elevated < baseline` despite this test's
+    // own value being live — the `alloc_guard` mutex only serialises the *guarded* tests
+    // against each other, never the allocator traffic of every OTHER test in the binary.
+    // So the intent — "the produced value's bytes are live while held, released after
+    // the sole consumer's terminal" — is anchored on the ledger, and the `live()` reads
+    // are kept only as a signed, slack-tolerant sanity check that can never panic on a
+    // small negative delta. Allocator-level, never RSS.
     let ledger = ResidencyLedger::new();
     // Signed byte figures for a slack-tolerant, never-panicking allocator corroboration.
     // Allocator live bytes are far below `i64::MAX`; the conversions cannot realistically
@@ -803,7 +800,7 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
     );
 
     // The sole consumer takes its lease, reads (without retaining the returned `Arc`),
-    // and returns (the lease drops) → the real C10 release rule fires and the value's
+    // and returns (the lease drops) → the real release rule fires and the value's
     // bytes return to the allocator.
     let consumer = producer.shared_ref();
     {
@@ -834,10 +831,10 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
          baseline={baseline}, after={after} (a leaked value would add {PAYLOAD})",
     );
 
-    // --- Ledger half, through the REAL driver (the load-bearing C10 authority): nothing
+    // --- Ledger half, through the REAL driver (the load-bearing authority): nothing
     // is counted after a non-retained run, and the released terminal value is not
     // redeemable. This deterministic ledger proof stays strict and is what carries the
-    // C10 release accounting through the driver.
+    // release accounting through the driver.
     let run = drive_chain(SHORT, PAYLOAD, false);
     assert_eq!(run.outcome, RunOutcome::Succeeded);
     assert_eq!(
@@ -858,10 +855,10 @@ fn value_released_after_sole_consumer_terminal_and_returned() {
 /// Two runs of the same short chain: with nothing retained, end-of-run residency
 /// is zero and the terminal value is not redeemable; with the terminal node
 /// retained, exactly one value's residency remains counted at run end and the
-/// retained value is redeemable via the T17 post-run redemption API (arch.md C10:
-/// *"Values still retained at the end of the run are … redeemable …; released ones
-/// are not"*). This proves the guard measures the right thing — non-retained
-/// releases, retained does not.
+/// retained value is redeemable via the post-run redemption API (*"Values still
+/// retained at the end of the run are … redeemable …; released ones are not"*).
+/// This proves the guard measures the right thing — non-retained releases, retained
+/// does not.
 #[test]
 fn retained_value_survives_and_is_redeemable_released_ones_are_not() {
     // Non-retained: nothing lingers, terminal value not redeemable.
@@ -907,9 +904,8 @@ fn retained_value_survives_and_is_redeemable_released_ones_are_not() {
 // ===========================================================================
 
 /// The measured ledger peak and the bounded verdict are stable across repeated
-/// runs of the hundred-node chain (arch.md C10 test-plan: determinism / no
-/// flakiness). The ledger peak is an exact integer with pinned inputs, so it is
-/// bit-for-bit identical run to run.
+/// runs of the hundred-node chain (determinism / no flakiness). The ledger peak is
+/// an exact integer with pinned inputs, so it is bit-for-bit identical run to run.
 #[test]
 fn ledger_peak_is_deterministic_across_repetitions() {
     let first = drive_chain(LONG, PAYLOAD, false).ledger_peak;
@@ -936,7 +932,7 @@ fn ledger_peak_is_deterministic_across_repetitions() {
 /// length and blowing through the ceilings the real chain satisfies. This models
 /// the exact regression the guard protects against (release-on-last-read, or a
 /// forgotten drop) — driven the same way, but with the consumer lease never
-/// entered, so the C10 release rule never fires.
+/// entered, so the release rule never fires.
 /// Drive a `len`-node chain whose links **never open a consumer lease**, so no
 /// upstream slot is ever released — every produced value stays counted. Returns the
 /// ledger peak. This is the injected regression (release-on-last-read / a forgotten
@@ -1017,7 +1013,7 @@ fn peak_grows_with_length_when_release_is_defeated() {
 }
 
 /// A **leaky** link runner used only by the non-vacuity proof: it fills its own
-/// slot but never opens a [`ConsumerLease`] on its upstream, so the C10 release
+/// slot but never opens a [`ConsumerLease`] on its upstream, so the release
 /// gate never advances and the upstream value is never reclaimed. This is the
 /// injected regression the healthy [`LinkRunner`] does not have — it is confined to
 /// this test and never used by the passing scenarios.

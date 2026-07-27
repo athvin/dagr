@@ -1,27 +1,25 @@
-//! C28 · the **full-pipeline fakes harness** — ticket T62 (075). Written first,
-//! TDD.
+//! The **full-pipeline fakes harness**. Written first, TDD.
 //!
 //! These exercise the **shipped** harness ([`dagr_cli::full_pipeline`]) — the
-//! third and last of C28's three testing levels (arch.md `### C28 · Testing
-//! surface`). The harness assembles a small flow of **fake** tasks (declarative,
-//! no real work), injects fake resources, and drives it through the **real** T24
-//! run-loop driver ([`dagr_cli::driver::drive`]) with an injected deterministic
-//! clock and a captured in-memory event sink — then exposes the run's outcome,
-//! per-node terminal states, the raw event stream, and the folded run artifact
-//! for assertion.
+//! third and last of the three testing levels. The harness assembles a small flow
+//! of **fake** tasks (declarative, no real work), injects fake resources, and
+//! drives it through the **real** run-loop driver
+//! ([`dagr_cli::driver::drive`]) with an injected deterministic clock and a
+//! captured in-memory event sink — then exposes the run's outcome, per-node
+//! terminal states, the raw event stream, and the folded run artifact for
+//! assertion.
 //!
 //! The point is that **fakes run through real orchestration**: readiness,
 //! admission, dispatch, failure propagation, trigger-rule evaluation, and
-//! cancellation are the framework's (C11/C12/C13/C15), reproduced verbatim by the
-//! harness rather than computed by the test. No test here reimplements the
-//! scheduler, wires a `NodeRunner` by hand, or reaches into the driver.
+//! cancellation are the framework's, reproduced verbatim by the harness rather
+//! than computed by the test. No test here reimplements the scheduler, wires a
+//! `NodeRunner` by hand, or reaches into the driver.
 //!
-//! Determinism (the T65 contract): every outcome is scripted (a node succeeds,
-//! fails permanently, retries then succeeds, or skips — keyed off the C8 attempt
-//! number, never timing or randomness); the clock is a hand-stepped monotonic
-//! counter; no wall-clock sleep is used; and if the harness touches the
-//! filesystem it does so under a private per-run temp base. So CI is
-//! reproducible run to run and machine to machine.
+//! Determinism: every outcome is scripted (a node succeeds, fails permanently,
+//! retries then succeeds, or skips — keyed off the attempt number, never timing or
+//! randomness); the clock is a hand-stepped monotonic counter; no wall-clock sleep
+//! is used; and if the harness touches the filesystem it does so under a private
+//! per-run temp base. So CI is reproducible run to run and machine to machine.
 
 use std::time::{Duration, Instant};
 
@@ -33,9 +31,9 @@ use dagr_core::context::TerminalState;
 // A fake resource, retrieved by type — no task edits needed to substitute it.
 // ===========================================================================
 
-/// A fake client a node retrieves by type from the C9 registry. In production a
-/// node's task would call `ctx.resources().get::<ApiClient>()`; the harness
-/// injects this fake through the registry with **no change to the task**.
+/// A fake client a node retrieves by type from the resource registry. In
+/// production a node's task would call `ctx.resources().get::<ApiClient>()`; the
+/// harness injects this fake through the registry with **no change to the task**.
 #[derive(Clone, Default)]
 struct ApiClient;
 
@@ -48,7 +46,7 @@ struct ApiClient;
 /// succeed. Every node reaches `succeeded`, the event stream contains
 /// run-started + run-finished plus the per-node transitions the real driver
 /// produces, and the folded run artifact reports exactly one terminal state per
-/// node — confirming the genuine T24 run loop drove the run.
+/// node — confirming the genuine run loop drove the run.
 #[test]
 fn runs_the_real_scheduler_not_a_stub() {
     // a → b, a → c, (b, c) → d : a chain with a fan-in (four nodes, a data
@@ -123,7 +121,7 @@ fn runs_the_real_scheduler_not_a_stub() {
 /// **No infrastructure required.** The same flow, resources supplied only as
 /// fakes, run with no network available and no database configured: the run
 /// completes successfully; no code path attempts a live connection, and bootstrap
-/// resource validation (C9) passes against the fakes.
+/// resource validation passes against the fakes.
 #[test]
 fn no_infrastructure_required() {
     let run = FullPipelineTest::new("no-infra")
@@ -178,10 +176,11 @@ fn fake_substitution_needs_no_task_edits() {
 /// stop-on-first-failure. `a` is `failed`, `b` is `upstream-failed` without
 /// executing, the contingency still executes, and an unrelated default-rule
 /// **pending** node ends `cancelled` — the propagation decisions are the
-/// framework's (C15), reproduced verbatim by the harness, not computed by the test.
+/// framework's, reproduced verbatim by the harness, not computed by the test.
 ///
-/// Determinism (the same signal the real T34 suite gates on): `unrelated`'s
-/// `cancelled` terminal depends on the stop landing **before** it is admitted. `a`
+/// Determinism (the same signal the real failure-policy suite gates on):
+/// `unrelated`'s `cancelled` terminal depends on the stop landing **before** it is
+/// admitted. `a`
 /// fails and triggers the stop, but its *return* is the trigger, so it cannot hold
 /// a permit until then. Admission is serialized by **pinning the memory pool**: a
 /// zero-cost `a`, a `keeper` that occupies the whole pinned pool until the run is
@@ -308,7 +307,7 @@ fn scripted_retry_then_succeed() {
 /// `upstream-skipped` carrying the originating node's identity to a default-rule
 /// downstream, while an `all-terminal` contingency whose rule is satisfiable
 /// despite the skip still runs, and a run whose only non-success outcomes are
-/// skips reports overall success (C15).
+/// skips reports overall success.
 #[test]
 fn scripted_deliberate_skip() {
     let run = FullPipelineTest::new("deliberate-skip")
@@ -369,9 +368,9 @@ fn scripted_deliberate_skip() {
 /// tolerated.
 #[test]
 fn completes_in_seconds_budget_enforced() {
-    // The completes-in-seconds budget (arch.md C28). A generous ceiling that a
-    // healthy fake run clears by orders of magnitude, so it never flakes but a
-    // real regression (a wall-clock sleep, a live connection) trips it.
+    // The completes-in-seconds budget. A generous ceiling that a healthy fake run
+    // clears by orders of magnitude, so it never flakes but a real regression (a
+    // wall-clock sleep, a live connection) trips it.
     const BUDGET: Duration = Duration::from_secs(5);
 
     let start = Instant::now();
@@ -395,16 +394,14 @@ fn completes_in_seconds_budget_enforced() {
 }
 
 // ===========================================================================
-// 8. Interpretive determinism (the T65 contract).
+// 8. Interpretive determinism.
 // ===========================================================================
 
-/// **Interpretive determinism (the T65 contract).** One flow, one set of scripted
-/// outcomes, fixed parameters and a fixed data interval, run twice: both runs
-/// yield identical per-node terminal states, identical propagation decisions, and
-/// byte-identical interpretive artifact content (volatile header fields excluded)
-/// — demonstrating the harness is the deterministic replay surface T65 drives.
-///
-/// This is the covering test for system-acceptance criterion 4(b) (`SL4b`).
+/// **Interpretive determinism.** One flow, one set of scripted outcomes, fixed
+/// parameters and a fixed data interval, run twice: both runs yield identical
+/// per-node terminal states, identical propagation decisions, and byte-identical
+/// interpretive artifact content (volatile header fields excluded) — demonstrating
+/// the harness is a deterministic replay surface.
 #[test]
 fn interpretive_determinism_is_the_t65_replay_surface() {
     let build = || {

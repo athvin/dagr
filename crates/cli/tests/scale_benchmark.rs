@@ -1,13 +1,12 @@
-//! **T69 (ticket 076) — Scale benchmark.** Written first, TDD (`bench(T69)` /
-//! `test(T69)`).
+//! **Scale benchmark.** Written first, TDD.
 //!
-//! arch.md `## Performance envelope`: *framework overhead per node — scheduling,
+//! Framework overhead per node — scheduling,
 //! admission, event writing; everything but the task's own work — is budgeted at
 //! **under one millisecond**, held by a CI benchmark that runs a thousand-node
-//! no-op graph and fails on regression.* This suite **is** that benchmark. It
+//! no-op graph and fails on regression. This suite **is** that benchmark. It
 //! drives a graph of exactly [`SCALE_NODE_COUNT`] no-op nodes through the **real**
-//! T24 run-loop driver (`dagr_cli::driver::drive` — readiness C11, admission C12,
-//! attempt running C14, event-stream writing C19, no stubbed scheduler), measures
+//! run-loop driver (`dagr_cli::driver::drive` — readiness, admission,
+//! attempt running, event-stream writing, no stubbed scheduler), measures
 //! the per-node framework overhead, and gates the build on the budget.
 //!
 //! # CI reliability (why this does not flake)
@@ -139,8 +138,8 @@ fn no_op_run_completes_with_every_node_succeeded() {
 // ===========================================================================
 
 /// **Overhead is attributed to the framework, not the task.** Reading the folded
-/// per-attempt phase breakdown, the phases sum exactly to each attempt's total
-/// (per C22), and each no-op attempt's window is a small **bounded constant**,
+/// per-attempt phase breakdown, the phases sum exactly to each attempt's total,
+/// and each no-op attempt's window is a small **bounded constant**,
 /// identical in structure across all [`SCALE_NODE_COUNT`] nodes — no node's body
 /// did variable work. Because every task body is a no-op, the growth of the
 /// measured budget across nodes is framework overhead
@@ -175,7 +174,7 @@ fn overhead_is_attributed_to_the_framework_not_the_task() {
     );
 
     for a in artifact.attempts() {
-        // C22: the named phases sum exactly to the attempt's total (the real teeth).
+        // The named phases sum exactly to the attempt's total (the real teeth).
         let sum: u64 = a.phase_durations_ns().values().copied().sum();
         assert_eq!(
             sum,
@@ -355,7 +354,7 @@ fn the_budget_assertion_fails_on_regression() {
 // ===========================================================================
 
 /// **Capacity is deterministic, not host-discovered.** Two benchmark runs on the
-/// same runner use identical **pinned** admission-pool capacities (the C12 pinning
+/// same runner use identical **pinned** admission-pool capacities (the capacity-pinning
 /// flag), not values discovered from the CI host's cgroup/host limits — so the
 /// number is a property of dagr's overhead, not of the runner's core count. The
 /// terminal-state picture is identical across the two runs (the pinned,

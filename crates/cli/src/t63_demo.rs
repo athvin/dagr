@@ -1,5 +1,5 @@
-//! The **M4 gate demo reference pipeline** — ticket T63 (078). Shared, shipped-in-
-//! test-support scaffolding assembled by the demo run/resume binary
+//! The **gate demo reference pipeline**. Shared, shipped-in-test-support
+//! scaffolding assembled by the demo run/resume binary
 //! (`crates/cli/src/bin/dagr-t63-demo-run.rs`) **and** by the review structure test
 //! (`crates/cli/tests/m4_demo_kill_resume_review.rs`), so the *same* reference
 //! pipeline is proven end-to-end (kill → resume) and its structure is the one the
@@ -7,21 +7,21 @@
 //!
 //! # Adds no engine capability
 //!
-//! This module composes **already-merged** M4 machinery — the C18 durable scratch
-//! store, the C27 durable-output contract, the real `drive()` loop (with its T63
-//! scratch/durable-reference wiring), the C27 `resume_verb`, and the C28 structure
-//! snapshot — through the **shipped** driver. It defines the reference pipeline's
-//! fake tasks (declarative, no real work) and the type-erased [`NodeRunner`]s the
-//! driver spawns, plus the assembly the review fixture snapshots. It ships behind no
+//! This module composes **already-merged** machinery — the durable scratch store,
+//! the durable-output contract, the real `drive()` loop (with its
+//! scratch/durable-reference wiring), the `resume_verb`, and the structure snapshot
+//! — through the **shipped** driver. It defines the reference pipeline's fake tasks
+//! (declarative, no real work) and the type-erased [`NodeRunner`]s the driver
+//! spawns, plus the assembly the review fixture snapshots. It ships behind no
 //! feature and in no released binary; it is checked-in scaffolding.
 //!
 //! # The reference pipeline (fixed at assembly; a durable stage boundary + teardown)
 //!
-//! Per the T63 Test plan, a small graph with every shape the M4 done-when needs:
+//! A small graph with every shape the kill/resume demo needs:
 //!
 //! - **`expensive`** — a **durable** stage-boundary producer (its output implements
-//!   the C27 reference contract; marked durable, so its reference is recorded and a
-//!   resume rehydrates it instead of recomputing). Group `stage`.
+//!   the durable-reference contract; marked durable, so its reference is recorded
+//!   and a resume rehydrates it instead of recomputing). Group `stage`.
 //! - **`inmem`** — an **in-memory** (non-durable) producer, covered by the teardown.
 //!   Group `stage`.
 //! - **`consumer`** — a data-dependent consumer that **demands** `expensive`'s value
@@ -33,11 +33,11 @@
 //!   so it is *pending* at the kill and re-runs on resume; its rule sees the
 //!   satisfied publish and fires. Group `publish`.
 //! - **`checkpoint`** — the **scratch-checkpointing** node: it writes a high-water
-//!   mark into its C18 scratch, signals mid-run readiness on disk, then holds until
+//!   mark into its scratch, signals mid-run readiness on disk, then holds until
 //!   the process is killed — so at the kill it is in-flight (non-succeeded, scratch
 //!   retained), and on resume it re-executes and reads its carried-forward
 //!   checkpoint. Ordered after `expensive`. Group `stage`.
-//! - **`teardown`** — a **teardown** covering the producer `inmem` (C17), so `inmem`
+//! - **`teardown`** — a **teardown** covering the producer `inmem`, so `inmem`
 //!   is always in the resume must-run seed and never satisfied-from-prior.
 
 use std::collections::BTreeMap;
@@ -71,7 +71,7 @@ pub const CHECKPOINT_MARK: &[u8] = b"finished-item-K";
 pub const STAGE_VALUE: &str = "STAGE-OUTPUT";
 
 // ===========================================================================
-// Payload — a durable blob carrying the C27 reference contract + a stable name.
+// Payload — a durable blob carrying the durable-reference contract + a stable name.
 // ===========================================================================
 
 /// The stage boundary's durable payload. Its reference is `blob://<content>`, so a
@@ -207,8 +207,8 @@ impl Task for Checkpoint {
     type Input = ();
     type Output = Unit;
     async fn run(&mut self, c: &RunContext, _i: ()) -> Result<Unit, TaskError> {
-        // Read the checkpoint FIRST (through the ordinary C18 context): on a resume
-        // it observes the carried-forward mark; on the first run it is absent.
+        // Read the checkpoint FIRST (through the ordinary scratch context): on a
+        // resume it observes the carried-forward mark; on the first run it is absent.
         let observed = c.scratch().get(CHECKPOINT_KEY)?;
         if observed.is_none() {
             // First attempt of this node in this run: write the high-water mark so a
@@ -247,9 +247,9 @@ fn signal_ready(marker: &std::path::Path) {
 // Assembly — the reference pipeline (identical for kill/resume + review).
 // ===========================================================================
 
-/// Assemble the reference pipeline (the C20 structure the review fixture snapshots
+/// Assemble the reference pipeline (the structure the review fixture snapshots
 /// and the graph the kill/resume scenario drives). `group_of` supplies each node's
-/// C6 group label so the review scenario can rename a group without touching the
+/// group label so the review scenario can rename a group without touching the
 /// fingerprint; pass [`base_groups`] for the canonical layout.
 ///
 /// `consumer_from` chooses which producer `consumer` demands — it is always
@@ -320,7 +320,7 @@ pub fn assemble(
         NodePolicy::new(),
     );
 
-    // The teardown covering the `inmem` producer (C17).
+    // The teardown covering the `inmem` producer.
     let _teardown = flow.register_teardown_named(
         "teardown",
         &Teardown,
@@ -356,8 +356,8 @@ pub fn base_groups(name: &str) -> Option<&'static str> {
 // Type-erased runners for the real drive() loop.
 // ===========================================================================
 
-/// A source runner over the real C14 caught attempt path. Optionally reports a
-/// **durable reference** for its succeeded attempt (the T63 driver seam records it),
+/// A source runner over the real caught attempt path. Optionally reports a
+/// **durable reference** for its succeeded attempt (the driver seam records it),
 /// so the durable stage boundary's reference lands in the folded artifact.
 struct SourceRunner<T: Task<Input = ()>> {
     name: String,
@@ -607,7 +607,7 @@ pub fn build_runner_set(
     )
 }
 
-/// A Blob-output source runner; `durable` records the [`Expensive`] reference (T63).
+/// A Blob-output source runner; `durable` records the [`Expensive`] reference.
 fn blob_source<T>(name: &str, task: T, slot: Arc<Slot<Blob>>, durable: bool) -> Box<dyn NodeRunner>
 where
     T: Task<Input = (), Output = Blob> + Send + 'static,

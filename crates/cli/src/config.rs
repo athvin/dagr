@@ -1,17 +1,16 @@
-//! C12/C26 · **Runtime-knob precedence** — the `flag > env > default` resolver,
+//! **Runtime-knob precedence** — the `flag > env > default` resolver,
 //! the parsers it needs, a strict never-silent error type, the `DAGR_*` env-name
-//! constants, and the extended reserved-flag namespace (ADR 089).
+//! constants, and the extended reserved-flag namespace.
 //!
 //! # What this module owns
 //!
-//! ADR 089 records the operator-requested `flag > env > default` story for every
-//! runtime knob, and — having read the code — refutes the assumption that a single
-//! flag-parsing choke point exists: [`parse_cli`](crate::contract::parse_cli)
+//! The `flag > env > default` story applies to every runtime knob. There is no
+//! single flag-parsing choke point: [`parse_cli`](crate::contract::parse_cli)
 //! returns only the verb, runtime-flag parsing is ad-hoc per pipeline binary,
 //! `RunConfig::new()` is infallible and env-free, and `dagr_core::limits`
-//! deliberately reads no environment. The ADR's answer is **reusable cli-level
-//! pieces wired at the binary layer**, keeping `dagr-core` environment-free. This
-//! module ships the isolated building blocks of that answer:
+//! deliberately reads no environment. The answer is **reusable cli-level pieces
+//! wired at the binary layer**, keeping `dagr-core` environment-free. This module
+//! ships the isolated building blocks of that answer:
 //!
 //! - [`resolve`] — the `flag > env > default` resolver over any [`FromStr`] type:
 //!   a present flag wins outright (the environment is never read); with no flag,
@@ -22,21 +21,20 @@
 //!   `stop-on-first-failure`. [`EnvDuration`] / [`EnvFailureMode`] wrap each so it
 //!   composes with the generic [`resolve`].
 //! - [`EnvParseError`] — a strict, never-silent error that carries the offending
-//!   variable name and maps to a C26 exit code: a **parse failure** →
+//!   variable name and maps to an exit code: a **parse failure** →
 //!   [`ExitCode::InvalidUsage`], an **out-of-range** value →
 //!   [`ExitCode::BootstrapFailure`] (reusing the exit-code table from
 //!   [`crate::contract`]).
-//! - the `DAGR_*` env-name constants ([`DAGR_GRACE`], …) for every knob in ADR
-//!   089's table, alongside the existing
-//!   [`DAGR_NO_BANNER`](crate::contract::NO_BANNER_ENV).
+//! - the `DAGR_*` env-name constants ([`DAGR_GRACE`], …) for every knob, alongside
+//!   the existing [`DAGR_NO_BANNER`](crate::contract::NO_BANNER_ENV).
 //!
 //! # What this module does NOT own
 //!
 //! - Wiring any of this into `RunConfig`, the opt-in env-fallback builder methods,
 //!   the `DAGR_POOL_*` pool-pinning, and the `--dagr.headroom-fraction` /
-//!   `ContainerLimitProbe::with_headroom` knob — **T77** owns all of it and
-//!   consumes exactly the surface this module lands. No `DAGR_*` variable is
-//!   *read* at run time here; the constants are declared, not consumed.
+//!   `ContainerLimitProbe::with_headroom` knob — the binary layer consumes exactly
+//!   the surface this module lands. No `DAGR_*` variable is *read* at run time here;
+//!   the constants are declared, not consumed.
 //! - Any env read inside `dagr-core` — a permanent scope boundary: the core reads
 //!   the host once and is injectable for tests; the CLI parses env and passes
 //!   already-parsed values inward.
@@ -50,43 +48,42 @@ use dagr_core::limits::PinnedPools;
 use crate::contract::ExitCode;
 
 // ===========================================================================
-// The DAGR_* environment-variable names (ADR 089's table)
+// The DAGR_* environment-variable names
 // ===========================================================================
 
-/// Environment fallback for `--grace` (the cancellation grace period, C16).
+/// Environment fallback for `--grace` (the cancellation grace period).
 /// Snake-case per the env convention (flags stay kebab-case); documented
-/// alongside [`DAGR_NO_BANNER`](crate::contract::NO_BANNER_ENV) (ADR 089).
+/// alongside [`DAGR_NO_BANNER`](crate::contract::NO_BANNER_ENV).
 pub const DAGR_GRACE: &str = "DAGR_GRACE";
 
-/// Environment fallback for `--teardown-deadline` (the teardown deadline, C17).
+/// Environment fallback for `--teardown-deadline` (the teardown deadline).
 pub const DAGR_TEARDOWN_DEADLINE: &str = "DAGR_TEARDOWN_DEADLINE";
 
-/// Environment fallback for `--failure-mode` (the run-level failure mode, C15).
+/// Environment fallback for `--failure-mode` (the run-level failure mode).
 pub const DAGR_FAILURE_MODE: &str = "DAGR_FAILURE_MODE";
 
 /// Environment fallback for `--dagr.pool.compute-threads` (the compute-thread
-/// pool pin, C12).
+/// pool pin).
 pub const DAGR_POOL_COMPUTE_THREADS: &str = "DAGR_POOL_COMPUTE_THREADS";
 
 /// Environment fallback for `--dagr.pool.blocking-threads` (the blocking-thread
-/// pool pin, C12).
+/// pool pin).
 pub const DAGR_POOL_BLOCKING_THREADS: &str = "DAGR_POOL_BLOCKING_THREADS";
 
-/// Environment fallback for `--dagr.pool.memory` (the memory pool pin, C12).
+/// Environment fallback for `--dagr.pool.memory` (the memory pool pin).
 pub const DAGR_POOL_MEMORY: &str = "DAGR_POOL_MEMORY";
 
 /// Environment fallback for `--dagr.headroom-fraction` (the admission headroom
-/// fraction, C12; default `0.20`, validated `0.0..=1.0`).
+/// fraction; default `0.20`, validated `0.0..=1.0`).
 pub const DAGR_HEADROOM: &str = "DAGR_HEADROOM";
 
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
 
-/// The kind of failure an [`EnvParseError`] records — the crux of ADR 089's
-/// "bad env values fail loudly": a syntactic parse failure and a semantic
-/// (validated) out-of-range value are **distinct causes** with distinct C26 exit
-/// codes.
+/// The kind of failure an [`EnvParseError`] records — the crux of "bad env values
+/// fail loudly": a syntactic parse failure and a semantic (validated) out-of-range
+/// value are **distinct causes** with distinct exit codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvParseErrorKind {
     /// The value could not be parsed into the target type (a syntactic failure) —
@@ -98,10 +95,10 @@ pub enum EnvParseErrorKind {
     OutOfRange,
 }
 
-/// A `DAGR_*` environment variable carried a value that could not be used
-/// (ADR 089). It **names the offending variable** so the diagnostic is actionable
-/// and maps to a specific C26 exit code by [kind](EnvParseErrorKind) — an env
-/// value is **never silently ignored or clamped**.
+/// A `DAGR_*` environment variable carried a value that could not be used. It
+/// **names the offending variable** so the diagnostic is actionable and maps to a
+/// specific exit code by [kind](EnvParseErrorKind) — an env value is **never
+/// silently ignored or clamped**.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvParseError {
     /// The offending environment variable's name (e.g. `DAGR_GRACE`).
@@ -135,7 +132,7 @@ impl EnvParseError {
 
     /// An **out-of-range** failure for `variable` carrying `value` and a `detail`
     /// naming the violated bound — maps to [`ExitCode::BootstrapFailure`]. Callers
-    /// (T77) that apply a semantic bound to an already-parsed value produce this.
+    /// that apply a semantic bound to an already-parsed value produce this.
     #[must_use]
     pub fn out_of_range(
         variable: impl Into<String>,
@@ -150,7 +147,7 @@ impl EnvParseError {
         }
     }
 
-    /// The C26 [`ExitCode`] this error maps to (reusing the exit-code table in
+    /// The [`ExitCode`] this error maps to (reusing the exit-code table in
     /// [`crate::contract`]): a [parse failure](EnvParseErrorKind::Parse) →
     /// [`ExitCode::InvalidUsage`], an
     /// [out-of-range](EnvParseErrorKind::OutOfRange) value →
@@ -185,7 +182,7 @@ impl std::error::Error for EnvParseError {}
 // The flag > env > default resolver
 // ===========================================================================
 
-/// Resolve a runtime knob by the ADR 089 precedence **`flag > env > default`**.
+/// Resolve a runtime knob by the precedence **`flag > env > default`**.
 ///
 /// - A **present flag** wins outright — the environment is **never read**
 ///   (`env_key` is ignored entirely).
@@ -198,16 +195,16 @@ impl std::error::Error for EnvParseError {}
 ///
 /// The environment is read (via [`std::env::var`]) only on the no-flag path, so a
 /// binary that already has a flag value never touches the process environment.
-/// This is a **cli-level** helper (ADR 089): `dagr-core` never reads the
-/// environment; a pipeline binary parses its flag as it does today, then calls
-/// this to fold in the env fallback before constructing `RunConfig` / pool pins.
+/// This is a **cli-level** helper: `dagr-core` never reads the environment; a
+/// pipeline binary parses its flag as it does today, then calls this to fold in the
+/// env fallback before constructing `RunConfig` / pool pins.
 ///
 /// # Errors
 ///
 /// Returns [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse), mapping to
 /// [`ExitCode::InvalidUsage`]) naming `env_key` when the no-flag env value fails
-/// `T::from_str`. Semantic bounds are the caller's (T77) to apply against the
-/// parsed value via [`EnvParseError::out_of_range`].
+/// `T::from_str`. Semantic bounds are the caller's to apply against the parsed value
+/// via [`EnvParseError::out_of_range`].
 pub fn resolve<T>(flag: Option<T>, env_key: &str, default: T) -> Result<T, EnvParseError>
 where
     T: FromStr,
@@ -232,9 +229,8 @@ where
 // Parsers the resolver needs (no FromStr exists for these forms)
 // ===========================================================================
 
-/// Parse a duration in the bare `10` / `10s` / `10ms` forms into a [`Duration`]
-/// (ADR 089). No [`FromStr`] exists for [`Duration`] on these forms, so this
-/// supplies one:
+/// Parse a duration in the bare `10` / `10s` / `10ms` forms into a [`Duration`].
+/// No [`FromStr`] exists for [`Duration`] on these forms, so this supplies one:
 ///
 /// - a bare integer or an `Ns` suffix → that many **seconds** (`10` and `10s`
 ///   both yield [`Duration::from_secs(10)`](Duration::from_secs));
@@ -325,13 +321,13 @@ impl FromStr for EnvDuration {
     }
 }
 
-/// Parse a [`FailureMode`] from its kebab-case token (ADR 089): accepts exactly
+/// Parse a [`FailureMode`] from its kebab-case token: accepts exactly
 /// `continue-independent` → [`FailureMode::ContinueIndependent`] and
 /// `stop-on-first-failure` → [`FailureMode::StopOnFirstFailure`]; any other token
 /// is a parse error.
 ///
-/// The tokens are the canonical Vocabulary spellings (arch.md C15) and match the
-/// `--failure-mode` flag spelling exactly.
+/// The tokens are the canonical spellings and match the `--failure-mode` flag
+/// spelling exactly.
 ///
 /// # Errors
 ///
@@ -398,11 +394,11 @@ impl FromStr for EnvFailureMode {
 }
 
 // ===========================================================================
-// The CLI pool-pinning layer — DAGR_POOL_* → PinnedPools (T77)
+// The CLI pool-pinning layer — DAGR_POOL_* → PinnedPools
 // ===========================================================================
 
 /// The already-parsed **pool-pin flags** a pipeline binary passes to
-/// [`resolve_pool_pins`] (ADR 089 / T77).
+/// [`resolve_pool_pins`].
 ///
 /// Each field is the flag value if the operator supplied one, else [`None`]. A
 /// present flag wins outright over the matching `DAGR_POOL_*` variable (the
@@ -421,16 +417,16 @@ pub struct PoolPinFlags {
     pub memory: Option<u64>,
 }
 
-/// Resolve the three `DAGR_POOL_*` pins by the ADR 089 precedence
-/// **`flag > env > default`** and fold them into a core [`PinnedPools`] (T77).
+/// Resolve the three `DAGR_POOL_*` pins by the precedence
+/// **`flag > env > default`** and fold them into a core [`PinnedPools`].
 ///
 /// For each pool: a present flag wins outright (the env is never read); with no
 /// flag, `DAGR_POOL_COMPUTE_THREADS` / `DAGR_POOL_BLOCKING_THREADS` /
 /// `DAGR_POOL_MEMORY` is read and parsed; with neither, the pool is left un-pinned
 /// (it will derive from the [`ContainerLimitProbe`](dagr_core::limits::ContainerLimitProbe)).
 /// The environment is resolved **here in `dagr-cli`** and handed to the core
-/// [`PinnedPools`] as parsed pins — `dagr-core` reads no environment (ADR 089's
-/// load-bearing boundary).
+/// [`PinnedPools`] as parsed pins — `dagr-core` reads no environment (a load-bearing
+/// boundary).
 ///
 /// # Errors
 ///
@@ -478,17 +474,17 @@ where
 }
 
 // ===========================================================================
-// The headroom knob — DAGR_HEADROOM / --dagr.headroom-fraction (T77)
+// The headroom knob — DAGR_HEADROOM / --dagr.headroom-fraction
 // ===========================================================================
 
-/// The default admission **headroom fraction** (arch.md C12: 20%), mirrored here
-/// so the CLI resolves `--dagr.headroom-fraction` / `DAGR_HEADROOM` to the same
-/// default `dagr-core`'s [`HEADROOM_DEFAULT`](dagr_core::limits::HEADROOM_DEFAULT)
-/// applies when no knob is set.
+/// The default admission **headroom fraction** (20%), mirrored here so the CLI
+/// resolves `--dagr.headroom-fraction` / `DAGR_HEADROOM` to the same default
+/// `dagr-core`'s [`HEADROOM_DEFAULT`](dagr_core::limits::HEADROOM_DEFAULT) applies
+/// when no knob is set.
 pub const HEADROOM_DEFAULT: f64 = 0.20;
 
 /// Resolve the admission **headroom fraction** by `flag > env > default` and
-/// **validate it to `0.0..=1.0`** (ADR 089 / T77). The resolved value is handed to
+/// **validate it to `0.0..=1.0`**. The resolved value is handed to
 /// [`ContainerLimitProbe::with_headroom`](dagr_core::limits::ContainerLimitProbe::with_headroom);
 /// the existing at-least-one-unit floor is unchanged, so even a `1.0` headroom
 /// still yields one unit per pool.
@@ -499,7 +495,7 @@ pub const HEADROOM_DEFAULT: f64 = 0.20;
 ///
 /// # Errors
 ///
-/// Two **distinct** loud failures, each naming `DAGR_HEADROOM`, per ADR 089:
+/// Two **distinct** loud failures, each naming `DAGR_HEADROOM`:
 /// - a value that is not a float → an [`EnvParseError`] of kind
 ///   [`Parse`](EnvParseErrorKind::Parse), mapping to [`ExitCode::InvalidUsage`];
 /// - a float **outside `0.0..=1.0`** → an [`EnvParseError`] of kind
@@ -545,9 +541,8 @@ mod tests {
 
     // Every env-touching test uses a UNIQUE variable name (never a real `DAGR_*`
     // name), set and removed within the test, so tests never race over a shared
-    // process-global variable even under cargo's default parallel runner (the
-    // T35-class hardening: hermetic, no shared mutable OS state). Edition 2021,
-    // so `set_var`/`remove_var` are safe.
+    // process-global variable even under cargo's default parallel runner (hermetic,
+    // no shared mutable OS state). Edition 2021, so `set_var`/`remove_var` are safe.
 
     // --- Precedence -------------------------------------------------------
 
@@ -611,7 +606,7 @@ mod tests {
     #[test]
     fn out_of_range_maps_to_bootstrap_failure_and_names_the_variable() {
         // A syntactically valid but out-of-range value (headroom 1.5 vs 0.0..=1.0).
-        // The bound is the caller's (T77) to apply; this exercises the error the
+        // The bound is the caller's to apply; this exercises the error the
         // resolver's consumer produces for the out-of-range case.
         let parsed: f64 = "1.5".parse().expect("1.5 is a valid f64");
         let err = if (0.0..=1.0).contains(&parsed) {
@@ -722,7 +717,7 @@ mod tests {
         assert_eq!(DAGR_HEADROOM, "DAGR_HEADROOM");
     }
 
-    // --- Pool pins + headroom resolvers (T77) ----------------------------
+    // --- Pool pins + headroom resolvers ----------------------------------
     //
     // These read the REAL DAGR_POOL_* / DAGR_HEADROOM names, so they take a
     // module-local lock and set/remove inside it (never a shared mutable OS var

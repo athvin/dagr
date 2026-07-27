@@ -1,9 +1,9 @@
-//! Shared **sample-pipeline harness** for the C26 CLI acceptance suite — ticket
-//! T56 (069). This is **test-support scaffolding**, not a released binary and not
+//! Shared **sample-pipeline harness** for the CLI acceptance suite. This is
+//! **test-support scaffolding**, not a released binary and not
 //! new framework capability: it composes already-merged library entry points
 //! (`dagr_cli::contract`, `dagr_cli::graph`, `dagr_cli::driver`,
 //! `dagr_artifact::fold`) into a compiled pipeline binary that exposes the real
-//! C26 command surface, exactly as a real pipeline crate would. `main.rs` is the
+//! command surface, exactly as a real pipeline crate would. `main.rs` is the
 //! library's own pipeline-less reference driver; a real pipeline binary carries a
 //! concrete pipeline and wires the same entry points — the pattern this harness
 //! demonstrates. It is `include!`d by the two structurally-distinct sample bins
@@ -11,20 +11,20 @@
 //!
 //! # What it wires (every verb, real library entry point)
 //!
-//! - `graph`   → [`graph_verb`] over the binary's assembled pipeline (C20).
+//! - `graph`   → [`graph_verb`] over the binary's assembled pipeline.
 //! - `validate`→ [`validate_verb`] (assembly only, prints every problem, no store).
 //! - `render`  → [`render_verb`] over a graph artifact read from a file
-//!   (optionally a run overlay), artifacts-only (C24).
+//!   (optionally a run overlay), artifacts-only.
 //! - `run`     → the real [`drive`] loop, after the library typed-parameter
 //!   validation ([`validate_params`]) and reserved-flag collision check
 //!   ([`check_reserved_collision`]) at bootstrap; the run's event stream is
 //!   written to the run store, then folded ([`fold_stream`]) into the run
-//!   artifact. The outcome maps through the C26 table ([`exit_code_for_run`]).
+//!   artifact. The outcome maps through the exit-code table ([`exit_code_for_run`]).
 //! - `single-node` → the durability gate ([`single_node_refusal_check`]) then a
 //!   real single-node replay: the requested node re-executes standalone (inputs
 //!   rehydrated from the prior run's recorded durable references), and the emitted
 //!   **replay-variant** artifact marks every unselected node `not-requested`.
-//! - `resume`  → the recognized [`resume_verb_stub`] (T58 replaces the body).
+//! - `resume`  → the recognized [`resume_verb_stub`].
 //! - `fold`    → [`fold_verb`] over a stream read from a file (crash-clause path).
 //! - `prune`   → run-store retention by count or age (nothing deleted implicitly).
 //!
@@ -64,7 +64,7 @@ use dagr_core::stable_name::StableName;
 use dagr_core::task::{RunContext, Task};
 use dagr_core::{Flow, NodePolicy, TaskError};
 
-/// The reserved graph-artifact file name in a run directory (T0.6 §3).
+/// The reserved graph-artifact file name in a run directory.
 const GRAPH_FILE_NAME: &str = "graph.json";
 /// The reserved folded run-artifact file name the harness writes next to a stream.
 const RUN_ARTIFACT_FILE_NAME: &str = "run.json";
@@ -90,8 +90,9 @@ pub struct Sample {
 // each sample assembles a DIFFERENT shape from them.
 // ===========================================================================
 
-/// A durable payload — implements the C27 reference contract, so a node producing
-/// it can be marked durable and its output rehydrated at single-node replay.
+/// A durable payload — implements the durable-reference contract, so a node
+/// producing it can be marked durable and its output rehydrated at single-node
+/// replay.
 struct Rows(u64);
 impl StableName for Rows {
     const STABLE_NAME: &'static str = "Rows";
@@ -188,7 +189,7 @@ impl Task for DecideSkip {
 /// A non-durable, stable-named output — has [`StableName`] but deliberately does
 /// **not** implement [`DurableOutput`], so a node marked durable while producing it
 /// is an assembly failure (the two-problem enumeration the assembly-fail scenarios
-/// exercise).
+/// exercise). Every problem is reported, not just the first.
 struct NonDurable;
 impl StableName for NonDurable {
     const STABLE_NAME: &'static str = "NonDurable";
@@ -219,12 +220,12 @@ impl Task for MakeNonDurable {
 fn build_pipeline(sample: &Sample) -> Pipeline {
     let mut flow = Flow::new();
     // `load → transform` is the stage boundary: `load` produces a durable value
-    // whose reference the run producer records (C27), so single-node replay
-    // rehydrates `transform`'s input from it. Registered through the stable-name
-    // registrar so the graph artifact is emittable (the durable *reference* is
-    // recorded per-attempt at run time, C22/T57 — not carried by the node policy
-    // flag here, which would need the combined durable+named registrar T55 did not
-    // add; the replay durability gate reads the recorded reference, C26).
+    // whose reference the run producer records, so single-node replay rehydrates
+    // `transform`'s input from it. Registered through the stable-name registrar so
+    // the graph artifact is emittable (the durable *reference* is recorded
+    // per-attempt at run time — not carried by the node policy flag here, which
+    // would need a combined durable+named registrar this harness does not use; the
+    // replay durability gate reads the recorded reference).
     let load = flow.register_source_named::<Load>("load", &Load, None::<String>, NodePolicy::new());
     let _t = flow.register_named::<Transform, _>(
         "transform",
@@ -325,7 +326,7 @@ enum RunKind {
 
 /// Assemble an **assembly-failing** variant: two nodes marked durable whose output
 /// type (`NonDurable`) lacks the durable contract, so assembly reports two
-/// independent problems (C7).
+/// independent problems.
 fn build_assembly_failing() -> Pipeline {
     let mut flow = Flow::new();
     let _a = flow.register_source_named::<MakeNonDurable>(
@@ -403,7 +404,7 @@ where
 // Deterministic sinks + clocks.
 // ===========================================================================
 
-/// An append-only local-file event sink (the real C19 sink surface).
+/// An append-only local-file event sink (the real event-stream sink surface).
 struct FileSink {
     file: File,
 }
@@ -511,7 +512,7 @@ impl Flags {
 /// Parse and dispatch one invocation of a sample binary, returning the process
 /// exit code. Mirrors a real pipeline crate's `main`: parse through the library,
 /// dispatch each verb to the real library entry point against a concrete pipeline,
-/// map to the C26 exit code.
+/// map to the exit code.
 pub fn dispatch_main(sample: &Sample) -> ProcExit {
     let code = match parse_cli(std::env::args_os()) {
         ParseOutcome::Help { exit, text } => {
@@ -544,7 +545,7 @@ fn dispatch(sample: &Sample, verb: Verb) -> ExitCode {
     }
 }
 
-/// `graph`: emit the assembled pipeline's C20 graph artifact (no store).
+/// `graph`: emit the assembled pipeline's graph artifact (no store).
 fn graph_dispatch<W: Write>(sample: &Sample, out: &mut W) -> ExitCode {
     let pipeline = build_pipeline(sample);
     match graph_verb(&pipeline, sample.pipeline_name, "2026-07-24T00:00:00Z", out) {
@@ -802,9 +803,9 @@ fn emit_bootstrap_failed_artifact(
 // ===========================================================================
 
 /// Produce a complete run whose durable `load` node recorded a durable reference
-/// (so single-node replay can rehydrate it), driving the real C19 writer. Records
-/// the parameters + verbatim data-interval in the run-started header (the
-/// T55-deferred round-trip the acceptance suite asserts).
+/// (so single-node replay can rehydrate it), driving the real event-stream writer.
+/// Records the parameters + verbatim data-interval in the run-started header (the
+/// round-trip the acceptance suite asserts).
 fn produce_durable_boundary_run<W: Write>(
     sample: &Sample,
     base: &str,
@@ -841,8 +842,8 @@ fn produce_durable_boundary_run<W: Write>(
         sample.pipeline_name,
     );
     clock.set(0);
-    // The T55-deferred assertion: record the parameters AND the verbatim
-    // data-interval in the run-started header.
+    // Record the parameters AND the verbatim data-interval in the run-started
+    // header.
     let data_interval = Some([
         "2026-07-24T00:00:00Z".to_string(),
         "2026-07-25T00:00:00Z".to_string(),
@@ -859,7 +860,7 @@ fn produce_durable_boundary_run<W: Write>(
     });
 
     // `load` — the stage boundary's producer. Records a durable reference so a
-    // single-node replay can rehydrate `transform`'s input (C27) — unless
+    // single-node replay can rehydrate `transform`'s input — unless
     // `--non-durable` asked for the in-memory case, which the replay durability
     // gate must then refuse.
     let load_ref = record_ref.then(|| Rows(42).serialize_reference());

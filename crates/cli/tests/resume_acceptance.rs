@@ -1,11 +1,10 @@
-//! C27 · **Resume acceptance suite** — ticket T59 (072). Written first, TDD.
+//! **Resume acceptance suite.** Written first, TDD.
 //!
-//! This is the black-box behavioural proof of resume: it pins every C27 acceptance
-//! criterion (arch.md `### C27 · Resume`, the `satisfied-from-prior` /
-//! success-like definitions in the Vocabulary, the C22 lineage/copy-forward
-//! behaviour, and the C18 scratch carry-forward resume triggers) against **real**
-//! sample pipelines run through the **real** resume machinery. It exercises
-//! already-merged components — it reimplements none of them:
+//! This is the black-box behavioural proof of resume: it pins every resume
+//! acceptance criterion (the `satisfied-from-prior` / success-like vocabulary, the
+//! lineage/copy-forward behaviour, and the scratch carry-forward resume triggers)
+//! against **real** sample pipelines run through the **real** resume machinery. It
+//! exercises already-merged components — it reimplements none of them:
 //!
 //! - the resume **plan** (gate + seed/closure/demand) is the real
 //!   `dagr_core::resume::plan_resume`, wired by the real
@@ -21,7 +20,7 @@
 //!   (`put` on the prior namespace, `carry_forward`, `get` on the resumed one);
 //! - a re-executing consumer that demands a satisfied producer's value, and the
 //!   re-executing node that reads its carried-forward scratch, are driven through
-//!   the **real** C14 attempt runner (`dagr_core::execution::run_attempt_caught`
+//!   the **real** attempt runner (`dagr_core::execution::run_attempt_caught`
 //!   — the same per-node path the full driver loop spawns) against a hand-built
 //!   `RunContext` wired to the resumed run's real scratch namespace, with the
 //!   demanded input filled by the **real** `DurableOutput::rehydrate` of the
@@ -142,8 +141,8 @@ impl RecordingProbe {
 // Fixtures: a durable payload + tiny tasks. The smallest shapes per scenario.
 // ===========================================================================
 
-/// A durable payload implementing the C27 reference contract: a task producing it
-/// can be marked durable and its output rehydrated from the recorded reference.
+/// A durable payload implementing the durable reference contract: a task producing
+/// it can be marked durable and its output rehydrated from the recorded reference.
 /// The reference is `blob://<content>`, so a **distinctive** marker survives the
 /// serialize→record→rehydrate round-trip and the assertion can trace the value to
 /// the prior run.
@@ -323,7 +322,7 @@ impl PriorAttempt {
 }
 
 /// Stage a **real** prior run for `pipeline` and return its folded artifact bytes
-/// (the exact shape a live run leaves): drive the real C19 event-stream writer to
+/// (the exact shape a live run leaves): drive the real event-stream writer to
 /// record the run-started header carrying this binary's **real** structural/policy
 /// fingerprints (so the resume gate has a true value to match), one lifecycle per
 /// attempt (with `record_durable_reference` for a durable success), and the
@@ -360,7 +359,7 @@ fn stage_prior_run(
     writer
         .run_started(RunStartedHeader {
             pipeline: pipeline_name.to_string(),
-            // The REAL fingerprints, in the raw-hex form the driver records (C21).
+            // The REAL fingerprints, in the raw-hex form the driver records.
             fingerprint_structural: Some(format!("{:016x}", fp.structural())),
             fingerprint_policy: Some(format!("{:016x}", fp.policy())),
             fingerprint_algorithm_version: FINGERPRINT_ALGORITHM_VERSION,
@@ -411,7 +410,7 @@ fn stage_prior_run(
     let mut json_bytes = artifact.to_canonical_json().into_bytes();
     // The folded artifact carries the run-store's lineage only via `resumed_from`;
     // resume's multi-generation lineage reads `header.resume_lineage`, which a
-    // resumed run records (T58) — stamp the prior run's own lineage block when it
+    // resumed run records — stamp the prior run's own lineage block when it
     // was itself a resume so a resume-of-a-resume keeps the original root. This is a
     // faithful reconstruction of what a resumed prior run's header holds, not a
     // fabrication of node outcomes (those came from the real fold above).
@@ -487,7 +486,7 @@ fn attempt_for<'a>(artifact: &'a Value, node: &str) -> Option<&'a Value> {
 }
 
 // ===========================================================================
-// The real per-node re-execution seam (C14 attempt runner, real scratch store).
+// The real per-node re-execution seam (attempt runner, real scratch store).
 // ===========================================================================
 
 /// A test slot for a node's output, wired to a fresh residency ledger.
@@ -502,8 +501,8 @@ fn slot_for<T: Send + Sync + 'static>(name: &str) -> Arc<Slot<T>> {
     ))
 }
 
-/// An attempt sink that discards the C14 records (the observable is the probe flag
-/// / the produced output / the scratch read, not the emitted events).
+/// An attempt sink that discards the attempt records (the observable is the probe
+/// flag / the produced output / the scratch read, not the emitted events).
 struct NullSink;
 impl AttemptEventSink for NullSink {
     fn emit(&mut self, _e: AttemptEvent) {}
@@ -559,7 +558,7 @@ impl Task for ContinueFromScratch {
     type Output = ();
     async fn run(&mut self, c: &RunContext, _i: ()) -> Result<(), TaskError> {
         self.probe.record(&self.node);
-        // Read the checkpoint through the ORDINARY C18 context API — the node has no
+        // Read the checkpoint through the ORDINARY context API — the node has no
         // awareness a carry-forward happened and no route to the prior run's dir.
         let mark = c.scratch().get(&self.key)?;
         *self.observed.lock().unwrap() = mark;
@@ -567,7 +566,7 @@ impl Task for ContinueFromScratch {
     }
 }
 
-/// Re-execute a no-input source task to its terminal state through the **real** C14
+/// Re-execute a no-input source task to its terminal state through the **real**
 /// attempt runner, against a `RunContext` wired to the resumed run's real scratch
 /// namespace under `base`. Returns the terminal state and (if it succeeded) the
 /// produced value read out of the slot.
@@ -594,7 +593,7 @@ where
             NodeId::from_name(node),
         )
         // Wire the REAL scratch store rooted at the run-store base, so the
-        // re-executing node reaches its resumed per-node namespace (C18) — exactly
+        // re-executing node reaches its resumed per-node namespace — exactly
         // where `carry_forward` copied the prior scratch.
         .scratch_root(base.to_path_buf())
         .build();
@@ -1146,7 +1145,7 @@ fn multi_generation_resume_links_parent_root_and_copies_references_forward() {
 /// high-water mark into its retained scratch (a checkpoint shape) but did not
 /// succeed, so its scratch is retained and it is in the seed. Resume plans it into
 /// the must-run set; the driver carries its scratch forward (REAL `carry_forward`);
-/// the re-executing `checkpoint` reads the mark through the ordinary C18 context
+/// the re-executing `checkpoint` reads the mark through the ordinary context
 /// and reports continuing from the checkpoint rather than starting over.
 ///
 /// Non-tautology + defeat check: the observed value is what the prior node WROTE
@@ -1159,7 +1158,7 @@ fn a_re_executing_node_observes_its_carried_forward_scratch() {
     let pipeline = single_checkpoint();
 
     // The prior run's `checkpoint` wrote a distinctive high-water mark and did NOT
-    // succeed, so its scratch is retained (T54a). Write it through the node's OWN
+    // succeed, so its scratch is retained. Write it through the node's OWN
     // prior-run store handle — exactly what `ctx.scratch().put(..)` does in a run.
     let key = b"high-water";
     let mark = b"finished-item-K";
@@ -1344,7 +1343,7 @@ fn force_overrides_a_conflicting_parameter_and_records_it_in_the_artifact() {
 
 /// **Resume derives parameters and the data interval from the prior artifact when
 /// no conflicting override is supplied** — a supporting proof that the resumed run
-/// inherits the prior invocation (the derivation the C27 gate specifies).
+/// inherits the prior invocation (the derivation the resume gate specifies).
 #[test]
 fn parameters_and_interval_are_derived_from_the_prior_run() {
     let pipeline = durable_chain();

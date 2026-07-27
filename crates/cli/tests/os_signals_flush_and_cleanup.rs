@@ -1,7 +1,7 @@
-//! C16 · OS signals, final flush, and temp cleanup — ticket T36 (046). Written first, TDD.
+//! OS signals, final flush, and temp cleanup. Written first, TDD.
 //!
-//! This is the **OS-signal half** of C16 that T35 deferred. It wires real OS
-//! termination signals (`SIGINT`/`SIGTERM`) to the T35 [`CancelHandle`] seam,
+//! This is the **OS-signal half** of the shutdown story. It wires real OS
+//! termination signals (`SIGINT`/`SIGTERM`) to the [`CancelHandle`] seam,
 //! guarantees a complete + fsync'd event stream on shutdown (a bounded final
 //! flush that reports the distinct sink-failure cause on an unwritable sink
 //! rather than hanging), and establishes the per-run temp-directory convention:
@@ -15,12 +15,12 @@
 //!   * the signal→cancel *wiring* is exercised through the same programmatic
 //!     [`CancelHandle`] seam the installed handler drives, plus a unit test of the
 //!     re-entry-hardened routing that a second signal takes;
-//!   * the **end-to-end** path (`#[cfg(unix)]`) installs the real T36 handlers
+//!   * the **end-to-end** path (`#[cfg(unix)]`) installs the real handlers
 //!     **first** — so the signal is *caught*, not fatal — then `raise`s a real
 //!     `SIGTERM`/`SIGINT` at this process and asserts the run cancels with an
 //!     external-interrupt origin and a complete stream; the two real-signal tests
 //!     are serialized (a raised signal is process-wide). Non-unix is a documented
-//!     no-op (there are no POSIX termination signals — platform-conditional, T70);
+//!     no-op (there are no POSIX termination signals — platform-conditional);
 //!   * the final flush + temp cleanup are ordinary injected-path logic — no
 //!     wall-clock, no network.
 
@@ -43,7 +43,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory + faulting sinks and a deterministic clock (the C19 seam).
+// In-memory + faulting sinks and a deterministic clock (the injection seam).
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -73,9 +73,9 @@ impl EventSink for MemorySink {
 }
 
 /// A sink whose `flush` (the fsync boundary) becomes unwritable, but whose
-/// `append_line` still succeeds — the "unwritable sink *at shutdown*" fault from
-/// the T0.6 contract. Appends land, so the stream is written; only the final
-/// fsync fails, which is exactly the at-shutdown sink-failure path.
+/// `append_line` still succeeds — the "unwritable sink *at shutdown*" fault.
+/// Appends land, so the stream is written; only the final fsync fails, which is
+/// exactly the at-shutdown sink-failure path.
 #[derive(Clone, Default)]
 struct FlushFailsSink {
     lines: Arc<Mutex<Vec<u8>>>,
@@ -239,7 +239,7 @@ impl Task for Succeeds {
 }
 
 // ===========================================================================
-// A type-erased source runner over the real C14 caught attempt path.
+// A type-erased source runner over the real caught attempt path.
 // ===========================================================================
 
 use dagr_core::execution::run_attempt_caught;
@@ -329,8 +329,8 @@ fn temp_base() -> PathBuf {
 
 /// **A signal routes to the `CancelHandle` seam.** The router the installed
 /// OS-signal handler drives fires the same programmatic `CancelHandle` a scripted
-/// task fires in the T35 suite — the signal path and the programmatic path are the
-/// same seam.
+/// task fires in the cancellation-core suite — the signal path and the programmatic
+/// path are the same seam.
 #[test]
 fn a_signal_routes_to_the_cancel_handle_seam() {
     let cfg = RunConfig::new("/tmp/dagr-t36");
@@ -384,7 +384,7 @@ fn a_second_signal_is_idempotent_and_does_not_shortcut_the_flush() {
 
 /// **A real `SIGTERM` triggers cancellation through the installed handlers, and the
 /// run drains to a complete stream — without killing the test runner.** We install
-/// the real T36 handlers, `raise(SIGTERM)` at *this* process (tokio's registered
+/// the real handlers, `raise(SIGTERM)` at *this* process (tokio's registered
 /// handler catches it — it does NOT take the default terminate disposition), and a
 /// concurrent cooperative task observes the resulting cancellation and returns. The
 /// run ends `cancelled` with an external-interrupt origin and a complete, fsync'd
@@ -519,7 +519,7 @@ impl Task for CoopUntilCancelled {
 
 /// **A complete, fsync'd stream is written on the cancellation (signal) path.**
 /// Exactly one run-end fsync is observed through the sink after the final records,
-/// and the stream is complete + parseable (C19 "fsync at cancellation/run end").
+/// and the stream is complete + parseable (fsync at cancellation/run end).
 #[test]
 fn complete_fsyncd_stream_on_cancellation() {
     let mut flow = Flow::new();
@@ -690,7 +690,7 @@ fn sink_failure_at_shutdown_is_not_a_run_failure() {
     );
 }
 
-/// **Run failure wins over sink failure and over cancellation (C26 precedence).**
+/// **Run failure wins over sink failure and over cancellation.**
 /// When a node genuinely failed, the shutdown exit reflects the run failure even
 /// if the sink also could not flush — a run failure is the highest-precedence code.
 #[test]
@@ -812,7 +812,7 @@ fn cleanup_removes_temp_dir() {
 
 /// **Cleanup is best-effort on a missing directory (the abandon path).** Cleaning a
 /// directory that a prior abrupt end never created — or that was already removed —
-/// must not panic; the guarantee is best-effort by design (arch.md C16).
+/// must not panic; the guarantee is best-effort by design.
 #[test]
 fn cleanup_is_best_effort_on_missing_dir() {
     let base = temp_base();

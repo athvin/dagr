@@ -1,13 +1,13 @@
-//! **Criterion-6 locality — adding a node is a local change** (arch.md
-//! system-level acceptance criterion 6; ticket T64).
+//! **Criterion-6 locality — adding a node is a local change**
+//! (system-level acceptance criterion 6).
 //!
 //! The machine proof of system criterion 6: *"Adding a node to an existing
 //! pipeline requires no changes outside: the new task's own module, the assembly
 //! site, the structure fixture, and — when it introduces a new resource — the
-//! registry construction in `main`."* This suite is the mapped test for `SL6`.
+//! registry construction in `main`."* This suite is the mapped test for that criterion.
 //!
-//! It uses a small **reference pipeline** with a checked-in structure fixture (the
-//! C28 machinery T61 ships — this ticket *uses* it, it does not build it) and
+//! It uses a small **reference pipeline** with a checked-in structure fixture (built
+//! on the structure-diff machinery this ticket *uses* rather than builds) and
 //! proves locality two ways:
 //!
 //! 1. **The structure-diff is exactly the new node and its edges.** Adding a node
@@ -219,7 +219,7 @@ fn baseline_matches_the_checked_in_fixture_and_the_addition_fails_it() {
 /// set is a checked fact, not a claim in prose.
 #[test]
 fn the_permitted_edit_set_is_exactly_the_four_criterion6_roles() {
-    // The four permitted edit ROLES, per arch.md system criterion 6. Adding a node
+    // The four permitted edit ROLES, per system criterion 6. Adding a node
     // with no new resource touches the first three; a resource-introducing node
     // additionally touches the fourth.
     let permitted_roles = [

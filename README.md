@@ -105,11 +105,10 @@ use dagr_core::task;
 
 // --- 1. Author two tasks. A task is a value holding its configuration, plus one
 // `async fn run` body — that is the whole authoring surface. `#[task]` reads the
-// `run` signature and generates the four things arch.md C1 says you declare (the
-// input type, the output type, the execution class, the work), so you write
-// business logic only — no scheduling, retry, permit, or trait-impl scaffolding.
-// (Prefer to write the `impl Task` by hand? It stays a first-class fallback — see
-// the cookbook.)
+// `run` signature and generates the four things you declare (the input type, the
+// output type, the execution class, the work), so you write business logic only —
+// no scheduling, retry, permit, or trait-impl scaffolding. (Prefer to write the
+// `impl Task` by hand? It stays a first-class fallback — see the cookbook.)
 
 /// The source: consumes nothing (an `()` input) and produces a starting number.
 struct Count {
@@ -200,8 +199,8 @@ fn main() -> ExitCode {
 }
 
 /// A minimal append-only event sink writing each line to `events.jsonl` under the
-/// run store. dagr injects the sink so the run store is *your* one job (arch.md
-/// "The shape of a run"); a real deployment points the base at durable storage.
+/// run store. dagr injects the sink so the run store is *your* one job; a real
+/// deployment points the base at durable storage.
 struct FileSink {
     file: File,
 }

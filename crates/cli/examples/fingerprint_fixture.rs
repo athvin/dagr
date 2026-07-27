@@ -1,7 +1,6 @@
-//! Cross-toolchain fingerprint stability fixture (arch.md `### C21 · Graph
-//! fingerprint`; ticket T41 / `SL4a`).
+//! Cross-toolchain fingerprint stability fixture.
 //!
-//! Prints the two C21 fingerprints — the structural fingerprint and the policy
+//! Prints the two graph fingerprints — the structural fingerprint and the policy
 //! hash, each as its version-prefixed header string — for a small, fixed fixture
 //! pipeline, one per line:
 //!
@@ -13,14 +12,14 @@
 //! CI builds and runs this example under **two different toolchains** and
 //! compares the output byte-for-byte (`.github/workflows/ci.yml`, the
 //! `cross-toolchain-fingerprint` job). A divergence fails the job — that is the
-//! executable form of C21's "two builds of unchanged source, on different
-//! toolchains, produce the same fingerprint" guarantee (T0.7 §5). Because every
+//! executable form of the "two builds of unchanged source, on different
+//! toolchains, produce the same fingerprint" guarantee. Because every
 //! hashed input is author-declared and the digest is pure integer arithmetic, the
 //! two runs must agree.
 //!
 //! This example depends only on the public `dagr_cli::graph` surface and
 //! `dagr_core`; it opens no run store, reads no environment, and takes no
-//! parameters (C7 / C20 pure assembly).
+//! parameters (pure assembly).
 
 use dagr_cli::graph::{format_fingerprint_policy, format_fingerprint_structural};
 use dagr_core::stable_name::StableName;

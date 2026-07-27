@@ -1,16 +1,15 @@
-//! C7/C26 · **Flow registry** — one pipeline binary hosts **many named flows**
-//! and selects one per invocation (arch.md `### C7`, `### C26`; ADR 086).
+//! **Flow registry** — one pipeline binary hosts **many named flows**
+//! and selects one per invocation.
 //!
 //! # Why this module exists
 //!
-//! Until now a dagr pipeline binary carried exactly **one** flow: the reference
-//! driver ([`crate`]'s `main`) once reported "needs a pipeline-specific binary" for
-//! the pipeline-bound verbs, and a real pipeline crate wired each verb to its single
-//! assembled pipeline. There was no built-in way for one binary to offer
-//! `dagr run etl` versus `dagr run nightly` and select a flow by name. An operator
-//! asked for exactly that — define **many** named flows and pick one per
-//! invocation, each `dagr run <flow>` being its own independent run (its own
-//! run-id and store). ADR 086 records the fix this module ships.
+//! Without this module a dagr pipeline binary carries exactly **one** flow: the
+//! reference driver ([`crate`]'s `main`) reports "needs a pipeline-specific binary"
+//! for the pipeline-bound verbs, and a real pipeline crate wires each verb to its
+//! single assembled pipeline. There is no built-in way for one binary to offer
+//! `dagr run etl` versus `dagr run nightly` and select a flow by name. This module
+//! provides exactly that — define **many** named flows and pick one per invocation,
+//! each `dagr run <flow>` being its own independent run (its own run-id and store).
 //!
 //! # The crux: factories, not stored flows
 //!
@@ -20,26 +19,25 @@
 //! answer at most one verb. So the registry stores a **re-invokable factory**
 //! `Fn() -> RunnableFlow` (boxed) and calls it **once per invocation**: each
 //! `run <flow>` builds a *fresh* flow with its own run identity and store —
-//! matching the operator's "each invocation its own thing". This is the only
-//! pattern consistent with `run(self)` consuming the flow (ADR 086, rejected
-//! alternatives).
+//! matching the "each invocation its own thing" requirement. This is the only
+//! pattern consistent with `run(self)` consuming the flow.
 //!
 //! # What this module routes
 //!
 //! [`run_registry`] dispatches every flow-selecting verb over the registry:
 //!
-//! - `list` — print the registered flow names (T74).
+//! - `list` — print the registered flow names.
 //! - `run <flow>` — build the selected flow, drive it, and map the
-//!   [`RunReport`](crate::run_flow::RunReport) through [`exit_code_for_run`] (T74).
+//!   [`RunReport`](crate::run_flow::RunReport) through [`exit_code_for_run`].
 //! - `graph <flow>` — build the selected flow, finish it into a live [`Pipeline`]
-//!   ([`RunnableFlow::into_pipeline`]), and emit the C20 graph artifact via
-//!   [`graph_verb`] (T75).
+//!   ([`RunnableFlow::into_pipeline`]), and emit the graph artifact via
+//!   [`graph_verb`].
 //! - `validate <flow>` — build the selected flow, finish it into a [`Pipeline`], and
-//!   run assembly (C7) only via [`validate_verb`], printing **every** problem (T75).
+//!   run assembly only via [`validate_verb`], printing **every** problem.
 //!
-//! # Per-verb exit-code fidelity (ADR 086)
+//! # Per-verb exit-code fidelity
 //!
-//! Each verb maps its **own** outcome to its C26 [`ExitCode`]: `run` goes through
+//! Each verb maps its **own** outcome to its [`ExitCode`]: `run` goes through
 //! [`exit_code_for_run`] (which is reserved for a completed
 //! [`RunReport`](crate::run_flow::RunReport)); `graph` and `validate` return their
 //! **own** `ExitCode`/error types **directly** — a `graph` emit failure and a
@@ -50,12 +48,12 @@
 //!
 //! # Out of scope for the registry (pipeline-bound verbs)
 //!
-//! `single-node` (C27 replay) and `prune` (run-store retention) select a flow but
-//! need per-invocation store/parameter/rehydration plumbing the registry does not
-//! own; the registry recognizes them and routes to a diagnostic pointing at the
-//! pipeline-specific verb bodies (arch.md `### C26`; the reference sample binary
-//! `dagr-t56-alpha` wires those directly). The artifact-only `render` / `fold`
-//! carry no flow and are dispatched by the binary directly, not here.
+//! `single-node` (attempt replay) and `prune` (run-store retention) select a flow
+//! but need per-invocation store/parameter/rehydration plumbing the registry does
+//! not own; the registry recognizes them and routes to a diagnostic pointing at the
+//! pipeline-specific verb bodies (the reference sample binary `dagr-t56-alpha` wires
+//! those directly). The artifact-only `render` / `fold` carry no flow and are
+//! dispatched by the binary directly, not here.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -88,7 +86,7 @@ const DEFAULT_STORE_BASE: &str = "./dagr-runs";
 type FlowFactory = Box<dyn Fn() -> RunnableFlow + Send + Sync>;
 
 /// A builder mapping a flow **name → a re-invokable factory** `Fn() -> RunnableFlow`
-/// so **one** binary can host **many** named flows (arch.md `### C26`; ADR 086).
+/// so **one** binary can host **many** named flows.
 ///
 /// Factories (not stored flows) are load-bearing: [`RunnableFlow::run(self)`](RunnableFlow::run)
 /// **consumes** the flow and the type is not `Clone`, so one instance serves at
@@ -170,7 +168,7 @@ impl FlowRegistry {
         self.flows.iter().map(|(name, _)| name.as_str()).collect()
     }
 
-    /// Resolve a `run` invocation's flow name to its factory, applying the ADR's
+    /// Resolve a `run` invocation's flow name to its factory, applying the
     /// selection rules: a single-flow registry serves the omitted name; a
     /// multi-flow registry requires a name; an unknown name is refused. Returns the
     /// selected `(name, factory)` on success, or the [`ExitCode::InvalidUsage`]
@@ -202,9 +200,9 @@ impl FlowRegistry {
     }
 }
 
-/// Dispatch a command line over `registry` and return the C26 [`ExitCode`], routing
-/// human-readable diagnostics to the process's standard streams (arch.md `### C26`;
-/// ADR 086). A pipeline binary calls this instead of hand-dispatching verbs:
+/// Dispatch a command line over `registry` and return the [`ExitCode`], routing
+/// human-readable diagnostics to the process's standard streams. A pipeline binary
+/// calls this instead of hand-dispatching verbs:
 ///
 /// ```no_run
 /// # use dagr_cli::registry::{run_registry, FlowRegistry};
@@ -212,10 +210,10 @@ impl FlowRegistry {
 /// std::process::exit(run_registry(&registry, std::env::args_os()).as_u8().into());
 /// ```
 ///
-/// This slice (T74) routes two verbs: `list` (print the registered names, exit
-/// [`ExitCode::Success`]) and `run <flow>` (build the selected flow via its
-/// factory, drive it, and map the [`RunReport`](crate::run_flow::RunReport) through
-/// [`exit_code_for_run`]). The remaining flow-selecting verbs are T75.
+/// It routes the flow-selecting verbs: `list` (print the registered names, exit
+/// [`ExitCode::Success`]), `run <flow>` (build the selected flow via its factory,
+/// drive it, and map the [`RunReport`](crate::run_flow::RunReport) through
+/// [`exit_code_for_run`]), and `graph <flow>` / `validate <flow>`.
 #[must_use]
 pub fn run_registry<I, T>(registry: &FlowRegistry, argv: I) -> ExitCode
 where
@@ -229,9 +227,9 @@ where
 }
 
 /// [`run_registry`] with an explicit diagnostic writer — the testable entrypoint
-/// (arch.md C28: pipelines are testable without infrastructure). `out` receives the
-/// `list` output and the `InvalidUsage` selection messages so a test can assert on
-/// them; [`run_registry`] routes it to the process's standard streams.
+/// (pipelines are testable without infrastructure). `out` receives the `list`
+/// output and the `InvalidUsage` selection messages so a test can assert on them;
+/// [`run_registry`] routes it to the process's standard streams.
 #[must_use]
 pub fn run_registry_to<I, T, W>(registry: &FlowRegistry, argv: I, out: &mut W) -> ExitCode
 where
@@ -242,14 +240,14 @@ where
     // Materialize argv once: the registry reads the library-reserved `--store`
     // value from the trailing tokens itself (so `run_registry` needs no ambient
     // process args), and `list` is a registry-specific verb we recognize before the
-    // C26 verb parser (which knows nothing of `list`).
+    // verb parser (which knows nothing of `list`).
     let raw: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
     // Strip the cosmetic banner flag exactly as the reference `main` does, so a
     // pipeline binary delegating here keeps `--no-banner` position-independent and
     // the flag never reaches the verb parser.
     let (_no_banner, argv) = split_banner_flag(raw.iter().cloned());
 
-    // `list` is registry-specific (not a C26 library verb, so clap would reject it
+    // `list` is registry-specific (not a library verb, so clap would reject it
     // as an unknown subcommand). Recognize it as the leading token before parsing.
     if leading_token_is(&argv, "list") {
         for name in registry.names() {
@@ -285,7 +283,7 @@ where
     match cli.verb {
         Verb::Run => dispatch("run", run_selected_flow),
         // `graph <flow>` builds a FRESH flow, finishes it into a live `&Pipeline`,
-        // and emits the C20 artifact — its own `ExitCode`, never via the run path.
+        // and emits the graph artifact — its own `ExitCode`, never via the run path.
         Verb::Graph => dispatch("graph", graph_selected_flow),
         // `validate <flow>` builds another fresh flow, finishes it into a `Pipeline`,
         // and runs assembly-only — `AssemblyFailure` (3) comes straight from the verb.
@@ -293,7 +291,7 @@ where
         // `single-node` / `prune` select a flow but need per-invocation store /
         // parameter / rehydration plumbing the registry does not own. Recognize them
         // and point at the pipeline-specific verb wiring rather than silently
-        // succeeding (ADR 086 "per-verb exit-code fidelity"; the sample binary
+        // succeeding (per-verb exit-code fidelity; the sample binary
         // `dagr-t56-alpha` wires those directly). Still refuse an unknown/absent flow
         // name here first, so selection stays consistent across every verb.
         verb @ (Verb::SingleNode | Verb::Prune) => {
@@ -333,15 +331,15 @@ where
 
 /// The signature every flow-selecting verb body shares: given the selected flow's
 /// `name` + `factory`, the invocation `argv`, and the diagnostic writer, build a
-/// fresh flow and produce the verb's own C26 [`ExitCode`]. A plain `fn` pointer so
+/// fresh flow and produce the verb's own [`ExitCode`]. A plain `fn` pointer so
 /// the `run`/`graph`/`validate` bodies and the inline `single-node`/`prune`
 /// diagnostic all coerce to one type the dispatcher can route.
 type FlowAction<W> = fn(&str, &FlowFactory, &[std::ffi::OsString], &mut W) -> ExitCode;
 
-/// Build the selected flow via its factory and emit its **C20 graph artifact**
+/// Build the selected flow via its factory and emit its **graph artifact**
 /// through [`graph_verb`] over the flow's live [`Pipeline`]
 /// ([`RunnableFlow::into_pipeline`]). The clock is read **once** for the
-/// generation-time field (the only byte-varying field, C20); every other byte is
+/// generation-time field (the only byte-varying field); every other byte is
 /// fixed per binary, so this is byte-identical to a single-flow binary's emission
 /// for the same flow. The exit code is the verb's **own**: `Success` on a clean
 /// emit, `AssemblyFailure` on a flow that cannot be emitted to the contract — never
@@ -362,13 +360,13 @@ fn graph_selected_flow<W: Write>(
             let _ = writeln!(out, "dagr graph {name}: {err}");
             // A structural emit failure (a node without stable names, a malformed
             // stable name) is the graph's own fault, surfaced before any run —
-            // AssemblyFailure is the C26 code for "the graph itself is unusable".
+            // AssemblyFailure is the exit code for "the graph itself is unusable".
             ExitCode::AssemblyFailure
         }
     }
 }
 
-/// Build the selected flow via its factory and run **assembly (C7) only** through
+/// Build the selected flow via its factory and run **assembly only** through
 /// [`validate_verb`] over the flow's live [`Pipeline`]. Prints **every** problem and
 /// returns the verb's **own** code: `Success` on a clean assembly or
 /// [`AssemblyFailure`](ExitCode::AssemblyFailure) (3) otherwise — never via
@@ -381,14 +379,14 @@ fn validate_selected_flow<W: Write>(
     out: &mut W,
 ) -> ExitCode {
     let pipeline = factory().into_pipeline();
-    let _ = name; // the flow's identity is not part of assembly (C7 is name-agnostic)
+    let _ = name; // the flow's identity is not part of assembly (assembly is name-agnostic)
     validate_verb(&pipeline, out)
 }
 
 /// Format the current wall-clock instant as an RFC 3339 UTC timestamp
 /// (`YYYY-MM-DDThh:mm:ssZ`) for the graph artifact's generation-time field.
 ///
-/// This is the **only** byte-varying field of the artifact (C20), so it is not
+/// This is the **only** byte-varying field of the artifact, so it is not
 /// fingerprint-bound and needs no sub-second precision; a plain second-granularity
 /// UTC stamp keeps the registry free of a date-formatting dependency. Computed by
 /// the standard civil-from-days algorithm (Howard Hinnant's `civil_from_days`) so
@@ -425,17 +423,17 @@ fn civil_from_days(z: u64) -> (u64, u64, u64) {
 }
 
 /// Whether the first token after the program name (skipping the program name only)
-/// equals `token` — how the registry recognizes its own `list` verb before the C26
-/// parser, which knows nothing of it.
+/// equals `token` — how the registry recognizes its own `list` verb before the
+/// verb parser, which knows nothing of it.
 fn leading_token_is(argv: &[std::ffi::OsString], token: &str) -> bool {
     argv.get(1).map(std::ffi::OsString::as_os_str) == Some(std::ffi::OsStr::new(token))
 }
 
-/// Build the selected flow via its factory, drive it against a real on-disk C19
-/// sink under the run store, and map the resulting run report to its C26 exit code
-/// through [`exit_code_for_run`] (the numeric half of the exit-code table T55
-/// owns). Each call builds a **fresh** flow (the factory is re-invoked), so two
-/// `run` invocations run independently with their own run identity and store.
+/// Build the selected flow via its factory, drive it against a real on-disk event
+/// sink under the run store, and map the resulting run report to its exit code
+/// through [`exit_code_for_run`]. Each call builds a **fresh** flow (the factory is
+/// re-invoked), so two `run` invocations run independently with their own run
+/// identity and store.
 fn run_selected_flow<W: Write>(
     name: &str,
     factory: &FlowFactory,
@@ -459,7 +457,7 @@ fn run_selected_flow<W: Write>(
         Ok(sink) => sink,
         Err(err) => {
             // There is nowhere to write an artifact if the store cannot be opened;
-            // the C26 sink-failure code covers an unwritable store at open.
+            // the sink-failure code covers an unwritable store at open.
             let _ = writeln!(
                 out,
                 "dagr run {name}: cannot open the run store at {}: {err}",
@@ -474,7 +472,7 @@ fn run_selected_flow<W: Write>(
         Ok(report) => exit_code_for_run(report.driver_report()),
         Err(err) => {
             // A flow that does not assemble is the graph's fault — the assembly
-            // failure short-circuits before execution (arch.md C7/C26).
+            // failure short-circuits before execution.
             let _ = writeln!(out, "dagr run {name}: the flow did not assemble: {err}");
             ExitCode::AssemblyFailure
         }
@@ -501,9 +499,9 @@ fn store_base(argv: &[std::ffi::OsString]) -> String {
 
 /// Mint a run identity for a registry-dispatched run. A wall-clock timestamp,
 /// process id, and a process-global monotonic counter together keep every
-/// invocation's store directory disjoint (arch.md C19 concurrent-run disjointness)
-/// without an external UUID dependency — even two invocations within the same
-/// process and the same clock tick get distinct ids (the counter breaks the tie).
+/// invocation's store directory disjoint (concurrent-run disjointness) without an
+/// external UUID dependency — even two invocations within the same process and the
+/// same clock tick get distinct ids (the counter breaks the tie).
 fn mint_run_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
@@ -514,14 +512,13 @@ fn mint_run_id() -> String {
 }
 
 // ===========================================================================
-// The internal on-disk C19 sink + monotonic clock the registry drives a flow with.
+// The internal on-disk event sink + monotonic clock the registry drives a flow with.
 // ===========================================================================
 
-/// A minimal append-only local-file C19 sink: appends each complete line to the
+/// A minimal append-only local-file event sink: appends each complete line to the
 /// run's `events.jsonl` and flushes to the OS. Mirrors every pipeline binary's own
-/// file sink (the run store is the operator's one job, arch.md "The shape of a
-/// run"); the registry provides one so `run_registry` can drive a flow with no
-/// caller-supplied sink.
+/// file sink (the run store is the operator's one job); the registry provides one so
+/// `run_registry` can drive a flow with no caller-supplied sink.
 struct FileSink {
     file: File,
 }

@@ -1,37 +1,37 @@
 //! `dagr-m3-demo-run` — the **test-support reference-pipeline producer** for the
-//! M3 gate demo, ticket T49 (061). It drives the **real** M3 artifact producers
+//! explain-a-run gate demo. It drives the **real** artifact producers
 //! to leave a graph artifact and a run artifact on disk, then the demo test
 //! (`crates/cli/tests/m3_demo_explain_a_run.rs`) explains the run **from those
 //! artifacts alone**.
 //!
-//! # Why a producer harness (mirrors T68's `dagr-crashy-run`)
+//! # Why a producer harness
 //!
-//! arch.md's Build order fixes the M3 done-when: *"a run produces both artifacts,
+//! The gate demo done-when: *"a run produces both artifacts,
 //! the rendered diagram is reviewable, and 'which node was slowest, and was it
 //! waiting or working?' is answerable from the artifacts alone — without reading a
 //! single log line."* The honest way to demonstrate that is to run the **real**
 //! producers and then read only what they left behind:
 //!
-//! - the **T40 graph emitter** ([`emit_graph`]) over a **real assembled
-//!   [`Pipeline`]** writes `graph.json` (C20), carrying the **computed C21
+//! - the **graph emitter** ([`emit_graph`]) over a **real assembled
+//!   [`Pipeline`]** writes `graph.json`, carrying the **computed
 //!   structural fingerprint**;
-//! - the **real merged C19 [`EventStreamWriter`]** (T19) — the same producer T68
-//!   drives — writes a real on-disk `events.jsonl` (C19), whose `run-started`
+//! - the **real merged event-stream writer** ([`EventStreamWriter`]) writes a real
+//!   on-disk `events.jsonl`, whose `run-started`
 //!   header carries the **same** structural fingerprint string the graph emitter
-//!   computed, so the two artifacts **join** (C22 fingerprint-match), and whose
-//!   `attempt-outcome` records carry **real C23 metrics** built through the merged
-//!   [`AttemptMetrics`] facility (T44).
+//!   computed, so the two artifacts **join** (fingerprint-match), and whose
+//!   `attempt-outcome` records carry **real metrics** built through the merged
+//!   [`AttemptMetrics`] facility.
 //!
-//! The M1/M2 run-loop driver (T24/T34) is deliberately *not* used to emit the
-//! stream here: at M1/M2 it records only `node`/`attempt`/`status` on each
+//! The run-loop driver is deliberately *not* used to emit the
+//! stream here: it records only `node`/`attempt`/`status` on each
 //! `attempt-outcome` and measures **no** metrics, cost, worker, or per-phase
-//! offsets (see `closing_outcome_record` in `dagr_cli::driver`). Driving the C19
-//! writer directly is how T68's harness produces a metrics-and-phase-rich stream
-//! from the **real** producer, and it is what lets this demo exercise the C23
-//! metrics path and the phase/critical-path summary end-to-end. This binary adds
-//! **no** engine capability — it composes merged components only (T40/T41 emit +
-//! fingerprint, T19/C19 writer, T44/C23 metrics) — and ships in **no** released
-//! binary; it is checked-in scaffolding the T49 demo runs.
+//! offsets (see `closing_outcome_record` in `dagr_cli::driver`). Driving the
+//! event-stream writer directly is how this harness produces a
+//! metrics-and-phase-rich stream from the **real** producer, and it is what lets
+//! this demo exercise the metrics path and the phase/critical-path summary end to
+//! end. This binary adds **no** engine capability — it composes merged components
+//! only (emit + fingerprint, event-stream writer, metrics) — and ships in **no**
+//! released binary; it is checked-in scaffolding the demo runs.
 //!
 //! # The reference pipeline (fixed at assembly; legibility, not volume)
 //!
@@ -51,8 +51,7 @@
 //!   (`skipped`), and `skipped-consumer`, its data dependent, which **never runs**
 //!   and carries the **propagated** `upstream-skipped` state (node coverage +
 //!   originated-vs-propagated skip distinguishable). A run containing only skips is
-//!   still a **successful** run (arch.md Vocabulary), so the overall outcome stays
-//!   `succeeded`.
+//!   still a **successful** run, so the overall outcome stays `succeeded`.
 //!
 //! # Determinism (no wall clock, no ordering dependence)
 //!
@@ -70,7 +69,7 @@
 //! It writes `<base>/m3-demo-pipeline/<run-id>/graph.json` and `.../events.jsonl`
 //! and exits `0`. A sentinel env var (`DAGR_M3_DEMO_SENTINEL`) that is **not** on
 //! the pipeline's declared allowlist is read from the environment if present but
-//! must never reach the artifact (C22 allowlist criterion); the allowlisted
+//! must never reach the artifact (the allowlist criterion); the allowlisted
 //! `DAGR_REGION` is captured.
 
 use std::collections::BTreeMap;
@@ -92,23 +91,23 @@ use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
 /// The fixed pipeline identity for the demo run store layout.
 pub const PIPELINE: &str = "m3-demo-pipeline";
 
-/// The graph-artifact file name the demo reads (T0.6 §3 reserved name).
+/// The graph-artifact file name the demo reads (reserved name).
 pub const GRAPH_FILE_NAME: &str = "graph.json";
 
-/// The allowlisted environment variable the pipeline declares it may capture
-/// (C7/C22). Its value reaches the artifact header.
+/// The allowlisted environment variable the pipeline declares it may capture.
+/// Its value reaches the artifact header.
 pub const ALLOWLISTED_ENV: &str = "DAGR_REGION";
 
 /// A sentinel env var deliberately **not** on the allowlist. If present in the
-/// environment it must appear **nowhere** in the emitted artifacts (C22 allowlist
+/// environment it must appear **nowhere** in the emitted artifacts (the allowlist
 /// criterion) — the demo plants it and scans for it.
 pub const SENTINEL_ENV: &str = "DAGR_M3_DEMO_SENTINEL";
 
-// === A minimal append-only local-file sink (the real C19 sink surface) =======
+// === A minimal append-only local-file sink (the real event-stream sink) =======
 
 /// A minimal append-only local-file [`EventSink`]: it appends each complete line
-/// to the run's `events.jsonl` and flushes to the OS. The same shape T68's
-/// harness uses — the real on-disk stream the fold later reads.
+/// to the run's `events.jsonl` and flushes to the OS — the real on-disk stream the
+/// fold later reads.
 struct FileSink {
     file: File,
 }
@@ -134,7 +133,7 @@ impl EventSink for FileSink {
 }
 
 /// A monotonic clock advanced by hand, so offsets are deterministic, distinct, and
-/// independent of wall-clock timing (the same discipline as T68's `StepClock`).
+/// independent of wall-clock timing.
 struct StepClock {
     now: std::cell::Cell<u64>,
 }
@@ -272,12 +271,12 @@ impl Task for SkippedConsumer {
     }
 }
 
-/// Assemble the real reference pipeline (the C20 structure the graph artifact
+/// Assemble the real reference pipeline (the structure the graph artifact
 /// serializes). Each data edge is a real edge; `slow-compute` carries a declared
 /// working-memory cost so the artifact juxtaposes declared vs measured cost.
 fn build_pipeline() -> Pipeline {
     let mut flow = Flow::new();
-    // The pipeline declares its env-capture allowlist (C7/C22): only DAGR_REGION.
+    // The pipeline declares its env-capture allowlist: only DAGR_REGION.
     flow.allow_env_capture([ALLOWLISTED_ENV.to_string()]);
 
     let load = flow.register_source_named::<Load>("load", &Load, None::<String>, NodePolicy::new());
@@ -326,19 +325,19 @@ fn build_pipeline() -> Pipeline {
     flow.finish()
 }
 
-/// Build one node's **real** C23 metric set through the merged [`AttemptMetrics`]
-/// facility (T44): a task metric attached under a unit-suffixed name, plus
+/// Build one node's **real** metric set through the merged [`AttemptMetrics`]
+/// facility: a task metric attached under a unit-suffixed name, plus
 /// framework-contributed peak memory and phase timings — then rendered to the open
 /// numeric JSON map the `attempt-outcome` record carries and the fold copies
 /// unmodified.
 fn metrics_json(rows_read: u64, peak_bytes: u64, executing_ns: u64) -> serde_json::Value {
     let mut m = AttemptMetrics::new();
-    // Task-attached, unit-in-the-name (C23 convention). A reserved-prefix attach
+    // Task-attached, unit-in-the-name convention. A reserved-prefix attach
     // would fail loudly at attach time (proven by the demo test).
     m.attach("rows_read", rows_read)
         .expect("rows_read is not under the reserved prefix");
     // Framework-contributed measurements — present even though the task attached
-    // one of its own (C23).
+    // one of its own.
     m.set_peak_memory_bytes(peak_bytes);
     m.set_phase_timings(&[("executing", executing_ns)]);
     m.finalize_task_metrics();
@@ -394,9 +393,9 @@ fn main() -> ExitCode {
 
     let pipeline = build_pipeline();
 
-    // --- (1) Emit the REAL graph artifact (C20 / T40) and capture its computed
-    // structural fingerprint (C21 / T41), so the run stream can carry the SAME
-    // string and the two artifacts JOIN (C22).
+    // --- (1) Emit the REAL graph artifact and capture its computed structural
+    // fingerprint, so the run stream can carry the SAME string and the two
+    // artifacts JOIN.
     let provenance = BuildProvenance::embedded();
     let graph_json = match emit_graph(&pipeline, PIPELINE, "2026-07-24T00:00:00Z", &provenance) {
         Ok(j) => j,
@@ -432,11 +431,11 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // --- (2) Drive the REAL C19 writer to a real on-disk events.jsonl (T19),
+    // --- (2) Drive the REAL event-stream writer to a real on-disk events.jsonl,
     // stamping the graph's fingerprint string into the run-started header so the
-    // run artifact joins the graph artifact (C22 fingerprint-match). Capture only
+    // run artifact joins the graph artifact (fingerprint-match). Capture only
     // the allowlisted env value; the sentinel (if set) is never read into the
-    // header (C22 allowlist criterion).
+    // header (the allowlist criterion).
     let stream_path = run_dir.join(EVENTS_FILE_NAME);
     let sink = match FileSink::create(&stream_path) {
         Ok(s) => s,
@@ -489,10 +488,11 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Drive the reference pipeline's deterministic lifecycle through the real C19
-/// writer, after `run-started`: the happy chain, the compute-bound bottleneck, the
-/// queue/permit-limited contrast, the originated-skip pair, and `run-finished`. All
-/// offsets are hand-stepped so every phase duration is a fixed number.
+/// Drive the reference pipeline's deterministic lifecycle through the real
+/// event-stream writer, after `run-started`: the happy chain, the compute-bound
+/// bottleneck, the queue/permit-limited contrast, the originated-skip pair, and
+/// `run-finished`. All offsets are hand-stepped so every phase duration is a fixed
+/// number.
 fn drive_run_stream(writer: &mut EventStreamWriter<FileSink, ClockRef<'_>>, clock: &StepClock) {
     // The happy chain: load → transform → publish. Small, quick executes.
     // Offsets: ready/admitted/started/finished. `executing = finished − started`.
@@ -544,7 +544,7 @@ fn drive_run_stream(writer: &mut EventStreamWriter<FileSink, ClockRef<'_>>, cloc
     // The queue/permit-limited contrast: total dominated by **permit-wait**. It
     // became ready, entered its attempt, then blocked waiting for an admission
     // permit for a long span *inside* the attempt window before finally executing a
-    // brief body. The C22 fold carves a phase out of the attempt total only for a
+    // brief body. The fold carves a phase out of the attempt total only for a
     // lifecycle offset that falls WITHIN `[attempt-started, attempt-outcome]`
     // (`dagr_artifact::fold` — "streams that carry in-window sub-phase offsets"), so
     // the permit-wait is recorded by emitting `node-admitted` AFTER
@@ -587,11 +587,11 @@ fn drive_run_stream(writer: &mut EventStreamWriter<FileSink, ClockRef<'_>>, cloc
     });
     let _ = writer.node_terminal("decide-skip", TerminalState::Skipped);
     // The consumer never runs; it carries the PROPAGATED upstream-skipped state,
-    // naming the originating node (arch.md Vocabulary). No attempt-started.
+    // naming the originating node. No attempt-started.
     clock.set(70);
     let _ = writer.node_terminal("skipped-consumer", TerminalState::UpstreamSkipped);
 
-    // A skip-only-among-these run is still a SUCCESSFUL run (arch.md Vocabulary).
+    // A skip-only-among-these run is still a SUCCESSFUL run.
     clock.set(1_000);
     let _ = writer.run_finished(RunOutcome::Succeeded);
     let _ = writer.finish();

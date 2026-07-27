@@ -1,45 +1,46 @@
-//! **M3 gate demo — explain a run from artifacts** — ticket T49 (061). Written
-//! first, TDD. **This is the M3 done-when, executed in CI.**
+//! **Gate demo — explain a run from artifacts.** Written first, TDD. **This is
+//! the explain-a-run done-when, executed in CI.**
 //!
-//! arch.md's **Build order** states M3 is *done when … a run produces both
-//! artifacts, the rendered diagram is reviewable, and "which node was slowest, and
-//! was it waiting or working?" is answerable from the artifacts without reading a
-//! single log line.* This file is that proof: it runs the **real** M3 producers
-//! (via the checked-in `dagr-m3-demo-run` reference-pipeline harness), then a
-//! programmatic **explainer** reads **only the emitted artifacts** — the graph
-//! artifact (C20), the folded run artifact (C22), and the run-overlaid diagram
-//! (C24) — and answers the M3 question mechanically, with **zero** reads of the
-//! event-log/stdout stream and **zero** access to the producing binary.
+//! The explain-a-run done-when is *… a run produces both artifacts, the rendered
+//! diagram is reviewable, and "which node was slowest, and was it waiting or
+//! working?" is answerable from the artifacts without reading a single log line.*
+//! This file is that proof: it runs the **real** explain-a-run producers (via the
+//! checked-in `dagr-m3-demo-run` reference-pipeline harness), then a programmatic
+//! **explainer** reads **only the emitted artifacts** — the graph artifact, the
+//! folded run artifact, and the run-overlaid diagram — and answers the explain-a-run
+//! question mechanically, with **zero** reads of the event-log/stdout stream and
+//! **zero** access to the producing binary.
 //!
 //! # This demo composes merged components — it adds no capability
 //!
-//! This is a **feature (demo)** ticket. It drives already-merged M3 components and
-//! adds **zero** engine capability, **no** CLI verb (that is T55), and reaches into
-//! **no** T64/T65 scope:
+//! This is a **feature (demo)** ticket. It drives already-merged explain-a-run
+//! components and adds **zero** engine capability, **no** CLI verb, and reaches into
+//! no documentation/acceptance-gate scope:
 //!
-//! - **T40 emit / T41 fingerprints** — the real graph artifact and its computed
-//!   C21 structural fingerprint (`dagr_cli::graph::emit_graph`).
-//! - **T42 fold / T43 summary+critical-path** — the real fold
+//! - **Graph emit / fingerprints** — the real graph artifact and its computed
+//!   structural fingerprint (`dagr_cli::graph::emit_graph`).
+//! - **Fold / summary + critical-path** — the real fold
 //!   (`dagr_artifact::fold::fold_stream`) over the real on-disk event stream, and
 //!   the summary's total-elapsed vs critical-path numbers.
-//! - **T44 node metrics** — the real C23 metrics facility (`dagr_core::metrics`),
-//!   whose task + framework measurements reach the run artifact unmodified.
-//! - **T47 overlay** — the real run overlay
+//! - **Node metrics** — the real metrics facility (`dagr_core::metrics`), whose
+//!   task + framework measurements reach the run artifact unmodified.
+//! - **Overlay** — the real run overlay
 //!   (`dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay}`).
-//! - **T48 validation** — the real published-schema validator
-//!   (`dagr_artifact::schema`), gated behind `schema-validation` like T40's suite.
-//! - **T68 crashed-run finalize** — reused unchanged; this demo asserts the
-//!   full-run **happy path only** (the crash variant is T68's).
+//! - **Validation** — the real published-schema validator
+//!   (`dagr_artifact::schema`), gated behind `schema-validation` like the graph
+//!   round-trip suite.
+//! - **Crashed-run finalize** — reused unchanged; this demo asserts the full-run
+//!   **happy path only** (the crash variant is covered elsewhere).
 //!
 //! # Real artifacts, explained from artifacts alone
 //!
-//! The reference pipeline is run by a **separate producer** — the real T40 emitter
-//! and the real merged C19 [`EventStreamWriter`] leave `graph.json` and
-//! `events.jsonl` on disk. Every explainer assertion below reads **only those two
-//! files** (and diagrams derived purely from them); it never touches the live run,
-//! the producing binary, or — for the "waiting vs working / slowest" answers — the
-//! event-log stream. The `critical_path_ns` summary number is consumed as an
-//! **upper bound**, never an exact value, per `docs/adr/0001-critical-path-definition.md`.
+//! The reference pipeline is run by a **separate producer** — the real emitter and
+//! the real merged [`EventStreamWriter`] leave `graph.json` and `events.jsonl` on
+//! disk. Every explainer assertion below reads **only those two files** (and
+//! diagrams derived purely from them); it never touches the live run, the producing
+//! binary, or — for the "waiting vs working / slowest" answers — the event-log
+//! stream. The `critical_path_ns` summary number is consumed as an **upper bound**,
+//! never an exact value: it can only over-attribute the true dependency chain.
 //!
 //! # Determinism
 //!
@@ -48,12 +49,12 @@
 //! leave identical verdicts and identical fingerprints (generation time aside), so
 //! the demo can gate the milestone without flaking.
 //!
-//! # Scope (T49 — integration demo only)
+//! # Scope (integration demo only)
 //!
-//! Adds no framework surface. It does not implement the run/fold CLI verbs (T55),
-//! the crashed/replay artifact variants beyond the happy path (T68/M4), the
-//! cookbook prose (T64), or the system acceptance gate (T65). It composes merged
-//! components over local artifact bytes.
+//! Adds no framework surface. It does not implement the run/fold CLI verbs, the
+//! crashed/replay artifact variants beyond the happy path, the cookbook prose, or
+//! the system acceptance gate. It composes merged components over local artifact
+//! bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -81,7 +82,7 @@ const SENTINEL_ENV: &str = "DAGR_M3_DEMO_SENTINEL";
 /// The sentinel value the demo plants — it must appear NOWHERE in the artifacts.
 const SENTINEL_VALUE: &str = "SECRET-NOT-ALLOWLISTED-9f2c";
 
-/// The reference pipeline's full node roster (the C20 node set), used for the
+/// The reference pipeline's full node roster (the graph node set), used for the
 /// fold's node-coverage roster and coverage assertions.
 const GRAPH_NODES: [&str; 7] = [
     "load",
@@ -128,11 +129,11 @@ impl Artifacts {
     fn stream_path(&self) -> PathBuf {
         self.run_dir.join(EVENTS_FILE_NAME)
     }
-    /// Read the graph artifact JSON bytes (C20).
+    /// Read the graph artifact JSON bytes.
     fn graph_bytes(&self) -> Vec<u8> {
         std::fs::read(self.graph_path()).expect("graph artifact exists")
     }
-    /// Read the event-stream bytes (C19) — used ONLY to fold into the run artifact
+    /// Read the event-stream bytes — used ONLY to fold into the run artifact
     /// (and, in the no-log-line test, deliberately made inaccessible).
     fn stream_bytes(&self) -> Vec<u8> {
         std::fs::read(self.stream_path()).expect("event stream exists")
@@ -161,7 +162,7 @@ fn produce(run_id: &str) -> Artifacts {
     Artifacts { base, run_dir }
 }
 
-/// Fold the on-disk event stream into a run artifact (C22) — the ONLY use of the
+/// Fold the on-disk event stream into a run artifact — the ONLY use of the
 /// stream, exactly as a later invocation folds it. Everything the explainer
 /// answers is read off the returned artifact, never the stream.
 fn fold_artifacts(a: &Artifacts) -> RunArtifact {
@@ -188,7 +189,7 @@ struct NodeProfile {
 }
 
 impl NodeProfile {
-    /// The classification the M3 question asks for: dominated by working
+    /// The classification the explain-a-run question asks for: dominated by working
     /// (executing) or by waiting (ready-wait + permit-wait). A mechanical
     /// comparison, not a heuristic.
     fn verdict(&self) -> &'static str {
@@ -201,8 +202,8 @@ impl NodeProfile {
 }
 
 /// Rank every node that ran by total attempt-elapsed time, descending, reading ONLY
-/// the run artifact (C22, system criterion 5). Never-ran nodes (zero total) sort
-/// last; ties break by node name for determinism.
+/// the run artifact. Never-ran nodes (zero total) sort last; ties break by node
+/// name for determinism.
 fn rank_by_total(run: &RunArtifact) -> Vec<NodeProfile> {
     let mut by_node: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     for att in run.attempts() {
@@ -251,9 +252,9 @@ fn profile_of(run: &RunArtifact, node: &str) -> NodeProfile {
 // ===========================================================================
 
 /// **Both artifacts are produced by one run.** The producer emits a graph artifact
-/// (C20) and, from a real event-stream run, a folded run artifact (C22) in the
-/// temp run store; both parse, and the run outcome is the successful full-run
-/// outcome (skips-among-successes is still a successful run).
+/// and, from a real event-stream run, a folded run artifact in the temp run store;
+/// both parse, and the run outcome is the successful full-run outcome
+/// (skips-among-successes is still a successful run).
 #[test]
 fn both_artifacts_are_produced_by_one_run() {
     let a = produce("run-both-artifacts");
@@ -285,7 +286,7 @@ fn both_artifacts_are_produced_by_one_run() {
 // ===========================================================================
 
 /// **Artifacts are joinable.** The run artifact's structural fingerprint equals the
-/// graph artifact's fingerprint from the same build (C21/C22 fingerprint-match).
+/// graph artifact's fingerprint from the same build (fingerprint-match).
 #[test]
 fn artifacts_join_on_the_same_structural_fingerprint() {
     let a = produce("run-join");
@@ -312,7 +313,7 @@ fn artifacts_join_on_the_same_structural_fingerprint() {
 
 /// **Node coverage.** Every node in the graph artifact appears at least once in the
 /// run artifact, including the never-ran node carrying its propagated terminal
-/// state (C22 node-coverage criterion).
+/// state.
 #[test]
 fn every_graph_node_is_covered_by_the_run_artifact() {
     let a = produce("run-coverage");
@@ -377,7 +378,7 @@ fn every_graph_node_is_covered_by_the_run_artifact() {
 
 /// **Phase durations sum exactly.** For every attempt record, the named phase
 /// durations sum bit-exactly to the attempt total (both derive from monotonic
-/// offsets) — no floating-point slack (C22).
+/// offsets) — no floating-point slack.
 #[test]
 fn phase_durations_sum_exactly_to_the_attempt_total() {
     let a = produce("run-phases");
@@ -402,7 +403,7 @@ fn phase_durations_sum_exactly_to_the_attempt_total() {
 
 /// **Slowest node is identifiable from artifacts alone.** The explainer ranks
 /// attempts by total elapsed and names the designed bottleneck — reading ONLY the
-/// run artifact, with the event stream not consulted (C22, system criterion 5).
+/// run artifact, with the event stream not consulted.
 #[test]
 fn slowest_node_is_identifiable_from_the_run_artifact_alone() {
     let a = produce("run-slowest");
@@ -429,7 +430,7 @@ fn slowest_node_is_identifiable_from_the_run_artifact_alone() {
 /// node the explainer compares waiting (ready-wait + permit-wait) vs working
 /// (executing) and classifies the compute-bound bottleneck as "working"; for the
 /// queue/permit-limited node it classifies "waiting" — each a mechanical,
-/// reproducible verdict, read only from the run artifact's phase durations (C22).
+/// reproducible verdict, read only from the run artifact's phase durations.
 #[test]
 fn waiting_vs_working_is_answerable_from_the_run_artifact_alone() {
     let a = produce("run-waiting-working");
@@ -466,11 +467,11 @@ fn waiting_vs_working_is_answerable_from_the_run_artifact_alone() {
 
 /// **Structure-limited vs resource-limited is distinguishable at the summary.** The
 /// demo compares the summary's total-elapsed against its critical-path time,
-/// consuming `critical_path_ns` strictly as an UPPER BOUND (per the T43 ADR). For
-/// this pipeline — parallel independent branches whose queue-limited node inflates
-/// total elapsed well above the true dependency chain — total elapsed exceeds the
-/// (over-attributing) critical-path upper bound, which reads as resource-limited
-/// (C22, T43, system criterion 5).
+/// consuming `critical_path_ns` strictly as an UPPER BOUND (it can only
+/// over-attribute the true dependency chain). For this pipeline — parallel
+/// independent branches whose queue-limited node inflates total elapsed well above
+/// the true dependency chain — total elapsed exceeds the (over-attributing)
+/// critical-path upper bound, which reads as resource-limited.
 #[test]
 fn structure_vs_resource_limited_distinguishable_at_the_summary() {
     let a = produce("run-summary");
@@ -484,8 +485,8 @@ fn structure_vs_resource_limited_distinguishable_at_the_summary() {
         "the run has a positive critical-path bound"
     );
 
-    // `critical_path_ns` is an UPPER BOUND on the true dependency chain (T43 ADR:
-    // it can only over-attribute). So the true critical path is ≤ this number, and
+    // `critical_path_ns` is an UPPER BOUND on the true dependency chain (it can
+    // only over-attribute). So the true critical path is ≤ this number, and
     // total elapsed exceeding even the OVER-attributing bound is a sound, robust
     // "resource-limited" signal: idle/queue time pushed the wall past the longest
     // dependency chain.
@@ -505,7 +506,7 @@ fn structure_vs_resource_limited_distinguishable_at_the_summary() {
 /// **Metrics reached the artifact unmodified.** A node attaches a task metric and
 /// relies on framework-contributed metrics; the explainer reads that node's attempt
 /// record and finds the task metric with its declared value and unit-suffixed name
-/// AND the framework metrics (peak memory, phase timings) present too (C23).
+/// AND the framework metrics (peak memory, phase timings) present too.
 #[test]
 fn metrics_reached_the_run_artifact_unmodified() {
     let a = produce("run-metrics");
@@ -551,14 +552,14 @@ fn metrics_reached_the_run_artifact_unmodified() {
 /// **Overlay renders from artifacts only.** From the graph and run artifacts (no
 /// running pipeline, no producing binary), the run-overlaid diagram renders in DOT
 /// and Mermaid; every node appears, and terminal states map to documented distinct
-/// styles with originated skips distinguishable from propagated ones (C24/C47). The
+/// styles with originated skips distinguishable from propagated ones. The
 /// reference-tool acceptance (`dot` parses, Mermaid parser accepts) runs in CI
-/// under `DAGR_REQUIRE_RENDER_TOOLS=1`; absent locally, it skips (mirroring T46/T47).
+/// under `DAGR_REQUIRE_RENDER_TOOLS=1`; absent locally, it skips.
 #[test]
 fn overlay_renders_from_artifacts_only_and_is_structurally_sound() {
     let a = produce("run-overlay");
     // The overlay consumes ONLY the two published artifacts — parsed through the
-    // render crate's own readers, which cannot even reach `dagr-core` (the C24
+    // render crate's own readers, which cannot even reach `dagr-core` (the
     // crate-graph boundary).
     let graph = dagr_render::GraphArtifact::from_json_str(
         &String::from_utf8(a.graph_bytes()).expect("graph is UTF-8"),
@@ -606,15 +607,15 @@ fn overlay_renders_from_artifacts_only_and_is_structurally_sound() {
 }
 
 // ===========================================================================
-// Scenario 10 — no log line was consulted (the M3 claim, enforced)
+// Scenario 10 — no log line was consulted (the explain-a-run claim, enforced)
 // ===========================================================================
 
 /// **No log line was consulted.** With the event stream / log output made
 /// inaccessible for the duration of the explain step (the stream bytes are folded
 /// once into the run artifact, then the on-disk stream is DELETED before the
 /// explainer runs), the explainer still produces answers 5, 6, and 7 — proving the
-/// M3 claim that the questions are answerable "without reading a single log line",
-/// and with no access to the producing binary (C22, system criterion 5).
+/// explain-a-run claim that the questions are answerable "without reading a single
+/// log line", and with no access to the producing binary.
 #[test]
 fn the_explainer_consults_no_log_line_and_no_binary() {
     let a = produce("run-no-log-line");
@@ -655,7 +656,7 @@ fn the_explainer_consults_no_log_line_and_no_binary() {
 
 /// **No non-allowlisted environment leaks (sentinel).** A sentinel env var set but
 /// not on the pipeline's declared allowlist appears NOWHERE in the emitted
-/// artifacts; the allowlisted value IS captured (C22 allowlist criterion).
+/// artifacts; the allowlisted value IS captured.
 #[test]
 fn no_non_allowlisted_environment_leaks_into_the_artifacts() {
     let a = produce("run-sentinel");
@@ -740,10 +741,11 @@ fn the_demo_is_deterministic_across_runs() {
 // Scenario 13 — criteria-matrix wiring
 // ===========================================================================
 
-/// **Criteria-matrix wiring.** The M3 done-when and system criterion 5 map to this
-/// demo in the checked-in coverage matrix, and the matrix-coverage CI check passes.
-/// This test runs the real verifier against the real matrix and suite (the same
-/// verifier `SL8machine` names), so this demo's registration is self-consistent.
+/// **Criteria-matrix wiring.** The explain-a-run done-when and the
+/// explain-from-artifacts system criterion map to this demo in the checked-in
+/// coverage matrix, and the matrix-coverage CI check passes. This test runs the real
+/// verifier against the
+/// real matrix and suite, so this demo's registration is self-consistent.
 #[test]
 fn criteria_matrix_coverage_check_passes() {
     let root = repo_root();
@@ -760,7 +762,7 @@ fn criteria_matrix_coverage_check_passes() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    // This demo's own test id is named in the SL5 row's additive note.
+    // This demo's own test id is named in the coverage matrix's additive note.
     let matrix = std::fs::read_to_string(root.join("docs/coverage-matrix.md"))
         .expect("read the coverage matrix");
     assert!(
@@ -775,10 +777,10 @@ fn criteria_matrix_coverage_check_passes() {
 
 /// **Both artifacts validate against their published schemas.** The real emitted
 /// graph artifact validates against `schemas/graph/v1.schema.json` and the real
-/// folded run artifact validates against `schemas/run/v1.schema.json` (C20/C22),
-/// via the T39 validator. Gated behind `schema-validation` (default OFF, pulling
-/// the CI-/dev-scoped `jsonschema` validator), mirroring T40's graph round-trip
-/// suite; CI runs it with the feature ON.
+/// folded run artifact validates against `schemas/run/v1.schema.json`, via the
+/// published-schema validator. Gated behind `schema-validation` (default OFF,
+/// pulling the CI-/dev-scoped `jsonschema` validator), mirroring the graph
+/// round-trip suite; CI runs it with the feature ON.
 #[cfg(feature = "schema-validation")]
 #[test]
 fn both_artifacts_validate_against_their_published_schemas() {
@@ -819,8 +821,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Blank the graph header's generation-time field so two artifacts compare for
-/// byte-identity outside it (C20: generation time is the only field allowed to
-/// vary).
+/// byte-identity outside it (generation time is the only field allowed to vary).
 fn mask_generated_at(mut artifact: Value) -> Value {
     if let Some(header) = artifact.get_mut("header").and_then(Value::as_object_mut) {
         header.insert("generated_at".into(), Value::from(""));
@@ -832,8 +833,8 @@ fn mask_generated_at(mut artifact: Value) -> Value {
 // Reference-tool acceptance (dot / Mermaid) — CI gate, local skip
 // ===========================================================================
 //
-// The rendered DOT/Mermaid must be accepted by their reference tools in CI (C24
-// line 520). These external programs may be absent locally, so an absent tool
+// The rendered DOT/Mermaid must be accepted by their reference tools in CI.
+// These external programs may be absent locally, so an absent tool
 // SKIPS with a printed notice (keeping `cargo test --workspace` green on a machine
 // without Graphviz/Node); in CI `DAGR_REQUIRE_RENDER_TOOLS=1` turns an absent tool
 // into a hard failure. This mirrors `crates/render/tests/reference_tools.rs` (the

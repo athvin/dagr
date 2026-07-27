@@ -1,8 +1,8 @@
-//! C26 · **`run` verb → exit code** end-to-end tests — ticket T55 (068). TDD.
+//! **`run` verb → exit code** end-to-end tests. TDD.
 //!
 //! These drive the **real** run-loop driver (`dagr_cli::driver::drive`) through
 //! the library `run` verb's outcome→exit-code selection and assert the **numeric**
-//! C26 exit code, so the exit-code table is load-bearing end-to-end (not only over
+//! exit code, so the exit-code table is load-bearing end-to-end (not only over
 //! synthetic reports in `exit_code_table.rs`):
 //!
 //! - a run whose single node ends `failed` (no signal) → the run-failure code;
@@ -132,7 +132,7 @@ fn slot_for<T: Send + Sync + 'static>(name: &str) -> Arc<Slot<T>> {
 }
 
 /// The library `run` verb's exit-code selection: drive the plan, then map the
-/// report through the C26 table. This is exactly what `run_verb` does around the
+/// report through the exit-code table. This is exactly what `run_verb` does around the
 /// driver.
 fn run_and_exit(
     config: &RunConfig,
@@ -183,7 +183,7 @@ fn a_failed_node_exits_run_failure() {
 fn stop_on_first_failure_still_exits_run_failure() {
     // Two independent sources: one fails, one succeeds. Under stop-on-first-failure
     // the failure routes through the cancellation core with a FailureUnderStop
-    // origin; the C26 table must still choose run-failure.
+    // origin; the exit-code table must still choose run-failure.
     let mut flow = Flow::new();
     let _f = flow.register_source("boom", &Fails);
     let _s = flow.register_source("other", &Succeeds);

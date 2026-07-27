@@ -1,16 +1,16 @@
-//! C26 · **Exit-code table** tests — ticket T55 (068). Written first, TDD.
+//! **Exit-code table** tests. Written first, TDD.
 //!
-//! The crux of C26 is the exit-code table: every run outcome / error class maps
-//! to a **specific numbered exit code**, by cause, with precedence (arch.md
-//! `### C26 · Command-line contract`). These tests pin that mapping
+//! The crux is the exit-code table: every run outcome / error class maps
+//! to a **specific numbered exit code**, by cause, with precedence (the
+//! command-line contract). These tests pin that mapping
 //! **exhaustively** and table-driven: every `ExitCode` variant has a fixed
 //! number, every number is distinct, and every cause the CLI can surface maps to
 //! the documented code — including the load-bearing precedence rule
 //! (**run failure beats consequent cancellation**).
 //!
 //! The numbers are fixed here so a change to any of them is a review-visible test
-//! diff (arch.md C26: *"documented in one table and never changes within a major
-//! version"*).
+//! diff — the table is documented in one place and never changes within a major
+//! version.
 
 use dagr_cli::contract::{exit_code_for_run, ExitCode};
 use dagr_cli::driver::{OverallOutcome, RunReport, ShutdownExit};
@@ -18,7 +18,7 @@ use dagr_core::context::{CancellationOrigin, TerminalState};
 
 use std::collections::BTreeMap;
 
-/// The documented C26 numbering. This is the single authoritative table the code
+/// The documented numbering. This is the single authoritative table the code
 /// and every orchestrator agree on; if the code changes a number, this test
 /// fails, which is the point (stability within a major version).
 fn documented_number(code: ExitCode) -> u8 {
@@ -48,7 +48,7 @@ fn every_exit_code_has_its_documented_number() {
 }
 
 /// The numbers are all distinct — no two causes share a code (the table is a
-/// bijection over its causes, arch.md C26: "distinct codes exist for …").
+/// bijection over its causes: distinct codes exist for each cause).
 #[test]
 fn every_exit_code_is_distinct() {
     let mut seen = std::collections::BTreeSet::new();
@@ -172,7 +172,7 @@ fn run_outcome_maps_to_the_documented_exit_code() {
 }
 
 /// A skip-only run (every node skip-family, none failed/timed-out) is a
-/// **successful** run and exits success (arch.md Vocabulary + C26).
+/// **successful** run and exits success.
 #[test]
 fn skip_only_run_exits_success() {
     let mut terminals = BTreeMap::new();
