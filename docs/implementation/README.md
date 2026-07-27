@@ -132,6 +132,26 @@ Purely additive `dagx`-inspired *declarative-DAG* ergonomics over the finished e
 - [x] **095** · [T80 — `#[dag]` attribute macro (keep fn, generate factory, submit)](095-T80-dag-attribute-macro.md) · M · feature — after T78, T79
 - [x] **096** · [T81 — many-dags example, cookbook, and `#[dag]` trybuild corpus](096-T81-dag-example-docs-and-trybuild.md) · M · feature (tests) — after T80
 
+## M7 — Persistent metastore (embedded libSQL)
+
+A lightweight, **embedded, opt-in** run index so one many-DAG binary has a single queryable place for cross-run state — derived from the event stream, not a new source of truth. Unlike M5/M6, M7 opens with a decision **ticket** (**T82**), not a pre-accepted ADR record: it amends arch.md's *permanent* "no metadata store" boundary to permit a local, non-coordinating index (keeping every other exclusion) and picks the substrate, so it needs operator sign-off before merge (a STOP per ticket-conventions §8/§10). The store is **libSQL** (the mature SQLite fork, `libsql` crate — not the pre-1.0 `turso` rewrite): embedded local file, multi-process WAL, single-writer + `busy_timeout` + `BEGIN IMMEDIATE` + bounded `SQLITE_BUSY` retry. Writes are **guaranteed** — a live tee sink during a run (same `SinkFault` contract as the JSONL sink) plus an idempotent `sync` reconcile for backfill/repair. Purely additive and behind a **default-off `metastore` feature**; `dagr-core` stays runtime-dependency-free and access is native only (`sqlite3`/`turso`/`libsql`, no Postgres wire). Work in order: ADR + arch.md amendment (T82), crate + schema + connection seam (T83), reconcile `sync` (T84), multi-process write validation (T85), guaranteed live tee (T86), example + docs (T87), acceptance gate (T88). Note: ticket codes continue at **T82** because T71–T81 were used in M5/M6.
+
+- [ ] **097** · [T82 — ADR: metastore scope carve-out + libSQL substrate](097-T82-metastore-scope-and-substrate-adr.md) · S · decision
+- [ ] **098** · [T83 — `dagr-metastore` crate: schema + libSQL connection seam](098-T83-dagr-metastore-crate-and-schema.md) · M · feature — after T82
+- [ ] **099** · [T84 — event→row mapping + `dagr metastore sync` (reconcile)](099-T84-metastore-reconcile-sync.md) · M · feature — after T83, T42
+- [ ] **100** · [T85 — multi-process write validation + concurrency hardening](100-T85-metastore-multiprocess-write-tests.md) · M · feature (tests) — after T84, T67
+- [ ] **101** · [T86 — guaranteed live metastore tee sink](101-T86-metastore-live-tee-sink.md) · M · feature — after T84, T24, T55
+- [ ] **102** · [T87 — native access, many-dags metastore example, and cookbook](102-T87-metastore-example-and-docs.md) · M · feature (docs) — after T86, T81
+- [ ] **103** · [T88 — M7 metastore acceptance gate](103-T88-metastore-acceptance-gate.md) · M · feature (gate) — after T85, T86, T87
+
+## M8 — Run/data lineage (fast-follow)
+
+Additive **data-lineage** enrichment over the M7 metastore, sequenced after it (metastore-first was an explicit operator choice). The Airflow `models/` review found dagr already models run/attempt state richly; the one gap is *what each run produced and consumed*. M8 enriches the durable-output contract with reference metadata (content hash/size), promotes production and consumption to first-class append-only lineage records in the event stream + fold, then projects them into the metastore — reusing the T84 reconcile and T86 live paths. Everything is event-stream-first and schema-versioned-additive; `dagr-core` stays runtime-dependency-free. Work in order: reference metadata + resume mutation-detection (T89), produced/consumed lineage events (T90), lineage projection into the metastore (T91).
+
+- [ ] **104** · [T89 — durable-reference metadata + resume mutation-detection](104-T89-durable-reference-metadata.md) · M · feature — after T88, T57, T42, T58
+- [ ] **105** · [T90 — produced/consumed lineage events](105-T90-produced-consumed-lineage.md) · M · feature — after T89, T50
+- [ ] **106** · [T91 — lineage projection into the metastore (+ optional asset identity)](106-T91-lineage-metastore-projection.md) · M · feature — after T90, T84, T86
+
 ---
 
-Total: 80 M0–M4 tickets (all merged), plus 7 M5 tickets (**T71–T77**, docs 083–091) and 4 M6 tickets (**T78–T81**, docs 093–096). The M5 ADRs (082, 086, 089) and the M6 ADR (092) are decision records like ADR 081 and are not counted as tickets. `T0.1` (the spec-amendment pass) is already done and has no ticket.
+Total: 80 M0–M4 tickets (all merged), plus 7 M5 tickets (**T71–T77**, docs 083–091) and 4 M6 tickets (**T78–T81**, docs 093–096), plus 7 M7 tickets (**T82–T88**, docs 097–103) and 3 M8 tickets (**T89–T91**, docs 104–106). The M5 ADRs (082, 086, 089) and the M6 ADR (092) are decision records like ADR 081 and are not counted as tickets; M7's ADR (097 · **T82**) is instead a decision **ticket** — it amends arch.md's permanent boundary and needs operator sign-off, so it ships through the normal branch/PR flow. `T0.1` (the spec-amendment pass) is already done and has no ticket.
