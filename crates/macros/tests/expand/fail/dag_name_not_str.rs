@@ -4,9 +4,8 @@
 //! pins that message.
 
 use dagr_cli::dag;
-use dagr_cli::prelude::FlowBuilder;
 
 #[dag(name = 42)]
-fn etl(_f: &mut FlowBuilder) {}
+fn etl(_f: &mut dagr_cli::prelude::FlowBuilder) {}
 
 fn main() {}

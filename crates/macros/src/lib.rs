@@ -53,11 +53,11 @@
 //! rustdoc cannot resolve links into it.)
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, FnArg, GenericArgument, ImplItem, ItemImpl, Pat, PatType, PathArguments,
-    ReturnType, Type,
+    parse_macro_input, Expr, ExprLit, FnArg, GenericArgument, ImplItem, ItemFn, ItemImpl, Lit,
+    Meta, Pat, PatType, PathArguments, ReturnType, Type,
 };
 
 /// The execution class the attribute argument selected, mapped to the
@@ -387,5 +387,125 @@ fn pat_ident(pat: &Pat) -> Option<syn::Ident> {
     match pat {
         Pat::Ident(pi) => Some(pi.ident.clone()),
         _ => None,
+    }
+}
+
+/// The `#[dag]` attribute — declares a DAG over the `FlowBuilder` façade and
+/// auto-registers it for discovery.
+///
+/// Apply it to a flow-builder fn `fn NAME(f: &mut FlowBuilder) { … }` (the body
+/// declares nodes through the `FlowBuilder` façade). The macro is a sibling to
+/// [`macro@task`] and follows its discipline exactly — build-time only, zero runtime
+/// dependency, expansion referencing only existing items in the caller's dependency
+/// graph — but where `#[task]` expands to `::dagr_core::…`, `#[dag]` expands to
+/// `::dagr_cli::…` **and** `::inventory::…`, so the app crate depends on both
+/// `dagr-cli` and `inventory` (ADR 092; the `$crate`-based `inventory::submit!` offers
+/// no path override).
+///
+/// It **keeps the user's fn verbatim** and emits two **sibling items** at module
+/// (item) scope — never inside the fn body:
+///
+/// - a factory `fn __dag_factory_<fn>() -> ::dagr_cli::run_flow::RunnableFlow` that
+///   news a [`RunnableFlow`](../dagr_cli/run_flow/struct.RunnableFlow.html), wraps a
+///   `&mut` of it in a [`FlowBuilder`](../dagr_cli/flow_builder/struct.FlowBuilder.html),
+///   calls the user's fn, and returns the flow (a fresh flow per verb — the flow is
+///   consumed by a run, so it cannot be reused);
+/// - an `::inventory::submit!{ ::dagr_cli::DagRegistration { name, factory } }`, which
+///   `dagr_cli::run` collects at link time to build its `FlowRegistry`.
+///
+/// The factory's item name is derived from the fn ident, so multiple `#[dag]`s in one
+/// module never clash at the Rust-item level. (Duplicate *DAG names* are a runtime
+/// concern `dagr_cli::run` already rejects.)
+///
+/// # Attribute grammar
+///
+/// - `#[dag]` — the DAG name is the **fn name**.
+/// - `#[dag(name = "…")]` — the DAG name is the given string literal.
+/// - Any other argument (`#[dag(bogus)]`, `#[dag(name = 42)]`, …) is a spanned
+///   `compile_error!` naming the accepted `name = "…"` grammar, mirroring
+///   `#[task]`'s attribute rejection.
+///
+/// (The `::dagr_cli` / `::inventory` paths above are written as plain code, not
+/// intra-doc links: this build-time proc-macro crate does not depend on either at
+/// build time, so its rustdoc cannot resolve links into them.)
+#[proc_macro_attribute]
+pub fn dag(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = parse_macro_input!(item as ItemFn);
+    let name = match parse_dag_name(attr, &func) {
+        Ok(name) => name,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    expand_dag(&func, &name).into()
+}
+
+/// The DAG-name string literal `#[dag]` registers with: empty attribute → the fn
+/// name; `name = "…"` → the given literal. Any other token is a spanned error naming
+/// the accepted grammar (mirrors [`parse_exec_class`]).
+fn parse_dag_name(attr: TokenStream, func: &ItemFn) -> syn::Result<syn::LitStr> {
+    let attr = proc_macro2::TokenStream::from(attr);
+    let grammar = "#[dag] accepts an optional `name = \"…\"` argument (a string literal) \
+                   or none (`#[dag]` = the fn name)";
+
+    // Empty attribute: the DAG name defaults to the fn's own identifier.
+    if attr.is_empty() {
+        let ident = &func.sig.ident;
+        return Ok(syn::LitStr::new(&ident.to_string(), ident.span()));
+    }
+
+    // Otherwise the sole accepted form is the `name = "…"` name-value pair; parse it
+    // as a `Meta` so a bare identifier / wrong key / non-string value each map to a
+    // clear, spanned message.
+    let meta: Meta =
+        syn::parse2(attr.clone()).map_err(|_| syn::Error::new(attr.span(), grammar))?;
+    let Meta::NameValue(nv) = &meta else {
+        // `#[dag(bogus)]` / `#[dag(name(…))]` — a path or list, not `key = value`.
+        return Err(syn::Error::new(meta.span(), grammar));
+    };
+    if !nv.path.is_ident("name") {
+        // The right shape but the wrong key (`#[dag(alias = "…")]`).
+        return Err(syn::Error::new(nv.path.span(), grammar));
+    }
+    // The value must be a string literal (`#[dag(name = 42)]` is rejected here).
+    match &nv.value {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => Ok(s.clone()),
+        other => Err(syn::Error::new(other.span(), grammar)),
+    }
+}
+
+/// Keep the user's flow-builder `func` verbatim and emit, at item scope, the
+/// discovery-registered factory + the `inventory::submit!` of a `DagRegistration`
+/// under `name`. The factory's item ident is derived from the fn ident so multiple
+/// `#[dag]`s in one module do not collide. This step is infallible — every grammar
+/// error is raised in [`parse_dag_name`] before it runs.
+fn expand_dag(func: &ItemFn, name: &syn::LitStr) -> proc_macro2::TokenStream {
+    let fn_ident = &func.sig.ident;
+    // Derive a collision-free factory item name from the fn ident: two `#[dag]`s in
+    // one module have distinct fn idents, so their factories have distinct idents.
+    let factory = format_ident!("__dag_factory_{}", fn_ident);
+
+    // The factory news a fresh `RunnableFlow`, hands the user's fn a `FlowBuilder`
+    // borrowing it, then returns the flow — the every-verb-its-own-fresh-flow shape
+    // `DagRegistration` requires (the flow is consumed by a run, not `Clone`).
+    quote! {
+        #func
+
+        #[doc(hidden)]
+        fn #factory() -> ::dagr_cli::run_flow::RunnableFlow {
+            let mut flow = ::dagr_cli::run_flow::RunnableFlow::new();
+            {
+                let mut builder = ::dagr_cli::flow_builder::FlowBuilder::new(&mut flow);
+                #fn_ident(&mut builder);
+            }
+            flow
+        }
+
+        ::inventory::submit! {
+            ::dagr_cli::DagRegistration {
+                name: #name,
+                factory: #factory,
+            }
+        }
     }
 }

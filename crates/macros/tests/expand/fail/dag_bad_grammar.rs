@@ -4,9 +4,8 @@
 //! message so a drift in the wording is a red build.
 
 use dagr_cli::dag;
-use dagr_cli::prelude::FlowBuilder;
 
 #[dag(bogus)]
-fn etl(_f: &mut FlowBuilder) {}
+fn etl(_f: &mut dagr_cli::prelude::FlowBuilder) {}
 
 fn main() {}

@@ -87,6 +87,20 @@ dagr-core = { path = "../core" }
 dagr-artifact = { path = "../artifact" }
 dagr-render = { path = "../render" }
 
+# dagr-macros — the build-time-only, zero-runtime-dependency proc-macro crate (ADR
+# 082/092). dagr-cli depends on it for the M6 `#[dag]` attribute (T80), which it
+# re-exports behind `#[cfg(feature = "dag")]` (`pub use dagr_macros::dag;`), exactly
+# as dagr-core re-exports `#[task]` behind its `macros` feature. A proc-macro runs
+# INSIDE the compiler and is never linked into the shipped binary, so this second edge
+# onto the leaf proc-macro crate adds NO runtime dependency and no cycle is possible
+# (dagr-macros has no dependency on dagr-cli). The `#[dag]` expansion targets
+# `::dagr_cli::…` / `::inventory::…` items — resolved in the leaf binary's own
+# dependency graph — so it needs no dependency edge here beyond this one. It is an
+# UNCONDITIONAL dependency (not behind the `dag` feature): the re-export is gated, but
+# pulling the build-time crate costs nothing at runtime, mirroring dagr-core's default-on
+# `macros` feature; a `--no-default-features` build simply drops the `pub use`.
+dagr-macros = { path = "../macros" }
+
 # clap — the C26 command-line contract's argument parser (T55). The pipeline
 # declares a typed parameter surface and the library *derives* the verb/flag
 # parsing (arch.md C26: "the library derives the parsing"); clap's derive is the

@@ -85,8 +85,9 @@ impl Task for Aggregate {
 fn etl(f: &mut FlowBuilder) {
     let rows = f.source("extract", Extract { rows: 5 });
     // Wrong wiring here would be a COMPILE error — the façade returns the real
-    // `Handle<T>` and the `Deps` bound is exact-typed.
-    f.node("load", Load, rows);
+    // `Handle<T>` and the `Deps` bound is exact-typed. The sink handle is unused
+    // (nothing consumes it), so bind it to `_` to satisfy `#[must_use]`.
+    let _report = f.node("load", Load, rows);
 }
 
 /// `#[dag(name = "nightly")]` on a fn named `foo`: the registered DAG name is
@@ -94,7 +95,7 @@ fn etl(f: &mut FlowBuilder) {
 /// expand without an item-level name collision.
 #[dag(name = "nightly")]
 fn foo(f: &mut FlowBuilder) {
-    f.source("aggregate", Aggregate { seed: 42 });
+    let _report = f.source("aggregate", Aggregate { seed: 42 });
 }
 
 fn main() -> std::process::ExitCode {

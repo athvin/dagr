@@ -1,0 +1,5 @@
+error: #[dag] accepts an optional `name = "…"` argument (a string literal) or none (`#[dag]` = the fn name)
+ --> tests/expand/fail/dag_name_not_str.rs:8:14
+  |
+8 | #[dag(name = 42)]
+  |              ^^
