@@ -145,4 +145,10 @@ pub fn migrations() -> Vec<String> {
 
 /// The five M7 table names, in creation order. Public so a test (and the `init`
 /// verb) can assert every one exists via `sqlite_master`.
-pub const TABLES: [&str; 5] = ["dag", "dag_version", "dag_run", "node_attempt", "node_terminal"];
+pub const TABLES: [&str; 5] = [
+    "dag",
+    "dag_version",
+    "dag_run",
+    "node_attempt",
+    "node_terminal",
+];

@@ -253,12 +253,12 @@ impl MetaStore {
             WriteError::Libsql(err) => OpenError::Libsql(err),
             // A migration that stays busy past the cap is a real open failure; map
             // it to a libsql error carrying the busy code so callers see one type.
-            WriteError::BusyRetriesExhausted { attempts } => OpenError::Libsql(
-                libsql::Error::SqliteFailure(
+            WriteError::BusyRetriesExhausted { attempts } => {
+                OpenError::Libsql(libsql::Error::SqliteFailure(
                     SQLITE_BUSY,
                     format!("migrations still SQLITE_BUSY after {attempts} attempts"),
-                ),
-            ),
+                ))
+            }
         })
     }
 
@@ -279,8 +279,7 @@ impl MetaStore {
     where
         F: for<'a> Fn(
             &'a libsql::Connection,
-        )
-            -> Pin<Box<dyn Future<Output = Result<(), libsql::Error>> + 'a>>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), libsql::Error>> + 'a>>,
     {
         let max_attempts = self.retry.max_attempts.max(1);
         for attempt in 1..=max_attempts {
@@ -312,8 +311,7 @@ impl MetaStore {
     where
         F: for<'a> Fn(
             &'a libsql::Connection,
-        )
-            -> Pin<Box<dyn Future<Output = Result<(), libsql::Error>> + 'a>>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), libsql::Error>> + 'a>>,
     {
         // BEGIN IMMEDIATE acquires the write lock up front — the ADR 097 §3
         // discipline. If this itself is busy, that is the retryable signal.

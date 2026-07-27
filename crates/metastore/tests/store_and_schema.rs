@@ -51,9 +51,7 @@ async fn fresh_open_creates_all_tables_and_enables_wal() {
     for table in TABLES {
         let present = scalar_i64(
             conn,
-            &format!(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
-            ),
+            &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"),
         )
         .await;
         assert_eq!(present, 1, "table `{table}` must exist after open");
@@ -109,12 +107,13 @@ async fn reopen_is_idempotent_and_preserves_rows() {
     for table in TABLES {
         let count = scalar_i64(
             conn,
-            &format!(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
-            ),
+            &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"),
         )
         .await;
-        assert_eq!(count, 1, "table `{table}` must not be duplicated on re-open");
+        assert_eq!(
+            count, 1,
+            "table `{table}` must not be duplicated on re-open"
+        );
     }
 
     let surviving = scalar_i64(conn, "SELECT count(*) FROM dag WHERE dag_id='d1'").await;
@@ -221,12 +220,18 @@ fn migration_set_and_state_lists_are_well_formed() {
     assert!(!m.is_empty(), "there are migrations");
     for table in TABLES {
         assert!(
-            m.iter().any(|s| s.contains(&format!("TABLE IF NOT EXISTS {table} "))
-                || m.iter().any(|s| s.contains(&format!("TABLE IF NOT EXISTS {table}(")))),
+            m.iter()
+                .any(|s| s.contains(&format!("TABLE IF NOT EXISTS {table} "))
+                    || m.iter()
+                        .any(|s| s.contains(&format!("TABLE IF NOT EXISTS {table}(")))),
             "a migration creates table `{table}`"
         );
     }
-    assert_eq!(NODE_TERMINAL_STATES.len(), 9, "dagr has nine terminal states");
+    assert_eq!(
+        NODE_TERMINAL_STATES.len(),
+        9,
+        "dagr has nine terminal states"
+    );
     assert_eq!(RUN_STATES.len(), 6, "there are six run-level states");
 }
 
@@ -260,16 +265,22 @@ async fn two_contending_writers_both_commit_no_lost_write() {
     // each increments created_ms. Both must land (no lost update).
     let w1 = store.with_write_txn(|c| {
         Box::pin(async move {
-            c.execute("UPDATE dag SET created_ms = created_ms + 10 WHERE dag_id='d'", ())
-                .await
-                .map(|_| ())
+            c.execute(
+                "UPDATE dag SET created_ms = created_ms + 10 WHERE dag_id='d'",
+                (),
+            )
+            .await
+            .map(|_| ())
         })
     });
     let w2 = store.with_write_txn(|c| {
         Box::pin(async move {
-            c.execute("UPDATE dag SET created_ms = created_ms + 100 WHERE dag_id='d'", ())
-                .await
-                .map(|_| ())
+            c.execute(
+                "UPDATE dag SET created_ms = created_ms + 100 WHERE dag_id='d'",
+                (),
+            )
+            .await
+            .map(|_| ())
         })
     });
     let (r1, r2) = tokio::join!(w1, w2);
@@ -308,7 +319,10 @@ async fn write_txn_returns_hard_error_past_retry_cap() {
     let result = store
         .with_write_txn(|_c| {
             Box::pin(async move {
-                Err(libsql::Error::SqliteFailure(5, "database is locked".to_string()))
+                Err(libsql::Error::SqliteFailure(
+                    5,
+                    "database is locked".to_string(),
+                ))
             })
         })
         .await;
@@ -367,7 +381,10 @@ async fn recognized_stub_modes_return_not_implemented() {
         auth_token: "t".to_string(),
     })
     .await;
-    assert!(remote.is_err(), "RemoteSqld is a recognized stub, not implemented");
+    assert!(
+        remote.is_err(),
+        "RemoteSqld is a recognized stub, not implemented"
+    );
 
     let replica = MetaStore::open(OpenMode::SyncedReplica {
         path: temp_store_path("replica"),
@@ -375,5 +392,8 @@ async fn recognized_stub_modes_return_not_implemented() {
         auth_token: "t".to_string(),
     })
     .await;
-    assert!(replica.is_err(), "SyncedReplica is a recognized stub, not implemented");
+    assert!(
+        replica.is_err(),
+        "SyncedReplica is a recognized stub, not implemented"
+    );
 }
