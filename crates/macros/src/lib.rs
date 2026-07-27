@@ -519,8 +519,8 @@ fn expand_dag(func: &ItemFn, name: &syn::LitStr) -> proc_macro2::TokenStream {
     }
 }
 
-/// Derive [`StableName`](dagr_core::stable_name::StableName) for a task or payload
-/// struct — the one-line ergonomic the trait's own docs anticipated.
+/// Derive `dagr_core::stable_name::StableName` for a task or payload struct — the
+/// one-line ergonomic the trait's own docs anticipated.
 ///
 /// The graph-emittable registrars (`FlowBuilder::source` / `node`,
 /// `RunnableFlow::register_source_named` / `register_named`) require every task and

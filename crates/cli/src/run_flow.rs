@@ -468,12 +468,11 @@ impl RunnableFlow {
     /// hand-written sink, clock, or [`RunConfig`].
     ///
     /// This is the golden-path counterpart to the fully-explicit [`run`](Self::run):
-    /// it mints a fresh run id, opens the default local-file
-    /// [`FileSink`](crate::run_store::FileSink) at
+    /// it mints a fresh run id, opens the default local-file [`FileSink`] at
     /// `<base>/<pipeline_name>/<run-id>/events.jsonl` (creating the directories),
-    /// drives the flow with the wall-clock-derived
-    /// [`SystemClock`](crate::run_store::SystemClock) (so the artifact's durations are
-    /// real), and returns the [`RunReport`]. Advanced callers who need a custom sink, a
+    /// drives the flow with the wall-clock-derived [`SystemClock`] (so the artifact's
+    /// durations are real), and returns the [`RunReport`]. Advanced callers who need a
+    /// custom sink, a
     /// deterministic clock, or a tuned [`RunConfig`] keep using [`run`](Self::run); this
     /// wraps it and adds no execution logic of its own.
     ///

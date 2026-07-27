@@ -30,9 +30,7 @@ pub use crate::flow_builder::FlowBuilder;
 pub use crate::run::{run, DagRegistration};
 pub use crate::run_flow::RunnableFlow;
 /// The run-store defaults a hand-written driver reaches for: the default local-file
-/// [`FileSink`](crate::run_store::FileSink), the wall-clock
-/// [`SystemClock`](crate::run_store::SystemClock), and the
-/// [`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE) — so
+/// [`FileSink`], the wall-clock [`SystemClock`], and the [`DEFAULT_STORE_BASE`] — so
 /// [`RunnableFlow::run`](crate::run_flow::RunnableFlow::run) needs no hand-written
 /// sink/clock. (The one-call [`run_to_store`](crate::run_flow::RunnableFlow::run_to_store)
 /// builds them for you; these are here for the explicit path.)

@@ -10,7 +10,7 @@
 //! those has an obvious default, but until now the only implementation lived
 //! **privately** inside the registry ([`crate::registry`]) and was copy-pasted into
 //! the quickstart and a test. This module is the single home for those defaults, so
-//! the registry, the [`#[dag]`](crate::run) run path, the one-call
+//! the registry, the `#[dag]` run path (the `run` module), the one-call
 //! [`RunnableFlow::run_to_store`](crate::run_flow::RunnableFlow::run_to_store), and
 //! any hand-written driver all agree — and no one hand-writes a `FileSink` again.
 //!
