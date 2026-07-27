@@ -34,6 +34,15 @@ pub use crate::run_flow::RunnableFlow;
 /// dagr_cli::prelude::*;` brings it into scope; absent under `--no-default-features`.
 #[cfg(feature = "dag")]
 pub use dagr_macros::dag;
+/// The `#[task]` attribute and `#[derive(StableName)]` derive, re-exported from the
+/// build-time proc-macro crate so `use dagr_cli::prelude::*;` is the **single**
+/// authoring import that brings in the whole macro trio — `#[task]` (author a task),
+/// `#[dag]` (declare a DAG), `#[derive(StableName)]` (name a task/payload so the
+/// graph-emittable registrars accept it). The `StableName` *derive* (macro namespace)
+/// coexists with the `StableName` *trait* re-exported below (type namespace) — the
+/// standard trait+derive pairing. A proc-macro is never linked into the shipped
+/// binary, so this adds no runtime dependency.
+pub use dagr_macros::{task, StableName};
 
 pub use dagr_core::context::RunContext;
 pub use dagr_core::stable_name::{StableInputNames, StableName};

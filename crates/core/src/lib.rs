@@ -435,5 +435,17 @@ pub use task::{ExecutionClass, Task};
 /// ```
 #[cfg(feature = "macros")]
 pub use dagr_macros::task;
+/// The `#[derive(StableName)]` derive macro — the one-line ergonomic that emits the
+/// `impl StableName` the graph-emittable registrars require, so `#[task]` tasks and
+/// their payloads compose with `#[dag]` / `FlowBuilder::source` / `node` with no
+/// hand-written trait bodies. Re-exported behind the default-on `macros` feature
+/// exactly as [`macro@task`] is; `--no-default-features` drops it and the runtime
+/// dependency graph is unchanged (a proc-macro is never linked into the binary).
+///
+/// The derive (macro namespace) coexists with the [`StableName`] trait (type
+/// namespace) under this one name, the standard trait+derive pairing — `use
+/// dagr_core::StableName;` brings both into scope.
+#[cfg(feature = "macros")]
+pub use dagr_macros::StableName;
 #[cfg(feature = "test-kit")]
 pub use test_kit::{SingleTaskTest, TaskOutcome};

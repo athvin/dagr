@@ -1,0 +1,5 @@
+error: #[stable_name = "…"] takes exactly one string-literal value (the author-declared stable name); omit it to default to the type name
+ --> tests/expand/fail/stable_name_not_str.rs:8:17
+  |
+8 | #[stable_name = 42]
+  |                 ^^
