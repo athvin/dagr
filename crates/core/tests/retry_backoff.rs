@@ -1,25 +1,23 @@
-//! C14 retry-with-jittered-exponential-backoff tests — ticket T22 (032).
-//! Written first, TDD.
+//! Retry-with-jittered-exponential-backoff tests. Written first, TDD.
 //!
-//! These exercise the **retry loop** the single-attempt runner (T20) deferred:
-//! the C14 "either fill the slot, schedule another attempt after a backoff, or
-//! reach a terminal failure" paragraph and its "Backoff is exponential with
-//! jitter and a cap" clause. The loop wraps the already-merged
-//! [`dagr_core::execution::run_attempt`] core (T20) — it does not fork it — and
-//! drives it up to the configured maximum, consulting the classification after
-//! each attempt.
+//! These exercise the **retry loop** the single-attempt runner deferred:
+//! "either fill the slot, schedule another attempt after a backoff, or reach a
+//! terminal failure", with "backoff is exponential with jitter and a cap". The
+//! loop wraps the already-merged [`dagr_core::execution::run_attempt`] core — it
+//! does not fork it — and drives it up to the configured maximum, consulting the
+//! classification after each attempt.
 //!
 //! Determinism (the load-bearing constraint): jitter needs randomness but tests
 //! must be reproducible. The retry logic reads **no** global RNG and **no**
 //! system clock. Jitter is an injected [`dagr_core::execution::Jitter`] source
 //! (a tiny seeded PRNG for production; a pinned/zero source for tests), and the
 //! backoff **wait** is a caller-provided timer future (the driver arms a real
-//! `tokio::time` sleep off the isolated runtime, T24/T33; tests pass a
-//! controllable timer that records the requested delay and resolves immediately)
-//! — so the exact backoff sequence is assertable with no wall-clock flakiness.
+//! `tokio::time` sleep off the isolated runtime; tests pass a controllable timer
+//! that records the requested delay and resolves immediately) — so the exact
+//! backoff sequence is assertable with no wall-clock flakiness.
 //!
-//! Scope discipline (T22): retry + backoff only. No run-loop driver (T24), no
-//! dispatch/concurrency (T33), no panic-catch (T23), no C5 policy surface (T29).
+//! Scope discipline: retry + backoff only. No run-loop driver, no
+//! dispatch/concurrency, no panic-catch, no node-policy surface.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -109,7 +107,7 @@ impl Task for DecidesToSkip {
     }
 }
 
-// --- A capturing event sink (C19-shaped, in-memory) -------------------------
+// --- A capturing event sink (event-stream shaped, in-memory) ----------------
 
 #[derive(Default)]
 struct CapturingSink {
@@ -217,9 +215,9 @@ fn fresh_slot() -> Slot<Report> {
 }
 
 /// A no-dependency, `unsafe`-free block-on for the returned future — the same
-/// runtime-agnostic executor the T20/T21 tests use, proving the retry loop needs
-/// no runtime. The attempt/timer futures resolve on a poll, so a busy-poll loop
-/// drives them to completion.
+/// runtime-agnostic executor the single-attempt runner tests use, proving the
+/// retry loop needs no runtime. The attempt/timer futures resolve on a poll, so
+/// a busy-poll loop drives them to completion.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc as StdArc;
@@ -802,10 +800,10 @@ fn backoff_phase_is_a_named_measurable_interval() {
 }
 
 // ===========================================================================
-// C1 exclusivity — no premature re-entry
+// Exclusivity — no premature re-entry
 // ===========================================================================
 
-/// **No premature re-entry (C1 exclusivity).** Attempt N+1's work never begins
+/// **No premature re-entry (exclusivity).** Attempt N+1's work never begins
 /// until attempt N's closure has returned — the same task instance is never
 /// running concurrently with a prior attempt. The loop takes the task by
 /// `&mut self`, so the borrow checker plus the sequential await already enforce
@@ -824,11 +822,11 @@ fn no_premature_re_entry_attempts_are_strictly_sequential() {
         type Input = ();
         type Output = Report;
         async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Report, TaskError> {
-            // No other attempt of this instance may be in flight (C1).
+            // No other attempt of this instance may be in flight.
             let concurrent = self.in_flight.fetch_add(1, Ordering::SeqCst);
             assert_eq!(
                 concurrent, 0,
-                "a prior attempt was still running (C1 violated)"
+                "a prior attempt was still running (exclusivity violated)"
             );
             self.log.lock().unwrap().push("enter");
             self.log.lock().unwrap().push("exit");

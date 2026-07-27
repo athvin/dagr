@@ -1,18 +1,18 @@
-// UI compile-failure fixture — ticket T52 (064), case
+// UI compile-failure fixture, case
 // `teardown_no_data_dependency`.
 //
-// PROVES (C17; C3; arch.md §52, §126, §371): a teardown node NEVER has data
+// PROVES: a teardown node NEVER has data
 // dependencies, and this is a COMPILE error, not a runtime or assembly check. A
-// teardown fires on the non-default `all-terminal` rule, which C3's builder
+// teardown fires on the non-default `all-terminal` rule, which the builder
 // typestate makes inexpressible on any node that consumes data — so the
 // `register_teardown` seam only accepts a consume-nothing task (`Task<Input =
 // ()>`). Passing a task that consumes a value is a trait-bound error: `Input = ()`
 // is not satisfied. A data-dependent teardown therefore cannot even be spelled.
 //
 // This is the REAL authoring API (dagr_core::flow::Flow::register_teardown), not a
-// throwaway sketch. Wired to the T8 UI harness (crates/core/tests/ui.rs); the
+// throwaway sketch. Wired to the UI harness (crates/core/tests/ui.rs); the
 // sibling `.stderr` names the substrings the diagnostic must contain, and the
-// harness asserts this sample FAILS to compile under the pinned toolchain (C28).
+// harness asserts this sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;
@@ -45,7 +45,7 @@ fn main() {
     let count = flow.register_source("count", &MakeCount);
     // `register_teardown` requires a consume-nothing task (`Task<Input = ()>`),
     // because a teardown fires on `all-terminal` and a data-consuming node cannot
-    // carry a non-default rule (C3/C4). Passing a data-consuming task is a
+    // carry a non-default rule. Passing a data-consuming task is a
     // compile error — a teardown can never have a data dependency.
     let _t = flow.register_teardown("cleanup", &ConsumesData, &[count.ordering()]);
 }

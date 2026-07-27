@@ -1,23 +1,22 @@
-//! The C28 **full-pipeline fakes harness** — the third and last of C28's three
-//! testing levels (arch.md `### C28 · Testing surface`; ticket T62).
+//! The **full-pipeline fakes harness** — the third and last of the three testing
+//! levels.
 //!
 //! This is a **shipped** testing utility: downstream test code assembles a small
 //! flow of **fake** tasks (declarative — no real work), injects fake resources,
-//! and drives the whole flow through the **real** T24 run-loop driver
+//! and drives the whole flow through the **real** run-loop driver
 //! ([`crate::driver::drive`]) against a tiny fixture, deterministically, with **no
 //! live network, no database, and no hand-rolled scheduler**. The point is that
-//! **fakes run through real orchestration**: readiness (C11), admission (C12),
-//! execution-class dispatch (C13), failure propagation and trigger-rule evaluation
-//! (C15), and cancellation (C16) are the framework's, reproduced verbatim by the
+//! **fakes run through real orchestration**: readiness, admission,
+//! execution-class dispatch, failure propagation and trigger-rule evaluation,
+//! and cancellation are the framework's, reproduced verbatim by the
 //! harness rather than computed by the test.
 //!
 //! It ships inside the library — behind the default-on `test-kit` feature — so
-//! **no pipeline ever writes its own full-pipeline harness** (arch.md C28
-//! acceptance). It is the sibling of the single-task kit
-//! ([`dagr_core::test_kit::SingleTaskTest`], T60): that kit exercises **one** task
-//! with a hand-built context; this harness runs a **whole flow** through the real
-//! driver. It does **not** reimplement the driver — it composes the real
-//! [`crate::driver::drive`] entry point, the real
+//! **no pipeline ever writes its own full-pipeline harness**. It is the sibling of
+//! the single-task kit ([`dagr_core::test_kit::SingleTaskTest`]): that kit
+//! exercises **one** task with a hand-built context; this harness runs a **whole
+//! flow** through the real driver. It does **not** reimplement the driver — it
+//! composes the real [`crate::driver::drive`] entry point, the real
 //! [`dagr_core::flow`] authoring API, and the real
 //! [`dagr_artifact::fold`] run-artifact fold.
 //!
@@ -33,33 +32,32 @@
 //!   [`node`](FullPipelineTest::node) (data-dependent, up to a two-input fan-in),
 //!   [`contingency`](FullPipelineTest::contingency) (a consume-nothing node
 //!   attached by ordering edges with a non-default trigger rule — the notify /
-//!   cleanup pattern C15's non-default rules exist for);
+//!   cleanup pattern non-default rules exist for);
 //!   [`register_fake`](FullPipelineTest::register_fake) (a fake resource retrieved
-//!   by type, C9); [`stop_on_first_failure`](FullPipelineTest::stop_on_first_failure),
+//!   by type); [`stop_on_first_failure`](FullPipelineTest::stop_on_first_failure),
 //!   [`parameter`](FullPipelineTest::parameter),
 //!   [`data_interval`](FullPipelineTest::data_interval),
 //!   [`run_id`](FullPipelineTest::run_id).
 //! - **capture** — the overall [outcome](HarnessRun::overall_outcome), each node's
 //!   [terminal state](HarnessRun::terminal_state), the raw
 //!   [event stream](HarnessRun::event_stream) (with per-node/per-run query
-//!   helpers), the folded [run artifact](HarnessRun::artifact), whether C9
+//!   helpers), the folded [run artifact](HarnessRun::artifact), whether
 //!   [bootstrap resource validation passed](HarnessRun::bootstrap_resource_validation_passed),
 //!   and the normalized [interpretive artifact](HarnessRun::interpretive_artifact_json)
-//!   for the T65 interpretive-determinism replay.
+//!   for the interpretive-determinism replay.
 //!
-//! # Scripted outcomes — the interpretive-determinism replay surface (T65)
+//! # Scripted outcomes — the interpretive-determinism replay surface
 //!
 //! Each node's outcome is **scripted** ([`Outcome`]): succeed (optionally
 //! producing a value, requiring a resource, or after a real `.await`), fail
-//! permanently, fail-then-succeed (retry-eligibly, keyed off the C8 attempt
+//! permanently, fail-then-succeed (retry-eligibly, keyed off the attempt
 //! number — never timing or randomness), or deliberately skip. The scripted result
 //! is driven through the **real** attempt runner and the framework's propagation
 //! logic, so a downstream user tests **their** pipeline's structural behaviour, not
 //! the test's. Given the same scripts, parameters, and data interval, repeated runs
 //! produce identical terminal states, identical propagation decisions, and
 //! byte-identical [interpretive artifact content](HarnessRun::interpretive_artifact_json)
-//! (volatile header/timing fields excluded) — the deterministic replay surface T65
-//! drives (system criterion 4(b)).
+//! (volatile header/timing fields excluded) — the deterministic replay surface.
 //!
 //! # Determinism and isolation
 //!
@@ -69,7 +67,7 @@
 //! directory** (the shared-`/tmp` flake class has bitten CI), created fresh and
 //! removed at the end of each run, so two harness runs — even concurrent ones —
 //! never collide. So a full-pipeline fake run is reproducible run to run and
-//! machine to machine, and completes in well under a second (arch.md C28's
+//! machine to machine, and completes in well under a second (the
 //! completes-in-seconds budget).
 //!
 //! # A note on the interim retry surface
@@ -77,11 +75,11 @@
 //! A **retrying** fake ([`Outcome::fail_then_succeed`]) is driven through the real
 //! bounded-retry loop ([`dagr_core::execution::run_with_retries_caught`]), which —
 //! per its own rustdoc — mints a fresh per-attempt context off run/pipeline
-//! identity only (the C5-policy/context fold is a later ticket's). A retrying node
+//! identity only (the policy/context fold is not applied there). A retrying node
 //! therefore does not receive injected resources through that loop; a
 //! resource-consuming fake is a single-attempt [`Outcome::succeed`]. The two
-//! scenarios are distinct in the T62 Test plan, so this composes cleanly; it is a
-//! known boundary of the interim retry surface, not a gap in the real driver.
+//! scenarios are distinct, so this composes cleanly; it is a known boundary of the
+//! interim retry surface, not a gap in the real driver.
 //!
 //! # Example
 //!
@@ -139,7 +137,7 @@ struct BuiltPlan {
 // Scripted outcomes
 // ===========================================================================
 
-/// The **script** for one fake node's outcome (arch.md C28; T62). A fake produces
+/// The **script** for one fake node's outcome. A fake produces
 /// this deterministically, driven through the real attempt runner and the
 /// framework's propagation logic — so a test asserts on the framework's decisions,
 /// not the test's.
@@ -148,25 +146,25 @@ struct BuiltPlan {
 /// [`fail_permanent`](Outcome::fail_permanent),
 /// [`fail_then_succeed`](Outcome::fail_then_succeed), [`skip`](Outcome::skip), and
 /// their variants), then optionally chain [`requires`](Outcome::requires) to
-/// declare a C9 resource requirement the node's context must satisfy at bootstrap.
+/// declare a resource requirement the node's context must satisfy at bootstrap.
 #[derive(Clone)]
 pub struct Outcome {
     script: Script,
-    /// The C9 resource requirements this node declares (validated at bootstrap).
+    /// The resource requirements this node declares (validated at bootstrap).
     requirements: ResourceRequirements,
     /// A by-type probe asserting the injected registry holds the required fake at
     /// run time (the "receives the fake by type" scenario) — a closure capturing the
     /// concrete resource type, so the lookup is the real type-keyed
     /// `get::<R>()`. `None` for a node that reads no resource.
     resource_probe: Option<ResourceProbe>,
-    /// The C12 declared working-memory cost this node demands of the admission
+    /// The declared working-memory cost this node demands of the admission
     /// pool (default 0). Pinning a capacity + costing nodes is how a test serializes
     /// admission deterministically (the pending-cancellation scenario).
     working_memory: u64,
 }
 
-/// A type-erased "is the fake of type `R` reachable by type?" probe (the C9 no-
-/// string-lookup path), captured at declaration time.
+/// A type-erased "is the fake of type `R` reachable by type?" probe (the
+/// no-string-lookup path), captured at declaration time.
 type ResourceProbe = Arc<dyn Fn(&ResourceRegistry) -> bool + Send + Sync>;
 
 /// The kind of scripted behaviour a fake node performs.
@@ -215,7 +213,7 @@ impl Outcome {
 
     /// The node **succeeds iff the injected fake resource of type `R` is reachable
     /// by type** at run time — the "the task receives the fake, no task edit"
-    /// scenario. Also declares the C9 requirement on `R` (so bootstrap validates
+    /// scenario. Also declares the requirement on `R` (so bootstrap validates
     /// it) and probes for it in the attempt.
     #[must_use]
     pub fn succeed_if_resource<R: Any + Send + Sync>() -> Self {
@@ -235,7 +233,7 @@ impl Outcome {
     }
 
     /// The node **fails retry-eligibly for its first `retries` attempts, then
-    /// succeeds** — keyed off the C8 attempt number, never timing or randomness. Its
+    /// succeeds** — keyed off the attempt number, never timing or randomness. Its
     /// retry budget is granted automatically (max attempts = `retries + 1`).
     #[must_use]
     pub fn fail_then_succeed(retries: u32) -> Self {
@@ -243,7 +241,7 @@ impl Outcome {
     }
 
     /// The node **deliberately skips** — a self-originated skip that propagates as
-    /// `upstream-skipped` to default-rule downstreams (C15).
+    /// `upstream-skipped` to default-rule downstreams.
     #[must_use]
     pub fn skip() -> Self {
         Self::with_script(Script::Skip)
@@ -262,8 +260,8 @@ impl Outcome {
         Self::with_script(Script::HoldUntilCancelled)
     }
 
-    /// Declare this node's C12 **working-memory cost** (bytes) — the per-pool demand
-    /// the admission controller acquires against (arch.md C12). Pair it with
+    /// Declare this node's **working-memory cost** (bytes) — the per-pool demand
+    /// the admission controller acquires against. Pair it with
     /// [`FullPipelineTest::capacity_memory`] to serialize admission deterministically.
     #[must_use]
     pub fn working_memory(mut self, bytes: u64) -> Self {
@@ -271,7 +269,7 @@ impl Outcome {
         self
     }
 
-    /// Declare that this node **requires** resource type `R` (C9). A flow whose
+    /// Declare that this node **requires** resource type `R`. A flow whose
     /// declared requirements are all satisfied by registered fakes passes bootstrap
     /// resource validation; a missing one is a bootstrap failure.
     #[must_use]
@@ -294,8 +292,8 @@ impl Outcome {
 // Fake resources
 // ===========================================================================
 
-/// A **fake resource** to inject into the harness's C9 registry (arch.md C9;
-/// T62). A node retrieves it by type through `ctx.resources().get::<R>()` with
+/// A **fake resource** to inject into the harness's resource registry. A node
+/// retrieves it by type through `ctx.resources().get::<R>()` with
 /// **no change to the task's own code** versus production — the substitution is
 /// purely through the registry.
 ///
@@ -307,7 +305,7 @@ pub struct FakeResource {
 
 impl FakeResource {
     /// Wrap `resource` as a fake to inject by its concrete type. Two fakes of the
-    /// **same** underlying type are distinguished by newtype wrappers (the C9
+    /// **same** underlying type are distinguished by newtype wrappers (the
     /// no-string-lookup pattern), exactly as in production.
     #[must_use]
     pub fn new<R: Any + Send + Sync + 'static>(resource: R) -> Self {
@@ -319,7 +317,7 @@ impl FakeResource {
     }
 }
 
-/// An accumulator for the fakes a harness run injects, built into the immutable C9
+/// An accumulator for the fakes a harness run injects, built into the immutable
 /// [`ResourceRegistry`] once every fake is staged. Internal — a caller reaches it
 /// only through [`FakeResource`].
 #[doc(hidden)]
@@ -337,7 +335,7 @@ impl ResourceRegistryStager {
     fn register<R: Any + Send + Sync + 'static>(&mut self, resource: R) {
         let builder = self.builder.take().expect("staging builder present");
         // A duplicate same-typed fake is a test-authoring error surfaced here (the
-        // C9 ambiguous-registration rule); newtype-wrap to distinguish two of a kind.
+        // ambiguous-registration rule); newtype-wrap to distinguish two of a kind.
         self.builder = Some(
             builder
                 .register(resource)
@@ -368,7 +366,7 @@ struct NodeSpec {
     outcome: Outcome,
 }
 
-/// A configured full-pipeline fake test (arch.md C28 full-pipeline level; T62).
+/// A configured full-pipeline fake test.
 ///
 /// Construct with [`new`](Self::new), add fake nodes and resources, set the
 /// run-level knobs a test cares about, then [`run`](Self::run) it and assert on the
@@ -383,7 +381,7 @@ pub struct FullPipelineTest {
     failure_mode: FailureMode,
     parameters: BTreeMap<String, String>,
     data_interval: Option<[String; 2]>,
-    /// A pinned C12 working-memory pool capacity (bytes), or `None` for
+    /// A pinned working-memory pool capacity (bytes), or `None` for
     /// unconstrained pools (every ready node admitted at once — the default).
     capacity_memory: Option<u64>,
 }
@@ -422,7 +420,7 @@ impl FullPipelineTest {
     /// Add a **data-dependent** fake node named `name`, consuming the fake values of
     /// the nodes named in `upstreams` (0, 1, or a two-name fan-in), with the
     /// scripted `outcome`. A data-consuming node always runs on the default
-    /// `all-succeeded` rule (C15).
+    /// `all-succeeded` rule.
     ///
     /// # Panics
     ///
@@ -448,9 +446,9 @@ impl FullPipelineTest {
     /// Add a **consume-nothing contingency** named `name`, attached by **ordering**
     /// edges to the nodes named in `after`, firing on the non-default `trigger_rule`
     /// (`all-terminal` — cleanup — or `any-failed` — notify-on-failure). This is the
-    /// notify / cleanup pattern C15's non-default rules exist for; the harness seeds
+    /// notify / cleanup pattern non-default rules exist for; the harness seeds
     /// the readiness tracker's ordering structure so the rule is evaluated against
-    /// the ordered-after nodes at run time (C15).
+    /// the ordered-after nodes at run time.
     pub fn contingency(
         mut self,
         name: impl Into<String>,
@@ -468,7 +466,7 @@ impl FullPipelineTest {
         self
     }
 
-    /// Register a **fake resource** (C9) the flow's nodes retrieve by type. The
+    /// Register a **fake resource** the flow's nodes retrieve by type. The
     /// substitution needs no task edit — a node reads the fake through the same
     /// `ctx.resources().get::<R>()` path it uses in production.
     pub fn register_fake(mut self, fake: FakeResource) -> Self {
@@ -476,7 +474,7 @@ impl FullPipelineTest {
         self
     }
 
-    /// Drive the run under **stop-on-first-failure** (C15): after the first failure
+    /// Drive the run under **stop-on-first-failure**: after the first failure
     /// no further default-rule work is admitted; an unrelated pending default node
     /// ends `cancelled`, while a firing non-default contingency still runs. The
     /// default is continue-independent (a failure cancels nothing).
@@ -485,7 +483,7 @@ impl FullPipelineTest {
         self
     }
 
-    /// Pin the C12 working-memory admission-pool capacity (bytes), serializing
+    /// Pin the working-memory admission-pool capacity (bytes), serializing
     /// admission against declared [node costs](Outcome::working_memory). The default
     /// is unconstrained (every ready node admitted at once). Pinning it (with a
     /// [`hold_until_cancelled`](Outcome::hold_until_cancelled) keeper occupying the
@@ -498,7 +496,7 @@ impl FullPipelineTest {
 
     /// Override the minted run identity (used verbatim). Fix it for a byte-stable
     /// [interpretive artifact](HarnessRun::interpretive_artifact_json) across
-    /// repeated runs (the T65 replay).
+    /// repeated runs (the replay).
     pub fn run_id(mut self, id: impl Into<String>) -> Self {
         self.run_id = Some(id.into());
         self
@@ -511,15 +509,15 @@ impl FullPipelineTest {
     }
 
     /// Record the run's opaque data interval for the `run-started` header — returned
-    /// verbatim in the artifact, exactly as supplied (C8's opaque-interval
+    /// verbatim in the artifact, exactly as supplied (the opaque-interval
     /// invariant).
     pub fn data_interval(mut self, start: impl Into<String>, end: impl Into<String>) -> Self {
         self.data_interval = Some([start.into(), end.into()]);
         self
     }
 
-    /// Assemble the flow, validate its C9 resource requirements against the injected
-    /// fakes, drive it through the **real** T24 run loop with an injected
+    /// Assemble the flow, validate its resource requirements against the injected
+    /// fakes, drive it through the **real** run loop with an injected
     /// deterministic clock and captured in-memory sink under a **private per-run
     /// temp base**, fold the recorded stream, and return the [`HarnessRun`] to
     /// assert on.
@@ -531,17 +529,17 @@ impl FullPipelineTest {
     /// the test, surfaced loudly rather than papered over.
     #[must_use]
     pub fn run(mut self) -> HarnessRun {
-        // --- Build the immutable fake registry (C9), shared into every runner.
+        // --- Build the immutable fake registry, shared into every runner.
         let mut stager = ResourceRegistryStager::new();
         for fake in std::mem::take(&mut self.fakes) {
             (fake.register)(&mut stager);
         }
         let registry = stager.build();
 
-        // --- C9 bootstrap resource validation (arch.md C9): every declared
-        // requirement across the flow must be satisfied by a registered fake,
-        // BEFORE any node executes. The harness records whether it passed so a test
-        // can assert the no-infrastructure guarantee.
+        // --- Bootstrap resource validation: every declared requirement across the
+        // flow must be satisfied by a registered fake, BEFORE any node executes. The
+        // harness records whether it passed so a test can assert the
+        // no-infrastructure guarantee.
         let declarations: Vec<(NodeId, ResourceRequirements)> = self
             .nodes
             .iter()
@@ -585,7 +583,7 @@ impl FullPipelineTest {
             TickClock::default(),
         );
 
-        // --- Fold the recorded stream into the C22 run artifact (the graph roster
+        // --- Fold the recorded stream into the run artifact (the graph roster
         // gives never-ran nodes their propagated terminal state in the artifact).
         let stream = sink.bytes();
         let node_roster: Vec<String> = pipeline.nodes().map(|n| n.name().to_string()).collect();
@@ -594,9 +592,9 @@ impl FullPipelineTest {
 
         // The declared data-edge structure (node → its data-upstream names), so the
         // harness can surface a propagated-skip's originating identity from the
-        // observable terminal-state map + the flow it assembled (C15) — the C19 wire
+        // observable terminal-state map + the flow it assembled — the wire
         // `node-terminal` record carries no origin field, and the published schema is
-        // not this ticket's to change.
+        // not changed here.
         let data_edges: BTreeMap<String, Vec<String>> = self
             .nodes
             .iter()
@@ -752,7 +750,7 @@ fn register_node(
 // The captured run
 // ===========================================================================
 
-/// The observable results of one full-pipeline fake run (arch.md C28; T62): the
+/// The observable results of one full-pipeline fake run: the
 /// overall outcome, per-node terminal states, the emitted event stream, and the
 /// folded run artifact — the surface a test asserts on.
 pub struct HarnessRun {
@@ -769,7 +767,7 @@ pub struct HarnessRun {
 impl HarnessRun {
     /// The overall run outcome as the normative lowercase token (`succeeded`,
     /// `failed`, `cancelled`, …) the real driver surfaced — a run whose only
-    /// non-success outcomes are skips is `succeeded` (C15).
+    /// non-success outcomes are skips is `succeeded`.
     #[must_use]
     pub fn overall_outcome(&self) -> &'static str {
         match self.outcome {
@@ -789,28 +787,28 @@ impl HarnessRun {
         self.terminal_states.get(node).copied()
     }
 
-    /// Whether the flow's declared C9 resource requirements were all satisfied by
+    /// Whether the flow's declared resource requirements were all satisfied by
     /// the injected fakes at bootstrap (the no-infrastructure guarantee).
     #[must_use]
     pub fn bootstrap_resource_validation_passed(&self) -> bool {
         self.bootstrap_ok
     }
 
-    /// The raw recorded C19 event stream (JSON Lines) the real driver wrote — the
+    /// The raw recorded event stream (JSON Lines) the real driver wrote — the
     /// authoritative record a test can walk directly.
     #[must_use]
     pub fn event_stream(&self) -> &[u8] {
         &self.stream
     }
 
-    /// The folded C22 [run artifact](RunArtifact) (attempts, per-node terminals,
+    /// The folded [run artifact](RunArtifact) (attempts, per-node terminals,
     /// overall outcome, summary) — the artifact surface a test asserts on.
     #[must_use]
     pub fn artifact(&self) -> &RunArtifact {
         &self.artifact
     }
 
-    /// The **normalized interpretive artifact JSON** for the T65 interpretive-
+    /// The **normalized interpretive artifact JSON** for the interpretive-
     /// determinism replay: the folded artifact with volatile header/timing fields
     /// (run id, generation time, monotonic offsets, worker, elapsed/critical-path
     /// timings) blanked to canonical placeholders, so two runs of the same script
@@ -883,13 +881,13 @@ impl HarnessRun {
 
     /// The **originating node identity** carried on `node`'s propagated
     /// `upstream-skipped` terminal — the skip-class data-upstream whose skip
-    /// deadened it (C15), or [`None`] if `node` is not upstream-skipped.
+    /// deadened it, or [`None`] if `node` is not upstream-skipped.
     ///
     /// The framework decides the propagation (the readiness tracker's
-    /// propagated-terminal `origin`, C15); this surfaces that decision from observable data —
+    /// propagated-terminal `origin`); this surfaces that decision from observable data —
     /// the run's per-node terminal-state map and the flow the harness assembled —
-    /// because the C19 wire `node-terminal` record carries no origin field and the
-    /// published schema is not this ticket's to change. When more than one upstream
+    /// because the wire `node-terminal` record carries no origin field and the
+    /// published schema is not changed here. When more than one upstream
     /// is skip-class, the first in declaration order is reported (the tracker's own
     /// tie-break).
     #[must_use]
@@ -911,7 +909,7 @@ impl HarnessRun {
 }
 
 /// Blank the volatile header/timing fields of a folded artifact JSON so two runs
-/// of the same script are byte-identical (the T65 interpretive-determinism
+/// of the same script are byte-identical (the interpretive-determinism
 /// replay). Everything interpretive — per-node terminal statuses, attempt numbers,
 /// propagation origins, overall outcome — is preserved.
 fn normalize_volatile(value: &mut serde_json::Value) {
@@ -1130,7 +1128,7 @@ fn clone_ctx(src: &RunContext, registry: Option<ResourceRegistry>) -> RunContext
 /// It reads its upstream slot(s) (proving the real data edges are wired), then
 /// drives the scripted adapter through the **real** attempt runner — a single
 /// caught attempt for most scripts, or the real bounded-retry loop for a
-/// fail-then-succeed script — so the emitted C14/C19 records are genuine.
+/// fail-then-succeed script — so the emitted attempt/event records are genuine.
 struct FakeRunner {
     name: String,
     outcome: Outcome,
@@ -1168,7 +1166,7 @@ impl NodeRunner for FakeRunner {
         Box::pin(async move {
             let max_attempts = outcome.max_attempts();
             if max_attempts > 1 {
-                // The REAL bounded-retry loop (T22/T23). It mints its own per-attempt
+                // The REAL bounded-retry loop. It mints its own per-attempt
                 // context (no resource injection — see module docs), so a retrying
                 // fake carries no resource probe. The backoff timer resolves
                 // immediately (no wall-clock sleep).
@@ -1252,7 +1250,7 @@ impl MonotonicClock for TickClock {
     }
 }
 
-/// A **private per-run temp base** for a harness run (arch.md C16; the shared-`/tmp`
+/// A **private per-run temp base** for a harness run (the shared-`/tmp`
 /// flake class). Created fresh under the process temp dir with a per-run unique
 /// suffix, and removed when the run's captures are collected — so two harness runs,
 /// even concurrent ones, never collide on the run store.

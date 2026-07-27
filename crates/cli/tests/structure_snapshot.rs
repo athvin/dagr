@@ -1,18 +1,17 @@
-//! C28 · **Structure-snapshot testing** — ticket T61 (074). Written first, TDD.
+//! **Structure-snapshot testing.** Written first, TDD.
 //!
-//! The middle level of the C28 testing surface (arch.md `### C28 · Testing
-//! surface`): a *shipped* library API that captures an assembled pipeline's
-//! **structure** as a canonical, human-readable snapshot (built on the T40 graph
-//! artifact / T41 fingerprint / T0.7 stable names) and asserts it against a
-//! checked-in golden fixture, so unintended rewiring fails review rather than
-//! production.
+//! The middle level of the testing surface: a *shipped* library API that captures
+//! an assembled pipeline's **structure** as a canonical, human-readable snapshot
+//! (built on the graph artifact / fingerprint / stable names) and asserts it
+//! against a checked-in golden fixture, so unintended rewiring fails review rather
+//! than production.
 //!
-//! These translate the T61 Test plan into executable tests against the **real**
-//! structure-snapshot API [`dagr_cli::structure_snapshot`] over **real** assembled
-//! [`Pipeline`]s built with the stable-name-aware registrars. Each test maps to
-//! one arch.md C28 (and C21 / C6) acceptance criterion (see the per-test doc
-//! comment). Every fixture is produced through the blessed update flow, never
-//! hand-edited.
+//! These translate the structure-snapshot test plan into executable tests against
+//! the **real** structure-snapshot API [`dagr_cli::structure_snapshot`] over
+//! **real** assembled [`Pipeline`]s built with the stable-name-aware registrars.
+//! Each test maps to one structure-snapshot (and fingerprint / group) acceptance
+//! criterion (see the per-test doc comment). Every fixture is produced through the
+//! blessed update flow, never hand-edited.
 
 use std::path::PathBuf;
 
@@ -391,7 +390,7 @@ static FIXTURE_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 // === Tests =================================================================
 
 /// **Baseline match passes.** A blessed fixture and a freshly snapshotted
-/// pipeline of the same structure assert equal with no diff (arch.md C28).
+/// pipeline of the same structure assert equal with no diff.
 #[test]
 fn baseline_match_passes_with_no_diff() {
     let fixture = bless_to_temp(&baseline(base_groups), "baseline-match");
@@ -403,7 +402,7 @@ fn baseline_match_passes_with_no_diff() {
 /// **Rebuild does not fail.** Volatile header fields — generation time, build
 /// provenance, tool version — are excluded from the snapshot, so a "rebuild"
 /// (a different provenance and generation time) produces the identical snapshot
-/// and the assertion still passes (arch.md C28: does not fail on a rebuild).
+/// and the assertion still passes.
 #[test]
 fn rebuild_does_not_fail() {
     // Two "builds" differing only in provenance + generation time produce
@@ -439,7 +438,7 @@ fn rebuild_does_not_fail() {
 
 /// **Adding a node fails with a diff.** Adding one node (and its edge) without
 /// re-blessing fails; the structural diff names the added node and its new edge
-/// and no unrelated nodes (arch.md C28).
+/// and no unrelated nodes.
 #[test]
 fn adding_a_node_fails_with_a_diff() {
     let fixture = bless_to_temp(&baseline(base_groups), "add");
@@ -466,7 +465,7 @@ fn adding_a_node_fails_with_a_diff() {
 }
 
 /// **Removing a node fails with a diff.** Deleting a node and its incident edges
-/// fails; the diff names the removed node and the removed edges (arch.md C28).
+/// fails; the diff names the removed node and the removed edges.
 #[test]
 fn removing_a_node_fails_with_a_diff() {
     // Bless the richer (added) pipeline, then assert the baseline (node removed).
@@ -486,7 +485,7 @@ fn removing_a_node_fails_with_a_diff() {
 
 /// **Renaming a node fails with a diff.** Changing a node's stable name (keeping
 /// wiring identical) fails; the diff shows the old name removed and the new name
-/// added so the identity change is review-visible (arch.md C28).
+/// added so the identity change is review-visible.
 #[test]
 fn renaming_a_node_fails_with_a_diff() {
     let fixture = bless_to_temp(&baseline(base_groups), "rename");
@@ -509,7 +508,7 @@ fn renaming_a_node_fails_with_a_diff() {
 
 /// **Carried-type change fails with a diff.** Changing the payload type carried on
 /// one edge (node and edge endpoints unchanged) fails; the diff reports the edge's
-/// carried-type change (arch.md C28, aligned with C21 carried-type coverage).
+/// carried-type change.
 #[test]
 fn carried_type_change_fails_with_a_diff() {
     let fixture = bless_to_temp(&baseline(base_groups), "carried");
@@ -536,7 +535,7 @@ fn carried_type_change_fails_with_a_diff() {
 /// (`rows_alt -data-> report`), each carrying its type + kind. The test is
 /// **non-vacuous**: it also asserts NO node is reported added/removed, so it proves a
 /// true rewire distinct from an add/remove and would fail if the snapshot ignored an
-/// edge's endpoint (arch.md C28 · "rewired", line 595; Test plan §34).
+/// edge's endpoint.
 #[test]
 fn rewiring_an_edge_fails_naming_removed_and_added_edge() {
     // Golden: `report`'s Rows input comes from `rows`.
@@ -600,7 +599,7 @@ fn rewiring_an_edge_fails_naming_removed_and_added_edge() {
 /// the group-*rename* test, whose destination group is brand-new — fails the
 /// structure assertion, and the diff reports `report`'s group facet change. As a
 /// companion check, BOTH the structural fingerprint and the policy hash are
-/// unchanged, because group is fingerprint-neutral (C6 / C21; T51). (Test plan §42.)
+/// unchanged, because group is fingerprint-neutral.
 #[test]
 fn moving_a_node_between_existing_groups_is_visible_but_fingerprint_neutral() {
     let fixture = bless_to_temp(&baseline(base_groups), "move-groups");
@@ -627,7 +626,7 @@ fn moving_a_node_between_existing_groups_is_visible_but_fingerprint_neutral() {
         "moving a node between groups changes only the group facet, not the topology: {report}"
     );
 
-    // Companion (T51 / C21): a between-groups move is fingerprint-neutral — BOTH
+    // Companion check: a between-groups move is fingerprint-neutral — BOTH
     // hashes are unchanged.
     let base_fp = snapshot(&baseline(base_groups));
     let moved_fp = snapshot(&moved_between_groups());
@@ -646,7 +645,7 @@ fn moving_a_node_between_existing_groups_is_visible_but_fingerprint_neutral() {
 
 /// **Effective-policy change fails with a diff.** Changing one node's effective
 /// policy (a retry count) with topology unchanged fails; the diff names the node
-/// and the changed policy field (arch.md C28).
+/// and the changed policy field.
 #[test]
 fn effective_policy_change_fails_with_a_diff() {
     let fixture = bless_to_temp(&baseline(base_groups), "policy");
@@ -670,8 +669,8 @@ fn effective_policy_change_fails_with_a_diff() {
 /// **Group rename fails with a review-visible diff, yet the fingerprint is
 /// unchanged.** Renaming a group (no other change) fails the structure assertion —
 /// the regroup is review-visible — even though both the structural fingerprint and
-/// the policy hash are unchanged (C6 / C21). This is the C6/C28 distinction proven
-/// in one place (arch.md C28 line 595).
+/// the policy hash are unchanged. This is the review-visible-but-fingerprint-neutral
+/// distinction proven in one place.
 #[test]
 fn group_rename_fails_but_fingerprint_unchanged() {
     let fixture = bless_to_temp(&baseline(base_groups), "regroup");
@@ -686,8 +685,8 @@ fn group_rename_fails_but_fingerprint_unchanged() {
         "the diff reports the regrouping of `report` (publish → landing): {report}"
     );
 
-    // Companion fingerprint check (T41 / C21): BOTH hashes are unchanged by the
-    // regroup — the review-visible-but-fingerprint-neutral property C6 owns.
+    // Companion fingerprint check: BOTH hashes are unchanged by the
+    // regroup — the review-visible-but-fingerprint-neutral property.
     let base_fp = snapshot(&baseline(base_groups));
     let regrouped_fp = snapshot(&regrouped());
     assert_eq!(
@@ -706,7 +705,7 @@ fn group_rename_fails_but_fingerprint_unchanged() {
 /// **Defaulted vs. written-out policy does not differ.** A pipeline authored with
 /// a policy value left to its default snapshots identically to one that states the
 /// same value explicitly — defaulted values compare identically to written-out
-/// defaults (C5 / C21), so no spurious diff (arch.md C28).
+/// defaults, so no spurious diff.
 #[test]
 fn defaulted_and_written_out_policy_do_not_differ() {
     // Baseline `report` leaves retries at its default (0).
@@ -744,7 +743,7 @@ fn defaulted_and_written_out_policy_do_not_differ() {
 /// **Canonical serialization is stable and order-independent.** The same
 /// structure registered in a different order blesses to a byte-identical fixture —
 /// the serialization is canonical and stably ordered, not dependent on
-/// registration order (arch.md C28 / T0.7 §6).
+/// registration order.
 #[test]
 fn canonical_serialization_is_stable_and_order_independent() {
     let one = snapshot(&baseline(base_groups)).to_canonical_string();
@@ -769,7 +768,7 @@ fn canonical_serialization_is_stable_and_order_independent() {
 /// pipeline whose structure legitimately changed against a stale fixture, running
 /// the documented update command rewrites the fixture to the new canonical
 /// structure; a subsequent assertion passes; running the update again is a no-op
-/// (byte-identical output) — idempotence (arch.md C28).
+/// (byte-identical output) — idempotence.
 #[test]
 fn bless_flow_regenerates_and_is_idempotent() {
     // A stale fixture blessed for the baseline …
@@ -798,8 +797,7 @@ fn bless_flow_regenerates_and_is_idempotent() {
 /// **No pipeline writes its own harness.** An example pipeline that only calls the
 /// shipped assertion helper against its own snapshot and fixture path runs its
 /// structure test with no bespoke comparison or serialization code — the entire
-/// mechanism comes from the library (arch.md C28: no pipeline needs its own
-/// harness).
+/// mechanism comes from the library, so no pipeline needs its own harness.
 #[test]
 fn no_pipeline_writes_its_own_harness() {
     // The example's entire "structure test" is these two library calls.
@@ -831,7 +829,7 @@ fn missing_fixture_is_an_io_error_not_a_mismatch() {
 
 /// **A structure snapshot is emittable only from stable-name-aware nodes.** A
 /// pipeline whose node lacks author-declared stable names cannot be snapshotted —
-/// the same C20 emittability contract the graph artifact enforces (T40).
+/// the same emittability contract the graph artifact enforces.
 #[test]
 fn snapshot_requires_stable_names() {
     // A type-erased registration produces a node without stable names.

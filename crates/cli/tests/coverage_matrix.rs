@@ -1,7 +1,7 @@
 //! Integration test that covers system-level acceptance criterion 8's machine
 //! part (`SL8machine`): *coverage of every machine-classed criterion is itself
-//! verified in CI from a checked-in criteria matrix* (arch.md "System-level
-//! acceptance", criterion 8; ticket 006 / T7).
+//! verified in CI from a checked-in criteria matrix* (system-level
+//! acceptance, criterion 8).
 //!
 //! This test IS the covering test the coverage matrix maps `SL8machine` to. It
 //! runs the checked-in coverage-matrix verifier (`scripts/check-coverage-matrix.sh`)
@@ -12,8 +12,8 @@
 //! script `SL8machine` names.
 //!
 //! It is hosted in `dagr-cli` because cli is the workspace's integration crate
-//! (it is the one place the live pipeline, artifacts, and rendering meet, per
-//! the T1 ADR), so an integration test that spans the whole repo belongs here.
+//! (it is the one place the live pipeline, artifacts, and rendering meet), so an
+//! integration test that spans the whole repo belongs here.
 
 use std::path::PathBuf;
 use std::process::Command;

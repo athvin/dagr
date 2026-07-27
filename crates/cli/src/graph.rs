@@ -1,58 +1,57 @@
-//! C20 · **Graph artifact emission** — the pipeline's structure, obtained without
-//! executing it (arch.md `### C20 · Graph artifact`; the T0.7 ADR,
-//! `docs/implementation/013-T0.7-stable-name-and-fingerprint-adr.md`; ticket
-//! T40).
+//! **Graph artifact emission** — the pipeline's structure, obtained without
+//! executing it.
 //!
 //! This module serializes an assembled [`Pipeline`] into a **schema-valid graph
-//! artifact** — the on-demand output that opens M3, "it explains itself." It is
-//! the one place the live pipeline (`dagr-core`) and the artifact serialization
-//! stack (`serde_json`, the T4-sanctioned runtime writer) meet; `dagr-artifact`
-//! cannot see `dagr-core` (the C24 boundary), so the bridge lives here in
-//! `dagr-cli`, behind the **graph verb** of the CLI contract (C26).
+//! artifact** — the on-demand output that explains the pipeline without running
+//! it. It is the one place the live pipeline (`dagr-core`) and the artifact
+//! serialization stack (`serde_json`, the sanctioned runtime writer) meet;
+//! `dagr-artifact` cannot see `dagr-core` (the crate-boundary rule), so the
+//! bridge lives here in `dagr-cli`, behind the **graph verb** of the CLI
+//! contract.
 //!
 //! # What it emits, and when
 //!
 //! Given an assembled pipeline it serializes, for **every node**: the identity
 //! name, group label, the author-declared **stable task name**, stable **input**
 //! and **output** type names, effective **execution class**, the **complete
-//! effective policy** with every C5 field written out (defaults included),
+//! effective policy** with every policy field written out (defaults included),
 //! declared **resource requirements** (the per-pool cost vector), and the
 //! **dependency list**. For **every edge**: its **kind** (data vs ordering) and,
 //! for a data edge, the **stable name of the carried type**. The versioned
 //! **header** carries the schema version, tool version, generation time, pipeline
-//! identity, the **computed C21 fingerprints** — the structural fingerprint, the
+//! identity, the **computed fingerprints** — the structural fingerprint, the
 //! policy hash (each a version-prefixed string, [`format_fingerprint_structural`]),
-//! and the algorithm version (T41) — and **build provenance** (tool version, git
+//! and the algorithm version — and **build provenance** (tool version, git
 //! commit, lockfile hash) embedded at build time.
 //!
 //! Emission runs from **pure assembly** — no credentials, no network, no database,
-//! no run store, no parameters (C7 / C20). That empty-environment guarantee is why
+//! no run store, no parameters. That empty-environment guarantee is why
 //! the artifact is trustworthy and why it runs in CI on every pull request.
 //!
-//! # Author-declared stable names, never `type_name` as identity (C20 / C21)
+//! # Author-declared stable names, never `type_name` as identity
 //!
 //! Every identity or type field records the **author-declared** stable name (the
 //! [`StableName`](dagr_core::StableName) constant captured at registration), never
 //! [`std::any::type_name`], whose output is unstable across compilers. `type_name`
 //! is permitted **only** in the node's informational `type_name` debug field, and
 //! this emitter never populates that field with anything load-bearing — it is
-//! reserved (T0.7 §1). A node lacking captured stable names (registered through a
+//! reserved. A node lacking captured stable names (registered through a
 //! type-erased registrar) is **not emittable** to this contract and produces a
 //! clear [`GraphEmitError`].
 //!
-//! # Byte-identity (C20)
+//! # Byte-identity
 //!
 //! Two emissions from one binary are **byte-identical** outside the generation-time
-//! field: the artifact is serialized through the shared T4 §6 canonicalizer
+//! field: the artifact is serialized through the shared canonicalizer
 //! ([`dagr_artifact::canonical`]), nodes and edges are emitted in a deterministic,
 //! registration-order-independent order (node name; edge `(from, to, kind)`), and
 //! every header field but generation time is fixed per binary. The
 //! [generation-time field](GENERATED_AT_FIELD) is the **only** field allowed to
 //! vary; [`mask_generated_at`] blanks it for a byte-identity comparison.
 //!
-//! # Fingerprints (C21 / T41)
+//! # Fingerprints
 //!
-//! The header's two hashes are the **computed** C21 fingerprints, obtained from
+//! The header's two hashes are the **computed** fingerprints, obtained from
 //! `dagr-core`'s public reuse surface ([`Pipeline::fingerprint`](dagr_core::Pipeline::fingerprint))
 //! — this emitter never re-derives the composition. Each is written as a
 //! self-describing, version-prefixed string
@@ -60,16 +59,16 @@
 //! version](dagr_core::FINGERPRINT_ALGORITHM_VERSION) is also carried as its own
 //! header integer. Because every hashed input is author-declared, the two hashes
 //! are **identical across machines and toolchains** for unchanged source and are
-//! **unaffected** by the generation time or the build provenance (T0.7 §5) — the
+//! **unaffected** by the generation time or the build provenance — the
 //! byte-identity guarantee above therefore extends to the fingerprint fields.
 //!
-//! # Scope (T40 / T41)
+//! # Scope
 //!
-//! This module **emits** the C20 artifact and populates its C21 fingerprint slot
-//! (T41). It folds **no** event stream (T42) and renders **no** diagram (T46). It
-//! serializes whatever **ordering** edges (C4 / T50) the assembled graph carries —
+//! This module **emits** the graph artifact and populates its fingerprint slot.
+//! It folds **no** event stream and renders **no** diagram. It
+//! serializes whatever **ordering** edges the assembled graph carries —
 //! tagged `ordering` with no carried type, distinct from `data` edges — and the
-//! ordering-edge *authoring* surface itself lives in `dagr-core` (T50). None of
+//! ordering-edge *authoring* surface itself lives in `dagr-core`. None of
 //! its output is a runtime outcome — it describes **structure only**.
 
 use std::fmt;
@@ -83,7 +82,7 @@ use dagr_core::{
 };
 use serde_json::{json, Map, Value};
 
-/// The self-identifying schema version this emitter targets (T4 §3; matches
+/// The self-identifying schema version this emitter targets (matches
 /// `schemas/graph/v1.schema.json`).
 pub const GRAPH_SCHEMA_VERSION: &str = "dagr.graph@1";
 
@@ -92,12 +91,12 @@ pub const GRAPH_SCHEMA_VERSION: &str = "dagr.graph@1";
 pub const GRAPH_SCHEMA_MAJOR: u32 = 1;
 
 /// The header field carrying the artifact's **generation time** — the **only**
-/// field excluded from byte-identity comparisons (C20). Everything else is fixed
+/// field excluded from byte-identity comparisons. Everything else is fixed
 /// per binary. Kept as a named constant so the emitter, [`mask_generated_at`],
 /// and the tests all name the same field.
 pub const GENERATED_AT_FIELD: &str = "generated_at";
 
-/// The prefix marking a computed C21 fingerprint string in the graph header: the
+/// The prefix marking a computed fingerprint string in the graph header: the
 /// hash-family tag `fnv1a-64` (matching the [build-provenance lockfile-hash
 /// convention](BuildProvenance) and the [`NodeId`](dagr_core::NodeId) digest
 /// family), so the string is self-describing and a future algorithm change is
@@ -106,12 +105,12 @@ pub const GENERATED_AT_FIELD: &str = "generated_at";
 /// [`format_fingerprint_structural`]).
 pub const FINGERPRINT_HASH_FAMILY: &str = "fnv1a-64";
 
-/// **Build provenance** embedded into the pipeline binary at build time (arch.md
-/// C20; "Stability · Supply chain"): tool version, git commit SHA, and lockfile
+/// **Build provenance** embedded into the pipeline binary at build time (the
+/// supply-chain stability record): tool version, git commit SHA, and lockfile
 /// hash — all fixed per binary and identical across every emission from it. The
 /// values are resolved by the crate's `build.rs` and read through `env!`, so they
 /// are compiled in rather than probed at emit time (which keeps emission
-/// environment-free, C20).
+/// environment-free).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildProvenance {
     tool_version: String,
@@ -167,13 +166,13 @@ impl BuildProvenance {
     }
 }
 
-/// A failure to emit the graph artifact (arch.md C20). Emission fails only for a
+/// A failure to emit the graph artifact. Emission fails only for a
 /// **structural** reason the assembled pipeline cannot satisfy — never for a
 /// missing environment resource (there is none to miss).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphEmitError {
     /// A node carries no author-declared [stable names](dagr_core::StableTypeNames)
-    /// (it was registered through a type-erased registrar). The C20 artifact
+    /// (it was registered through a type-erased registrar). The artifact
     /// requires the stable task/input/output names as identity, so such a node
     /// cannot be emitted. Names the offending node.
     MissingStableNames {
@@ -181,7 +180,7 @@ pub enum GraphEmitError {
         node: String,
     },
     /// A recorded stable name is **malformed** (fails [`is_well_formed`]) — the
-    /// whole-pipeline validity rule the artifact enforces (T0.7 §1). Names the
+    /// whole-pipeline validity rule the artifact enforces. Names the
     /// node and the offending value.
     MalformedStableName {
         /// The identity name of the node carrying the malformed stable name.
@@ -212,7 +211,7 @@ impl fmt::Display for GraphEmitError {
 impl std::error::Error for GraphEmitError {}
 
 /// Emit the **schema-valid graph artifact** for `pipeline` as a canonical JSON
-/// string (arch.md C20), stamped with `pipeline_name` as its identity, the
+/// string, stamped with `pipeline_name` as its identity, the
 /// `generated_at` generation time (the only byte-varying field), and the
 /// build-time `provenance`.
 ///
@@ -220,7 +219,7 @@ impl std::error::Error for GraphEmitError {}
 /// one binary outside the generation-time field: nodes and edges are ordered
 /// canonically (node name; edge `(from, to, kind)`), the full effective policy is
 /// written out with defaults, and every header field but `generated_at` is fixed.
-/// It validates against `schemas/graph/v1.schema.json` (T39).
+/// It validates against `schemas/graph/v1.schema.json`.
 ///
 /// `generated_at` is injected by the caller (the CLI verb reads the clock once),
 /// which keeps this function itself clock-free and lets tests supply a controlled
@@ -230,7 +229,7 @@ impl std::error::Error for GraphEmitError {}
 ///
 /// Returns [`GraphEmitError`] if any node lacks author-declared stable names, or
 /// carries a malformed stable name — the only structural reasons emission can
-/// fail (no environment resource is ever required, C20).
+/// fail (no environment resource is ever required).
 pub fn emit_graph(
     pipeline: &Pipeline,
     pipeline_name: &str,
@@ -241,27 +240,26 @@ pub fn emit_graph(
     Ok(dagr_artifact::canonical::to_canonical_string(&artifact))
 }
 
-/// The **graph verb** of the CLI contract (arch.md `### C26 · Command-line
-/// contract`: *"emit the graph"*): emit the assembled pipeline's schema-valid
-/// graph artifact to `sink`, requiring **no run store, no parameters, and no
-/// network** (C20 / C7).
+/// The **graph verb** of the CLI contract (*"emit the graph"*): emit the
+/// assembled pipeline's schema-valid graph artifact to `sink`, requiring **no run
+/// store, no parameters, and no network**.
 ///
-/// This is the library entry point the CLI verb dispatcher (the argument parsing
-/// and exit-code table are T55 / C26) invokes. It reads the wall clock **once**
+/// This is the library entry point the CLI verb dispatcher (which owns the
+/// argument parsing and exit-code table) invokes. It reads the wall clock **once**
 /// for the generation-time field, uses the build-time embedded
 /// [`BuildProvenance`], and writes the canonical artifact followed by a trailing
-/// newline. It opens no run store and reads no parameters — assembly is pure (C7),
-/// and this verb runs it with no store at all (arch.md "The shape of a run": *"the
-/// inspection verbs run assembly with no store"*).
+/// newline. It opens no run store and reads no parameters — assembly is pure,
+/// and this verb runs it with no store at all (the inspection verbs run assembly
+/// with no store).
 ///
-/// `pipeline_name` is the pipeline's identity (the stable pipeline name, T0.6);
+/// `pipeline_name` is the pipeline's identity (the stable pipeline name);
 /// `now_rfc3339` is the caller-supplied generation timestamp so the clock read is
 /// injected at the single call site (keeping the emitter itself testable and
 /// clock-free).
 ///
 /// # Errors
 ///
-/// Returns [`GraphEmitError`] if the pipeline cannot be emitted to the C20
+/// Returns [`GraphEmitError`] if the pipeline cannot be emitted to the graph
 /// contract (a node without stable names, or a malformed stable name); returns an
 /// [`std::io::Error`] if the sink write fails. Neither is an environment-resource
 /// failure — there is none to fail on.
@@ -282,7 +280,7 @@ pub fn graph_verb<W: std::io::Write>(
 /// ([`GraphEmitError`]) or a sink write failure ([`std::io::Error`]).
 #[derive(Debug)]
 pub enum GraphVerbError {
-    /// The pipeline could not be emitted to the C20 contract.
+    /// The pipeline could not be emitted to the graph contract.
     Emit(GraphEmitError),
     /// Writing the artifact to the sink failed.
     Io(std::io::Error),
@@ -324,22 +322,22 @@ pub fn build_artifact(
     generated_at: &str,
     provenance: &BuildProvenance,
 ) -> Result<Value, GraphEmitError> {
-    // The C21 fingerprint (T41) is computed once from the assembled pipeline
+    // The fingerprint is computed once from the assembled pipeline
     // through dagr-core's public reuse surface — this emitter never re-derives the
-    // composition, and the same digests reach the run artifact (C22) and resume
-    // (C27) from the same place.
+    // composition, and the same digests reach the run artifact and resume
+    // from the same place.
     let fingerprint = pipeline.fingerprint();
     let header = build_header(pipeline_name, generated_at, provenance, &fingerprint);
 
     // Nodes in deterministic, registration-order-independent order. `Pipeline`
     // already iterates by identity name (a total, stable key), which is exactly
-    // the canonical node ordering (T0.7 §6).
+    // the canonical node ordering.
     let mut nodes = Vec::new();
     for node in pipeline.nodes() {
         nodes.push(build_node(pipeline, node)?);
     }
 
-    // Edges in canonical `(from, to, kind)` order (T0.7 §6), independent of
+    // Edges in canonical `(from, to, kind)` order, independent of
     // registration order.
     let edges = build_edges(pipeline)?;
 
@@ -351,8 +349,8 @@ pub fn build_artifact(
 }
 
 /// Blank the [generation-time field](GENERATED_AT_FIELD) in a parsed artifact so
-/// two artifacts can be compared for byte-identity **outside** that field (C20:
-/// generation time is the only field allowed to vary). Returns the value with
+/// two artifacts can be compared for byte-identity **outside** that field
+/// (generation time is the only field allowed to vary). Returns the value with
 /// `header.generated_at` set to the empty string; every other byte is untouched.
 #[must_use]
 pub fn mask_generated_at(mut artifact: Value) -> Value {
@@ -362,10 +360,9 @@ pub fn mask_generated_at(mut artifact: Value) -> Value {
     artifact
 }
 
-/// Build the versioned header (C20 / C21). Everything but `generated_at` is fixed
+/// Build the versioned header. Everything but `generated_at` is fixed
 /// per binary; the two fingerprints depend only on author-declared inputs, so
-/// they too are identical across emissions from any machine or toolchain (T0.7
-/// §5).
+/// they too are identical across emissions from any machine or toolchain.
 fn build_header(
     pipeline_name: &str,
     generated_at: &str,
@@ -382,10 +379,10 @@ fn build_header(
             "git_commit": provenance.git_commit(),
             "lockfile_hash": provenance.lockfile_hash(),
         },
-        // The COMPUTED C21 fingerprints (T41): the structural fingerprint, the
+        // The COMPUTED fingerprints: the structural fingerprint, the
         // policy hash (each a self-describing, version-prefixed string), and the
         // algorithm version. Every input is author-declared, so these exclude
-        // generation time, provenance, and everything else environmental (T0.7 §5).
+        // generation time, provenance, and everything else environmental.
         "fingerprint_structural": format_fingerprint_structural(fingerprint),
         "fingerprint_policy": format_fingerprint_policy(fingerprint),
         "fingerprint_algorithm_version": fingerprint.algorithm_version(),
@@ -393,11 +390,11 @@ fn build_header(
 }
 
 /// Format the **structural fingerprint** header string from a computed
-/// [`FingerprintSlot`] — `fnv1a-64:v<algorithm_version>:<16-hex-digits>` (C21 /
-/// T41). The `v<version>` segment carries the [algorithm
+/// [`FingerprintSlot`] — `fnv1a-64:v<algorithm_version>:<16-hex-digits>`. The
+/// `v<version>` segment carries the [algorithm
 /// version](dagr_core::FINGERPRINT_ALGORITHM_VERSION) inside the value as well as
 /// in the dedicated header integer, so a version mismatch is legible from the
-/// string alone. Exposed so a consumer (a test, the run artifact C22, resume C27)
+/// string alone. Exposed so a consumer (a test, the run artifact, resume)
 /// can reproduce the exact header value from a slot without re-deriving the
 /// composition.
 #[must_use]
@@ -419,7 +416,7 @@ fn format_digest(algorithm_version: u64, digest: u64) -> String {
     format!("{FINGERPRINT_HASH_FAMILY}:v{algorithm_version}:{digest:016x}")
 }
 
-/// Build one node's artifact object (C20): identity name, group, stable
+/// Build one node's artifact object: identity name, group, stable
 /// task/input/output names, effective execution class, complete effective policy
 /// (defaults written out), declared resources, and dependency list.
 fn build_node(pipeline: &Pipeline, node: &PipelineNode) -> Result<Value, GraphEmitError> {
@@ -429,7 +426,7 @@ fn build_node(pipeline: &Pipeline, node: &PipelineNode) -> Result<Value, GraphEm
             node: node.name().to_string(),
         })?;
 
-    // Enforce the whole-pipeline stable-name well-formedness rule (T0.7 §1): every
+    // Enforce the whole-pipeline stable-name well-formedness rule: every
     // recorded task/input/output stable name must be well-formed (or the reserved
     // unit sentinel for the output). A malformed name is a hard emit error.
     validate_stable_name(node.name(), names.task())?;
@@ -445,7 +442,7 @@ fn build_node(pipeline: &Pipeline, node: &PipelineNode) -> Result<Value, GraphEm
 
     Ok(json!({
         "name": node.name(),
-        // The group label is presentation metadata (C6) — recorded, but in neither
+        // The group label is presentation metadata — recorded, but in neither
         // fingerprint. Absent → the empty string (the schema types `group` as a
         // plain string).
         "group": node.group().unwrap_or(""),
@@ -460,7 +457,7 @@ fn build_node(pipeline: &Pipeline, node: &PipelineNode) -> Result<Value, GraphEm
         "dependencies": Value::Array(
             dependencies.into_iter().map(Value::from).collect(),
         ),
-        // `type_name` (the informational debug field, T0.7 §1) is deliberately
+        // `type_name` (the informational debug field) is deliberately
         // NOT populated: this emitter records only author-declared stable names as
         // identity, and never emits a `type_name` value that could be mistaken for
         // one. The field stays reserved (optional in the schema).
@@ -468,7 +465,7 @@ fn build_node(pipeline: &Pipeline, node: &PipelineNode) -> Result<Value, GraphEm
 }
 
 /// Validate one recorded stable name against the whole-pipeline well-formedness
-/// rule (T0.7 §1).
+/// rule.
 fn validate_stable_name(node: &str, value: &str) -> Result<(), GraphEmitError> {
     if is_well_formed(value) {
         Ok(())
@@ -480,9 +477,9 @@ fn validate_stable_name(node: &str, value: &str) -> Result<(), GraphEmitError> {
     }
 }
 
-/// Build the **complete effective policy** object (C5 / C20): every C5 field
+/// Build the **complete effective policy** object: every policy field
 /// written out with its resolved value, defaults included. A no-policy node and an
-/// all-defaults node produce byte-identical policy blocks (C5), because both
+/// all-defaults node produce byte-identical policy blocks, because both
 /// resolve to the same [`EffectivePolicy`].
 fn build_policy(policy: &EffectivePolicy) -> Value {
     let cost = policy.cost();
@@ -492,7 +489,7 @@ fn build_policy(policy: &EffectivePolicy) -> Value {
         "backoff": {
             "base_ms": duration_ms(backoff.base()),
             // The growth factor is a config f64; emit its raw IEEE-754 bits as an
-            // integer so the value is deterministic and integer-only (T4 §6 — no
+            // integer so the value is deterministic and integer-only (no
             // float formatting), matching how the fingerprint encoding treats it.
             "factor_bits": backoff.factor().to_bits(),
             "cap_ms": duration_ms(backoff.cap()),
@@ -513,7 +510,7 @@ fn build_policy(policy: &EffectivePolicy) -> Value {
     })
 }
 
-/// Build the **declared resource requirements** object (C5/C9/C20): the per-pool
+/// Build the **declared resource requirements** object: the per-pool
 /// cost vector in each pool's native unit — bytes for the memory pool (split into
 /// working memory and output residency) and a thread count for each thread pool.
 /// So bootstrap and the run artifact can juxtapose declared against measured cost.
@@ -529,7 +526,7 @@ fn build_resources(policy: &EffectivePolicy) -> Value {
 
 /// The dependency names of `node` — the identity names of its upstream nodes, in
 /// deterministic (sorted, deduplicated) order. Covers **both** data and ordering
-/// upstreams (C4 / T50): a node ordered after another depends on it (it runs after
+/// upstreams: a node ordered after another depends on it (it runs after
 /// it), so the ordering upstream belongs in the dependency list, even though no
 /// value flows.
 fn dependency_names(pipeline: &Pipeline, node: &PipelineNode) -> Vec<String> {
@@ -548,10 +545,10 @@ fn dependency_names(pipeline: &Pipeline, node: &PipelineNode) -> Vec<String> {
     deps
 }
 
-/// Build the edge array (C20): one edge per dependency, **data** edges tagged
+/// Build the edge array: one edge per dependency, **data** edges tagged
 /// `data` and carrying the stable name of the type they carry; **ordering** edges
-/// (C4 / T50) tagged `ordering` and carrying **no** type. Emitted in canonical
-/// `(from, to, kind)` order, independent of registration order (T0.7 §6).
+/// tagged `ordering` and carrying **no** type. Emitted in canonical
+/// `(from, to, kind)` order, independent of registration order.
 ///
 /// The two kinds are recorded distinctly: a data edge's entry has a `type_name`
 /// field (the producer's stable output type), an ordering edge's entry has none.
@@ -583,7 +580,7 @@ fn build_edges(pipeline: &Pipeline) -> Result<Vec<Value>, GraphEmitError> {
                 Some(carried.to_string()),
             ));
         }
-        // Ordering edges (C4 / T50): sequence-only, no value, so no carried type.
+        // Ordering edges: sequence-only, no value, so no carried type.
         // The upstream needs NO stable names — nothing flows along the edge, so an
         // ordering upstream that lacks stable output names is still emittable (only
         // a DATA edge requires its producer's stable output type).
@@ -620,8 +617,8 @@ fn build_edges(pipeline: &Pipeline) -> Result<Vec<Value>, GraphEmitError> {
         .collect())
 }
 
-/// The stable string name of an [`ExecutionClass`] recorded in the artifact
-/// (arch.md C13). Fixed, author-independent, byte-stable.
+/// The stable string name of an [`ExecutionClass`] recorded in the artifact.
+/// Fixed, author-independent, byte-stable.
 fn execution_class_name(class: ExecutionClass) -> &'static str {
     match class {
         ExecutionClass::AwaitBound => "await-bound",
@@ -630,7 +627,7 @@ fn execution_class_name(class: ExecutionClass) -> &'static str {
     }
 }
 
-/// The normative string name of a [`TriggerRule`] (arch.md Vocabulary; matches the
+/// The normative string name of a [`TriggerRule`] (matches the
 /// schema enum `all-succeeded | all-terminal | any-failed`).
 fn trigger_rule_name(rule: TriggerRule) -> &'static str {
     match rule {
@@ -641,7 +638,7 @@ fn trigger_rule_name(rule: TriggerRule) -> &'static str {
 }
 
 /// A [`std::time::Duration`] as whole milliseconds, saturating — a total,
-/// deterministic, integer scalar for the artifact (T4 §6; no float formatting).
+/// deterministic, integer scalar for the artifact (no float formatting).
 /// `Duration::MAX` (the effectively-uncapped backoff cap) saturates to
 /// [`u64::MAX`], a fixed sentinel that encodes identically every time.
 fn duration_ms(d: std::time::Duration) -> u64 {

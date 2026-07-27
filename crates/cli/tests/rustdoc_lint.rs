@@ -1,5 +1,4 @@
-//! **Rustdoc-on-public-items lint — present at head, fails on a missing doc**
-//! (arch.md "Documentation"; ticket T64).
+//! **Rustdoc-on-public-items lint — present at head, fails on a missing doc.**
 //!
 //! The Documentation deliverable requires that *every public item* carry rustdoc,
 //! enforced by a CI lint that fails on any missing-docs finding. dagr wires this

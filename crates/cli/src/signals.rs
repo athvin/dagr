@@ -1,7 +1,7 @@
-//! The C16 **OS-signal → cancellation wiring** (arch.md `### C16`; ticket T36).
+//! The **OS-signal → cancellation wiring**.
 //!
-//! This is the OS-signal half of C16 that T35 deferred. T35 built the cancellation
-//! *core* and exposed [`CancelHandle`] as the explicit
+//! This is the OS-signal half of cancellation. The cancellation *core* is built
+//! elsewhere and exposes [`CancelHandle`] as the explicit
 //! **signal seam** — the programmatic trigger a test fires and, in production, the
 //! trigger an OS-signal handler fires. This module installs the handlers.
 //!
@@ -25,32 +25,32 @@
 //! ([`route_signal`]) are **re-entry hardened**: subsequent signals are counted
 //! (observed, never dropped) but do **not** re-fire cancellation and do **not**
 //! escalate to an immediate `process::exit` that would shortcut the final flush.
-//! This is the arch.md/ticket contract — *"the first signal starts the budgeted
+//! This is the contract — *"the first signal starts the budgeted
 //! shutdown and subsequent ones do not shortcut the final flush"* — chosen over a
 //! second-signal-forces-immediate-exit policy precisely because the shutdown budget
-//! already bounds the wait (C16), so an escalation would only risk truncating the
+//! already bounds the wait, so an escalation would only risk truncating the
 //! stream the budget guarantees.
 //!
-//! # Isolation (C13 / T33)
+//! # Isolation
 //!
 //! Signal reception runs on its **own** single-worker runtime owned by the returned
 //! [`SignalGuard`], separate from every task-execution surface, so a saturated
-//! task fleet cannot starve signal delivery (consistent with the T2 isolated
+//! task fleet cannot starve signal delivery (consistent with the isolated
 //! framework runtime). The handler does no work beyond firing the cheap, wait-free
 //! `CancelHandle` — the real shutdown happens on the driver's framework runtime.
 //!
-//! # Platform posture (platform-conditional, T70)
+//! # Platform posture (platform-conditional)
 //!
 //! Unix delivers `SIGTERM`/`SIGINT` and this module installs real handlers via
 //! `tokio::signal::unix`. On **non-unix** targets there are no POSIX termination
 //! signals to wire; [`install_signal_handlers`] is a documented no-op returning a
 //! guard, and the same cancellation is still reachable through the programmatic
 //! [`CancelHandle`] seam. The end-to-end signal
-//! coverage is therefore gated to unix (T70's platform matrix).
+//! coverage is therefore gated to unix (the platform matrix).
 
 use crate::driver::CancelHandle;
 
-/// The re-entry-hardened routing a delivered OS signal takes (arch.md C16; T36).
+/// The re-entry-hardened routing a delivered OS signal takes.
 ///
 /// `count` is the running tally of signals delivered so far (each call increments
 /// it). `fire` is the cancellation trigger — invoked **only on the first signal**;
@@ -67,7 +67,7 @@ pub fn route_signal(count: &mut u32, fire: &mut dyn FnMut()) {
     // escalation to an immediate exit that would shortcut the bounded final flush.
 }
 
-/// The stateful router an installed OS-signal handler drives (arch.md C16; T36).
+/// The stateful router an installed OS-signal handler drives.
 ///
 /// Holds the [`CancelHandle`] seam and the delivered-
 /// signal count, applying the [`route_signal`] re-entry hardening. Exposed so the
@@ -118,7 +118,7 @@ impl SignalRouter {
     }
 }
 
-/// A live registration of the C16 OS-signal handlers (arch.md C16; T36).
+/// A live registration of the OS-signal handlers.
 ///
 /// Keep it alive for as long as the run should react to `SIGTERM`/`SIGINT`; drop it
 /// to stop listening (the listener runtime is torn down without joining the driver,
@@ -130,8 +130,7 @@ pub struct SignalGuard {
     _runtime: tokio::runtime::Runtime,
 }
 
-/// Install the C16 OS-signal handlers wiring `SIGTERM`/`SIGINT` to `handle`
-/// (arch.md C16; T36).
+/// Install the OS-signal handlers wiring `SIGTERM`/`SIGINT` to `handle`.
 ///
 /// Both signals fire the same [`CancelHandle`]; the
 /// first delivery starts the budgeted shutdown and subsequent deliveries are
@@ -153,7 +152,7 @@ pub fn install_signal_handlers(handle: CancelHandle) -> std::io::Result<SignalGu
     use tokio::signal::unix::{signal, SignalKind};
 
     // A dedicated single-worker runtime for signal reception — isolated from every
-    // task-execution surface (C13 / T2), so a jammed task fleet cannot starve it.
+    // task-execution surface, so a jammed task fleet cannot starve it.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_io()
@@ -193,7 +192,7 @@ fn spawn_listener(router: std::sync::Arc<SignalRouter>, mut stream: tokio::signa
     });
 }
 
-/// Install the C16 OS-signal handlers — the **non-unix documented no-op**.
+/// Install the OS-signal handlers — the **non-unix documented no-op**.
 ///
 /// There are no POSIX termination signals to wire on this target; the same
 /// cancellation stays reachable through the programmatic

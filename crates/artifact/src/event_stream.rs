@@ -1,38 +1,37 @@
-//! The C19 event-stream writer — the crash-proof, append-only record of a run.
+//! The event-stream writer — the crash-proof, append-only record of a run.
 //!
-//! This module builds the append-only event-stream **writer** for a single run
-//! (arch.md `### C19 · Event stream`). It emits one single-line JSON record per
-//! state transition through the run-store [`EventSink`] (T0.6 / 012), encoded as
-//! JSON Lines per the T4 serialization ADR (017), and stamps every record with
+//! This module builds the append-only event-stream **writer** for a single run.
+//! It emits one single-line JSON record per state transition through the
+//! run-store [`EventSink`], encoded as JSON Lines, and stamps every record with
 //! run identity, schema version, a gapless strictly-increasing sequence number,
 //! an informational wall-clock stamp, and an authoritative monotonic offset from
 //! run start.
 //!
-//! # What lives here (C19 writer) — and what does not
+//! # What lives here — and what does not
 //!
 //! This is the **writer** only: it serializes events and appends them to the
-//! sink, and it ships the tolerant [`read_records`] the fold contract (C22 /
-//! T42) and the crash-safety suite (T27) build on. It does **not** run tasks
-//! (C14 / T20), drive the run loop that produces the transitions at runtime
-//! (T24), read back a stream into a run artifact (the fold itself is C22 / T42),
-//! nor construct the default local-file sink from an operator base path (the
-//! sink and base-location surface are T0.6 / C18, injected here). The event
-//! vocabulary is closed (arch.md "Vocabulary"); this module never mutates the
-//! graph shape at runtime and pushes nothing over a network (arch.md C19: live
-//! telemetry is an external tailer's job, not a framework exporter).
+//! sink, and it ships the tolerant [`read_records`] the run-artifact fold and
+//! the crash-safety suite build on. It does **not** run tasks, drive the run
+//! loop that produces the transitions at runtime, read back a stream into a run
+//! artifact (that is the fold itself, in [`crate::fold`]), nor construct the
+//! default local-file sink from an operator base path (the sink and
+//! base-location surface are owned by the run store and injected here). The
+//! event vocabulary is closed; this module never mutates the graph shape at
+//! runtime and pushes nothing over a network (live telemetry is an external
+//! tailer's job, not a framework exporter).
 //!
 //! # Governing decisions
 //!
-//! - **Encoding — T4 (017).** Each record is one compact JSON object per line,
+//! - **Encoding.** Each record is one compact JSON object per line,
 //!   newline-delimited, written into the reserved `events.jsonl`. The
-//!   `schema_version` field carries `dagr.event-stream@1`. Bytes are canonical
-//!   (T4 §6): object keys sorted lexicographically, integers only, compact
+//!   `schema_version` field carries `dagr.event-stream@1`. Bytes are canonical:
+//!   object keys sorted lexicographically, integers only, compact
 //!   whitespace, minimal escaping — so a record is byte-deterministic.
-//! - **Sink + header — T0.6 (012).** The stream is written through the injected
+//! - **Sink + header.** The stream is written through the injected
 //!   two-operation [`EventSink`] (append a line, flush). Every record carries
-//!   the T0.6 §7 header: run identity, schema version, gapless sequence,
+//!   the header: run identity, schema version, gapless sequence,
 //!   informational wall stamp, authoritative monotonic offset.
-//! - **Node identity — T13 (023).** Records name nodes by their author-declared
+//! - **Node identity.** Records name nodes by their author-declared
 //!   registration name (node identity is the name, verbatim).
 
 use std::collections::BTreeMap;
@@ -41,20 +40,20 @@ use std::io;
 
 use uuid::Uuid;
 
-/// The schema-version string stamped on every event record (T4 §3).
+/// The schema-version string stamped on every event record.
 ///
 /// A `<name>@<version>` string: the `<name>` self-identifies the event-stream
 /// schema among the three co-located schemas (`dagr.event-stream`, `dagr.graph`,
 /// `dagr.run`), and `@1` is the single monotonically-increasing major version.
 pub const EVENT_STREAM_SCHEMA_VERSION: &str = "dagr.event-stream@1";
 
-/// The reserved file name of the C19 event stream under a run directory
-/// (`<base>/<pipeline>/<run-id>/events.jsonl`, T0.6 §3).
+/// The reserved file name of the event stream under a run directory
+/// (`<base>/<pipeline>/<run-id>/events.jsonl`).
 pub const EVENTS_FILE_NAME: &str = "events.jsonl";
 
 // === Sink =================================================================
 
-/// The two-operation sink the event stream is written through (T0.6 §1).
+/// The two-operation sink the event stream is written through.
 ///
 /// Exactly two operations, no more: append one complete record as a single
 /// line, and flush. The writer never hands the sink a partial or interleaved
@@ -62,9 +61,9 @@ pub const EVENTS_FILE_NAME: &str = "events.jsonl";
 /// with the bytes — and whether `flush` fsyncs — is the sink's business. The
 /// **default local-file sink** (a local file under the run directory, which does
 /// not fsync per append; its `flush` fsyncs) is **owned and constructed by the
-/// run store — T0.6 / C18 — and injected here, not built by this crate** (see
-/// the module-level "what lives here" note). The injection seam is a
-/// bootstrap-time parameter (T0.6 §1): the crash-safety suite (T27) supplies a
+/// run store and injected here, not built by this crate** (see the
+/// module-level "what lives here" note). The injection seam is a
+/// bootstrap-time parameter: the crash-safety suite supplies a
 /// failing sink here, and an operator points the stream at a different local
 /// target, without touching the pipeline.
 pub trait EventSink: Send {
@@ -75,7 +74,7 @@ pub trait EventSink: Send {
     ///
     /// # Errors
     /// Returns any I/O error from the underlying target; the writer treats it as
-    /// a run-level "event stream unwritable" fault (T0.6 §5).
+    /// a run-level "event stream unwritable" fault.
     fn append_line(&mut self, line: &[u8]) -> io::Result<()>;
 
     /// Ensure everything already appended has been handed to the sink and (for
@@ -88,7 +87,7 @@ pub trait EventSink: Send {
 
 // === Monotonic clock ======================================================
 
-/// The authoritative monotonic clock the writer reads offsets from (T0.6 §7).
+/// The authoritative monotonic clock the writer reads offsets from.
 ///
 /// Durations are computed from offsets, never from the wall clock, so this
 /// source must be **monotonic** (non-decreasing, immune to wall-clock steps).
@@ -105,108 +104,108 @@ pub trait MonotonicClock {
 /// The full run-artifact header known at run start, carried by `run-started`.
 ///
 /// Everything a `run.json` header holds *except* the overall outcome and
-/// summary, which exist only at run end (C19). A stream that ends one record
+/// summary, which exist only at run end. A stream that ends one record
 /// after `run-started` still identifies its run completely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStartedHeader {
-    /// Pipeline identity — its stable name (C20/C22 header).
+    /// Pipeline identity — its stable name.
     pub pipeline: String,
-    /// Structural fingerprint — a real `blake3:…` hash when assembly succeeded
-    /// (C21); [`FINGERPRINT_UNAVAILABLE`] on the assembly-failed path (a stream
+    /// Structural fingerprint — a real `blake3:…` hash when assembly succeeded;
+    /// [`FINGERPRINT_UNAVAILABLE`] on the assembly-failed path (a stream
     /// with no assembled graph still records its start, and the published
     /// event-stream schema requires the field on every `run-started` header).
     pub fingerprint_structural: Option<String>,
-    /// Policy hash — a real `blake3:…` hash when assembly succeeded (C21);
+    /// Policy hash — a real `blake3:…` hash when assembly succeeded;
     /// [`FINGERPRINT_UNAVAILABLE`] on the assembly-failed path (see
     /// [`fingerprint_structural`](Self::fingerprint_structural)).
     pub fingerprint_policy: Option<String>,
     /// The fingerprint-algorithm version the two fingerprints were computed
-    /// under (C21), so a consumer knows which algorithm produced the hashes.
+    /// under, so a consumer knows which algorithm produced the hashes.
     pub fingerprint_algorithm_version: u32,
-    /// The run's parameters (C7), as name→value strings.
+    /// The run's parameters, as name→value strings.
     pub parameters: BTreeMap<String, String>,
-    /// The run's optional data interval (C7), as `{start, end}` strings.
+    /// The run's optional data interval, as `{start, end}` strings.
     pub data_interval: Option<[String; 2]>,
-    /// Allowlisted captured environment values (C7 / C22), name→value.
+    /// Allowlisted captured environment values, name→value.
     pub captured_env: BTreeMap<String, String>,
-    /// Resume lineage — the originating run id when this run resumed one (C27).
+    /// Resume lineage — the originating run id when this run resumed one.
     pub resumed_from: Option<String>,
 }
 
 /// The sentinel a `run-started` header carries for a fingerprint that does not
-/// exist because assembly failed before a graph was built (C21). The published
+/// exist because assembly failed before a graph was built. The published
 /// event-stream schema requires `fingerprint_structural`/`fingerprint_policy` on
 /// every `run-started` header (each a non-empty string), so the assembly-failed
-/// stream — which has no fingerprints — records this sentinel; the C22 fold
+/// stream — which has no fingerprints — records this sentinel; the fold
 /// treats it as "no fingerprint" and omits it from the run artifact.
 pub const FINGERPRINT_UNAVAILABLE: &str = "unavailable";
 
 /// The default fingerprint-algorithm version stamped on a header when the caller
-/// does not pin one (C21: the fingerprints are BLAKE3-based, algorithm version 1).
+/// does not pin one (the fingerprints are BLAKE3-based, algorithm version 1).
 pub const FINGERPRINT_ALGORITHM_VERSION: u32 = 1;
 
-/// One event kind per state transition in the closed C19 vocabulary.
+/// One event kind per state transition in the closed event vocabulary.
 ///
 /// The set is closed: run started, node became ready, node admitted, attempt
 /// started, attempt succeeded, attempt failed, node reached terminal state,
-/// zombie-at-exit (C14), run finished. Terminal records carry the normative
-/// terminal state from the arch.md Vocabulary.
+/// zombie-at-exit, run finished. Terminal records carry the normative
+/// terminal state from the vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// The run started; carries the full run-artifact header known at start.
     RunStarted(RunStartedHeader),
     /// A node's upstreams are all terminal and its rule fired — it is ready.
     NodeReady {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
     },
-    /// The node was admitted through the admission controller (C12).
+    /// The node was admitted through the admission controller.
     NodeAdmitted {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
     },
     /// An attempt for the node began (attempt numbers are 1-based).
     AttemptStarted {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The 1-based attempt number.
         attempt: u32,
     },
     /// An attempt for the node returned a value.
     AttemptSucceeded {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The 1-based attempt number.
         attempt: u32,
     },
     /// An attempt for the node failed (retryable or permanent).
     AttemptFailed {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The 1-based attempt number.
         attempt: u32,
     },
-    /// The single rich **attempt-outcome** record for one attempt (arch.md
-    /// l.331: "Every attempt produces exactly one attempt-outcome record in the
-    /// event stream, alongside its per-transition events"). It carries the
-    /// attempt's terminal status plus the fold's richest input — the
-    /// task-reported metrics, declared-vs-measured cost, structured error and
-    /// message, the worker that ran it, and the durable-output reference — so the
-    /// C22 fold (T42) reconstructs the run artifact from the stream alone.
+    /// The single rich **attempt-outcome** record for one attempt: every attempt
+    /// produces exactly one attempt-outcome record in the event stream, alongside
+    /// its per-transition events. It carries the attempt's terminal status plus
+    /// the fold's richest input — the task-reported metrics, declared-vs-measured
+    /// cost, structured error and message, the worker that ran it, and the
+    /// durable-output reference — so the fold reconstructs the run artifact from
+    /// the stream alone.
     AttemptOutcome(AttemptOutcomeRecord),
-    /// The node reached a terminal state from the C19 vocabulary.
+    /// The node reached a terminal state from the event vocabulary.
     NodeTerminal {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
-        /// The normative terminal state from arch.md "Vocabulary".
+        /// The normative terminal state from the vocabulary.
         state: TerminalState,
     },
-    /// A leftover thread was still running at process exit (C14 zombie).
+    /// A leftover thread was still running at process exit (a zombie).
     ZombieAtExit {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The 1-based attempt number whose thread was left behind (the schema
-        /// keys pinned-time accounting off `(node, attempt)`; C14 / C22 fold).
+        /// keys pinned-time accounting off `(node, attempt)`).
         attempt: u32,
     },
     /// The run finished; carries the run outcome.
@@ -216,20 +215,19 @@ pub enum Event {
     },
 }
 
-/// The rich payload of the single `attempt-outcome` record one attempt emits
-/// (arch.md l.331). Its field names, status token, phase-friendly worker string,
-/// and optional-field defaults match **both** the published event-stream schema
-/// (`schemas/event-stream/v1.schema.json`) and the C22 fold's reader
-/// (`crates/artifact/src/fold.rs`), so a real writer stream folds end-to-end
-/// (C19 ↔ C22).
+/// The rich payload of the single `attempt-outcome` record one attempt emits.
+/// Its field names, status token, phase-friendly worker string, and
+/// optional-field defaults match **both** the published event-stream schema
+/// (`schemas/event-stream/v1.schema.json`) and the fold's reader
+/// ([`crate::fold`]), so a real writer stream folds end-to-end.
 ///
 /// Only `node`, `attempt`, and `status` are always present; every other field is
 /// emitted only when the caller has a value for it (the schema is additive and
-/// the fold defaults a missing field), keeping the record minimal for the M1/M2
-/// callers that do not yet measure cost or metrics.
+/// the fold defaults a missing field), keeping the record minimal for callers
+/// that do not yet measure cost or metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AttemptOutcomeRecord {
-    /// The node's author-declared identity name (T13).
+    /// The node's author-declared identity name.
     pub node: String,
     /// The 1-based attempt number.
     pub attempt: u32,
@@ -245,28 +243,27 @@ pub struct AttemptOutcomeRecord {
     pub message: Option<String>,
     /// Structured error detail, reproduced verbatim into the artifact.
     pub error: Option<serde_json::Value>,
-    /// Task-reported metrics (C23), copied unmodified by the fold; `None` emits
+    /// Task-reported metrics, copied unmodified by the fold; `None` emits
     /// no `metrics` field (the fold defaults to an empty object).
     pub metrics: Option<serde_json::Value>,
-    /// The declared cost vector (C5), juxtaposed against the measured cost.
+    /// The declared cost vector, juxtaposed against the measured cost.
     pub cost_declared: Option<serde_json::Value>,
-    /// The measured cost, juxtaposed against the declared cost (C5/C10).
+    /// The measured cost, juxtaposed against the declared cost.
     pub cost_measured: Option<serde_json::Value>,
-    /// The durable-output reference a durable node's succeeded attempt records
-    /// (C10/C27), or that a resume copies forward.
+    /// The durable-output reference a durable node's succeeded attempt records,
+    /// or that a resume copies forward.
     pub durable_reference: Option<serde_json::Value>,
-    /// The originating run identity a `satisfied-from-prior` attempt carries (C27).
+    /// The originating run identity a `satisfied-from-prior` attempt carries.
     pub satisfied_from_run: Option<String>,
-    /// The node that decided an `upstream-skipped`/`upstream-failed` propagation
-    /// (arch.md Vocabulary).
+    /// The node that decided an `upstream-skipped`/`upstream-failed` propagation.
     pub originating_node: Option<String>,
 }
 
 impl AttemptOutcomeRecord {
     /// A minimal outcome record naming only the node, attempt, and terminal
-    /// status — the shape the M1/M2 driver emits, since it does not yet measure
-    /// metrics or cost. Optional fields default to absent (the fold defaults each
-    /// missing field).
+    /// status — the shape a driver emits when it does not yet measure metrics or
+    /// cost. Optional fields default to absent (the fold defaults each missing
+    /// field).
     #[must_use]
     pub fn new(node: impl Into<String>, attempt: u32, status: impl Into<String>) -> Self {
         Self {
@@ -279,14 +276,13 @@ impl AttemptOutcomeRecord {
 }
 
 /// Record a durable node's **serialized reference** onto its succeeded attempt's
-/// outcome record — the C27 declaration-to-recording bridge (ticket T57).
+/// outcome record — the declaration-to-recording bridge.
 ///
 /// `reference` is the owned `String` a durable output type's
-/// `DurableOutput::serialize_reference` produced (dagr-core, C27/T0.8 ADR §4);
-/// this stamps it onto the attempt record's [`durable_reference`] slot as an opaque
-/// value, so the T42 fold carries it into the run artifact (C22) and it round-trips
-/// through the published schema's opaque `durable_reference` field (T39). The
-/// caller passes:
+/// `DurableOutput::serialize_reference` produced (in dagr-core); this stamps it
+/// onto the attempt record's [`durable_reference`] slot as an opaque value, so
+/// the fold carries it into the run artifact and it round-trips through the
+/// published schema's opaque `durable_reference` field. The caller passes:
 ///
 /// - `Some(reference)` **only** on a durable node's **succeeded** attempt (the one
 ///   that produced a value, hence a reference), and
@@ -297,18 +293,18 @@ impl AttemptOutcomeRecord {
 /// The reference is a plain serialized value (a JSON string here — a JSON blob, a
 /// storage key, a URL — whatever the task serialized); it carries **no live
 /// handle** and no dependency on the producing process, so a later resume or
-/// single-node replay (T58/T55) reads it straight from the artifact.
+/// single-node replay reads it straight from the artifact.
 ///
 /// [`durable_reference`]: AttemptOutcomeRecord::durable_reference
 pub fn record_durable_reference(record: &mut AttemptOutcomeRecord, reference: Option<String>) {
     record.durable_reference = reference.map(serde_json::Value::String);
 }
 
-/// The normative terminal states from arch.md "Vocabulary".
+/// The normative terminal states from the event vocabulary.
 ///
 /// Every node ends a run in exactly one of these. The wire form (below) is the
-/// exact kebab-case spelling arch.md uses, so artifacts and diagrams read the
-/// same word the spec does.
+/// exact kebab-case spelling the vocabulary uses, so artifacts and diagrams read
+/// the same word throughout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalState {
     /// The task returned a value; the slot was filled.
@@ -332,7 +328,7 @@ pub enum TerminalState {
 }
 
 impl TerminalState {
-    /// The normative kebab-case wire spelling from arch.md "Vocabulary".
+    /// The normative kebab-case wire spelling from the event vocabulary.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -351,12 +347,12 @@ impl TerminalState {
 
 /// The overall run outcome carried by the `run-finished` record.
 ///
-/// This is the *outcome*, not the summary (metrics/critical path are C22/C23 and
-/// fold-time — T42/T43). The `assembly-failed` variant is how an assembly
-/// failure records itself in a two-record stream (C19: even an assembly failure
-/// has a place to record itself); the `bootstrap-failed` variant is the parallel
-/// fail-fast startup outcome (a missing resource — C9/T30 — or a too-big node —
-/// C12/T32), **distinct** from an assembly failure.
+/// This is the *outcome*, not the summary (metrics/critical path are computed at
+/// fold time). The `assembly-failed` variant is how an assembly failure records
+/// itself in a two-record stream — even an assembly failure has a place to
+/// record itself; the `bootstrap-failed` variant is the parallel fail-fast
+/// startup outcome (a missing resource, or a too-big node), **distinct** from an
+/// assembly failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
     /// The run completed; no node ended failure-like.
@@ -367,9 +363,9 @@ pub enum RunOutcome {
     Cancelled,
     /// Assembly failed before execution; the stream has no fingerprints.
     AssemblyFailed,
-    /// Bootstrap failed a fail-fast startup check (a missing declared resource —
-    /// C9/T30 — or a node whose declared cost exceeds a pool's total capacity —
-    /// C12/T32) before any node executed. **Distinct** from an assembly failure.
+    /// Bootstrap failed a fail-fast startup check (a missing declared resource,
+    /// or a node whose declared cost exceeds a pool's total capacity) before any
+    /// node executed. **Distinct** from an assembly failure.
     BootstrapFailed,
 }
 
@@ -389,12 +385,12 @@ impl RunOutcome {
 
 // === Writer ================================================================
 
-/// A run-level fault surfaced when the sink cannot record a transition (C19).
+/// A run-level fault surfaced when the sink cannot record a transition.
 ///
 /// A mid-run sink failure is a run-level fault: the run moves to cancelling with
 /// reason "event stream unwritable" and exits with the distinct sink-failure
-/// code (T0.6 §5). This is the error the writer returns from a record method
-/// when the sink's append/flush fails; the run loop (T24) reacts to it.
+/// code. This is the error the writer returns from a record method
+/// when the sink's append/flush fails; the run loop reacts to it.
 #[derive(Debug)]
 pub struct SinkFault {
     /// The stable cancellation reason surfaced to the run loop.
@@ -403,7 +399,7 @@ pub struct SinkFault {
     pub source: io::Error,
 }
 
-/// The cancellation reason a sink fault carries (arch.md C19, verbatim).
+/// The cancellation reason a sink fault carries (verbatim).
 pub const EVENT_STREAM_UNWRITABLE: &str = "event stream unwritable";
 
 impl fmt::Display for SinkFault {
@@ -418,7 +414,7 @@ impl std::error::Error for SinkFault {
     }
 }
 
-/// The append-only event-stream writer for a single run (C19).
+/// The append-only event-stream writer for a single run.
 ///
 /// Constructed at bootstrap from an injected [`EventSink`], a run identity
 /// (`UUIDv7`, operator-overridable), a pipeline identity, and a
@@ -426,22 +422,22 @@ impl std::error::Error for SinkFault {
 /// gapless strictly-increasing sequence (starting at `0` on `run-started`), an
 /// informational wall stamp, and an authoritative monotonic offset onto every
 /// record, then appends and flushes it to the sink before the transition is
-/// treated as recorded (write-through, no user-space buffering — T0.6 §6).
+/// treated as recorded (write-through, no user-space buffering).
 pub struct EventStreamWriter<S: EventSink, C: MonotonicClock> {
-    /// The injected two-operation sink (T0.6 §1).
+    /// The injected two-operation sink.
     sink: S,
     /// The authoritative monotonic clock; its zero is the run-start instant.
     clock: C,
-    /// The run identity, stamped on every record (T0.6 §7).
+    /// The run identity, stamped on every record.
     run_id: String,
     /// The pipeline identity, stamped on every record.
     pipeline: String,
     /// The next sequence number to assign — gapless, strictly increasing,
-    /// starting at `0` on `run-started` (T0.6 §7).
+    /// starting at `0` on `run-started`.
     next_seq: u64,
     /// The informational wall-clock source (an RFC3339 string, per the published
     /// schema's `wall`). Never used for durations — the monotonic `offset_ns` is
-    /// authoritative (T0.6 §7).
+    /// authoritative.
     wall: fn() -> String,
     /// Once a sink append/flush has faulted, the run is unwritable; the writer
     /// refuses to keep appending (a run that cannot record should stop).
@@ -474,11 +470,11 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     /// an RFC3339 string).
     ///
     /// The wall stamp is **informational only** — never used for durations
-    /// (offsets are authoritative — T0.6 §7) — so overriding it changes no
-    /// behavior that matters to a consumer. It exists to make the record bytes
-    /// fully deterministic under test (the wall stamp is a record's analog of an
-    /// artifact's excluded generation-time field, T4 §6): holding it fixed lets
-    /// two emissions of the same record be byte-identical.
+    /// (offsets are authoritative) — so overriding it changes no behavior that
+    /// matters to a consumer. It exists to make the record bytes fully
+    /// deterministic under test (the wall stamp is a record's analog of an
+    /// artifact's excluded generation-time field): holding it fixed lets two
+    /// emissions of the same record be byte-identical.
     #[must_use]
     pub fn with_wall_clock(mut self, wall: fn() -> String) -> Self {
         self.wall = wall;
@@ -486,11 +482,11 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     }
 
     /// The stream file path this writer writes under, given the resolved base
-    /// location: `<base>/<pipeline>/<run-id>/events.jsonl` (T0.6 §3).
+    /// location: `<base>/<pipeline>/<run-id>/events.jsonl`.
     ///
     /// Because the path embeds both the pipeline identity and the run-unique
     /// run id, two concurrent runs — even of the same binary and pipeline —
-    /// write disjoint files (T0.6 §3; C19 concurrent-run disjointness).
+    /// write disjoint files.
     #[must_use]
     pub fn stream_path(&self, base: &str) -> String {
         format!(
@@ -504,7 +500,7 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     /// The record carries every header field known at start — run identity,
     /// pipeline identity, both fingerprints *when assembly succeeded*, parameters,
     /// data interval, allowlisted captured environment, and resume lineage — and
-    /// omits overall outcome and summary, which exist only at run end (C19). A
+    /// omits overall outcome and summary, which exist only at run end. A
     /// stream that ends immediately after it still identifies its run completely.
     ///
     /// # Errors
@@ -562,11 +558,11 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
         })
     }
 
-    /// Emit the single rich `attempt-outcome` record for one attempt (arch.md
-    /// l.331), carrying the terminal status and whatever metrics/cost/error/
-    /// worker/durable-reference the caller measured. This is emitted **alongside**
-    /// the per-transition `attempt-succeeded`/`attempt-failed` record, not
-    /// instead of it, and is the fold's richest input (C22 / T42).
+    /// Emit the single rich `attempt-outcome` record for one attempt, carrying
+    /// the terminal status and whatever metrics/cost/error/worker/durable-
+    /// reference the caller measured. This is emitted **alongside** the
+    /// per-transition `attempt-succeeded`/`attempt-failed` record, not instead of
+    /// it, and is the fold's richest input.
     ///
     /// # Errors
     /// Returns a [`SinkFault`] if the sink cannot record the transition.
@@ -586,7 +582,7 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     }
 
     /// Emit a `zombie-at-exit` record (a leftover thread still running at process
-    /// exit — C14; it changes no node's terminal state).
+    /// exit; it changes no node's terminal state).
     ///
     /// # Errors
     /// Returns a [`SinkFault`] if the sink cannot record the transition.
@@ -600,7 +596,7 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     /// Emit the `run-finished` record carrying the overall run outcome.
     ///
     /// This records only the *outcome*; the summary (metrics, critical path) is
-    /// C22/C23 fold-time work (T42/T43), deliberately not here.
+    /// fold-time work, deliberately not here.
     ///
     /// # Errors
     /// Returns a [`SinkFault`] if the sink cannot record the transition.
@@ -610,7 +606,7 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
 
     /// Emit an arbitrary [`Event`], the same path every typed helper takes.
     ///
-    /// The run loop (T24) that produces transitions may name the [`Event`]
+    /// The run loop that produces transitions may name the [`Event`]
     /// variants directly; the typed helpers above are the ergonomic surface.
     ///
     /// # Errors
@@ -621,10 +617,10 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
 
     /// Flush (fsync, via the sink's `flush`) at run end or cancellation.
     ///
-    /// This is the single fsync boundary the spec promises (T0.6 §6): the writer
-    /// does **not** fsync per event; it asks the sink to make its accepted bytes
-    /// durable exactly once, at the known-complete boundary. Call it at
-    /// `run-finished` and at cancellation.
+    /// This is the single fsync boundary the writer promises: it does **not**
+    /// fsync per event; it asks the sink to make its accepted bytes durable
+    /// exactly once, at the known-complete boundary. Call it at `run-finished`
+    /// and at cancellation.
     ///
     /// # Errors
     /// Returns a [`SinkFault`] if the sink's flush fails.
@@ -652,7 +648,7 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
 
     /// Build the canonical envelope, append-and-record it, then advance the
     /// sequence. Write-through: the record reaches the sink before this returns
-    /// (no user-space buffering — T0.6 §6). A sink error is a run-level fault.
+    /// (no user-space buffering). A sink error is a run-level fault.
     fn emit(&mut self, event: &Event) -> Result<(), SinkFault> {
         let seq = self.next_seq;
         let offset_ns = self.clock.elapsed_ns();
@@ -671,13 +667,13 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     }
 
     /// Serialize one record to its canonical single-line JSON bytes plus the
-    /// terminating newline (T4 §1, §6).
+    /// terminating newline.
     ///
     /// The wire form is the **published** event-stream schema
-    /// (`schemas/event-stream/v1.schema.json`): the T0.6/C19 header
+    /// (`schemas/event-stream/v1.schema.json`): the header
     /// (`schema_version`, `run_id`, `seq`, `wall` as an RFC3339 string,
     /// `offset_ns`), the `kind` discriminator, and the per-kind payload **spread
-    /// at the top level** (never nested under a `body`), so the C22 fold reads it
+    /// at the top level** (never nested under a `body`), so the fold reads it
     /// directly.
     fn canonical_line(&self, seq: u64, wall: &str, offset_ns: u64, event: &Event) -> String {
         let (kind, fields) = event_wire(event, &self.run_id);
@@ -704,16 +700,15 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
         }
         let value = serde_json::Value::Object(record);
         let mut out = String::new();
-        // The T4 §6 canonicalization is shared with the graph-artifact emitter
-        // (T40) so both rest on one authoritative canonicalizer (see
-        // `crate::canonical`).
+        // The canonicalization is shared with the graph-artifact emitter so both
+        // rest on one authoritative canonicalizer (see `crate::canonical`).
         crate::canonical::write_canonical(&value, &mut out);
         out.push('\n');
         out
     }
 }
 
-/// One top-level payload field name and value, spread beside the C19 header.
+/// One top-level payload field name and value, spread beside the shared header.
 type WireField = (String, serde_json::Value);
 
 /// Map an [`Event`] to its `(wire-kind-name, top-level-fields)` pair. The fields
@@ -875,10 +870,10 @@ fn string_map(map: &BTreeMap<String, String>) -> serde_json::Value {
 
 /// The current time as an **RFC3339 UTC** string (`YYYY-MM-DDTHH:MM:SS.mmmZ`) —
 /// the informational wall-clock stamp the published schema types as a non-empty
-/// string. Never used for durations (the monotonic `offset_ns` is authoritative
-/// — T0.6 §7), so this stamp's only job is to be a valid, human-readable RFC3339
-/// instant. Computed dependency-free from `SystemTime` (no `chrono`/`time` — the
-/// runtime writer stays on `serde_json` + `uuid` only, per the T4 ADR
+/// string. Never used for durations (the monotonic `offset_ns` is
+/// authoritative), so this stamp's only job is to be a valid, human-readable
+/// RFC3339 instant. Computed dependency-free from `SystemTime` (no `chrono`/
+/// `time` — the runtime writer stays on `serde_json` + `uuid` only, for a lean
 /// supply-chain posture).
 fn rfc3339_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -918,7 +913,7 @@ fn rfc3339_from_unix_millis(unix_ms: u128) -> String {
 
 // === Run identity ==========================================================
 
-/// A run identity (T0.6 §4): a `UUIDv7` by default, operator-overridable verbatim.
+/// A run identity: a `UUIDv7` by default, operator-overridable verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunId(String);
 
@@ -930,7 +925,7 @@ impl RunId {
     }
 
     /// Use an operator-supplied id **verbatim** — not validated into `UUIDv7`
-    /// shape, re-hashed, or prefixed (T0.6 §4).
+    /// shape, re-hashed, or prefixed.
     #[must_use]
     pub fn from_operator(id: impl Into<String>) -> Self {
         RunId(id.into())
@@ -955,11 +950,11 @@ pub struct ReadStream {
 }
 
 /// Tolerantly read a JSONL event stream, discarding **at most one trailing
-/// partial record** (C19 / T4 §1).
+/// partial record**.
 ///
 /// This is the reader half of the writer/reader contract the crash-safety suite
-/// (T27) and the run-artifact fold (C22 / T42) build on. It parses each physical
-/// line independently:
+/// and the run-artifact fold build on. It parses each physical line
+/// independently:
 ///
 /// - Every complete line (terminated by `\n`) must parse; a **non-final** line
 ///   that fails to parse is a corruption, reported as a [`ReadError`].
@@ -967,10 +962,10 @@ pub struct ReadStream {
 ///   tolerated trailing partial: it is discarded and
 ///   [`trailing_partial_discarded`](ReadStream::trailing_partial_discarded) is
 ///   set — this is the abrupt-kill tolerance, because the default sink does not
-///   fsync per event (T0.6 §6).
+///   fsync per event.
 ///
 /// It needs nothing but the bytes — no live writer, no run object — which is what
-/// makes the stream self-contained for folding (C22).
+/// makes the stream self-contained for folding.
 ///
 /// # Errors
 /// Returns a [`ReadError`] if a non-final (fully terminated) line fails to parse.
@@ -1176,14 +1171,14 @@ mod tests {
 
     #[test]
     fn terminal_and_outcome_wire_names_are_normative() {
-        // Spot-check the exact arch.md "Vocabulary" spellings.
+        // Spot-check the exact vocabulary spellings.
         assert_eq!(TerminalState::UpstreamSkipped.as_str(), "upstream-skipped");
         assert_eq!(
             TerminalState::SatisfiedFromPrior.as_str(),
             "satisfied-from-prior"
         );
         assert_eq!(RunOutcome::AssemblyFailed.as_str(), "assembly-failed");
-        // The bootstrap-failed outcome is distinct from assembly-failed (C12/T32).
+        // The bootstrap-failed outcome is distinct from assembly-failed.
         assert_eq!(RunOutcome::BootstrapFailed.as_str(), "bootstrap-failed");
         assert_ne!(
             RunOutcome::BootstrapFailed.as_str(),

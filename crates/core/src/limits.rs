@@ -1,14 +1,12 @@
-//! The C12 **container limit detection** probe — bootstrap sizing of the
-//! admission pools from the machine's actual limits (arch.md `### C12`, line 279;
-//! ticket T32).
+//! The **container limit detection** probe — bootstrap sizing of the admission
+//! pools from the machine's actual limits.
 //!
 //! # What this module owns
 //!
-//! T31 built the admission pools and the permit lifecycle but *took* their
-//! capacities as an input. This module is the **sizing half** of C12: the
-//! bootstrap probe that discovers the real ceiling of the machine a run executes
-//! on and turns it into the default [`PoolCapacities`] T31 admits against. It
-//! owns:
+//! The admission pools and the permit lifecycle *take* their capacities as an
+//! input. This module is the **sizing half**: the bootstrap probe that discovers
+//! the real ceiling of the machine a run executes on and turns it into the default
+//! [`PoolCapacities`] the pools admit against. It owns:
 //!
 //! - **the ordered probe** — memory and CPU limits are detected by trying sources
 //!   in strict order: **cgroup v2** first, then **cgroup v1**, then **host
@@ -35,9 +33,9 @@
 //!
 //! # Determinism and platform (the load-bearing part)
 //!
-//! cgroup detection is Linux-specific. To keep `dagr-core` **dependency-free** (the
-//! workspace ADR T1) and every test **deterministic on both macOS and Linux CI**,
-//! the probe never reads the real `/sys` or `/proc` from a unit test: it reads
+//! cgroup detection is Linux-specific. To keep `dagr-core` **dependency-free** and
+//! every test **deterministic on both macOS and Linux CI**, the probe never reads
+//! the real `/sys` or `/proc` from a unit test: it reads
 //! cgroup / proc values from a **supplied root path** ([`ContainerLimitProbe::from_root`])
 //! and takes the host core count as an **injected value**
 //! ([`ContainerLimitProbe::with_host_cores`]). Tests feed a temp directory
@@ -47,18 +45,18 @@
 //! from `std::thread::available_parallelism` — the only live-host read, and it is
 //! `std`, so no dependency is added.
 //!
-//! The platform-conditional nature is documented here for the T70 coverage matrix:
-//! cgroup v2 / v1 detection is **Tier-1 Linux** (arch.md lines 629–633); on macOS
-//! (and any host without a cgroup hierarchy) the probe falls back to host resources
-//! by design, which is the correct dev-machine behaviour.
+//! The platform-conditional nature is documented here for the coverage matrix:
+//! cgroup v2 / v1 detection is **Tier-1 Linux**; on macOS (and any host without a
+//! cgroup hierarchy) the probe falls back to host resources by design, which is
+//! the correct dev-machine behaviour.
 //!
 //! # Scope
 //!
-//! This module only **sizes** the pools T31 built and feeds them to it. It does not
-//! touch T31's permit mechanics, the class dispatch (T33), the overcommit demo
-//! (T38), or the platform-matrix CI (T70) — it supplies the pinning flag and the
-//! documented fallback those depend on. Runtime resizing of pools is a permanent
-//! non-goal: sizing happens once, at bootstrap.
+//! This module only **sizes** the pools and feeds them to the admission layer. It
+//! does not touch the permit mechanics, the class dispatch, the overcommit demo,
+//! or the platform-matrix CI — it supplies the pinning flag and the documented
+//! fallback those depend on. Runtime resizing of pools is a permanent non-goal:
+//! sizing happens once, at bootstrap.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -67,14 +65,14 @@ use crate::admission::{Pool, PoolCapacities, PoolCost};
 use crate::context::BootstrapOutcome;
 
 /// The default **headroom fraction** applied to every detected pool total: pools
-/// are sized to the detected limit minus this fraction (arch.md C12, line 279).
-/// 20% — enough slack for the framework's own machinery and allocator overhead so
-/// the container's OOM killer is not the thing that enforces the ceiling.
+/// are sized to the detected limit minus this fraction. 20% — enough slack for the
+/// framework's own machinery and allocator overhead so the container's OOM killer
+/// is not the thing that enforces the ceiling.
 pub const HEADROOM_DEFAULT: f64 = 0.20;
 
 /// The reserved key prefix a pinning flag must carry (the library-reserved `dagr.`
-/// namespace — arch.md line 498). A key outside this namespace is rejected so a
-/// task cannot smuggle a capacity override.
+/// namespace). A key outside this namespace is rejected so a task cannot smuggle a
+/// capacity override.
 const RESERVED_PREFIX: &str = "dagr.pool.";
 
 /// The reserved pinning-flag keys, one per pool.
@@ -87,12 +85,12 @@ const KEY_COMPUTE: &str = "dagr.pool.compute-threads";
 // ===========================================================================
 
 /// The **operator pinning flags** — explicit per-pool capacity overrides in the
-/// library-reserved `dagr.` namespace (arch.md C12, line 289).
+/// library-reserved `dagr.` namespace.
 ///
 /// A pinned pool's total is exactly the flag's value, overriding **both** cgroup
 /// detection and host fallback. This is also the mechanism CI uses to make capacity
-/// deterministic (the T38 overcommit demo pins capacity through this flag). Build
-/// one with the typed builder ([`memory`](Self::memory) …) or from a raw
+/// deterministic (the overcommit demo pins capacity through this flag). Build one
+/// with the typed builder ([`memory`](Self::memory) …) or from a raw
 /// `dagr.`-prefixed key/value pair ([`set_flag`](Self::set_flag), the CLI-flag
 /// path). Unset pools derive from detection.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -224,7 +222,7 @@ struct RawLimits {
 // ===========================================================================
 
 /// The **container-limit probe** — reads cgroup / proc values from an injected
-/// root path and derives the default [`PoolCapacities`] (arch.md C12; T32).
+/// root path and derives the default [`PoolCapacities`].
 ///
 /// Construct it with [`from_root`](Self::from_root) (tests: a fixture tree under a
 /// temp dir) or [`from_host`](Self::from_host) (production: rooted at `/`, host
@@ -296,13 +294,13 @@ impl ContainerLimitProbe {
         self
     }
 
-    /// Run the probe and derive the [`PoolCapacities`] (arch.md C12; T32).
+    /// Run the probe and derive the [`PoolCapacities`].
     ///
     /// Memory is sized from the memory dimension; **both** thread pools (blocking
     /// and compute) are sized from the CPU dimension — routing a node onto one
-    /// versus the other is T33's class dispatch, not this sizing pass. Each pool is
-    /// the detected raw limit minus headroom, floored at one unit; a pinned pool is
-    /// the pin verbatim.
+    /// versus the other is the class dispatch's job, not this sizing pass. Each
+    /// pool is the detected raw limit minus headroom, floored at one unit; a pinned
+    /// pool is the pin verbatim.
     ///
     /// # Errors
     ///
@@ -472,7 +470,7 @@ fn parse_meminfo_total_bytes(raw: &str) -> Option<u64> {
 
 /// Apply the headroom fraction to a byte count, flooring at one unit: `floor(raw *
 /// (1 - headroom))`, then `max(1)`. Every pool gets at least one unit after
-/// headroom and rounding (arch.md C12, line 279).
+/// headroom and rounding.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -499,13 +497,13 @@ fn apply_headroom_u32(raw: u32, headroom: f64) -> u32 {
 // Too-big-node bootstrap rejection — the bootstrap-failed artifact
 // ===========================================================================
 
-/// **Bootstrap-time capacity validation** (arch.md C12, lines 285/289; T32).
+/// **Bootstrap-time capacity validation**.
 ///
 /// Given the derived `caps` and the pipeline's declared node costs (each a
-/// `(node, cost)` pair, surfaced from C5), reject **at bootstrap and before any
-/// node executes** every node whose declared cost for any pool exceeds that pool's
-/// **total** capacity — such a node can never be admitted no matter how much
-/// capacity releases, so it must fail fast rather than wedge at admission time.
+/// `(node, cost)` pair), reject **at bootstrap and before any node executes** every
+/// node whose declared cost for any pool exceeds that pool's **total** capacity —
+/// such a node can never be admitted no matter how much capacity releases, so it
+/// must fail fast rather than wedge at admission time.
 ///
 /// Returns [`Ok`] when every node fits every pool (a node exactly at capacity fits
 /// — the rule is strictly "exceeds"). Returns [`Err`] carrying the complete
@@ -546,7 +544,7 @@ pub fn detect_capacities(
 /// One too-big-node capacity error, for the [bootstrap-failure
 /// artifact](CapacityBootstrapFailure): the offending node, the pool it overran,
 /// its declared cost, and that pool's total capacity — the exact four facts an
-/// operator needs to fix the run (arch.md C12, line 285).
+/// operator needs to fix the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapacityError {
     node: String,
@@ -597,15 +595,15 @@ impl std::fmt::Display for CapacityError {
 }
 
 /// The **bootstrap-failure artifact** produced when a node's declared cost exceeds
-/// a pool's total capacity (arch.md C12, lines 285/475; T32).
+/// a pool's total capacity.
 ///
 /// The fail-fast startup outcome, **distinct from an assembly failure** and from
-/// T31's admission-time can-never-fit guard: it names every offending node, the
+/// the admission-time can-never-fit guard: it names every offending node, the
 /// pool, the declared cost, and the pool capacity, records that **zero attempts**
 /// ran (no node executed), and never hangs (a synchronous, terminating check). It
-/// mirrors T30's resource-check [`BootstrapFailure`](crate::context::BootstrapFailure)
-/// shape so the downstream artifact emitter (C20 / C22) folds both bootstrap
-/// failures the same way.
+/// mirrors the resource-check [`BootstrapFailure`](crate::context::BootstrapFailure)
+/// shape so the downstream artifact emitter folds both bootstrap failures the same
+/// way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapacityBootstrapFailure {
     errors: Vec<CapacityError>,
@@ -627,8 +625,8 @@ impl CapacityBootstrapFailure {
     }
 
     /// The number of attempts recorded — **always zero** for a bootstrap failure,
-    /// because bootstrap fails *before any node executes* (arch.md C12: never a
-    /// mid-run surprise).
+    /// because bootstrap fails *before any node executes* (never a mid-run
+    /// surprise).
     #[must_use]
     #[allow(
         clippy::unused_self,
@@ -639,7 +637,7 @@ impl CapacityBootstrapFailure {
     }
 
     /// Group the errors by offending node — the shape a per-node artifact fold
-    /// (C22) reads, so a node with several overrun pools renders once.
+    /// reads, so a node with several overrun pools renders once.
     #[must_use]
     pub fn errors_by_node(&self) -> BTreeMap<&str, Vec<&CapacityError>> {
         let mut by_node: BTreeMap<&str, Vec<&CapacityError>> = BTreeMap::new();

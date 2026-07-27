@@ -1,6 +1,5 @@
 //! **One binary, many named flows** — the copyable authoring pattern for the
-//! `FlowRegistry` + `run_registry` seam (arch.md `### C26` "Many flows per binary";
-//! ADR 086; ticket T75).
+//! `FlowRegistry` + `run_registry` seam.
 //!
 //! A single dagr pipeline binary usually carries exactly one flow. This example
 //! shows the *many-flows* option: it registers **two** independent flows — `etl`
@@ -16,7 +15,7 @@
 //!
 //! ```text
 //! cargo run --example multi_flow -- list                       # etl, analytics
-//! cargo run --example multi_flow -- graph etl                  # etl's C20 graph artifact
+//! cargo run --example multi_flow -- graph etl                  # etl's graph artifact
 //! cargo run --example multi_flow -- graph analytics            # analytics' graph
 //! cargo run --example multi_flow -- validate etl               # assembly only, every problem
 //! cargo run --example multi_flow -- run etl --store ./runs     # drive etl (its own run + store)
@@ -34,7 +33,7 @@
 //!
 //! ## Graph-emittable registration
 //!
-//! `graph <flow>` emits the C20 graph artifact, which records each node's
+//! `graph <flow>` emits the graph artifact, which records each node's
 //! author-declared **stable names**. So each flow registers its nodes through the
 //! stable-name-aware
 //! [`register_source_named`](dagr_cli::run_flow::RunnableFlow::register_source_named)
@@ -103,7 +102,7 @@ impl Task for Load {
 
 /// Build the `etl` flow (a **fresh** one each call — the registry re-invokes this
 /// factory once per invocation). Registers through the stable-name-aware surface so
-/// `graph etl` can emit its C20 artifact.
+/// `graph etl` can emit its graph artifact.
 fn build_etl() -> RunnableFlow {
     let mut flow = RunnableFlow::new();
     let rows = flow.register_source_named("extract", Extract { rows: 100 });

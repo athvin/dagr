@@ -1,12 +1,10 @@
-//! C19 event-stream writer — behavioral test suite (T19 / ticket 029).
+//! Event-stream writer — behavioral test suite.
 //!
-//! These tests are the covering suite the coverage matrix (`docs/coverage-matrix.md`)
-//! maps C19 to. Each `#[test]` realizes one scenario from the ticket's Test plan;
-//! together they exercise the append-only JSONL writer, the T0.6 record header,
-//! the T4 canonical encoding, write-through-then-record discipline, the
-//! fsync-at-boundary contract, induced sink failure, per-run directory
-//! disjointness, and the tolerant reader the fold contract (C22/T42) and
-//! crash-safety suite (T27) depend on.
+//! Each `#[test]` realizes one scenario for the append-only JSONL writer:
+//! together they exercise the shared record header, the canonical encoding,
+//! write-through-then-record discipline, the fsync-at-boundary contract, induced
+//! sink failure, per-run directory disjointness, and the tolerant reader the fold
+//! contract and crash-safety suite depend on.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -175,7 +173,7 @@ fn as_obj(line: &[u8]) -> serde_json::Map<String, serde_json::Value> {
 /// A fixed informational wall-clock stamp (an RFC3339 string, per the published
 /// schema's `wall`). Byte-identity of two emissions of the same record is defined
 /// with the wall stamp held equal — the record's analog of the artifact's
-/// excluded generation-time field (T4 §6).
+/// excluded generation-time field.
 fn fixed_wall() -> String {
     "2023-11-14T22:13:20.000Z".to_string()
 }
@@ -301,7 +299,7 @@ fn run_started_carries_full_header() {
         header["fingerprint_policy"],
         serde_json::json!("blake3:bbbb")
     );
-    // The fingerprint-algorithm version is stamped (C21).
+    // The fingerprint-algorithm version is stamped.
     assert_eq!(
         header["fingerprint_algorithm_version"],
         serde_json::json!(FINGERPRINT_ALGORITHM_VERSION)
@@ -516,8 +514,8 @@ fn mid_run_sink_failure_surfaces_fault() {
 #[test]
 fn foldability_with_no_original_run_access() {
     // A completed stream file only — hand its bytes to the reader used by the
-    // fold contract (C22/T42). It yields the ordered record sequence with
-    // envelope fields intact, using nothing but the bytes.
+    // fold contract. It yields the ordered record sequence with envelope fields
+    // intact, using nothing but the bytes.
     let sink = CaptureSink::new();
     let mut w = writer(sink.clone(), ManualClock::new());
     w.run_started(header()).unwrap();
@@ -547,7 +545,7 @@ fn foldability_with_no_original_run_access() {
 #[test]
 fn canonical_bytes_are_deterministic_and_sorted() {
     // Two writers producing the same record must emit byte-identical lines, and
-    // object keys are lexicographically sorted (T4 §6).
+    // object keys are lexicographically sorted.
     let sink1 = CaptureSink::new();
     let sink2 = CaptureSink::new();
     let mut w1 = EventStreamWriter::new(
@@ -634,7 +632,7 @@ fn terminal_states_use_normative_names() {
 
 #[test]
 fn event_kinds_have_stable_wire_names() {
-    // Every C19 transition serializes under its documented kebab-case kind name.
+    // Every transition serializes under its documented kebab-case kind name.
     let sink = CaptureSink::new();
     let mut w = writer(sink.clone(), ManualClock::new());
     w.run_started(header()).unwrap();
@@ -682,7 +680,7 @@ fn event_kinds_have_stable_wire_names() {
 }
 
 /// Event enum round-trips through the writer as the public constructor path.
-/// (Kept minimal — the `Event` type is public so the run loop (T24) can name it.)
+/// (Kept minimal — the `Event` type is public so the run loop can name it.)
 #[test]
 fn event_enum_is_constructible() {
     let _ = Event::RunFinished {

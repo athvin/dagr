@@ -1,6 +1,6 @@
-// UI compile-failure fixture — ticket T12 (024), case `wiring_data_cycle_back_edge`.
+// UI compile-failure fixture — case `wiring_data_cycle_back_edge`.
 //
-// PROVES (C2; arch.md `### C2 · Handle`): a cycle via a DATA edge cannot be
+// PROVES: a cycle via a DATA edge cannot be
 // closed AFTER THE FACT either — a back-edge is as inexpressible as a self-edge.
 // This is the REAL authoring API (`dagr_core::flow::Flow`, `Flow::register`).
 // Registering node "a" that binds node "b", when "b" is registered AFTER "a",
@@ -9,12 +9,12 @@
 // there is no after-the-fact edge API to add `a -> b` once "a" is registered.
 // The forward reference is a use of an undeclared binding (E0425), so the
 // back-edge cannot be written. This is the same backward-reference discipline
-// the T0.9 ordering-edge fixtures prove, now shown against the real data-binding
-// surface — the cycle guarantee extends across BOTH edge kinds (C2/C4).
+// the ordering-edge fixtures prove, now shown against the real data-binding
+// surface — the cycle guarantee extends across BOTH edge kinds.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28). The positive
+// sample FAILS to compile under the pinned toolchain. The positive
 // counterpart (a forward-only A->B->C chain that DOES compile) lives in
 // crates/core/tests/flow_builder.rs.
 

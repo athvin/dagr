@@ -1,17 +1,17 @@
-//! **Mermaid** (flowchart) emission for a C20 graph artifact (arch.md `### C24 ·
-//! Renderers`; Mermaid's parser gates this format in CI).
+//! **Mermaid** (flowchart) emission for a graph artifact (Mermaid's parser gates
+//! this format in CI).
 //!
 //! The output is a single `flowchart TB` with:
 //!
 //! * one node declaration per artifact node, `id["name"]`, drawn with its
 //!   **stable declared name** as both id and bracketed label (never the
-//!   informational `type_name`, C20);
+//!   informational `type_name`);
 //! * one link per artifact edge, in canonical `(from, to, kind)` order;
 //! * each **group** rendered as a **Mermaid subgraph** (`subgraph group_<group>`)
 //!   containing exactly its member nodes; **ungrouped** nodes declared at the top
-//!   level, outside every subgraph; groups never nest (C6).
+//!   level, outside every subgraph; groups never nest.
 //!
-//! # Documented, disjoint edge styling (C4 line 143 / C24 line 521)
+//! # Documented, disjoint edge styling
 //!
 //! The two edge kinds use **disjoint** Mermaid link forms:
 //!
@@ -23,9 +23,9 @@
 //! A solid arrow (`-->`) and a dashed arrow (`-.->`) are lexically disjoint link
 //! forms — a reader (and the structural tests) tell them apart from the Mermaid
 //! alone. A data link is labelled with the carried stable type name; an ordering
-//! link carries **no** label (C4 line 144).
+//! link carries **no** label.
 //!
-//! # Determinism (C24 golden files)
+//! # Determinism (golden files)
 //!
 //! Output is byte-stable and independent of the artifact's node/edge input order:
 //! subgraphs in group-name order, nodes within a subgraph and the ungrouped nodes
@@ -36,15 +36,15 @@ use std::fmt::Write as _;
 use crate::model::{Edge, EdgeKind, GraphArtifact, Node};
 use crate::overlay::{all_classes, Overlay};
 
-/// Render `artifact` to Mermaid flowchart source (arch.md C24). Deterministic and
-/// byte-stable; accepted by Mermaid's parser.
+/// Render `artifact` to Mermaid flowchart source. Deterministic and byte-stable;
+/// accepted by Mermaid's parser.
 #[must_use]
 pub fn render(artifact: &GraphArtifact) -> String {
     render_with_overlay(artifact, None)
 }
 
-/// Render `artifact` to Mermaid, optionally applying a **run overlay** (T47):
-/// when `overlay` is `Some`, a per-state `classDef` prelude is emitted and each
+/// Render `artifact` to Mermaid, optionally applying a **run overlay**: when
+/// `overlay` is `Some`, a per-state `classDef` prelude is emitted and each
 /// joined node gets a `class <node> <state>` assignment plus a duration in its
 /// label; the structure is identical to the base render. With `None` the output
 /// is byte-for-byte the base structural diagram.
@@ -161,7 +161,7 @@ fn emit_edge(out: &mut String, edge: &Edge) {
     match edge.kind() {
         EdgeKind::Data => {
             // A solid, labelled link: `from -- "Type" --> to`. The carried stable
-            // type name is the link text (C4 line 144).
+            // type name is the link text.
             let ty = edge
                 .type_name()
                 .map(escape_mermaid_text)
@@ -170,7 +170,7 @@ fn emit_edge(out: &mut String, edge: &Edge) {
         }
         EdgeKind::Ordering => {
             // A dashed link, unlabelled: `from -.-> to`. Ordering edges carry no
-            // value and no label (C4 line 144).
+            // value and no label.
             let _ = writeln!(out, "  {from} -.-> {to}");
         }
     }
@@ -185,7 +185,7 @@ fn kind_ord(kind: EdgeKind) -> u8 {
 }
 
 /// Sanitize an identity name into a Mermaid node id. Mermaid ids may contain only
-/// a restricted character set without quoting; stable declared names (T0.7) use
+/// a restricted character set without quoting; stable declared names use
 /// ASCII letters, digits, and `_ - . :`, of which `-`, `.`, and `:` can confuse
 /// Mermaid's id grammar, so they are mapped to `_`. The bracketed **label**
 /// carries the exact original name, so the drawn identity is always the stable

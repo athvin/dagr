@@ -1,18 +1,17 @@
-//! M1 run-loop driver tests — ticket T24 (034). Written first, TDD.
+//! Run-loop driver tests. Written first, TDD.
 //!
 //! These exercise the **real** driver in [`dagr_cli::driver`]: the component that
-//! orchestrates one complete run from an assembled pipeline to a truthful end
-//! (arch.md "The shape of a run", `### C11`, `### C14`, `### C19`). Each scenario
-//! builds a real assembled pipeline (or a deliberately-failing one), drives it
-//! through the driver, and asserts against the **actual sink output** (the parsed
-//! event stream) and the returned outcome — never internal state.
+//! orchestrates one complete run from an assembled pipeline to a truthful end.
+//! Each scenario builds a real assembled pipeline (or a deliberately-failing one),
+//! drives it through the driver, and asserts against the **actual sink output**
+//! (the parsed event stream) and the returned outcome — never internal state.
 //!
-//! Scope discipline (T24): this is the minimal readiness-driven run loop only. No
-//! admission pools (T31), no cancellation triggering/signals (T34/T35), no scale
-//! authority (T26), no fault injection (T27), no runtime firing of non-default
-//! trigger rules (T34). The loop composes the merged M1 pieces (readiness tracker,
-//! single-attempt/caught runner, event-stream writer, run store) and consumes the
-//! C16 grace period only as the bounded zombie wait at natural run end.
+//! Scope discipline: this is the minimal readiness-driven run loop only. No
+//! admission pools, no cancellation triggering/signals, no scale authority, no
+//! fault injection, no runtime firing of non-default trigger rules. The loop
+//! composes the readiness tracker, single-attempt/caught runner, event-stream
+//! writer, and run store, and consumes the grace period only as the bounded zombie
+//! wait at natural run end.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,12 +28,12 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// A capturing, in-memory run-store sink + monotonic clock (C19 injection seam)
+// A capturing, in-memory run-store sink + monotonic clock (injection seam)
 // ===========================================================================
 
 /// An in-memory [`EventSink`] capturing every appended line, so a test can parse
-/// the real event stream the driver wrote — the T24 test-plan requirement that
-/// streams are asserted by parsing the actual sink output.
+/// the real event stream the driver wrote — streams are asserted by parsing the
+/// actual sink output.
 #[derive(Clone, Default)]
 struct MemorySink {
     lines: Arc<Mutex<Vec<u8>>>,
@@ -189,7 +188,7 @@ impl Task for BlocksForever {
 }
 
 // ===========================================================================
-// Type-erased node runners built on the real C14 attempt path
+// Type-erased node runners built on the real attempt path
 // ===========================================================================
 
 /// A no-input source runner: runs its task's single attempt through the real
@@ -269,7 +268,7 @@ impl<U: Send + Sync + Clone + 'static, T: Task<Input = U>> NodeRunner for MapRun
         // The upstream succeeded before this node was admitted, so its slot is
         // filled; read the value a one-input task expects and pre-bind it into an
         // owned no-input adapter, so the real single-attempt runner drives it and
-        // emits the genuine C14 records.
+        // emits the genuine attempt records.
         let input = (*self.upstream.read()).clone();
         let mut bound = Bound {
             inner: task,
@@ -286,7 +285,7 @@ impl<U: Send + Sync + Clone + 'static, T: Task<Input = U>> NodeRunner for MapRun
 /// (so it is `'static` and `Send`, satisfying the `Task` bounds `run_attempt`
 /// needs) and pre-binds the input value the upstream produced. Reusing the real
 /// single-attempt runner over this adapter means the emitted records are the
-/// genuine C14 ones (admission marker, attempt-started, attempt-outcome,
+/// genuine ones (admission marker, attempt-started, attempt-outcome,
 /// node-terminal), not a re-implementation.
 struct Bound<U, T> {
     inner: T,
@@ -488,7 +487,7 @@ fn fast_branch_not_gated_on_slow_branch() {
 
     // root -> slow ; root -> fast -> fast_child   (fast_child does NOT depend on slow)
     // `root` fans out to two consumers, so its edges are received SHARED (an owned
-    // multi-consumer edge is an assembly error — C3/T0.2).
+    // multi-consumer edge is an assembly error).
     let mut flow = Flow::new();
     let root = flow.register_source("root", &SucceedsWith(1));
     let _slow = flow.register::<Slow, _>(
@@ -820,7 +819,7 @@ fn every_outcome_is_fed_back() {
 
     let events = parse_events(&sink.bytes());
     // Each node: exactly one node-terminal record AND exactly one attempt-outcome
-    // record (arch.md l.331: every attempt produces exactly one attempt-outcome).
+    // record (every attempt produces exactly one attempt-outcome).
     for n in ["up", "down"] {
         let terminals = events
             .iter()
@@ -1139,7 +1138,7 @@ fn two_simultaneous_runs_do_not_interfere() {
 }
 
 // ===========================================================================
-// A blocking-timeout runner (drives the T21 blocking/compute timeout path)
+// A blocking-timeout runner (drives the blocking/compute timeout path)
 // ===========================================================================
 
 /// A runner for a blocking task that never returns: it arms a short per-attempt

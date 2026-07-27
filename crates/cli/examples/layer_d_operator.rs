@@ -1,13 +1,12 @@
-//! **Layer D — the developer and operator surface** (arch.md "Layer D"; ticket
-//! T64).
+//! **Layer D — the developer and operator surface.**
 //!
 //! The surfaces that make a pipeline *operable* and *reviewable*. This example
-//! shows the C28 **structure snapshot**: a pipeline's structure is captured as a
+//! shows the **structure snapshot**: a pipeline's structure is captured as a
 //! canonical, semantic fingerprint, and a structural change (adding a node,
 //! rewiring an edge) is caught as a diff — so an unintended rewiring fails review
-//! rather than production (system criterion 6). It uses the public
+//! rather than production. It uses the public
 //! [`StructureSnapshot`](dagr_cli::structure_snapshot::StructureSnapshot) API and
-//! needs no run store, network, or database (pure assembly, C7). Run it with
+//! needs no run store, network, or database (pure assembly). Run it with
 //! `cargo run --example layer_d_operator`.
 
 use dagr_cli::structure_snapshot::StructureSnapshot;
@@ -16,7 +15,7 @@ use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
 use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
 
-// Author-declared stable names (C20): recorded in the structure, stable across
+// Author-declared stable names: recorded in the structure, stable across
 // toolchains (unlike `std::any::type_name`).
 struct Count;
 impl StableName for Count {
@@ -118,8 +117,8 @@ fn main() {
     println!("baseline vs rebuild: no diff (stable under rebuild)");
 
     // Adding a node is a structural change — the diff names it, so a reviewer sees
-    // exactly what changed (system criterion 6). This is what catches an
-    // unintended rewiring in code review.
+    // exactly what changed. This is what catches an unintended rewiring in code
+    // review.
     let added_snapshot =
         StructureSnapshot::from_pipeline(&with_added_node(), name).expect("added snapshots");
     let diff = base_snapshot.diff(&added_snapshot);
@@ -130,7 +129,7 @@ fn main() {
     println!("baseline vs added-node: DIFF present\n{diff}");
 
     // The structural change also moves the structural fingerprint; a policy-only
-    // change would move only the policy hash (C21).
+    // change would move only the policy hash.
     assert_ne!(
         base_snapshot.structural_fingerprint(),
         added_snapshot.structural_fingerprint(),

@@ -1,14 +1,13 @@
-//! C13 · **Execution-class dispatch** driver integration test — ticket T33 (043).
-//! Written first, TDD.
+//! **Execution-class dispatch** driver integration test. Written first, TDD.
 //!
-//! This exercises the **real** T24 run-loop driver ([`dagr_cli::driver::drive`])
+//! This exercises the **real** run-loop driver ([`dagr_cli::driver::drive`])
 //! routing each dispatched attempt onto the thread execution surface named by its
-//! resolved execution class (arch.md `### C13 · Execution class dispatch`; T2 ADR
-//! 004 §2/§3/§5): *await-bound* work on the async (tokio) runtime, *blocking* work
-//! on tokio's dedicated blocking pool (`spawn_blocking`), and *compute-bound* work
-//! on a dedicated fixed-size `rayon` pool. The class is resolved from the task's
-//! declared [`ExecutionClass`](dagr_core::task::ExecutionClass) and the C5 node
-//! policy override (T29), applied at dispatch.
+//! resolved execution class: *await-bound* work on the async (tokio) runtime,
+//! *blocking* work on tokio's dedicated blocking pool (`spawn_blocking`), and
+//! *compute-bound* work on a dedicated fixed-size `rayon` pool. The class is
+//! resolved from the task's declared
+//! [`ExecutionClass`](dagr_core::task::ExecutionClass) and the node policy override,
+//! applied at dispatch.
 //!
 //! # How each scenario is observed deterministically (no wall-clock, no network)
 //!
@@ -22,10 +21,10 @@
 //! (an await-bound node finishes while a blocking node is still spinning), never an
 //! absolute duration.
 //!
-//! Scope discipline (T33): this is only the class→surface routing + the compute
-//! pool wiring + its driver integration. It does not change T31 permit mechanics or
-//! T32 sizing (it consumes the pinned `compute_threads` capacity), and it does not
-//! implement the T38 demo. The T24 framework-survives-a-blocked-task guarantee and
+//! Scope discipline: this is only the class→surface routing + the compute pool
+//! wiring + its driver integration. It does not change permit mechanics or pool
+//! sizing (it consumes the pinned `compute_threads` capacity), and it does not
+//! implement the demo. The framework-survives-a-blocked-task guarantee and
 //! termination stay intact (asserted here too).
 
 use std::collections::BTreeMap;
@@ -44,7 +43,7 @@ use dagr_core::task::{ExecutionClass, Task};
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam)
+// In-memory sink + clock (the injection seam)
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -247,7 +246,7 @@ impl Task for ComputeConcurrencyProbe {
 }
 
 // ===========================================================================
-// Type-erased node runners on the real C14 attempt path
+// Type-erased node runners on the real attempt path
 // ===========================================================================
 
 struct SourceRunner<T: Task<Input = ()>> {
@@ -480,7 +479,7 @@ fn compute_node_runs_on_the_compute_pool() {
     );
 }
 
-/// The C5 policy override moves the effective class: a synchronous task declared
+/// The policy override moves the effective class: a synchronous task declared
 /// `Blocking` overridden to `Compute` (a legal synchronous→synchronous move) runs
 /// on the compute pool, i.e. the override wins over the task default.
 #[test]
@@ -497,7 +496,7 @@ fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
         NodePolicy::new().execution_class(ExecutionClass::Compute),
     );
     let pipeline = flow.finish();
-    // Confirm assembly accepts the legal move (the boundary check is T29's).
+    // Confirm assembly accepts the legal move (assembly owns the boundary check).
     pipeline
         .assemble()
         .expect("legal sync->sync override assembles");
@@ -534,9 +533,9 @@ fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
     );
 }
 
-/// The C5 legality boundary: overriding an await-bound task to a synchronous class
-/// is illegal (C5), so assembly rejects it, naming the node — dispatch never
-/// receives an illegal class. (The authoritative check is T29; this confirms the
+/// The legality boundary: overriding an await-bound task to a synchronous class
+/// is illegal, so assembly rejects it, naming the node — dispatch never receives an
+/// illegal class. (Assembly owns the authoritative check; this confirms the
 /// dispatch path never sees an illegal class.)
 #[test]
 fn illegal_await_bound_to_synchronous_override_fails_assembly() {
@@ -709,8 +708,8 @@ fn compute_pool_concurrency_is_bounded_by_pool_size() {
 }
 
 /// The compute pool has a floor of one thread even under a pinned zero/fractional
-/// capacity (T2 §3 floor-of-one; T32 sizing) — a single compute node still runs and
-/// succeeds when the pinned compute capacity is zero.
+/// capacity — a single compute node still runs and succeeds when the pinned compute
+/// capacity is zero.
 #[test]
 fn compute_pool_has_a_floor_of_one_thread() {
     let probe = SurfaceProbe::default();
@@ -759,7 +758,7 @@ fn compute_pool_has_a_floor_of_one_thread() {
 /// Framework survives a fully blocked task fleet: a per-attempt timeout still fires
 /// while every blocking-pool worker is jammed by a never-returning synchronous task,
 /// the timed-out node's fate is decided, and the run reaches `run-finished` with a
-/// complete stream (the T24 isolation guarantee, extended to dispatch by class).
+/// complete stream (the isolation guarantee, extended to dispatch by class).
 /// A blocking task that never returns — a misdeclared/hung synchronous fleet.
 struct BlocksForever;
 impl Task for BlocksForever {
@@ -773,9 +772,9 @@ impl Task for BlocksForever {
     }
 }
 
-/// A blocking runner that marks its attempt timed out promptly (the real T21
+/// A blocking runner that marks its attempt timed out promptly (the real
 /// blocking-timeout mark path), so the timeout fires though the worker is jammed —
-/// mirroring the T24 framework-survives-a-blocked-task scenario, now under dispatch.
+/// mirroring the framework-survives-a-blocked-task scenario, now under dispatch.
 struct TimedBlockingRunner {
     name: String,
     task: Option<BlocksForever>,

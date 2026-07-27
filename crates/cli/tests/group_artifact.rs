@@ -1,11 +1,11 @@
-//! C6 groups in the graph artifact — ticket T51 (063). Written first, TDD.
+//! Groups in the graph artifact. Written first, TDD.
 //!
-//! The group label is *presentation metadata* recorded on the node in the C20
-//! graph artifact (arch.md `### C6 · Group`; C20) so downstream tooling — the C24
-//! renderer (which clusters by it, T46) and the C28 structure comparison — can
-//! read it, while it stays out of every field that feeds node identity or either
-//! C21 fingerprint hash. This suite asserts the T51-owned artifact facets against
-//! the **real** emitter [`dagr_cli::graph`] over a **real** assembled pipeline:
+//! The group label is *presentation metadata* recorded on the node in the graph
+//! artifact so downstream tooling — the renderer (which clusters by it) and the
+//! structure comparison — can read it, while it stays out of every field that feeds
+//! node identity or either fingerprint hash. This suite asserts the group artifact
+//! facets against the **real** emitter [`dagr_cli::graph`] over a **real** assembled
+//! pipeline:
 //!
 //! * each node's record carries its group label (a documented empty-string marker
 //!   for an ungrouped node), and the artifact round-trips through serialization
@@ -13,12 +13,11 @@
 //! * a group **rename** is **review-visible** — it produces a byte-different graph
 //!   artifact (the node records differ) — yet leaves **both** header fingerprints
 //!   byte-identical. This is the fingerprint-neutral-but-review-visible property
-//!   C6 owns; the full C28 structure-diff harness is T61's, and this ticket wires
-//!   the group label through the existing artifact surface it consumes (Out of
-//!   scope: redesigning the C28 harness).
+//!   groups own; the full structure-diff harness lives elsewhere, and this suite
+//!   wires the group label through the existing artifact surface it consumes.
 //!
-//! The renderer-clustering half of C6 (groups render as clusters in DOT/Mermaid,
-//! accepted by the reference tools) landed with T46 and is covered by
+//! The renderer-clustering half (groups render as clusters in DOT/Mermaid,
+//! accepted by the reference tools) is covered by
 //! `crates/render/tests/renderer.rs` and `reference_tools.rs` over a real emitted
 //! grouped artifact; this suite covers the recording and fingerprint-neutrality
 //! halves.
@@ -174,9 +173,8 @@ fn group_of_node(artifact: &Value, name: &str) -> String {
 // === Tests =================================================================
 
 /// **Group appears in the graph artifact.** Each node's record carries its group
-/// label, and an ungrouped node records the documented empty-string marker
-/// (arch.md C6; C20 "each node's record carries its group label or a documented
-/// none marker for ungrouped nodes").
+/// label, and an ungrouped node records the documented empty-string marker (a
+/// documented "none" marker for ungrouped nodes).
 #[test]
 fn each_node_record_carries_its_group_label() {
     let artifact = parse(&emit(&fixture(base_groups), GEN));
@@ -191,7 +189,7 @@ fn each_node_record_carries_its_group_label() {
         "an ungrouped node records the documented empty-string group marker"
     );
 
-    // Two distinct groups plus an ungrouped node are present (the C6 clustering
+    // Two distinct groups plus an ungrouped node are present (the clustering
     // fixture shape the renderer consumes).
     let groups: std::collections::BTreeSet<String> = artifact["nodes"]
         .as_array()
@@ -205,7 +203,7 @@ fn each_node_record_carries_its_group_label() {
 /// **The artifact round-trips through serialization stably.** Re-emitting the
 /// same pipeline with the same clock is byte-identical, and parsing then
 /// re-serializing the artifact (with generation time masked) is stable — the
-/// group label participates in the deterministic canonical encoding (C20).
+/// group label participates in the deterministic canonical encoding.
 #[test]
 fn grouped_artifact_round_trips_stably() {
     let first = emit(&fixture(base_groups), GEN);
@@ -230,9 +228,9 @@ fn grouped_artifact_round_trips_stably() {
 /// Renaming a group produces a byte-**different** graph artifact (the affected
 /// node records carry the new label) — the change is visible to a reviewer /
 /// structure comparison — while **both** header fingerprints stay byte-identical.
-/// This is C6's load-bearing property: a rename shows up in the structure diff
-/// (C28) but never breaks resume (C21/C27). The full C28 diff harness is T61's;
-/// T51 wires the label through this existing artifact surface.
+/// This is the group's load-bearing property: a rename shows up in the structure
+/// diff but never breaks resume. The full structure-diff harness lives elsewhere;
+/// this suite wires the label through this existing artifact surface.
 #[test]
 fn group_rename_is_review_visible_but_fingerprint_neutral() {
     let base = parse(&emit(&fixture(base_groups), GEN));
@@ -248,7 +246,7 @@ fn group_rename_is_review_visible_but_fingerprint_neutral() {
     assert_eq!(group_of_node(&renamed, "rows"), "landing");
 
     // Yet BOTH header fingerprints are byte-identical — the rename never moves a
-    // hash, so resume is never broken by a regrouping (C21 line 465 / C27).
+    // hash, so resume is never broken by a regrouping.
     for field in [
         "fingerprint_structural",
         "fingerprint_policy",

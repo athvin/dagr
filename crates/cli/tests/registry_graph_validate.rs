@@ -1,14 +1,13 @@
 //! `run_registry` routing of the remaining flow-selecting verbs — `graph` and
 //! `validate` — plus the single-flow ergonomic default and per-verb exit-code
-//! fidelity. Ticket T75 (088), written first (TDD) — arch.md `### C20`, `### C26`;
-//! ADR 086; graph verb T40.
+//! fidelity. Written first (TDD).
 //!
-//! T74 (087) shipped the `FlowRegistry` type, the `Cli.flow_name` positional, and
-//! the `run`/`list` verbs. This slice routes the *pipeline-bound* verbs that select
+//! The `FlowRegistry` type, the `Cli.flow_name` positional, and
+//! the `run`/`list` verbs ship elsewhere. This slice routes the *pipeline-bound* verbs that select
 //! a flow **by re-invoking the selected factory once per verb**: `graph <flow>`
 //! builds a fresh `RunnableFlow`, finishes it into a live `Pipeline`, and emits the
-//! C20 graph artifact via `graph_verb` (byte-identical to a single-flow binary);
-//! `validate <flow>` builds another, runs assembly (C7) only, and exits `Success`
+//! graph artifact via `graph_verb` (byte-identical to a single-flow binary);
+//! `validate <flow>` builds another, runs assembly only, and exits `Success`
 //! on a clean assembly or `AssemblyFailure` (3) printing every problem. Each verb
 //! maps its **own** `ExitCode`/error type — never through `exit_code_for_run`,
 //! which is reserved for a completed `RunReport`.
@@ -28,7 +27,7 @@ use dagr_core::TaskError;
 // ===========================================================================
 // Test tasks — two distinct stable-name-aware flows named `etl` and `analytics`.
 // A `RunnableFlow` whose nodes carry author-declared stable names is emittable to
-// the C20 graph contract (a type-erased node is not, T40) — so the flows the
+// the graph contract (a type-erased node is not) — so the flows the
 // registry routes `graph` to register through the stable-name-aware surface.
 // ===========================================================================
 
@@ -95,7 +94,7 @@ impl Task for Aggregate {
 }
 
 /// Build a two-node `etl` flow (`extract -> load`) using the stable-name-aware
-/// registration surface, so it is emittable to the C20 graph contract.
+/// registration surface, so it is emittable to the graph contract.
 fn build_etl() -> RunnableFlow {
     let mut flow = RunnableFlow::new();
     let rows = flow.register_source_named("extract", Extract { rows: 3 });
@@ -111,7 +110,7 @@ fn build_analytics() -> RunnableFlow {
 }
 
 /// A flow that does **not** assemble: two nodes registered under the *same*
-/// identity name is a duplicate-name assembly failure (C7). Used to prove
+/// identity name is a duplicate-name assembly failure. Used to prove
 /// `validate` reports the failure through its own `AssemblyFailure` (3) code.
 struct Effect;
 impl StableName for Effect {
@@ -144,7 +143,7 @@ where
 }
 
 /// Parse the captured artifact bytes as JSON with the generation-time field masked,
-/// so two emissions compare byte-identical outside that single varying field (C20).
+/// so two emissions compare byte-identical outside that single varying field.
 fn masked_json(bytes: &[u8]) -> serde_json::Value {
     let text = String::from_utf8(bytes.to_vec()).expect("graph artifact is UTF-8");
     let value: serde_json::Value = serde_json::from_str(text.trim_end())
@@ -153,7 +152,7 @@ fn masked_json(bytes: &[u8]) -> serde_json::Value {
 }
 
 // ===========================================================================
-// graph — routes to the selected flow, emits the C20 artifact.
+// graph — routes to the selected flow, emits the graph artifact.
 // ===========================================================================
 
 /// `graph etl` on a multi-flow registry selects `etl`, `graph_verb` emits `etl`'s

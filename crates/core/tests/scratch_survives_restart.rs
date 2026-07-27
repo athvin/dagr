@@ -1,27 +1,26 @@
-//! C18 · Scratch survives a full process restart — ticket T54a (066). Written
-//! first, TDD. Each test mirrors one bullet of the ticket's Test plan.
+//! Scratch survives a full process restart. Written first, TDD. Each test mirrors
+//! one bullet of the Test plan.
 //!
-//! # What makes this the restart proof (vs T53's `scratch_store.rs`)
+//! # What makes this the restart proof (vs the in-process `scratch_store.rs`)
 //!
-//! T53 proves the store's *in-process* contract: an attempt-1 write is readable
-//! on attempt 2 through a fresh in-process handle, keys are namespaced, isolation
-//! is enforced, a succeeded node's scratch is deleted. It never actually ends a
-//! process. This suite closes the remaining, load-bearing gap for C18's
-//! durability half: a **real, separate OS process** (`dagr-scratch-run`, the
-//! checked-in test-support harness) writes a node's scratch **through the run
+//! The `scratch_store.rs` suite proves the store's *in-process* contract: an
+//! attempt-1 write is readable on attempt 2 through a fresh in-process handle, keys
+//! are namespaced, isolation is enforced, a succeeded node's scratch is deleted. It
+//! never actually ends a process. This suite closes the remaining, load-bearing gap
+//! for the durability half: a **real, separate OS process** (`dagr-scratch-run`,
+//! the checked-in test-support harness) writes a node's scratch **through the run
 //! store on disk** and then **exits**; a **later, separate process** (this test
 //! process — the situation a resume faces) opens the *same run directory* with a
 //! fresh [`ScratchStore`] and reads the value back. The value crossed a genuine
 //! process boundary via the run-store medium, not via any in-process state — the
-//! foundation T54b/T58 resume stands on (arch.md `### C18`, "The shape of a run"
-//! line 67; T0.6 §8, §9).
+//! foundation a later resume stands on.
 //!
-//! It also proves the *lifecycle* half the amended C18 governs (arch.md line 393;
-//! T0.6 §8): at run end **nothing is deleted implicitly** — only a **succeeded**
-//! node's scratch is removed (by the on-success hook), and every **non-succeeded**
-//! node's scratch is **retained** on disk under the run-store base, byte-for-byte,
-//! for a later resume to copy forward and for **prune (C26)** — and prune alone —
-//! to reclaim by removing the whole per-run directory.
+//! It also proves the *lifecycle* half: at run end **nothing is deleted
+//! implicitly** — only a **succeeded** node's scratch is removed (by the on-success
+//! hook), and every **non-succeeded** node's scratch is **retained** on disk under
+//! the run-store base, byte-for-byte, for a later resume to copy forward and for
+//! **prune** — and prune alone — to reclaim by removing the whole per-run
+//! directory.
 //!
 //! # Determinism + isolation (no wall-clock sleeps; private per-test temp)
 //!
@@ -167,9 +166,9 @@ fn reopen_store(base: &Path, pipeline: &str, run: &str, node: &str) -> ScratchSt
 }
 
 /// The whole per-run directory `<base>/<pipeline>/<run-id>/` — the unit prune
-/// operates over (T0.6 §8). Built from the same identity strings the store uses;
-/// the reserved `scratch/` subtree (and everything else a run leaves) lives under
-/// it. Ordinary ids used by these tests pass through as-is.
+/// operates over. Built from the same identity strings the store uses; the
+/// reserved `scratch/` subtree (and everything else a run leaves) lives under it.
+/// Ordinary ids used by these tests pass through as-is.
 fn run_dir(base: &Path, pipeline: &str, run: &str) -> PathBuf {
     base.join(pipeline).join(run)
 }
@@ -219,7 +218,7 @@ fn non_succeeded_scratch_survives_a_full_process_restart() {
 /// **Non-succeeded scratch is retained at run end.** A node writes scratch and
 /// ends non-succeeded; the run process finishes **normally** (not killed). After
 /// it exits, the on-disk run directory still carries that node's scratch — run end
-/// deleted nothing belonging to a non-succeeded node (arch.md line 393; T0.6 §8).
+/// deleted nothing belonging to a non-succeeded node.
 ///
 /// Non-vacuous: a run-finished path that performed any blanket scratch cleanup
 /// would leave the namespace absent and fail the on-disk existence check.
@@ -258,7 +257,7 @@ fn non_succeeded_scratch_is_retained_after_a_clean_run_end() {
 
 /// **Succeeded scratch is gone after restart too.** A node writes scratch and then
 /// **succeeds** (its on-success hook runs) before the process exits. From a fresh
-/// process the succeeded node's scratch namespace is absent — the T53
+/// process the succeeded node's scratch namespace is absent — the
 /// success-triggered deletion is durable and is not resurrected by the retention
 /// path.
 ///
@@ -297,7 +296,7 @@ fn succeeded_scratch_is_gone_after_restart() {
 /// success deletions.** Some nodes succeed and some do not, all writing scratch.
 /// After the processes finish, exactly the non-succeeded nodes' scratch remains;
 /// the succeeded nodes' scratch is gone. The run-finished path itself performed no
-/// deletion beyond the per-node success deletions (arch.md line 393; T0.6 §8).
+/// deletion beyond the per-node success deletions.
 ///
 /// Non-vacuous: a blanket end-of-run cleanup would also remove the non-succeeded
 /// nodes' scratch (failing the retained checks); a retention path that skipped the
@@ -372,8 +371,7 @@ fn a_mixed_run_deletes_only_succeeded_scratch_at_run_end() {
 /// and B both end non-succeeded, each writing a distinct value under a **shared
 /// key name**. From a new process, each reads back its own node's value; the
 /// per-node namespace kept them disjoint across the restart, and neither handle can
-/// reach the other's namespace (isolation from T53/C18 acceptance holds across the
-/// process boundary).
+/// reach the other's namespace (isolation holds across the process boundary).
 ///
 /// Non-vacuous: a namespacing that collided across nodes (or a handle that could
 /// address a foreign namespace) would read the wrong node's value or a non-`None`
@@ -426,14 +424,13 @@ fn a_fresh_process_sees_retained_scratch_per_node_namespaced() {
 // Prune removes retained non-succeeded scratch (by removing the per-run dir).
 // ===========================================================================
 
-/// **Prune (C26) is the mechanism that removes retained non-succeeded scratch, and
-/// it does so by removing the whole per-run directory.** A completed run retains a
+/// **Prune is the mechanism that removes retained non-succeeded scratch, and it
+/// does so by removing the whole per-run directory.** A completed run retains a
 /// non-succeeded node's scratch; prune's unit of work is the per-run directory
-/// `<base>/<pipeline>/<run-id>/` (T0.6 §8). Removing that directory reclaims the
-/// retained scratch. (The prune verb's *selection* semantics — count/age, the CLI
-/// surface — are C26/T55/T56 and out of scope here; this asserts only that prune's
-/// unit of removal is the per-run directory and that removing it reclaims the
-/// retained scratch.)
+/// `<base>/<pipeline>/<run-id>/`. Removing that directory reclaims the retained
+/// scratch. (The prune verb's *selection* semantics — count/age, the CLI surface —
+/// are out of scope here; this asserts only that prune's unit of removal is the
+/// per-run directory and that removing it reclaims the retained scratch.)
 ///
 /// Non-vacuous: if the retained scratch had leaked outside the per-run directory,
 /// removing that directory would not reclaim it and the post-remove read would
@@ -548,12 +545,11 @@ fn only_prune_removes_retained_scratch_a_later_run_does_not() {
 // ===========================================================================
 
 /// **Retention holds on a durable-style base.** The base is pointed at a directory
-/// that outlives a single process (the "survives the container" configuration,
-/// arch.md line 67); a run leaves a node non-succeeded, and the process (the
-/// "container") goes away. Re-opening the run directory from the persisted base
-/// with a new process finds the non-succeeded node's scratch intact and readable —
-/// matching the operational promise that a run whose store survives is the
-/// resumable case (arch.md lines 67, 688).
+/// that outlives a single process (the "survives the container" configuration); a
+/// run leaves a node non-succeeded, and the process (the "container") goes away.
+/// Re-opening the run directory from the persisted base with a new process finds
+/// the non-succeeded node's scratch intact and readable — matching the operational
+/// promise that a run whose store survives is the resumable case.
 ///
 /// This mirrors `non_succeeded_scratch_survives_a_full_process_restart` but frames
 /// the base as the operator-supplied durable medium and re-opens **twice** across
@@ -563,7 +559,7 @@ fn only_prune_removes_retained_scratch_a_later_run_does_not() {
 fn retention_holds_on_a_durable_style_base_across_multiple_reopens() {
     // The base stands in for a mounted/synced directory the operator points at:
     // it is a plain on-disk directory that outlives the writing process — the
-    // whole operational requirement (arch.md "The shape of a run").
+    // whole operational requirement.
     let base = TempBase::new("durable");
     write_scratch_in_a_separate_process(
         base.path(),

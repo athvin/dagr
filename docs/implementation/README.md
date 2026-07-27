@@ -123,6 +123,15 @@ Purely additive `dagx`-inspired ergonomics and multi-flow selection over the fin
 - [x] **090** · [T76 — precedence helper + parsers](090-T76-precedence-helper-and-parsers.md) · M · feature — after T55
 - [x] **091** · [T77 — wire DAGR_* env fallbacks + expose headroom](091-T77-env-fallbacks-and-headroom.md) · M · feature — after T76, T31, T32
 
+## M6 — Auto-discovered multi-dag binaries
+
+Purely additive `dagx`-inspired *declarative-DAG* ergonomics over the finished engine and the M5 flow registry — no existing behaviour changes and `dagr-core` stays runtime-dependency-free. A `#[dag]` attribute (sibling to `#[task]`) declares a flow over a type-checked `FlowBuilder`, and each declaration **auto-registers** via the `inventory` crate so one binary hosts many DAGs discovered by `dagr_cli::run` with a one-line `main`. The decision is recorded in a companion ADR, accepted alongside this plan: [092 — declarative-DAG (`#[dag]` + auto-discovery)](092-dag-macro-and-autodiscovery-adr.md). Work the tickets in order: the `FlowBuilder` façade (T78), then `inventory` discovery + the `dagr_cli::run` entrypoint (T79), then the `#[dag]` macro that submits (T80), then the example, cookbook, and trybuild corpus (T81). Discovery relies on `inventory`'s leaf-binary collection, so `#[dag]`s live in the binary crate; cross-crate DAG libraries are out of scope. Note: ticket codes continue at **T78** because T71–T77 were used in M5.
+
+- [ ] **093** · [T78 — `FlowBuilder` declaration façade over `RunnableFlow`](093-T78-flowbuilder-facade.md) · S · feature — after T74
+- [ ] **094** · [T79 — `DagRegistration` inventory type + `dagr_cli::run` entrypoint](094-T79-dag-registration-and-run-entrypoint.md) · M · feature — after T74, T75
+- [ ] **095** · [T80 — `#[dag]` attribute macro (keep fn, generate factory, submit)](095-T80-dag-attribute-macro.md) · M · feature — after T78, T79
+- [ ] **096** · [T81 — many-dags example, cookbook, and `#[dag]` trybuild corpus](096-T81-dag-example-docs-and-trybuild.md) · M · feature (tests/docs) — after T80
+
 ---
 
-Total: 80 M0–M4 tickets (all merged), plus 7 M5 tickets (**T71–T77**, docs 083–091). The M5 ADRs (082, 086, 089) are decision records like ADR 081 and are not counted as tickets. `T0.1` (the spec-amendment pass) is already done and has no ticket.
+Total: 80 M0–M4 tickets (all merged), plus 7 M5 tickets (**T71–T77**, docs 083–091) and 4 M6 tickets (**T78–T81**, docs 093–096). The M5 ADRs (082, 086, 089) and the M6 ADR (092) are decision records like ADR 081 and are not counted as tickets. `T0.1` (the spec-amendment pass) is already done and has no ticket.

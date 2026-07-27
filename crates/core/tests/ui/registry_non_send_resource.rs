@@ -1,17 +1,17 @@
-// UI compile-failure fixture — ticket T30 (040), case
+// UI compile-failure fixture, case
 // `registry_non_send_resource`.
 //
-// PROVES (C9; arch.md §223): stored resources are `Send + Sync + 'static`. A
+// PROVES: stored resources are `Send + Sync + 'static`. A
 // client that is not thread-safe cannot be registered directly — the escape
 // hatch is the documented owning-worker channel pattern (one thread owns it,
 // others reach it through a channel), NOT relaxing the bound. Registering a
 // `!Send`/`!Sync` value (here one holding an `Rc`) fails to COMPILE.
 //
 // This is the REAL registry API (`dagr_core::context::ResourceRegistry`), linked
-// against the built rlib by the T8 harness (crates/core/tests/ui.rs). The
+// against the built rlib by the UI harness (crates/core/tests/ui.rs). The
 // sibling `.stderr` names the substrings the diagnostic must contain; the harness
-// asserts only that this sample FAILS to compile under the pinned toolchain
-// (C28).
+// asserts only that this sample FAILS to compile under the pinned
+// toolchain.
 
 use std::rc::Rc;
 

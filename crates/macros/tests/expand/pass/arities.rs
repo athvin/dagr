@@ -1,5 +1,5 @@
 //! Compile-pass: the four input arities the macro accepts, and the `type Input`
-//! each infers (T73 test plan, "trybuild compile-pass").
+//! each infers.
 //!
 //! - zero dep args  -> `type Input = ()`
 //! - one dep arg    -> the **bare** `T` (never `(T,)`)

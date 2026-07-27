@@ -1,14 +1,13 @@
-//! C14 per-attempt timeout tests — ticket T21 (031). Written first, TDD.
+//! Per-attempt timeout tests. Written first, TDD.
 //!
 //! These exercise the **per-attempt timeout** facet the single-attempt runner
-//! (T20) deferred: the C14 "Timeout semantics differ by class, honestly"
-//! paragraph and the T0.3 ADR (009) it builds on. The timeout is **runtime-
-//! agnostic**, exactly as the T20 core is: the runner races the attempt future
-//! against a caller-provided *deadline* future (the framework's isolated timer,
-//! C13/T33, drives the real one; tests drive a controllable one), so `dagr-core`
-//! stays dependency-free (no tokio).
+//! deferred: timeout semantics differ by class, honestly. The timeout is
+//! **runtime-agnostic**, exactly as the runner core is: the runner races the
+//! attempt future against a caller-provided *deadline* future (the framework's
+//! isolated timer drives the real one; tests drive a controllable one), so
+//! `dagr-core` stays dependency-free (no tokio).
 //!
-//! Two class-shapes, one taxonomy (T0.3 ADR §1):
+//! Two class-shapes, one taxonomy:
 //!
 //! - **await-bound** — the one shape Rust can cancel: on timeout the attempt
 //!   future is **dropped** (true cancellation) and any permit-shaped guard it
@@ -17,12 +16,11 @@
 //!   attempt is **marked** `timed-out` immediately (fate decided, event emitted,
 //!   late-result barrier up) while the closure runs on as *abandoned-but-running*
 //!   work whose permit is **held until the closure actually returns**; a retry is
-//!   deferred until that return (C1 exclusivity).
+//!   deferred until that return (task-instance exclusivity).
 //!
-//! Scope discipline (T21): timeout only. No retry loop (T22), no panic-catch
-//! (T23), no run-loop driver (T24), no dispatch (T33). The permit here is a
-//! test stand-in modelling the T31 ledger's release/hold contract, not the real
-//! ledger.
+//! Scope discipline: timeout only. No retry loop, no panic-catch, no run-loop
+//! driver, no dispatch. The permit here is a test stand-in modelling the real
+//! ledger's release/hold contract, not the real ledger.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -77,7 +75,7 @@ impl Task for ResolvesPromptly {
     }
 }
 
-// --- A capturing event sink (C19-shaped, in-memory) -------------------------
+// --- A capturing event sink (in-memory) -------------------------------------
 
 #[derive(Default)]
 struct CapturingSink {
@@ -123,12 +121,12 @@ impl CapturingSink {
     }
 }
 
-// --- A permit-ledger stand-in (models the T31 release/hold contract) --------
+// --- A permit-ledger stand-in (models the real release/hold contract) -------
 
-/// A minimal stand-in for the C12 permit ledger (T31 owns the real one). It
-/// counts a per-pool cost while a permit is live and returns it to zero when the
-/// permit's guard is dropped — the load-bearing T0.3 trick: "the work returned"
-/// is *definitionally* "the guard was dropped."
+/// A minimal stand-in for the permit ledger. It counts a per-pool cost while a
+/// permit is live and returns it to zero when the permit's guard is dropped — the
+/// load-bearing trick: "the work returned" is *definitionally* "the guard was
+/// dropped."
 #[derive(Debug, Default)]
 struct Ledger {
     counted: AtomicU64,
@@ -184,8 +182,8 @@ impl Drop for Permit {
 }
 
 /// The ledger observes live zombies — the signal that defers a timed-out
-/// blocking/compute node's retry until its previous closure has returned
-/// (T0.3 ADR §5). The real ledger (T31) implements the same port.
+/// blocking/compute node's retry until its previous closure has returned. The real
+/// ledger implements the same port.
 impl ZombieObserver for Ledger {
     fn has_live_zombie(&self) -> bool {
         self.live_zombies() > 0
@@ -206,7 +204,7 @@ impl Clock {
         Arc::new(Self::default())
     }
     /// Fire the deadline: the next poll of a [`Deadline`] built on this clock
-    /// resolves. Models the framework's isolated timer (C13) elapsing.
+    /// resolves. Models the framework's isolated timer elapsing.
     fn fire(&self) {
         self.fired.store(true, Ordering::SeqCst);
     }
@@ -220,9 +218,8 @@ impl Clock {
 
 /// The caller-provided per-attempt timeout future. Resolving means "the deadline
 /// elapsed" — the runner races the attempt future against it. In production this
-/// is a `tokio::time` sleep on the framework runtime (T2/T33); here it is a
-/// controllable pinned clock so timing is deterministic and no runtime is
-/// needed.
+/// is a `tokio::time` sleep on the framework runtime; here it is a controllable
+/// pinned clock so timing is deterministic and no runtime is needed.
 struct Deadline {
     clock: Arc<Clock>,
 }
@@ -279,9 +276,9 @@ fn ctx_for(attempt: u32, max: u32) -> RunContext {
 }
 
 /// A no-dependency, `unsafe`-free block-on for the returned future — the same
-/// runtime-agnostic executor the T20 tests use, proving the timeout path needs
-/// no runtime. The attempt/deadline futures here resolve on a poll once their
-/// state is set, so a busy-poll loop drives them to completion.
+/// runtime-agnostic executor the single-attempt tests use, proving the timeout
+/// path needs no runtime. The attempt/deadline futures here resolve on a poll once
+/// their state is set, so a busy-poll loop drives them to completion.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc as StdArc;
@@ -384,7 +381,7 @@ fn blocking_timeout_marks_immediately_and_holds_permit_until_return() {
     let mut permit = ledger.admit(200);
     assert_eq!(ledger.counted(), 200, "permit counted while running");
 
-    // T21's blocking-class decision: mark timed-out now, hold the permit.
+    // The blocking-class decision: mark timed-out now, hold the permit.
     let decision = TimeoutDecision::mark_blocking_timed_out(NODE, &ctx_for(1, 2), &mut sink);
     permit.mark_zombie();
 
@@ -414,7 +411,7 @@ fn blocking_timeout_marks_immediately_and_holds_permit_until_return() {
 
 /// **Compute attempt exceeds its timeout → same held-permit semantics as
 /// blocking.** Identical observable behaviour: marked `timed-out` immediately,
-/// permit held until the closure returns (T0.3 ADR §1 — class-shape-driven).
+/// permit held until the closure returns (class-shape-driven).
 #[test]
 fn compute_timeout_behaves_identically_to_blocking() {
     let ledger = Ledger::new();
@@ -483,8 +480,8 @@ fn late_result_never_writes_scratch() {
 
 /// **Retry of a timed-out blocking node is deferred past zombie return.** No
 /// second attempt of the same node may begin while the first closure is still
-/// running; the retry begins only after the first closure has returned
-/// (C1 exclusivity — the task instance never runs concurrently with its zombie).
+/// running; the retry begins only after the first closure has returned (the task
+/// instance never runs concurrently with its zombie).
 #[test]
 fn retry_of_a_timed_out_blocking_node_is_deferred_past_zombie_return() {
     let ledger = Ledger::new();
@@ -520,7 +517,7 @@ fn retry_of_a_timed_out_blocking_node_is_deferred_past_zombie_return() {
 
 /// **Terminal state is decided exactly once.** A blocking timeout is and stays
 /// `timed-out`; it never transitions to `abandoned`, and the lingering thread's
-/// eventual return is not a second terminal state (only a zombie event, C19).
+/// eventual return is not a second terminal state (only a zombie event).
 #[test]
 fn terminal_state_is_decided_exactly_once() {
     let ledger = Ledger::new();
@@ -627,7 +624,7 @@ fn exactly_one_attempt_outcome_record_for_a_timed_out_attempt() {
 
 /// **A well-behaved await-bound attempt within its timeout is unaffected.** It
 /// fills its slot and reaches `succeeded`; no timeout event is emitted; the
-/// permit releases on the normal terminal path exactly as in T20.
+/// permit releases on the normal terminal path.
 #[test]
 fn well_behaved_attempt_within_timeout_is_unaffected() {
     let ledger = Ledger::new();
@@ -680,7 +677,7 @@ fn well_behaved_attempt_within_timeout_is_unaffected() {
 // --- Timeout fires even when the deadline is driven off-thread (isolation) ---
 
 /// **The timeout fires regardless of task-worker availability.** The deadline
-/// future is the framework's isolated timer (C13): the runner races the attempt
+/// future is the framework's isolated timer: the runner races the attempt
 /// against it, so even an attempt whose work never yields is ended by the
 /// deadline. Here the deadline is already fired before the race begins,
 /// modelling a timer that elapsed on the isolated framework runtime while task

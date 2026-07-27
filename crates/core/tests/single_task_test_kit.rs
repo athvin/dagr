@@ -1,18 +1,15 @@
-//! C28 **single-task test kit** behavioral tests — ticket T60 (073). Written
-//! first, TDD.
+//! **Single-task test kit** behavioral tests. Written first, TDD.
 //!
 //! These exercise the **shipped** single-task test kit in
-//! [`dagr_core::test_kit`]: the first of C28's three testing levels (arch.md
-//! `### C28 · Testing surface`). The kit lets a caller invoke **exactly one**
-//! task with a hand-built [`RunContext`] (C8) and fake resources (C9) —
-//! **no live network, no database** — and observe the outcome, proving the
-//! synchronous path needs no async runtime and the await-bound path needs only
+//! [`dagr_core::test_kit`]: the first of the three testing levels. The kit lets a
+//! caller invoke **exactly one** task with a hand-built [`RunContext`] and fake
+//! resources — **no live network, no database** — and observe the outcome, proving
+//! the synchronous path needs no async runtime and the await-bound path needs only
 //! the runtime the kit provides.
 //!
-//! Scope discipline (T60): this is the **single-task** level only — no
-//! full-pipeline harness (T62), no structure-snapshot level (T61), no
-//! scheduler/driver. Every scenario below drives one task through the
-//! library-provided kit, never a bespoke harness.
+//! Scope discipline: this is the **single-task** level only — no full-pipeline
+//! harness, no structure-snapshot level, no scheduler/driver. Every scenario below
+//! drives one task through the library-provided kit, never a bespoke harness.
 //!
 //! The kit is behind the (default-on) `test-kit` feature; the whole test file is
 //! gated so it only compiles when the kit does.
@@ -27,8 +24,8 @@ use dagr_core::test_kit::SingleTaskTest;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// Fake resources (C9): substituted through the kit's registry with NO task
-// change between production and test.
+// Fake resources: substituted through the kit's registry with NO task change
+// between production and test.
 // ===========================================================================
 
 /// A fake resource whose interactions the test can observe — a stand-in for a
@@ -51,11 +48,11 @@ impl FakeStore {
     }
 }
 
-/// Two same-typed clients distinguished by newtype wrappers (C9 disambiguation).
+/// Two same-typed clients distinguished by newtype wrappers.
 struct BillingClient(FakeStore);
 struct AnalyticsClient(FakeStore);
 
-/// A secret resource carrying a planted sentinel value (C9 redaction test).
+/// A secret resource carrying a planted sentinel value (redaction test).
 struct ApiToken(Secret<String>);
 
 // ===========================================================================
@@ -102,7 +99,7 @@ impl Task for AwaitsThenProduces {
     }
 }
 
-/// A task that reads every C8 context field and returns them, so the test can
+/// A task that reads every context field and returns them, so the test can
 /// assert what the task actually observed.
 #[derive(Debug, PartialEq, Eq)]
 struct SeenFields {
@@ -266,7 +263,8 @@ fn await_bound_task_completes_on_provided_runtime() {
 }
 
 /// **Every context field is populated** — build with only defaults, on a
-/// first-attempt-of-first-node default, and read every C8 field the task sees.
+/// first-attempt-of-first-node default, and read every context field the task
+/// sees.
 #[test]
 fn every_context_field_is_populated_on_defaults() {
     let outcome = SingleTaskTest::new(ReadsAllFields).run_sync();
@@ -442,7 +440,7 @@ fn cancellation_signal_is_observable() {
 /// **Context is inert toward scheduling** (surface check) — the constructed
 /// context exposes only reads; there is no method to mutate the graph, reorder
 /// work, or reach a scheduler. Validated by the fact that the kit hands the task
-/// a `&RunContext` whose entire surface is the C8 read-only accessor set (proven
+/// a `&RunContext` whose entire surface is the read-only accessor set (proven
 /// by construction: the kit builds it through `RunContext::builder`, which has no
 /// scheduling lever), plus this compile-checked absence: none of the scheduling
 /// verbs exist on the type the task receives.
@@ -490,7 +488,7 @@ fn same_inputs_behave_identically() {
 }
 
 /// **Metrics capture** — the kit exposes the attempt's captured metrics for
-/// assertion (C23 seam), including on a successful run.
+/// assertion (the metrics seam), including on a successful run.
 #[test]
 fn captured_metrics_are_observable() {
     let outcome = SingleTaskTest::new(SyncDoubler { n: 3 }).run_sync();

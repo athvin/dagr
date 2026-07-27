@@ -1,18 +1,16 @@
-//! M1 demo — the three-node chain with a retry — ticket T28 (038). Written
-//! first, TDD. **This is the M1 gate: the spec's "It runs" done-when, executed
-//! in CI.**
+//! Demo — the three-node chain with a retry. Written first, TDD. **This is the
+//! gate: the spec's "It runs" done-when, executed in CI.**
 //!
-//! arch.md's **Build order** states M1 is *done when a three-node chain executes
-//! in order, one node fails and retries successfully, and the event stream shows
-//! every transition* — and *nothing else exists yet (no artifacts, no admission
-//! control, no CLI)*. This file is that proof: a small, source-controlled example
-//! pipeline built entirely through the **public authoring API** — the `Task`
-//! trait (T9), typed `Handle`s (T10), `Deps` binding (T11), the `Flow`/`Pipeline`
-//! builder (T13), `RunContext` (T16), `TaskError` retry classification (T3), the
-//! attempt runner with retry (T22) / panic containment (T23), assembly
-//! (`Pipeline::assemble`, T14) and the run-loop driver (`drive`, T24) writing the
-//! C19 event stream (T19) — driven exactly as an end user would drive it, then
-//! walked and asserted against the raw event stream.
+//! The "It runs" done-when is *a three-node chain executes in order, one node fails
+//! and retries successfully, and the event stream shows every transition* — and
+//! *nothing else exists yet (no artifacts, no admission control, no CLI)*. This file
+//! is that proof: a small, source-controlled example pipeline built entirely through
+//! the **public authoring API** — the `Task` trait, typed `Handle`s, `Deps` binding,
+//! the `Flow`/`Pipeline` builder, `RunContext`, `TaskError` retry classification, the
+//! attempt runner with retry / panic containment, assembly
+//! (`Pipeline::assemble`) and the run-loop driver (`drive`) writing the event
+//! stream — driven exactly as an end user would drive it, then walked and asserted
+//! against the raw event stream.
 //!
 //! # The demo shape (public-API only — no internals reached into)
 //!
@@ -23,11 +21,11 @@
 //!   first attempt.
 //! - **`transform`** — the deterministically-flaky **middle** node. It fails with
 //!   a **retry-eligible** [`TaskError::retryable`] on its **first** attempt and
-//!   succeeds on its **second**, keyed off the C8 [`RunContext::attempt`] number so
+//!   succeeds on its **second**, keyed off the [`RunContext::attempt`] number so
 //!   the flakiness is driven by a counter, **never** by timing or randomness. Its
-//!   node policy grants a retry ([`NodePolicy::retries`]) so the T22 retry path is
+//!   node policy grants a retry ([`NodePolicy::retries`]) so the retry path is
 //!   permitted, and — because a retrying node must not take an *owned* input edge
-//!   (assembly rejects that, C1/C3/T0.2) — its edge from `source` opts into
+//!   (assembly rejects that) — its edge from `source` opts into
 //!   **clone-on-read** ([`Handle::clone_on_read`]), the honest authoring pattern
 //!   for a node whose attempts must each see a fresh input.
 //! - **`sink`** — consumes `transform`'s output; succeeds on its first attempt.
@@ -35,24 +33,24 @@
 //! # The event-stream walker — the observable oracle, built for reuse
 //!
 //! [`Walk`] is the reusable **event-stream walker** the ticket asks for: it parses a
-//! recorded C19 stream into ordered [`Transition`] records (delegating to the
+//! recorded stream into ordered [`Transition`] records (delegating to the
 //! tolerant [`read_records`](dagr_artifact::event_stream::read_records), so it
 //! tolerates the ≤1 trailing-partial guarantee) and exposes per-node and per-run
 //! assertions — the ordered transition sequence, per-node attempt-outcome counts,
 //! sequence-number gaplessness, single-terminal-state, and monotonic-offset
-//! durations. It is written to be reused by the later milestone demos (T38, T49,
-//! T63) and referenced by the T65 acceptance gate as the executable M1 done-when.
+//! durations. It is written to be reused by the later milestone demos and referenced
+//! by the acceptance gate as the executable "It runs" done-when.
 //!
-//! # Scope (T28 — integration demo only)
+//! # Scope (integration demo only)
 //!
-//! This adds **no** framework surface: it composes the already-merged M1 pieces
-//! through their public API. It does not re-test lower components in isolation
-//! (timeout T21, retry mechanics T22, panic containment T23, crash-safety T27, the
-//! termination property T25, the bounded-memory chain T26 each have their own
-//! suites); it integrates them and asserts the whole M1 stack runs a real chain
-//! with a real retry. No artifacts (C20/C22), no admission control (C12/C13), no
-//! CLI verbs (C26), no cancellation/timeout/abandonment paths — the middle node
-//! fails *retryably and recovers*.
+//! This adds **no** framework surface: it composes the already-merged execution
+//! pieces through their public API. It does not re-test lower components in isolation
+//! (timeout, retry mechanics, panic containment, crash-safety, the termination
+//! property, the bounded-memory chain each have their own suites); it integrates
+//! them and asserts the whole execution stack runs a real chain with a real retry. No
+//! artifacts, no admission control, no CLI verbs, no
+//! cancellation/timeout/abandonment paths — the middle node fails *retryably and
+//! recovers*.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -73,7 +71,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// Injection seam: an in-memory run-store sink + a monotonic clock (C19)
+// Injection seam: an in-memory run-store sink + a monotonic clock
 // ===========================================================================
 
 /// An in-memory [`EventSink`] capturing every appended line, so the test can walk
@@ -115,7 +113,7 @@ impl MonotonicClock for TickClock {
 }
 
 // ===========================================================================
-// The example tasks (public `Task` trait — T9)
+// The example tasks (public `Task` trait)
 // ===========================================================================
 
 /// The **source** task (`source`): a no-input task producing a seed value.
@@ -133,7 +131,7 @@ impl Task for Source {
 
 /// The deterministically-flaky **middle** task (`transform`): fails with a
 /// **retry-eligible** error on its first attempt and succeeds on its second,
-/// keyed off the C8 attempt number — the flakiness is a counter, never timing or
+/// keyed off the attempt number — the flakiness is a counter, never timing or
 /// randomness. On success it doubles its input, so the demo can assert the value
 /// flowed through the retry.
 struct FlakyTransform;
@@ -142,8 +140,8 @@ impl Task for FlakyTransform {
     type Output = u64;
     async fn run(&mut self, c: &RunContext, input: u64) -> Result<u64, TaskError> {
         if c.attempt() == 1 {
-            // Deterministic first-attempt failure: retry-eligible, so the T22
-            // retry loop schedules a second attempt.
+            // Deterministic first-attempt failure: retry-eligible, so the retry
+            // loop schedules a second attempt.
             Err(TaskError::retryable(
                 "transient hiccup on the first attempt",
             ))
@@ -165,10 +163,10 @@ impl Task for Sink {
 }
 
 // ===========================================================================
-// The example pipeline — built through the PUBLIC authoring API (T13/T11)
+// The example pipeline — built through the PUBLIC authoring API
 // ===========================================================================
 
-/// The three node names, explicit and stable (node identity is the name — T13).
+/// The three node names, explicit and stable (node identity is the name).
 const SOURCE: &str = "source";
 const TRANSFORM: &str = "transform";
 const SINK: &str = "sink";
@@ -178,16 +176,15 @@ const SEED: u64 = 21;
 /// The value `sink` ultimately produces — proof the retried value flowed through.
 const FINAL_VALUE: u64 = (SEED * 2) + 1;
 
-/// Build the M1 demo pipeline through the **public authoring API** exactly as an
+/// Build the demo pipeline through the **public authoring API** exactly as an
 /// end user would: register three nodes on a [`Flow`], wire them head-to-tail by
 /// typed data dependencies, and grant the middle node a retry.
 ///
 /// `source → transform → sink`. The `source → transform` edge opts into
 /// **clone-on-read** because `transform` is a **retrying** node — an owned edge
-/// into a retrying node is an assembly error (C1/C3/T0.2), so a node whose
-/// attempts must each see a fresh input opts into clone-on-read. `transform`'s
-/// policy grants one retry (two attempts total) so the T22 retry path is
-/// permitted.
+/// into a retrying node is an assembly error, so a node whose attempts must each
+/// see a fresh input opts into clone-on-read. `transform`'s policy grants one retry
+/// (two attempts total) so the retry path is permitted.
 fn build_demo_pipeline() -> Pipeline {
     let mut flow = Flow::new();
     let source = flow.register_source(SOURCE, &Source { value: SEED });
@@ -223,7 +220,7 @@ fn slot_for<T: Send + Sync + 'static>(name: &str, consumers: u32) -> Arc<Slot<T>
 }
 
 /// A no-input **source** runner: runs its task's single attempt through the real
-/// caught runner and reports the terminal state — the genuine C14 records.
+/// caught runner and reports the terminal state — the genuine attempt records.
 struct SourceRunner {
     name: String,
     task: Option<Source>,
@@ -259,8 +256,8 @@ impl NodeRunner for SourceRunner {
 
 /// A one-input **retrying** runner for the middle node: reads its single upstream
 /// slot (clone-on-read semantics — each attempt a fresh clone), then drives the
-/// **real T22 retry loop** ([`run_with_retries_caught`]) over the pre-bound task
-/// so the emitted records are the genuine C14/C22 ones (admission, attempt-started,
+/// **real retry loop** ([`run_with_retries_caught`]) over the pre-bound task
+/// so the emitted records are the genuine ones (admission, attempt-started,
 /// attempt-failed then attempt-started + attempt-succeeded on retry, and one
 /// node-terminal), not a re-implementation.
 struct RetryingRunner {
@@ -322,7 +319,7 @@ impl NodeRunner for RetryingRunner {
                 // The backoff wait: a caller-provided timer future. The demo
                 // resolves it immediately (no wall-clock sleep) so CI never flakes
                 // on timing — the retry is driven by the attempt counter, and the
-                // backoff phase is still recorded as a named interval (C22/C23).
+                // backoff phase is still recorded as a named interval.
                 |_delay: Duration| async {},
             )
             .await;
@@ -333,7 +330,7 @@ impl NodeRunner for RetryingRunner {
 
 /// An **owned no-input adapter** over the one-input middle task that re-binds a
 /// **fresh clone** of the upstream value on **every** attempt (clone-on-read), so
-/// the T22 retry loop — which drives `&mut self` once per attempt — can run the
+/// the retry loop — which drives `&mut self` once per attempt — can run the
 /// second attempt after the first failed. It holds the task by value (so it is
 /// `'static` + `Send`, satisfying the retry loop's `Task` bounds) and reuses the
 /// **real** retry runner, so the emitted records are genuine.
@@ -418,7 +415,7 @@ impl Task for BoundOnce {
 // ===========================================================================
 
 /// Assemble the demo pipeline, wire each node's runner with its input slot, and
-/// drive it to completion through the **real** M1 run-loop driver against an
+/// drive it to completion through the **real** run-loop driver against an
 /// injected in-memory event-stream sink the test walks back — exactly as the real
 /// run path does (identity minted and stream opened before assembly is acted on).
 ///
@@ -472,12 +469,12 @@ fn run_demo() -> (Vec<u8>, RunOutcome) {
 // The event-stream walker — a reusable oracle (DoD deliverable)
 // ===========================================================================
 
-/// One parsed transition record from a walked C19 event stream: its kind, the
+/// One parsed transition record from a walked event stream: its kind, the
 /// node it names (if any), the authoritative monotonic offset, and the gapless
 /// sequence number.
 #[derive(Debug, Clone)]
 struct Transition {
-    /// The C19 event kind (`run-started`, `node-ready`, `attempt-failed`, …).
+    /// The event kind (`run-started`, `node-ready`, `attempt-failed`, …).
     kind: String,
     /// The node this record names, or `None` for run-level records.
     node: Option<String>,
@@ -489,18 +486,18 @@ struct Transition {
     seq: u64,
 }
 
-/// The reusable **event-stream walker** (T28 deliverable): parse a recorded C19 stream
-/// into ordered [`Transition`] records and answer per-node and per-run questions
-/// about it.
+/// The reusable **event-stream walker** (a demo deliverable): parse a recorded
+/// stream into ordered [`Transition`] records and answer per-node and per-run
+/// questions about it.
 ///
 /// It delegates parsing to the tolerant
 /// [`read_records`](dagr_artifact::event_stream::read_records), so it inherits the
-/// C19 ≤1-trailing-partial guarantee: on a complete stream it yields every
+/// ≤1-trailing-partial guarantee: on a complete stream it yields every
 /// transition; on a stream whose final record was truncated it parses every
 /// complete record and reports the missing tail
 /// ([`trailing_partial_discarded`](Walk::trailing_partial_discarded)) rather than
 /// panicking. This is the observable oracle for the whole demo and is written to
-/// be reused by the later milestone demos (T38, T49, T63) and the T65 gate.
+/// be reused by the later milestone demos and the acceptance gate.
 struct Walk {
     transitions: Vec<Transition>,
     /// Whether the reader tolerated (and discarded) a single trailing partial.
@@ -561,7 +558,7 @@ impl Walk {
         self.trailing_partial_discarded
     }
 
-    /// The run identity carried on the first record (and, by the C19 contract,
+    /// The run identity carried on the first record (and, by the stream contract,
     /// every record).
     fn run_id(&self) -> Option<&str> {
         self.run_id.as_deref()
@@ -595,8 +592,8 @@ impl Walk {
             .count()
     }
 
-    /// The sequence numbers of every walked record, in stream order (the C19
-    /// gapless, strictly-increasing sequence).
+    /// The sequence numbers of every walked record, in stream order (the gapless,
+    /// strictly-increasing sequence).
     fn seqs(&self) -> Vec<u64> {
         self.transitions.iter().map(|t| t.seq).collect()
     }
@@ -622,10 +619,10 @@ impl Walk {
 }
 
 // ===========================================================================
-// The tests — the executable M1 done-when
+// The tests — the executable "It runs" done-when
 // ===========================================================================
 
-/// **Scenario 1+2+3 (headline): the M1 done-when.** A three-node chain executes
+/// **Scenario 1+2+3 (headline): the "It runs" done-when.** A three-node chain executes
 /// in dependency order; the middle node fails once then retries to success; the
 /// event stream shows every transition, in order — `run-started` first, then per
 /// node `node-ready → node-admitted → attempt-started → attempt-outcome →
@@ -656,12 +653,12 @@ fn m1_three_node_chain_with_retry_is_the_done_when() {
     // The middle node produced exactly two attempt cycles: a retryable failure
     // then a success. It started exactly two attempts (initial + one retry) and
     // succeeded on the second. Its first attempt is a retryable failure, recorded
-    // as an `attempt-failed`; the C19 vocabulary carries no dedicated `backoff`
+    // as an `attempt-failed`; the event vocabulary carries no dedicated `backoff`
     // event, so the retry loop's backoff-phase marker (the named interval that
-    // folds into the run artifact at C22/T42) *also* surfaces on the raw C19
-    // stream as an `attempt-failed` record — hence exactly two `attempt-failed`
-    // records for `transform`: the genuine failure and the backoff marker, both
-    // before the retry's `attempt-started`. `source`/`sink` each ran exactly once.
+    // folds into the run artifact) *also* surfaces on the raw stream as an
+    // `attempt-failed` record — hence exactly two `attempt-failed` records for
+    // `transform`: the genuine failure and the backoff marker, both before the
+    // retry's `attempt-started`. `source`/`sink` each ran exactly once.
     assert_eq!(
         walk.count("attempt-started", TRANSFORM),
         2,
@@ -730,8 +727,8 @@ fn m1_three_node_chain_with_retry_is_the_done_when() {
             "node-admitted",
             "attempt-started",
             "attempt-failed",  // the genuine retryable first-attempt failure
-            "attempt-outcome", // that attempt's single rich outcome record (l.331)
-            "attempt-failed",  // the backoff-phase marker (no C19 `backoff` event)
+            "attempt-outcome", // that attempt's single rich outcome record
+            "attempt-failed",  // the backoff-phase marker (no `backoff` event exists)
             "node-admitted",
             "attempt-started",
             "attempt-succeeded",
@@ -962,7 +959,7 @@ fn the_demo_is_deterministic_across_runs() {
 /// stream it returns the full ordered transition set; on a deliberately-truncated
 /// copy (a valid prefix with the final record's bytes cut) it parses every
 /// complete record and reports the missing tail rather than panicking —
-/// demonstrating it tolerates the C19 ≤1 trailing-partial guarantee and is fit for
+/// demonstrating it tolerates the ≤1 trailing-partial guarantee and is fit for
 /// reuse by later demos.
 #[test]
 fn the_walker_is_a_reusable_oracle_tolerating_a_truncated_tail() {

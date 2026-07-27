@@ -1,15 +1,15 @@
-// UI compile-failure fixture — ticket T11 (021),
+// UI compile-failure fixture,
 // case `data_binding_wrong_arity_too_few`.
 //
-// PROVES (C3; arch.md §125): binding FEWER handles than the task declares is a
+// PROVES: binding FEWER handles than the task declares is a
 // COMPILE error. A task declaring `type Input = (Alpha, Beta)` (exactly two
 // inputs) is bound ONE handle; the sealed `Deps` trait's `Inputs = T::Input`
 // bound (`<Handle<Alpha> as Deps>::Inputs == (Alpha, Beta)`) is unsatisfied.
 // This is the REAL binding API (dagr_core::binding), not a throwaway sketch.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::binding::test_support::{register, source};
 use dagr_core::task::Task;

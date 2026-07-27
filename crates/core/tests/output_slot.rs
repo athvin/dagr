@@ -1,17 +1,16 @@
-//! Output-slot behavioral tests — ticket T17 (027). Written first, TDD.
+//! Output-slot behavioral tests. Written first, TDD.
 //!
-//! These exercise the **real** C10 output-slot substrate in
-//! [`dagr_core::slot`]: a typed, once-writable slot per node, assembly-time
-//! typed consumer references (lookup-free, type-check-free reads), the T0.2
-//! three-mode delivery (owned move / shared read / clone-on-read), zombie-aware
-//! release gated on *terminal-and-returned*, single-count output residency with
-//! peak accounting hooks, the `retained` post-run redemption API, and the loud
-//! read-before-fill framework defect that names the node.
+//! These exercise the **real** output-slot substrate in [`dagr_core::slot`]: a
+//! typed, once-writable slot per node, assembly-time typed consumer references
+//! (lookup-free, type-check-free reads), the three-mode delivery (owned move /
+//! shared read / clone-on-read), zombie-aware release gated on
+//! *terminal-and-returned*, single-count output residency with peak accounting
+//! hooks, the `retained` post-run redemption API, and the loud read-before-fill
+//! framework defect that names the node.
 //!
-//! Governed by arch.md `### C10 · Output slot` and the T0.2 output-ownership ADR
-//! (008). The **runner** that fills slots from real attempt outcomes is T20; the
-//! authoritative hundred-node bounded-memory assertion is T26 — only a smaller
-//! smoke test lives here.
+//! The **runner** that fills slots from real attempt outcomes lands separately;
+//! the authoritative hundred-node bounded-memory assertion lives elsewhere —
+//! only a smaller smoke test lives here.
 
 use std::sync::Arc;
 
@@ -19,8 +18,8 @@ use dagr_core::handle::NodeId;
 use dagr_core::slot::{RedeemError, ResidencyLedger, Slot, SlotRef};
 
 // --- A deliberately non-`Clone` output type -------------------------------
-// The T0.2 model must carry a non-`Clone` output through both the owned and the
-// shared modes; only clone-on-read demands `Clone`.
+// The delivery model must carry a non-`Clone` output through both the owned and
+// the shared modes; only clone-on-read demands `Clone`.
 #[derive(Debug, PartialEq, Eq)]
 struct Payload {
     bytes: Vec<u8>,

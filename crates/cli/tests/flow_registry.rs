@@ -1,11 +1,11 @@
-//! `FlowRegistry` + `dagr run <flow>` / `list` dispatch tests — ticket T74 (087).
-//! Written first, TDD (arch.md `### C26`; ADR 086).
+//! `FlowRegistry` + `dagr run <flow>` / `list` dispatch tests.
+//! Written first, TDD.
 //!
-//! These exercise the many-flows-per-binary registry the ADR adds: a builder
+//! These exercise the many-flows-per-binary registry: a builder
 //! mapping a flow **name → a re-invokable factory `Fn() -> RunnableFlow`**, the
-//! additive `Cli.flow_name` positional the C26 contract gains, and the two verbs
+//! additive `Cli.flow_name` positional the command-line contract gains, and the two verbs
 //! `run_registry` routes in this slice — `list` and `run <flow>`. Every scenario
-//! here is one the ADR/ticket names: named selection, the single-flow ergonomic
+//! here is a named case: named selection, the single-flow ergonomic
 //! default, the "name required (…)" and unknown-name `InvalidUsage` messages,
 //! `list`, factory re-invocation (independence), and the backward-compatible
 //! `flow_name = None` parse of every existing verb/flag.

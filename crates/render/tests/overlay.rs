@@ -1,19 +1,16 @@
-//! C24 · run-overlay rendering — ticket T47 (058). Written first, TDD.
+//! Run-overlay rendering tests. Written first, TDD.
 //!
-//! These translate the T47 Test plan into executable tests against the **real**
-//! overlay renderer (`dagr_render::overlay`), projecting a **run artifact**
-//! (C22) onto the base structural diagram (T46) in both DOT and Mermaid. Each
-//! test maps to one T47 Test-plan scenario / arch.md C24 acceptance line (see
-//! the per-test doc comment).
+//! These exercise the overlay renderer (`dagr_render::overlay`), projecting a
+//! **run artifact** onto the base structural diagram in both DOT and Mermaid.
 //!
 //! Inputs are **real artifacts**. Wherever the real producers can already emit
 //! the shape a scenario needs, the test drives them:
 //!
-//! * The graph artifact is the checked-in 30-node T46 fixture and the genuine
-//!   T40-emitted two-node corpus artifact.
-//! * The run artifact is produced by the **real T42 fold**
+//! * The graph artifact is the checked-in 30-node fixture and the genuine
+//!   emitter-produced two-node corpus artifact.
+//! * The run artifact is produced by the **real fold**
 //!   (`dagr_artifact::fold::fold_stream(...).to_canonical_json()`) over a real
-//!   C19 event stream, and by the checked-in run-artifact corpus fixtures
+//!   event stream, and by the checked-in run-artifact corpus fixtures
 //!   (`tests/fixtures/corpus/run/v1/*.json`) — themselves published-schema
 //!   artifacts.
 //!
@@ -73,9 +70,9 @@ fn run_from_corpus(rel: &str) -> RunArtifact {
     RunArtifact::from_json_str(&raw).expect("corpus run artifact parses")
 }
 
-// === Real run-artifact builders (via the T42 fold) ===========================
+// === Real run-artifact builders (via the real fold) ==========================
 
-/// The shared C19 record envelope (published T39 event-stream wire form).
+/// The shared record envelope (published event-stream wire form).
 fn env(seq: u64, offset_ns: u64, kind: &str) -> Value {
     json!({
         "schema_version": "dagr.event-stream@1",
@@ -156,7 +153,7 @@ fn succeeded_node(recs: &mut Vec<Value>, seq: &mut u64, base: u64, node: &str, d
 }
 
 /// Fold a real event stream that runs `load` (dur 1000ns) and `sink` (dur
-/// 2000ns), both succeeded, into a REAL C22 run artifact JSON via the T42 fold,
+/// 2000ns), both succeeded, into a REAL run artifact JSON via the real fold,
 /// then parse it into the overlay's read-only view.
 fn real_folded_two_node_run() -> (String, RunArtifact) {
     let mut recs = vec![run_started_rec()];
@@ -235,7 +232,7 @@ fn mermaid_class_of(mmd: &str, node: &str) -> Option<String> {
 
 /// **Overlay is opt-in / no regression.** The base `render_dot`/`render_mermaid`
 /// output is untouched by the presence of the overlay module; rendering the
-/// 30-node fixture with no run artifact reproduces the T46 golden byte-for-byte.
+/// 30-node fixture with no run artifact reproduces the base golden byte-for-byte.
 #[test]
 fn overlay_is_opt_in_no_regression() {
     let art = thirty_node_graph();
@@ -480,7 +477,7 @@ fn satisfied_from_prior_distinct_from_succeeded() {
 /// published-schema) `single-node-replay.json` corpus fixture marks `load`
 /// `not-requested` and runs `sink`. `not-requested` renders with its own
 /// documented style, is not treated as a terminal state, and raises no error.
-/// (Justified fixture: the T42 fold does not yet emit the replay variant.)
+/// (Justified fixture: the real fold does not yet emit the replay variant.)
 #[test]
 fn single_node_replay_not_requested_handled() {
     let graph = two_node_graph();
@@ -526,7 +523,7 @@ fn duration_annotations_present_and_correct() {
 
 /// **Every node and edge still appears with the overlay on.** The 30-node
 /// fixture with a matching run artifact covering all nodes: every graph node and
-/// edge is present, data/ordering edges keep their T46 styling, groups still
+/// edge is present, data/ordering edges keep their base styling, groups still
 /// cluster, and every node additionally carries state colouring and a duration.
 #[test]
 fn every_node_and_edge_present_with_overlay() {
@@ -564,7 +561,7 @@ fn every_node_and_edge_present_with_overlay() {
         graph.edges().len(),
         "all Mermaid edges present"
     );
-    // Data edges stay solid, ordering dashed (T46 guarantee preserved).
+    // Data edges stay solid, ordering dashed (base guarantee preserved).
     assert!(dot.contains("style=solid"));
     assert!(dot.contains("style=dashed"));
     // Groups still cluster.
@@ -652,7 +649,7 @@ fn works_on_a_historical_artifact() {
 }
 
 /// **A genuinely-real-producer overlay.** Fold a real event stream through the
-/// T42 fold and overlay the result — the overlay is not tied to hand-authored
+/// real fold and overlay the result — the overlay is not tied to hand-authored
 /// run JSON.
 #[test]
 fn real_folded_run_artifact_overlays() {
@@ -707,7 +704,7 @@ fn graph_run_mismatch_is_defined_not_fatal() {
 }
 
 /// **The taxonomy the overlay documents is exactly the normative nine.** Guards
-/// against drift between `TERMINAL_STATES` and arch.md's Vocabulary.
+/// against drift between `TERMINAL_STATES` and the normative taxonomy.
 #[test]
 fn terminal_states_table_matches_the_normative_taxonomy() {
     let got: BTreeSet<&str> = TERMINAL_STATES.iter().copied().collect();

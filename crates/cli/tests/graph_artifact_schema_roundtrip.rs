@@ -1,14 +1,14 @@
-//! C20 · Graph artifact **schema round-trip** — ticket T40. Written first, TDD.
+//! Graph artifact **schema round-trip**. Written first, TDD.
 //!
-//! The load-bearing interlock with T39 (ticket 050): a **real emitted** graph
+//! The load-bearing interlock: a **real emitted** graph
 //! artifact validates against the published `schemas/graph/v1.schema.json` via the
-//! T39 validation helper (`dagr_artifact::schema`), and a deliberately-corrupted
+//! validation helper (`dagr_artifact::schema`), and a deliberately-corrupted
 //! copy is rejected — proving the check has teeth. That is the whole point of
 //! emitting to a *published* contract.
 //!
 //! This suite is gated behind the `schema-validation` feature (default OFF), which
-//! pulls the CI-/dev-scoped `jsonschema` validator (T4 ADR 017 §4). CI runs it
-//! with the feature ON in a dedicated step (mirroring T39's); the shipped binary
+//! pulls the CI-/dev-scoped `jsonschema` validator. CI runs it
+//! with the feature ON in a dedicated step; the shipped binary
 //! and the bare `cargo test --workspace` never activate it, so `cargo deny` never
 //! sees `jsonschema`'s permissive-but-unlisted transitive licences.
 
@@ -116,8 +116,8 @@ fn emitted() -> Value {
     serde_json::from_str(&out).expect("valid JSON")
 }
 
-/// **Schema validation (C20).** A real emitted artifact validates cleanly against
-/// the published T39 graph schema via the validation helper; a deliberately
+/// **Schema validation.** A real emitted artifact validates cleanly against
+/// the published graph schema via the validation helper; a deliberately
 /// corrupted copy (a required field removed) fails — proving the check has teeth.
 #[test]
 fn emitted_artifact_validates_against_the_published_schema() {
@@ -174,7 +174,7 @@ impl Task for Publish {
     }
 }
 
-/// A pipeline carrying both a data edge and an ordering edge (T50 / C4).
+/// A pipeline carrying both a data edge and an ordering edge.
 fn ordering_pipeline() -> Pipeline {
     let mut flow = Flow::new();
     let rows = flow.register_source_named::<LoadRows>(
@@ -220,7 +220,7 @@ impl Task for BuildReportOne {
     }
 }
 
-/// **A real ordering-edge graph validates against the published schema (C20 / C4).**
+/// **A real ordering-edge graph validates against the published schema.**
 /// The emitted artifact — carrying a `data` edge with a `type_name` and an
 /// `ordering` edge without one — validates cleanly against
 /// `schemas/graph/v1.schema.json`, and a corrupted copy is rejected.
@@ -258,7 +258,7 @@ fn ordering_edge_artifact_validates_against_the_published_schema() {
     );
 }
 
-/// **A real emitted ordering-edge graph renders distinctly in both formats (C24).**
+/// **A real emitted ordering-edge graph renders distinctly in both formats.**
 /// Feeding a real emitted artifact (with one data and one ordering edge) through
 /// the renderer produces DOT and Mermaid in which the two edge kinds carry disjoint
 /// documented styling — the data edge solid/labelled, the ordering edge dashed.
@@ -302,7 +302,7 @@ fn ordering_edge_artifact_renders_distinctly() {
     );
 }
 
-/// **The graph verb's output validates against the published schema (C20 / C26).**
+/// **The graph verb's output validates against the published schema.**
 /// What the verb writes to a sink is itself a schema-valid artifact.
 #[test]
 fn graph_verb_output_validates_against_the_published_schema() {

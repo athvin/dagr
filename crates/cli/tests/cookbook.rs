@@ -1,5 +1,5 @@
 //! **Cookbook — the patterns the design forces, each backed by compiled,
-//! run code** (arch.md "Documentation"; ticket T64).
+//! run code.**
 //!
 //! [`docs/cookbook.md`](../../../../docs/cookbook.md) is the human-facing
 //! cookbook. This suite is its executable ground truth: one test per cookbook
@@ -8,29 +8,29 @@
 //! prose can never claim a behaviour the code does not have. Every flow-running
 //! entry runs its flow through the one-call
 //! [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow) seam — the author writes
-//! tasks + a flow and never a `NodeRunner` (arch.md C1).
+//! tasks + a flow and never a `NodeRunner`.
 //!
-//! The entries, and the arch.md contract each pins:
+//! The entries, and the contract each pins:
 //!
 //! - **Fan-out inside one node** — internal parallelism bounded by the node's
 //!   declared cost; fan-out is a *within-node* concern, not a graph-shape change
-//!   (C5/C12/arch.md "the graph's shape never changes at runtime").
+//!   (the graph's shape never changes at runtime).
 //! - **Fan-in** — many upstream handles joined into one node as a tuple, under
-//!   the default `all-succeeded` rule (C3).
+//!   the default `all-succeeded` rule.
 //! - **Branch-in-task** — `self-skip` versus `succeed-with-empty` for joins, and
-//!   why an author picks one over the other (C15/Vocabulary).
+//!   why an author picks one over the other.
 //! - **Incremental cursors via scratch** — a cursor written on one attempt and
-//!   read on the next (C18).
+//!   read on the next.
 //! - **Durable stage boundaries** — the `DurableOutput` contract a durable node's
-//!   output implements, and what it buys at resume (C10/C27).
+//!   output implements, and what it buys at resume.
 //! - **Two same-typed resources via newtypes** — retrieval by type succeeding and
-//!   the identical-type registration failing as ambiguous (C9).
+//!   the identical-type registration failing as ambiguous.
 //! - **Common `#[task]` mistakes** — the *fixes* for the macro's four documented
 //!   failure modes compile and run; the broken forms are the trybuild corpus in
-//!   `crates/macros/tests/expand/fail/` (ADR 082, T73).
+//!   `crates/macros/tests/expand/fail/`.
 //!
 //! The **non-`Send` capture** entry is a compile-fail fixture pinned to the
-//! workspace toolchain, so it lives in the T8 UI harness
+//! workspace toolchain, so it lives in the UI harness
 //! (`crates/core/tests/ui/`), not here; this suite covers its *fixes* (the forms
 //! that compile) inline in the durable/scratch tasks that capture only `Send`
 //! values.
@@ -113,7 +113,7 @@ fn temp_base(tag: &str) -> String {
 
 // ===========================================================================
 // Entry: FAN-OUT INSIDE ONE NODE — the declared-cost rule bounds internal
-// parallelism, and fan-out is NOT a graph-shape change (C5/C12).
+// parallelism, and fan-out is NOT a graph-shape change.
 // ===========================================================================
 
 /// A trivial source feeding the fan-out node (a data-dependent node is what
@@ -130,8 +130,8 @@ impl Task for HowMany {
 }
 
 /// A single node that discovers N work items at runtime and processes them with
-/// **bounded internal concurrency** — the blessed pattern (arch.md: "one node
-/// that iterates internally with bounded concurrency"). It never becomes N nodes.
+/// **bounded internal concurrency** — the blessed pattern (one node that iterates
+/// internally with bounded concurrency). It never becomes N nodes.
 /// The concurrency ceiling here is honest about the node's declared cost: a
 /// counter tracks the peak in-flight count and asserts it never exceeds the bound.
 struct FanOutInsideOneNode {
@@ -171,8 +171,8 @@ fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
     let mut flow = RunnableFlow::new();
     let count = flow.register_source("how-many", HowMany { items: 100 });
     // The declared cost (compute threads) is the honest budget for this node's
-    // internal parallelism (C5). The processing stays ONE node — fan-out is a
-    // within-node concern (arch.md "the graph's shape never changes at runtime").
+    // internal parallelism. The processing stays ONE node — fan-out is a
+    // within-node concern (the graph's shape never changes at runtime).
     let node = flow.register_with::<FanOutInsideOneNode, _>(
         "process-all",
         FanOutInsideOneNode { max_in_flight: 4 },
@@ -212,7 +212,7 @@ fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
 
 // ===========================================================================
 // Entry: FAN-IN — many upstream handles joined into one node as a TUPLE, under
-// the default `all-succeeded` rule (C3). The tuple binding is compile-checked
+// the default `all-succeeded` rule. The tuple binding is compile-checked
 // and the node succeeds only when every upstream succeeded.
 // ===========================================================================
 
@@ -246,7 +246,7 @@ impl Task for JoinCountAndLabel {
 #[test]
 fn fan_in_binds_many_upstream_handles_as_a_tuple_under_all_succeeded() {
     // The joining node binds two handles AS A TUPLE — count, order, and types are
-    // all compile-checked at once (C3). A data-dependent node is `all-succeeded`
+    // all compile-checked at once. A data-dependent node is `all-succeeded`
     // by construction: the typestate offers no other rule, so the join fires only
     // when *every* upstream succeeded.
     let mut flow = Flow::new();
@@ -326,7 +326,7 @@ fn fan_in_via_aggregate_struct_runs_through_the_one_call_seam() {
 }
 
 // ===========================================================================
-// Entry: BRANCH-IN-TASK — `self-skip` vs `succeed-with-empty` for joins (C15).
+// Entry: BRANCH-IN-TASK — `self-skip` vs `succeed-with-empty` for joins.
 // A task that decides "nothing to do" returns a deliberate skip that propagates;
 // a branch that must keep a downstream join alive succeeds with an empty value.
 // ===========================================================================
@@ -372,7 +372,7 @@ impl Task for ConsumeValue {
 fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
     // A self-skipping branch: the downstream, under the default `all-succeeded`
     // rule, is marked `upstream-skipped` and never runs — a skip-only run is still
-    // a *successful* run (arch.md Vocabulary).
+    // a *successful* run.
     let mut flow = RunnableFlow::new();
     let branch = flow.register_source("branch", SelfSkippingBranch);
     let _join = flow.register::<ConsumeValue, _>("join", ConsumeValue, branch);
@@ -442,7 +442,7 @@ fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
 
 // ===========================================================================
 // Entry: INCREMENTAL CURSORS VIA SCRATCH — a cursor written on one attempt and
-// read on the next (C18). Scratch is a per-node, per-run key-value store of
+// read on the next. Scratch is a per-node, per-run key-value store of
 // opaque bytes reached through `ctx.scratch()`; serialization is the task's
 // affair. A value written on one attempt is readable on the next.
 // ===========================================================================
@@ -454,11 +454,11 @@ fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
 ///
 /// This helper is the exact body such a task would run, factored out so the test
 /// can drive it across two *separate* stores that share the node's namespace —
-/// the observable equivalent of "attempt one" and "attempt two" (C18).
+/// the observable equivalent of "attempt one" and "attempt two".
 fn advance_cursor(scratch: &dagr_core::context::ScratchStore) -> Result<u64, TaskError> {
     // Read the high-water cursor written by a prior attempt, if any. A scratch
     // I/O error maps (via `?` / `From`) to a retry-eligible task failure — disk
-    // trouble is transient more often than not (C18).
+    // trouble is transient more often than not.
     let prior: u64 = match scratch.get(b"cursor")? {
         Some(bytes) => std::str::from_utf8(&bytes)
             .ok()
@@ -477,7 +477,7 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
     use dagr_core::context::{PipelineId, RunId, ScratchStore};
     use dagr_core::handle::NodeId;
 
-    // A real on-disk run store, one per test. Scratch lives under it (C18).
+    // A real on-disk run store, one per test. Scratch lives under it.
     let base = temp_base("cursor");
     let base_path = std::path::Path::new(&base);
     let (pipeline, run, node) = (
@@ -496,7 +496,7 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
 
     // "Attempt two": a NEW store for the same (base, pipeline, run, node) — the
     // same namespace — reads the cursor attempt one wrote and resumes from it,
-    // rather than starting over. This is the whole point of a checkpoint (C18).
+    // rather than starting over. This is the whole point of a checkpoint.
     let attempt_two = ScratchStore::for_node(base_path, &pipeline, &run, node);
     let read_back = attempt_two
         .get(b"cursor")
@@ -516,7 +516,7 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
 }
 
 // ===========================================================================
-// Entry: DURABLE STAGE BOUNDARIES — the DurableOutput contract (C10/C27). A
+// Entry: DURABLE STAGE BOUNDARIES — the DurableOutput contract. A
 // durable node's output type serializes a reference to where the value lives and
 // rehydrates it later; that is what lets resume skip completed work.
 // ===========================================================================
@@ -524,7 +524,7 @@ fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
 /// A durable stage-boundary output: it holds a *reference* to where the real
 /// (large) value lives, not the value itself. `serialize_reference` names the
 /// referent; `rehydrate` reconstructs the typed value from that reference — a
-/// lossless round-trip, so resume can rehydrate instead of recomputing (C27).
+/// lossless round-trip, so resume can rehydrate instead of recomputing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DatasetRef {
     location: String,
@@ -584,7 +584,7 @@ fn a_node_marked_durable_needs_the_contract_or_assembly_rejects_it() {
 
 // ===========================================================================
 // Entry: TWO SAME-TYPED RESOURCES VIA NEWTYPES — retrieval by type succeeds and
-// the identical-type registration fails as ambiguous (C9). Same no-string-lookup
+// the identical-type registration fails as ambiguous. Same no-string-lookup
 // philosophy as typed handles.
 // ===========================================================================
 
@@ -600,7 +600,7 @@ struct AnalyticsClient(HttpClient);
 fn two_same_typed_resources_are_distinguished_by_newtypes() {
     // Two resources share the underlying `HttpClient` type but are registered
     // behind DISTINCT newtypes, so each is retrievable by its own type — no string
-    // key, no ambiguity (C9).
+    // key, no ambiguity.
     let registry = dagr_core::context::ResourceRegistry::builder()
         .register(BillingClient(HttpClient {
             base_url: "https://billing".into(),
@@ -625,7 +625,7 @@ fn two_same_typed_resources_are_distinguished_by_newtypes() {
 #[test]
 fn registering_two_resources_of_the_identical_type_fails_as_ambiguous() {
     // Registering two resources of the LITERALLY identical type is rejected —
-    // a type-keyed `get::<HttpClient>()` could not choose between them (C9). The
+    // a type-keyed `get::<HttpClient>()` could not choose between them. The
     // remedy is the newtype pattern above.
     let result = dagr_core::context::ResourceRegistry::builder()
         .register(HttpClient {
@@ -642,7 +642,7 @@ fn registering_two_resources_of_the_identical_type_fails_as_ambiguous() {
 }
 
 // ===========================================================================
-// Entry: COMMON `#[task]` MISTAKES — the FIXES compile and run (T73 / ADR 082).
+// Entry: COMMON `#[task]` MISTAKES — the FIXES compile and run.
 //
 // The broken forms are the trybuild corpus (`crates/macros/tests/expand/fail/`,
 // each with a committed `.stderr`). This entry proves the *fix* for each of the

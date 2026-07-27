@@ -1,5 +1,4 @@
-//! The **README quickstart**, as a compiled-and-run reference (arch.md
-//! "Documentation"; system-level acceptance criterion 1; ticket T64).
+//! The **README quickstart**, as a compiled-and-run reference.
 //!
 //! This file is the *single source of truth* for the quickstart's Rust code. The
 //! `## Quickstart` section of the repository `README.md` quotes the region
@@ -10,17 +9,17 @@
 //!
 //! It takes a reader from an empty directory to a compiled, run,
 //! artifact-inspected **two-node pipeline** using the one-call
-//! [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow) seam (ADR 081): the author
+//! [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow) seam: the author
 //! writes two [`#[task]`](dagr_core::task)s and a flow, and *never* writes a
-//! scheduler, a `NodeRunner`, or any slot wiring (arch.md C1). The
-//! [`#[task]`](dagr_core::task) attribute (ADR 082) generates the
+//! scheduler, a `NodeRunner`, or any slot wiring. The
+//! [`#[task]`](dagr_core::task) attribute generates the
 //! [`Task`](dagr_core::task::Task) impl from the `run` fn, so each node body is a
 //! single function — the hand-written `impl Task` stays a first-class fallback.
 //! No async experience is required — the two task bodies are ordinary code
 //! returning a value; the framework runs them.
 //!
 //! No server, database, or scheduler is involved: the binary and its one
-//! argument (a run-store directory) are sufficient (system criterion 7). Run it
+//! argument (a run-store directory) are sufficient. Run it
 //! with `cargo run --example quickstart -- ./quickstart-runs`.
 
 // ANCHOR: quickstart
@@ -37,11 +36,10 @@ use dagr_core::task;
 
 // --- 1. Author two tasks. A task is a value holding its configuration, plus one
 // `async fn run` body — that is the whole authoring surface. `#[task]` reads the
-// `run` signature and generates the four things arch.md C1 says you declare (the
-// input type, the output type, the execution class, the work), so you write
-// business logic only — no scheduling, retry, permit, or trait-impl scaffolding.
-// (Prefer to write the `impl Task` by hand? It stays a first-class fallback — see
-// the cookbook.)
+// `run` signature and generates the four things you declare (the input type, the
+// output type, the execution class, the work), so you write business logic only —
+// no scheduling, retry, permit, or trait-impl scaffolding. (Prefer to write the
+// `impl Task` by hand? It stays a first-class fallback — see the cookbook.)
 
 /// The source: consumes nothing (an `()` input) and produces a starting number.
 struct Count {
@@ -132,8 +130,8 @@ fn main() -> ExitCode {
 }
 
 /// A minimal append-only event sink writing each line to `events.jsonl` under the
-/// run store. dagr injects the sink so the run store is *your* one job (arch.md
-/// "The shape of a run"); a real deployment points the base at durable storage.
+/// run store. dagr injects the sink so the run store is *your* one job; a real
+/// deployment points the base at durable storage.
 struct FileSink {
     file: File,
 }
@@ -175,7 +173,7 @@ impl MonotonicClock for TickClock {
 // ANCHOR_END: quickstart
 
 // ===========================================================================
-// The DAGR_* environment surface + the binary-wiring pattern (ADR 089 / T77)
+// The DAGR_* environment surface + the binary-wiring pattern
 // ===========================================================================
 //
 // Every runtime knob honours the standard **`flag > env > default`** precedence:
@@ -227,7 +225,7 @@ mod dagr_env_wiring {
 
     /// Fold the parsed flags with the `DAGR_*` env fallbacks into a fully-resolved
     /// [`RunConfig`] and sized pool capacities. A bad env value surfaces as an
-    /// [`EnvParseError`] whose `exit_code()` is the C26 code to exit with (an
+    /// [`EnvParseError`] whose `exit_code()` is the code to exit with (an
     /// unparseable value → `InvalidUsage`, an out-of-range headroom →
     /// `BootstrapFailure`) — the binary maps it straight to a process exit.
     pub fn resolve_config(base: &str, flags: ParsedFlags) -> Result<RunConfig, EnvParseError> {

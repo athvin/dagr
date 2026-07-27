@@ -1,14 +1,13 @@
-//! C27 · Durable-output **reference recording** — ticket T57 (067). Written
-//! first, TDD.
+//! Durable-output **reference recording**. Written first, TDD.
 //!
-//! T0.8 (ADR 014 §6) decided the per-attempt `durable_reference` field; T39/T42
-//! landed the schema slot and the fold that reads it. T57 lands the **recording
-//! bridge**: when a durable node produces its output successfully, the serialized
-//! reference (the `String` the output type's `DurableOutput::serialize_reference`
-//! yields, C27) is captured into that attempt's outcome record, folds into the run
-//! artifact through the REAL C19 writer, and round-trips through the run schema.
+//! The per-attempt `durable_reference` field, its schema slot, and the fold that
+//! reads it are already in place. This suite covers the **recording bridge**:
+//! when a durable node produces its output successfully, the serialized reference
+//! (the `String` the output type's `DurableOutput::serialize_reference` yields) is
+//! captured into that attempt's outcome record, folds into the run artifact
+//! through the real event-stream writer, and round-trips through the run schema.
 //!
-//! What this suite proves (test plan, ticket 067):
+//! What this suite proves:
 //!   - a durable node's **successful** attempt records exactly one reference;
 //!   - a **non-durable** success records **none**;
 //!   - a **failed** attempt records none; a fail-then-succeed node records the

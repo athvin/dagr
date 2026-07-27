@@ -1,15 +1,15 @@
-//! C11 · termination property test — ticket T25 (035). Written first, TDD.
+//! Termination property test. Written first, TDD.
 //!
-//! This is the anti-deadlock safety net C11 demands (arch.md `### C11 · Readiness
-//! tracker`, last acceptance line): *"The tracker cannot deadlock: a test over
-//! randomly generated graphs with randomized outcomes confirms every run
-//! terminates."* It generates **arbitrary valid acyclic DAGs** with **randomized
-//! per-node outcomes** and drives each through the **real** C11 tracker
-//! ([`dagr_core::readiness::ReadinessTracker`]) exactly as the T24 run loop does —
-//! admit the initial frontier, feed each executed node's scripted outcome back
-//! through [`notify_terminal`](ReadinessTracker::notify_terminal), admit the ready
-//! nodes it unlocks, record the propagated-terminal nodes it deadens — and asserts
-//! the two load-bearing termination invariants over every generated case.
+//! This is the anti-deadlock safety net for the readiness tracker: *the tracker
+//! cannot deadlock — a test over randomly generated graphs with randomized
+//! outcomes confirms every run terminates.* It generates **arbitrary valid acyclic
+//! DAGs** with **randomized per-node outcomes** and drives each through the
+//! **real** tracker ([`dagr_core::readiness::ReadinessTracker`]) exactly as the run
+//! loop does — admit the initial frontier, feed each executed node's scripted
+//! outcome back through [`notify_terminal`](ReadinessTracker::notify_terminal),
+//! admit the ready nodes it unlocks, record the propagated-terminal nodes it
+//! deadens — and asserts the two load-bearing termination invariants over every
+//! generated case.
 //!
 //! # Why drive the tracker directly (not the tokio driver) for the property
 //!
@@ -19,30 +19,29 @@
 //! → admit `Ready`, record `PropagatedTerminal`). Property-testing the tracker
 //! directly is **deterministic** (no runtime, no clock, no wall-time), **fast**
 //! (thousands of cases without spinning two multithreaded tokio runtimes per
-//! case), and exercises the exact decision engine C11's guarantee is about. A
+//! case), and exercises the exact decision engine the guarantee is about. A
 //! companion driver-level termination check — the same generator driven through
 //! the *real* `dagr_cli::driver::drive` against fakes — lives in
-//! `crates/cli/tests/termination_property_driver.rs`, so the full T24 loop is also
+//! `crates/cli/tests/termination_property_driver.rs`, so the full run loop is also
 //! proven to terminate; this suite owns the deep, high-case-count property.
 //!
 //! # The framework: a hand-rolled, dependency-free, seeded generator
 //!
-//! Per the ticket's dependency-review constraint (keep `core`'s review-gated
-//! dependency set minimal), the property harness is a **hand-rolled deterministic
-//! seeded generator** (the ticket's "or equivalent" to proptest) rather than a new
-//! crate: a `SplitMix64` PRNG, a bounded random-DAG shape, and an explicit shrinker.
-//! It captures the seed of every case, **prints it on failure**, and shrinks a
-//! failing case to a minimal DAG + outcome assignment. This adds **no** dependency
-//! to the workspace (audit/deny untouched) and is trivially reproducible in CI.
+//! To keep `core`'s review-gated dependency set minimal, the property harness is a
+//! **hand-rolled deterministic seeded generator** (an equivalent to proptest)
+//! rather than a new crate: a `SplitMix64` PRNG, a bounded random-DAG shape, and an
+//! explicit shrinker. It captures the seed of every case, **prints it on failure**,
+//! and shrinks a failing case to a minimal DAG + outcome assignment. This adds
+//! **no** dependency to the workspace (audit/deny untouched) and is trivially
+//! reproducible in CI.
 //!
-//! # Scope (M1 only)
+//! # Scope
 //!
-//! This asserts C11's **termination** and **terminal-state** invariants as
-//! *emergent properties* over random shapes; the per-rule fires/can-never-fire
-//! *unit* table is T18's and the failure-policy runtime is T34's. M1 runs the
-//! `all-succeeded` rule against the final interface, so the generated runtime nodes
-//! carry `all-succeeded` (the only rule expressible on a data-consuming node — the
-//! C3/C4 compile-time restriction the generator honours by construction); the
+//! This asserts the **termination** and **terminal-state** invariants as *emergent
+//! properties* over random shapes; the per-rule fires/can-never-fire *unit* table
+//! and the failure-policy runtime are covered elsewhere. The generated runtime
+//! nodes carry `all-succeeded` (the only rule expressible on a data-consuming
+//! node — the compile-time restriction the generator honours by construction); the
 //! `all-terminal`/`any-failed` seam is exercised where reachable through the pure
 //! [`evaluate_rule`](dagr_core::readiness::evaluate_rule) table (regression case A).
 
@@ -62,7 +61,7 @@ use dagr_core::TaskError;
 
 /// `SplitMix64` — a small, fast, dependency-free deterministic PRNG. A fixed seed
 /// reproduces the exact same stream, which is what makes every generated case
-/// replayable from its recorded seed (the ticket's determinism requirement).
+/// replayable from its recorded seed.
 struct SplitMix64 {
     state: u64,
 }
@@ -97,9 +96,9 @@ impl SplitMix64 {
 // The generated case: a DAG shape + a per-node executed outcome.
 // ===========================================================================
 
-/// The M1 outcome an *executed* node can produce (arch.md Vocabulary, the states
-/// a task actually originates). Never-run nodes take their propagated state from
-/// the tracker, not from here.
+/// The outcome an *executed* node can produce (the states a task actually
+/// originates). Never-run nodes take their propagated state from the tracker, not
+/// from here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     /// The attempt returned a value (or a retry-then-succeed resolved to success).
@@ -116,7 +115,7 @@ impl Outcome {
     /// The executed-terminal [`TerminalState`] this outcome is fed back to the
     /// tracker as. A retry-then-succeed case is modelled as `Succeeded` — the
     /// tracker never sees the intermediate retry, only the node's decided terminal
-    /// (retry orchestration is C14/T22, upstream of the tracker).
+    /// (retry orchestration is upstream of the tracker).
     fn terminal(self) -> TerminalState {
         match self {
             Outcome::Succeeded => TerminalState::Succeeded,
@@ -146,8 +145,8 @@ impl Case {
     }
 
     /// The deterministic node name for index `i`. Distinct names → distinct
-    /// name-derived identities (T0.7); zero-padded so lexical order matches index
-    /// order (not required, but keeps generated pipelines readable on failure).
+    /// name-derived identities; zero-padded so lexical order matches index order
+    /// (not required, but keeps generated pipelines readable on failure).
     fn name(i: usize) -> String {
         format!("n{i:03}")
     }
@@ -163,9 +162,9 @@ impl Case {
 /// when they could have some, so multi-root graphs and wide fan-ins both appear.
 fn generate(seed: u64) -> Case {
     const MAX_NODES: usize = 12;
-    // The C3 fan-in ceiling (MAX_INPUT_ARITY = 8) bounds how many upstreams a
-    // single data node can bind; honour it so every case builds through the real
-    // typed builder.
+    // The fan-in ceiling (MAX_INPUT_ARITY = 8) bounds how many upstreams a single
+    // data node can bind; honour it so every case builds through the real typed
+    // builder.
     const MAX_ARITY: usize = 8;
 
     let mut rng = SplitMix64::new(seed);
@@ -201,7 +200,7 @@ fn generate(seed: u64) -> Case {
     }
 }
 
-/// A random executed outcome over the M1 outcome space. Success is weighted a
+/// A random executed outcome over the outcome space. Success is weighted a
 /// little higher than the failure-like outcomes so deep graphs still exercise the
 /// firing path (an all-failing generator would deaden every graph at its roots and
 /// never test a real join firing), while every non-success outcome stays common
@@ -224,9 +223,8 @@ fn random_outcome(rng: &mut SplitMix64) -> Outcome {
 // feed any downstream input position; multi-input joins use the fixed-arity
 // `JoinN` tasks below. Every data edge is bound `.shared()`, which is always a
 // valid receive mode regardless of consumer count (an owned multi-consumer demand
-// is the one thing assembly rejects — C3/T0.2). Data-consuming nodes therefore
-// carry the `all-succeeded` rule the typed builder pins on them (C3), exactly as
-// M1 runs.
+// is the one thing assembly rejects). Data-consuming nodes therefore carry the
+// `all-succeeded` rule the typed builder pins on them.
 
 /// A source task producing a `u64`.
 struct Source;
@@ -260,7 +258,7 @@ join_task!(Join7, (u64, u64, u64, u64, u64, u64, u64));
 join_task!(Join8, (u64, u64, u64, u64, u64, u64, u64, u64));
 
 /// Build a real, assemblable [`Pipeline`] from a case. Nodes are registered in
-/// index order, so every upstream handle exists before it is bound (the C3
+/// index order, so every upstream handle exists before it is bound (the
 /// forward-reference restriction is satisfied by construction). Arity dispatch
 /// matches the runtime-chosen upstream count onto the typed `JoinN` binding.
 fn build_pipeline(case: &Case) -> Pipeline {
@@ -356,7 +354,7 @@ fn build_pipeline(case: &Case) -> Pipeline {
 }
 
 // ===========================================================================
-// Driving the real tracker exactly as the T24 run loop does.
+// Driving the real tracker exactly as the run loop does.
 // ===========================================================================
 
 /// The record of one driven run: every node's recorded terminal state, whether the
@@ -383,7 +381,7 @@ struct RunTrace {
 }
 
 /// Drive `pipeline` through the **real** [`ReadinessTracker`], scripting each
-/// executed node to its assigned outcome, mirroring the T24 run loop's
+/// executed node to its assigned outcome, mirroring the run loop's
 /// admit→feed-back→admit cycle. Returns a full trace for the property assertions.
 ///
 /// The step budget is a **deadlock detector**: a correct tracker decides at least
@@ -490,9 +488,9 @@ fn index_of(case: &Case, id: NodeId) -> Option<usize> {
     (0..case.node_count()).find(|&i| NodeId::from_name(&Case::name(i)) == id)
 }
 
-/// The nine normative terminal states (arch.md Vocabulary) — the closed taxonomy a
-/// recorded terminal state must belong to. `not-requested` is deliberately absent
-/// (an artifact marking, not a terminal state — C26).
+/// The nine normative terminal states — the closed taxonomy a recorded terminal
+/// state must belong to. `not-requested` is deliberately absent (an artifact
+/// marking, not a terminal state).
 fn is_taxonomy_state(state: TerminalState) -> bool {
     matches!(
         state,
@@ -668,9 +666,9 @@ fn describe(case: &Case) -> String {
 // ===========================================================================
 
 /// The number of generated cases. Deterministic (a fixed base seed) and
-/// meaningfully large in CI, quick locally — the ticket's "higher in CI than a
-/// local quick run" knob, read from an env var the CI job sets, with a solid
-/// default either way. Both runs are reproducible from the printed base seed.
+/// meaningfully large in CI, quick locally — a "higher in CI than a local quick
+/// run" knob, read from an env var the CI job sets, with a solid default either
+/// way. Both runs are reproducible from the printed base seed.
 fn case_count() -> u64 {
     std::env::var("DAGR_TERMINATION_CASES")
         .ok()
@@ -695,7 +693,7 @@ fn seed_for(case_index: u64) -> u64 {
 /// The headline property: over `case_count()` randomly generated valid DAGs with
 /// randomized outcomes, **every** run terminates and satisfies all four
 /// invariants. On the first failure the case is shrunk to a minimal reproducer and
-/// its seed printed so it can be re-driven in CI. (C11 — anti-deadlock guarantee.)
+/// its seed printed so it can be re-driven in CI (the anti-deadlock guarantee).
 #[test]
 fn every_generated_run_terminates_and_holds_the_invariants() {
     let cases = case_count();
@@ -722,11 +720,10 @@ fn every_generated_run_terminates_and_holds_the_invariants() {
 // ===========================================================================
 
 /// A pinned diamond `S → {A, B} → J` where one branch fails and one succeeds. Under
-/// M1's `all-succeeded` join, a failing branch deadens the join (`upstream-failed`)
+/// an `all-succeeded` join, a failing branch deadens the join (`upstream-failed`)
 /// — the run still terminates and every node ends in exactly one terminal state.
 /// The `all-terminal` variant (a join that still fires downstream of a failure) is
-/// asserted at the pure `evaluate_rule` seam, since M1 wires only `all-succeeded`
-/// onto runtime nodes (the `all-terminal` runtime firing is T34). (C11 · Reg A.)
+/// asserted at the pure `evaluate_rule` seam.
 #[test]
 fn regression_mixed_rule_diamond() {
     // S(0) → A(1), B(2); J(3) joins A and B.  A fails, B succeeds.
@@ -764,8 +761,7 @@ fn regression_mixed_rule_diamond() {
 
     // The all-terminal counterpart at the rule seam: a join downstream of a failure
     // whose rule is `all-terminal` STILL fires (it never propagates failure) — the
-    // very reason non-default rules exist (arch.md Vocabulary). M1 does not wire
-    // this onto a runtime node; T34 does.
+    // very reason non-default rules exist.
     assert_eq!(
         evaluate_rule(
             TriggerRule::AllTerminal,
@@ -783,7 +779,7 @@ fn regression_mixed_rule_diamond() {
 /// A pinned chain `A → B → C` where the only executed node deliberately skips, and
 /// the skip propagates downstream. The run terminates; the originated skip is
 /// `skipped`; downstream nodes are `upstream-skipped`; and a run of only skips is a
-/// success (no failure-like or stop-like state appears). (C11 · Reg B.)
+/// success (no failure-like or stop-like state appears).
 #[test]
 fn regression_all_skips_graph() {
     // A(0) → B(1) → C(2). A skips; B and C are deadened upstream-skipped.
@@ -827,7 +823,6 @@ fn regression_all_skips_graph() {
 /// the same pass/fail result — proving the suite is reproducible and any future
 /// counterexample can be re-driven in CI. The seed comes from an env var when set
 /// (the replay entry point the failure message points at), else a fixed one.
-/// (C11 · Reg C.)
 #[test]
 fn replay_recorded_seed() {
     let seed: u64 = std::env::var("DAGR_TERMINATION_SEED")
@@ -860,7 +855,7 @@ fn replay_recorded_seed() {
 /// deadlock signature), the property checker FAILS and the shrinker reduces the
 /// failing case to a small reproducer rather than a large one. This validates both
 /// that the property *bites* (it catches a broken tracker) and that shrinking
-/// works, without altering the real tracker. (C11 · Reg D — meta-test.)
+/// works, without altering the real tracker.
 ///
 /// A **broken-tracker surrogate** for the meta-test: it always reports a failure
 /// (as if the highest-index node were left non-terminal — the deadlock signature),
@@ -924,8 +919,7 @@ fn shrinking_produces_a_minimal_counterexample() {
     // And the REAL property genuinely bites on a genuinely broken *tracker*: if we
     // fail to feed one node's outcome back (drop it from the ready frontier), the
     // real drive leaves it pending — `check_case`'s termination/boundary assertion
-    // fires. We demonstrate the assertion logic directly here (see NOTES in the
-    // ticket for the manual break-and-revert of the tracker itself).
+    // fires. We demonstrate the assertion logic directly here.
     let stuck = Case {
         seed: 0,
         upstreams: vec![vec![], vec![0]],

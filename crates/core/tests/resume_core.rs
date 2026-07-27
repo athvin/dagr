@@ -1,15 +1,12 @@
-//! C27 · Resume **core** — the pure gate + seed/closure/demand plan algorithm
-//! (ticket T58, 070). Written first, TDD.
+//! Resume **core** — the pure gate + seed/closure/demand plan algorithm. Written
+//! first, TDD.
 //!
-//! T41 landed the structural fingerprint that gates resume; T57 landed the
-//! durable-output contract and its per-attempt reference recording; T54a landed
-//! the retained-scratch foundation; T55 stubbed the `resume` verb. T58 lands the
-//! **resume core**: given a prior run's per-node terminal states + recorded
-//! durable references and this binary's assembled graph, compute a demand-driven
-//! re-execution plan — refusing up front on a changed structural fingerprint, an
-//! incomparable algorithm version, a cross-tool-version prior, or a dangling
-//! durable reference; and, when it proceeds, deriving the must-run seed, closing
-//! it downward, resolving demand upward (rehydrating durable producers, pulling
+//! Given a prior run's per-node terminal states + recorded durable references and
+//! this binary's assembled graph, compute a demand-driven re-execution plan —
+//! refusing up front on a changed structural fingerprint, an incomparable
+//! algorithm version, a cross-tool-version prior, or a dangling durable
+//! reference; and, when it proceeds, deriving the must-run seed, closing it
+//! downward, resolving demand upward (rehydrating durable producers, pulling
 //! demanded in-memory producers into the must-run set), and marking every prior
 //! success left outside the must-run set `satisfied-from-prior` with its
 //! originating run identity.
@@ -19,7 +16,7 @@
 //! invocation derivation (parameters/interval/force), the run-store-gone refusal,
 //! and the resumed-artifact recording (which need serde + the artifact crate) are
 //! the CLI's, exercised in `crates/cli/tests/resume_verb.rs`. The exhaustive
-//! behavioural suite is T59.
+//! behavioural suite lives separately.
 
 use std::collections::BTreeMap;
 

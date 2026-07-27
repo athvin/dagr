@@ -1,31 +1,29 @@
-//! Positive (compiles == the assertion) fixtures for the T5 (018) typed-handle
-//! + dependency-encoding spike.
+//! Positive (compiles == the assertion) fixtures for the typed-handle +
+//! dependency-encoding spike.
 //!
-//! These are the compile-PASS half of the ticket's evidence. They live in a
-//! normal integration test (compiled by `cargo test --workspace`), NOT in
-//! [`tests/ui/`](./ui), because the T8 UI harness ([`tests/ui.rs`](./ui.rs))
-//! asserts every `tests/ui/*.rs` sample FAILS to compile — a positive sample
-//! there would break it. Their **compilation is the assertion**: a future
-//! regression that made any of these shapes stop compiling would fail the build,
-//! exactly as the ticket's definition of done asks (handles freely copyable;
-//! single input takes `T` not `(T,)`; one handle fans out to many consumers).
+//! These are the compile-PASS half of the evidence. They live in a normal
+//! integration test (compiled by `cargo test --workspace`), NOT in
+//! [`tests/ui/`](./ui), because the UI harness ([`tests/ui.rs`](./ui.rs)) asserts
+//! every `tests/ui/*.rs` sample FAILS to compile — a positive sample there would
+//! break it. Their **compilation is the assertion**: a future regression that made
+//! any of these shapes stop compiling would fail the build (handles freely
+//! copyable; single input takes `T` not `(T,)`; one handle fans out to many
+//! consumers).
 //!
-//! THROWAWAY, illustrative types — NOT dagr's real authoring API. The real typed
-//! handle lands in T10, the real data-dependency binding in T11, and the real
-//! flow builder / node identity in T13. This file only pins the settled T5
-//! ENCODING so those tickets adopt it. Names mirror the ADR embedded in
-//! `docs/implementation/018-T5-typed-handle-encoding-spike.md`.
+//! THROWAWAY, illustrative types — NOT dagr's real authoring API. This file only
+//! pins the settled ENCODING so the real typed handle, data-dependency binding,
+//! and flow builder / node identity adopt it.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-/// A node's identity token (mirrors C2 · Handle: identity comes from the node's
-/// declared name — T0.7 — not from its value type or registration order).
+/// A node's identity token: identity comes from the node's declared name, not from
+/// its value type or registration order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct NodeId(u32);
 
-/// A typed handle (C2): node identity plus the value's type. `PhantomData<fn()
-/// -> T>` keeps the handle `Copy + Send + Sync` REGARDLESS of `T` (the naive
+/// A typed handle: node identity plus the value's type. `PhantomData<fn() -> T>`
+/// keeps the handle `Copy + Send + Sync` REGARDLESS of `T` (the naive
 /// `PhantomData<T>` would infect the handle with `T`'s auto-traits), while still
 /// carrying the value type at compile time.
 struct Handle<T> {
@@ -40,7 +38,7 @@ impl<T> Clone for Handle<T> {
 }
 impl<T> Copy for Handle<T> {}
 
-/// A type-erased ordering upstream (C4/T0.9): identity only, value type dropped.
+/// A type-erased ordering upstream: identity only, value type dropped.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Ordering(NodeId);
 
@@ -50,9 +48,9 @@ impl<T> Handle<T> {
     }
 }
 
-/// Sealed positional binding (C3): a private trait maps a handle tuple to the
-/// task's declared input tuple so COUNT, ORDER, and TYPES are all compile-
-/// checked. A single input is the bare value `A`, never a one-tuple `(A,)`.
+/// Sealed positional binding: a private trait maps a handle tuple to the task's
+/// declared input tuple so COUNT, ORDER, and TYPES are all compile-checked. A
+/// single input is the bare value `A`, never a one-tuple `(A,)`.
 trait Deps {
     type Inputs;
     /// Consumes the dep-set, yielding the upstream node identities.
@@ -158,7 +156,7 @@ fn passthrough<T>(handle: Handle<T>) -> Handle<T> {
 
 /// Handles are freely COPYABLE and passable during construction, even for a
 /// value type that is itself `!Send + !Sync + !Copy` — the fn-pointer phantom
-/// keeps the handle unconditionally cheap and thread-safe (C2).
+/// keeps the handle unconditionally cheap and thread-safe.
 #[test]
 fn handles_are_freely_copyable() {
     // `Rc<String>` is deliberately NOT Send/Sync/Copy — the adversarial `T`.
@@ -177,7 +175,7 @@ fn handles_are_freely_copyable() {
 
 /// A single-input task consumes `T` directly — NO tuple wrapping at the call
 /// site (resolves the single-input-ergonomics open question). The companion
-/// rejected form `(Gamma,)` is documented in the ADR as unnecessary.
+/// rejected form `(Gamma,)` is unnecessary.
 #[test]
 fn single_input_takes_t_not_one_tuple() {
     let mut flow = Flow::new();
@@ -188,7 +186,7 @@ fn single_input_takes_t_not_one_tuple() {
 }
 
 /// One producer handle fans out to any number of downstream consumers whose
-/// declared input type matches; the same handle is reused freely (C3).
+/// declared input type matches; the same handle is reused freely.
 #[test]
 fn fan_out_one_handle_many_consumers() {
     let mut flow = Flow::new();

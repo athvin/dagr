@@ -1,22 +1,22 @@
-// UI compile-failure fixture — ticket T5 (018), case `typed_handle_data_cycle`.
+// UI compile-failure fixture — case `typed_handle_data_cycle`.
 //
-// PROVES (C2): a cycle via DATA edges is INEXPRESSIBLE by CONSTRUCTION —
+// PROVES: a cycle via DATA edges is INEXPRESSIBLE by CONSTRUCTION —
 // structural, never a later or runtime validation pass. Because a handle is
 // obtained ONLY by registering a node, and `register` accepts only already-
 // existing handles, no expression can name a node that is not yet registered.
 // Binding node B's handle as an input to node A, when A is registered BEFORE B,
 // cannot be written: B's handle does not exist yet at A's registration point, so
 // it is a use of an undeclared binding (E0425). This is the data-edge half of
-// C2's "an attempt to express a cycle — through data edges or ordering edges —
-// fails to compile" (the ordering-edge half is the T0.9 fixtures).
+// the "an attempt to express a cycle — through data edges or ordering edges —
+// fails to compile" guarantee (the ordering-edge half is the ordering fixtures).
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts
-// this sample FAILS to compile under the pinned toolchain (C28).
+// this sample FAILS to compile under the pinned toolchain.
 //
 // THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (typed handles land in T10, the real binding in T11). It models only the
-// settled T5 backward-reference registration discipline shared with C4 ordering
+// (typed handles and the real binding land later). It models only the
+// settled backward-reference registration discipline shared with ordering
 // edges.
 
 use std::marker::PhantomData;

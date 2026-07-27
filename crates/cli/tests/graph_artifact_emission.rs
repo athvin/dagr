@@ -1,16 +1,16 @@
-//! C20 · Graph artifact emission — ticket T40. Written first, TDD.
+//! Graph artifact emission. Written first, TDD.
 //!
-//! These translate the T40 Test plan into executable tests against the **real**
-//! emitter [`dagr_cli::graph`] over a **real** assembled [`Pipeline`] built with
-//! the stable-name-aware registrars. Each test maps to one arch.md C20 acceptance
-//! criterion (see the per-test doc comment).
+//! These translate the graph-emission test plan into executable tests against the
+//! **real** emitter [`dagr_cli::graph`] over a **real** assembled [`Pipeline`] built
+//! with the stable-name-aware registrars. Each test maps to one graph-artifact
+//! acceptance criterion (see the per-test doc comment).
 //!
-//! The **schema round-trip** — the load-bearing interlock with T39 (a real
+//! The **schema round-trip** — the load-bearing interlock with the schema (a real
 //! emitted artifact validates against `schemas/graph/v1.schema.json` via the
 //! published helper, and a corrupted copy is rejected) — lives in the sibling
 //! `graph_artifact_schema_roundtrip.rs`, gated behind the `schema-validation`
 //! feature so the CI-/dev-scoped `jsonschema` validator is pulled only by CI's
-//! dedicated step (mirroring T39), never by the shipped binary or the bare
+//! dedicated step, never by the shipped binary or the bare
 //! `cargo test --workspace`.
 
 use dagr_cli::graph::{
@@ -155,9 +155,9 @@ fn parse(json: &str) -> Value {
 
 // === Tests =================================================================
 
-/// **Empty-environment emission (C20).** Emission returns a complete artifact
+/// **Empty-environment emission.** Emission returns a complete artifact
 /// with no env vars, no filesystem fixtures, no network, no credentials, and no
-/// parameters — assembly is pure (C7), and this emitter reads nothing beyond the
+/// parameters — assembly is pure, and this emitter reads nothing beyond the
 /// assembled pipeline and the injected generation time.
 #[test]
 fn emission_succeeds_in_an_empty_environment() {
@@ -174,7 +174,7 @@ fn emission_succeeds_in_an_empty_environment() {
     assert_eq!(artifact["nodes"].as_array().unwrap().len(), 3);
 }
 
-/// **Byte-identical repeat (C20).** Emitting twice from the same binary produces
+/// **Byte-identical repeat.** Emitting twice from the same binary produces
 /// identical bytes after masking only the generation-time field — including
 /// header provenance and node/edge ordering.
 #[test]
@@ -196,7 +196,7 @@ fn emitting_twice_is_byte_identical_outside_generation_time() {
     );
 }
 
-/// **Generation time is the only variance (C20).** Two emissions with two
+/// **Generation time is the only variance.** Two emissions with two
 /// different instants differ **only** within the generation-time field; every
 /// other field (including provenance and ordering) is byte-for-byte identical.
 #[test]
@@ -212,7 +212,7 @@ fn generation_time_is_the_only_field_that_varies() {
     assert_eq!(mask_generated_at(a), mask_generated_at(b));
 }
 
-/// **Node completeness (C20).** Every assembled node appears exactly once, each
+/// **Node completeness.** Every assembled node appears exactly once, each
 /// carrying name, group, stable task name, stable input/output type names,
 /// execution class, and dependency lists; none is missing and none is invented.
 #[test]
@@ -253,7 +253,7 @@ fn every_node_appears_once_with_its_complete_fields() {
     assert_eq!(by_name["schema"]["group"], Value::from(""));
 }
 
-/// **Full effective policy including defaults (C5 / C20).** An all-default node's
+/// **Full effective policy including defaults.** An all-default node's
 /// policy block equals the every-default-written-out form; an overridden node
 /// shows the overridden values. Neither omits a field.
 #[test]
@@ -267,7 +267,7 @@ fn full_effective_policy_is_written_out_with_defaults() {
         .map(|n| (n["name"].as_str().unwrap(), n))
         .collect();
 
-    // The all-default `schema` node writes out every C5 field at its default.
+    // The all-default `schema` node writes out every policy field at its default.
     let p = &by_name["schema"]["policy"];
     for field in [
         "retries",
@@ -301,7 +301,7 @@ fn full_effective_policy_is_written_out_with_defaults() {
     assert_eq!(lp["execution_class"], Value::from("compute"));
 }
 
-/// **Declared resource requirements present (C9 / C20).** A node's declared cost
+/// **Declared resource requirements present.** A node's declared cost
 /// vector appears in native units with distinct working-memory, output-residency,
 /// and thread entries, matching what was declared.
 #[test]
@@ -321,9 +321,10 @@ fn declared_resource_requirements_are_present_in_native_units() {
     assert_eq!(r["blocking_threads"], Value::from(0));
 }
 
-/// **Edge kinds and carried types (C20).** A data edge is tagged `data` and
+/// **Edge kinds and carried types.** A data edge is tagged `data` and
 /// records the stable declared name of its carried payload type; every data edge
-/// the runtime would use is present. (Ordering edges are T50; none exist yet.)
+/// the runtime would use is present. (Ordering edges are covered separately; none
+/// exist yet in this fixture.)
 #[test]
 fn data_edges_are_tagged_and_carry_the_stable_type_name() {
     let pipeline = fixture_pipeline();
@@ -341,7 +342,7 @@ fn data_edges_are_tagged_and_carry_the_stable_type_name() {
     assert_eq!(schema_edge["kind"], "data");
     assert_eq!(schema_edge["type_name"], "Schema");
 
-    // Every edge is a data edge here (no ordering edges yet — T50).
+    // Every edge is a data edge here (no ordering edges yet).
     assert!(edges.iter().all(|e| e["kind"] == "data"));
 }
 
@@ -359,7 +360,7 @@ impl Task for Publish {
     }
 }
 
-/// **Ordering edges recorded distinctly (C20 / C4).** A pipeline with one data
+/// **Ordering edges recorded distinctly.** A pipeline with one data
 /// edge and one ordering edge into distinct downstream nodes emits both: the data
 /// edge tagged `data` carrying its stable type name; the ordering edge tagged
 /// `ordering` with NO `type_name` field. The artifact still validates against the
@@ -453,7 +454,7 @@ fn ordering_edges_are_recorded_distinctly_from_data_edges() {
     );
 }
 
-/// **Stable declared names, never `type_name` as identity (C20 / C21).** Recorded
+/// **Stable declared names, never `type_name` as identity.** Recorded
 /// task and type names are the author-declared stable names — `load-rows-task`
 /// differs from its Rust type identifier `LoadRows`. No `type_name` value is used
 /// as identity, and the informational `type_name` debug field is not populated by
@@ -482,7 +483,7 @@ fn recorded_names_are_stable_declared_names_never_type_name() {
     );
 }
 
-/// **Build-provenance header embedded (C20 / Stability).** The header carries the
+/// **Build-provenance header embedded.** The header carries the
 /// schema version, tool version, pipeline identity, the reserved fingerprint /
 /// algorithm-version slots, and build provenance (tool version, git commit,
 /// lockfile hash) fixed for the binary and identical across repeated emissions.
@@ -494,7 +495,7 @@ fn header_carries_the_versioned_provenance_slots() {
     assert_eq!(h["schema_version"], Value::from(GRAPH_SCHEMA_VERSION));
     assert_eq!(h["tool_version"], Value::from("0.0.0"));
     assert_eq!(h["pipeline"], Value::from("example-pipeline"));
-    // Reserved fingerprint slots present (values are T41's).
+    // Reserved fingerprint slots present (the fingerprint values are filled elsewhere).
     assert!(h.get("fingerprint_structural").is_some());
     assert!(h.get("fingerprint_policy").is_some());
     assert!(h["fingerprint_algorithm_version"].as_u64().unwrap() >= 1);
@@ -521,7 +522,7 @@ fn header_carries_the_versioned_provenance_slots() {
     assert!(!one.lockfile_hash().is_empty());
 }
 
-/// **Two in-process assemblies agree — interlock with T15 (C7 / C20).** Assembling
+/// **Two in-process assemblies agree.** Assembling
 /// the same pipeline definition twice in one process and emitting each yields
 /// byte-identical artifacts outside the generation-time field — emission adds no
 /// nondeterminism on top of assembly, regardless of registration order.
@@ -568,7 +569,7 @@ fn two_in_process_assemblies_emit_identically() {
     );
 }
 
-/// **Graph verb reachable, needs no store or parameters (C26 / C7).** The graph
+/// **Graph verb reachable, needs no store or parameters.** The graph
 /// verb writes the artifact to an arbitrary sink, opening no run store and reading
 /// no parameters — the inspection-verb guarantee.
 #[test]
@@ -597,7 +598,7 @@ fn graph_verb_writes_to_a_sink_with_no_store_or_parameters() {
     );
 }
 
-/// **A node without stable names is not emittable (C20).** The C20 contract
+/// **A node without stable names is not emittable.** The emittability contract
 /// requires author-declared stable names as identity; a node registered through a
 /// type-erased registrar (no stable names captured) produces a clear error naming
 /// the node — never a silent `type_name` fallback.
@@ -627,7 +628,7 @@ fn a_node_without_stable_names_fails_emission() {
     );
 }
 
-/// **A malformed stable name fails emission (C20 / T0.7 §1).** A recorded stable
+/// **A malformed stable name fails emission.** A recorded stable
 /// name that violates the well-formedness rule (whitespace, control chars, or
 /// out-of-set punctuation) is rejected with an error naming the node and value.
 #[test]
@@ -666,7 +667,7 @@ fn a_malformed_stable_name_fails_emission() {
 }
 
 /// **A no-policy node and an all-defaults-written-out node emit identical policy
-/// blocks (C5 / C20).** Two nodes — one registered with `NodePolicy::new()`, one
+/// blocks.** Two nodes — one registered with `NodePolicy::new()`, one
 /// with every default explicitly set — produce byte-identical policy JSON.
 #[test]
 fn no_policy_and_written_out_defaults_emit_identical_policy_blocks() {
@@ -691,10 +692,10 @@ fn no_policy_and_written_out_defaults_emit_identical_policy_blocks() {
     );
 }
 
-/// **The checked-in T40 corpus fixture is a real emitted artifact (C20 / T0.10).**
+/// **The checked-in corpus fixture is a real emitted artifact.**
 /// `tests/fixtures/corpus/graph/v1/t40-three-node.json` must be exactly what this
 /// emitter produces for the three-node fixture (generation-time field aside), so
-/// the corpus example never drifts from the emitter and the T39/T48 corpus walker
+/// the corpus example never drifts from the emitter and the corpus walker
 /// validates a genuine emission rather than a hand-written approximation.
 #[test]
 fn checked_in_corpus_fixture_matches_a_real_emission() {

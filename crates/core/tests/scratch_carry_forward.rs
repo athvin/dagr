@@ -1,26 +1,24 @@
-//! C18 · Resume **scratch carry-forward** — ticket T54b (071). Written first, TDD.
-//! Each test mirrors one bullet of the ticket's Test plan.
+//! Resume **scratch carry-forward**. Written first, TDD.
 //!
-//! # What this proves (vs T54a's `scratch_survives_restart.rs`)
+//! # What this proves (vs `scratch_survives_restart.rs`)
 //!
-//! T54a proves the durability *half*: a non-succeeded node's scratch **survives**
-//! a full process exit and is readable, byte-for-byte, from a *later, separate*
-//! process opening the same prior run directory (arch.md `### C18`; "The shape of
-//! a run" line 67). That is the checkpoint sitting on disk. This suite proves the
-//! resume *transfer*: on resume, for exactly the nodes T58's plan marks for
-//! re-execution (its `must_run` set), each node's **retained prior scratch is
-//! copied forward** into the **resumed run's** per-node namespace, so the
-//! re-executing node reads its checkpoint through the ordinary C18 context with no
-//! awareness that a copy happened, and no path to the prior run's directory
-//! (arch.md line 391; C18 acceptance "a resumed run's re-executing nodes see the
-//! prior run's scratch values", line 399).
+//! The restart suite proves the durability *half*: a non-succeeded node's scratch
+//! **survives** a full process exit and is readable, byte-for-byte, from a *later,
+//! separate* process opening the same prior run directory. That is the checkpoint
+//! sitting on disk. This suite proves the resume *transfer*: on resume, for exactly
+//! the nodes the plan marks for re-execution (its `must_run` set), each node's
+//! **retained prior scratch is copied forward** into the **resumed run's** per-node
+//! namespace, so the re-executing node reads its checkpoint through the ordinary
+//! context with no awareness that a copy happened, and no path to the prior run's
+//! directory — a resumed run's re-executing nodes see the prior run's scratch
+//! values.
 //!
 //! The copy is **copy, not move**: the prior run's scratch is *retained*, not
-//! consumed (T54a) — prune (C26) alone reclaims it. Only re-executing nodes are
-//! copied; a `satisfied-from-prior` node never runs and never reads scratch, so
-//! nothing is copied for it. Cross-node **isolation** survives the copy: each
-//! node's carried-forward scratch lands only in its own resumed namespace, keyed
-//! by that node's own identity fingerprint — one node can never receive another's.
+//! consumed — prune alone reclaims it. Only re-executing nodes are copied; a
+//! `satisfied-from-prior` node never runs and never reads scratch, so nothing is
+//! copied for it. Cross-node **isolation** survives the copy: each node's
+//! carried-forward scratch lands only in its own resumed namespace, keyed by that
+//! node's own identity fingerprint — one node can never receive another's.
 //!
 //! # Determinism + isolation (no wall-clock sleeps; private per-test temp)
 //!
@@ -88,7 +86,7 @@ fn store_for(base: &Path, pipeline: &str, run: &str, node: &str) -> ScratchStore
 
 /// Seed a node's **retained prior-run scratch** by writing a key/value directly
 /// through its prior-run store handle (a non-succeeded node's scratch is retained
-/// on disk, T54a — the write leaves it there, no success-hook deletion).
+/// on disk — the write leaves it there, no success-hook deletion).
 fn seed_prior_scratch(
     base: &Path,
     pipeline: &str,
@@ -102,7 +100,7 @@ fn seed_prior_scratch(
 }
 
 /// Carry one re-executing node's retained prior scratch forward into the resumed
-/// run's namespace — the operation under test (T54b). A thin wrapper over the new
+/// run's namespace — the operation under test. A thin wrapper over the
 /// [`ScratchStore::carry_forward`] API so each test reads at the resume level.
 fn carry_forward(
     base: &Path,
@@ -132,8 +130,7 @@ const RESUMED: &str = "run-resumed";
 /// linked prior run.** The prior run left a node non-succeeded with a retained
 /// key/value; resume carries that node's scratch forward; the resumed node reads
 /// the key through the ordinary context API and gets the exact prior bytes — the
-/// checkpoint crossed from the prior namespace into the resumed one (arch.md line
-/// 391, 399).
+/// checkpoint crossed from the prior namespace into the resumed one.
 ///
 /// Non-vacuous: without the copy, the resumed node's namespace is empty and the
 /// read is `Ok(None)`.
@@ -170,7 +167,7 @@ fn a_re_executing_node_sees_the_prior_runs_scratch_value() {
 /// namespace — the resumed node has no path to the prior run's directory.** After
 /// the copy, the resumed run directory's scratch for that node holds the key; the
 /// value was read through the resumed handle, whose namespace is under the resumed
-/// run id, never the prior one (arch.md T53/T54a per-run/per-node namespacing).
+/// run id, never the prior one (per-run/per-node namespacing).
 ///
 /// Non-vacuous: a copy that wrote into the prior namespace (or read through the
 /// prior handle) would leave the resumed namespace empty here.
@@ -209,8 +206,7 @@ fn the_value_arrives_in_the_resumed_namespace_not_the_prior_one() {
 /// **A continued node resumes from its high-water mark, not from the beginning.**
 /// The prior run recorded a high-water mark ("finished item K"); after carry-
 /// forward the re-executing node reads that mark and would do only the remaining
-/// work — it did not restart from zero, which is the point of checkpoints (arch.md
-/// line 391).
+/// work — it did not restart from zero, which is the point of checkpoints.
 ///
 /// Non-vacuous: without carry-forward the mark is absent and the node would start
 /// over from the beginning.
@@ -242,11 +238,11 @@ fn a_continued_node_resumes_from_its_checkpoint_not_from_zero() {
 // ===========================================================================
 
 /// **A `satisfied-from-prior` node has no scratch copied forward.** The copy set
-/// is the re-execution set only: a node T58 leaves outside `must_run` is never
+/// is the re-execution set only: a node the plan leaves outside `must_run` is never
 /// carried forward, so its resumed scratch namespace is empty — it never runs and
-/// never reads scratch (arch.md lines 35, 391). This is modelled by simply **not**
-/// calling carry-forward for that node (the driver only carries the `must_run`
-/// set), even though it *had* retained prior scratch.
+/// never reads scratch. This is modelled by simply **not** calling carry-forward
+/// for that node (the driver only carries the `must_run` set), even though it *had*
+/// retained prior scratch.
 ///
 /// Non-vacuous: if carry-forward were driven over all nodes rather than the
 /// must-run set, the satisfied node's namespace would be non-empty here.
@@ -287,8 +283,8 @@ fn a_satisfied_from_prior_node_has_nothing_carried_forward() {
 /// **A re-executing node whose prior scratch is absent resumes with an empty
 /// namespace — absence is not an error.** The node ended non-succeeded but never
 /// wrote any retained scratch; carry-forward is a clean empty carry (`Ok`), and
-/// the resumed node reads an empty namespace and proceeds (arch.md: missing prior
-/// scratch is a clean start, not a resume failure).
+/// the resumed node reads an empty namespace and proceeds (missing prior scratch is
+/// a clean start, not a resume failure).
 ///
 /// Non-vacuous: if carry-forward treated a missing prior namespace as an error,
 /// this would return `Err` and fail.
@@ -317,7 +313,7 @@ fn a_re_executing_node_with_no_prior_scratch_starts_empty() {
 /// wrote a distinct value under the **same key name** in the prior run. After
 /// carrying both forward, A reads A's value and B reads B's; neither can read the
 /// other's — the per-run/per-node namespacing kept the two carried-forward sets
-/// disjoint (C18 isolation criterion, arch.md line 399).
+/// disjoint (the isolation criterion).
 ///
 /// Non-vacuous: a copy that mixed the two nodes' namespaces (or keyed by anything
 /// other than each node's own identity) would let one read the other's value.
@@ -357,9 +353,9 @@ fn cross_node_isolation_survives_the_copy() {
 // ===========================================================================
 
 /// **Carry-forward is a copy, not a move: the prior run's retained scratch is
-/// still there afterward.** The prior scratch is retained (T54a) and reclaimed
-/// only by prune (C26) — carry-forward must not consume it. After the copy, both
-/// the prior namespace and the resumed namespace hold the value.
+/// still there afterward.** The prior scratch is retained and reclaimed only by
+/// prune — carry-forward must not consume it. After the copy, both the prior
+/// namespace and the resumed namespace hold the value.
 ///
 /// Non-vacuous: a move (or a copy that deleted the source) would leave the prior
 /// namespace empty and fail the prior-side read.
@@ -395,8 +391,7 @@ fn carry_forward_is_a_copy_the_prior_scratch_is_retained() {
 /// not) and one satisfied node (wrote scratch but is not re-executed). Driving
 /// carry-forward over the re-execution set only, exactly the re-executing node
 /// that had scratch ends up with carried-forward scratch; the satisfied node has
-/// none; the re-executing node that wrote nothing has an empty namespace (arch.md
-/// line 391).
+/// none; the re-executing node that wrote nothing has an empty namespace.
 #[test]
 fn only_re_executing_nodes_with_prior_scratch_are_copied() {
     let base = TempBase::new("only-reexec");
@@ -467,8 +462,8 @@ fn all_of_a_nodes_retained_keys_are_carried_forward() {
 /// run's scratch destination for one node is made unwritable (a plain file sits
 /// where its namespace directory must be created), so the copy's write fails. The
 /// carry surfaces a [`ScratchError`] (which converts to a retry-eligible
-/// [`TaskError`], C4 / arch.md line 393); it does not silently succeed, and it
-/// leaves other nodes' carries unaffected.
+/// [`TaskError`]); it does not silently succeed, and it leaves other nodes' carries
+/// unaffected.
 ///
 /// Non-vacuous: a carry-forward that swallowed the error (silent skip) would return
 /// `Ok`, and this fails.
@@ -491,7 +486,7 @@ fn carry_forward_io_failure_is_retry_eligible_against_the_node() {
         result.is_err(),
         "a carry-forward write failure surfaces as an error, not a silent skip"
     );
-    // It converts to a retry-eligible task failure attributed to the node (C4).
+    // It converts to a retry-eligible task failure attributed to the node.
     let task_err: dagr_core::error::TaskError = result.unwrap_err().into();
     assert!(
         task_err.is_retryable(),

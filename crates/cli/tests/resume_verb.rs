@@ -1,6 +1,6 @@
-//! C27 · Resume **verb wiring** — ticket T58 (070). Written first, TDD.
+//! Resume **verb wiring**. Written first, TDD.
 //!
-//! The `resume` verb was stubbed by T55 (068). T58 replaces the stub with the
+//! The `resume` verb was previously a stub; it is now the
 //! real resume behaviour: it reads a prior run's folded artifact, runs the pure
 //! seed/closure/demand plan (`dagr_core::resume`), derives parameters and the
 //! data interval from the prior artifact (a conflict refuses; `--force`
@@ -12,8 +12,8 @@
 //!
 //! These exercise the REAL `dagr_cli::contract` resume entry against the REAL
 //! `dagr_core::flow` pipeline surface and the REAL fold shape. Determinism +
-//! refusal-exit-code alignment with the C26 table are asserted here; the
-//! exhaustive behavioural matrix is T59.
+//! refusal-exit-code alignment with the exit-code table are asserted here; the
+//! exhaustive behavioural matrix lives in a separate suite.
 
 use std::collections::BTreeMap;
 

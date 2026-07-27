@@ -1,19 +1,15 @@
-//! Assembly validation and precomputation tests — ticket T14 (025). Written
-//! first, TDD.
+//! Assembly validation and precomputation tests. Written first, TDD.
 //!
 //! These exercise the **real** assembly pass in [`dagr_core::assembly`]: the
 //! total, pure validation-plus-precomputation that turns the immutable
-//! [`Pipeline`](dagr_core::flow::Pipeline) from T13 into a validated,
-//! runtime-ready [`AssemblyArtifact`](dagr_core::assembly::AssemblyArtifact),
-//! reporting **every** problem it finds (never just the first) — governed by C7
-//! (arch.md `### C7 · Flow assembly`), with criteria leaking in from C5 (invalid
-//! class override), C10 (consumer counts), C17 (nonzero teardown cost), and C27
-//! (durable-output contract).
+//! [`Pipeline`](dagr_core::flow::Pipeline) into a validated, runtime-ready
+//! [`AssemblyArtifact`](dagr_core::assembly::AssemblyArtifact), reporting
+//! **every** problem it finds (never just the first). Concerns leak in from the
+//! invalid class override, consumer counts, nonzero teardown cost, and the
+//! durable-output contract.
 //!
-//! The assembly/bootstrap seam is the T0.5 ADR; the durable-output contract is
-//! the T0.8 ADR; the fingerprint composition is the T0.7 ADR. Capacity/cost-fit
-//! and the actual capture of allowlisted environment values are **bootstrap**
-//! (T15/T24/T29), deliberately NOT here.
+//! Capacity/cost-fit and the actual capture of allowlisted environment values
+//! are **bootstrap** concerns, deliberately NOT here.
 
 use dagr_core::assembly::{AssemblyArtifact, DurableOutput, NodePolicy, ProblemKind};
 use dagr_core::flow::Flow;
@@ -90,7 +86,7 @@ impl Task for BlockingTask {
 
 // --- A durable-contract-satisfying output type and one that lacks it ---------
 
-/// An output type that IS a durable reference — implements the contract (T57).
+/// An output type that IS a durable reference — implements the contract.
 struct DurableBlob;
 impl DurableOutput for DurableBlob {
     fn serialize_reference(&self) -> String {
@@ -178,7 +174,7 @@ fn empty_pipeline_is_rejected() {
 #[test]
 fn invalid_execution_class_override_fails_assembly() {
     // Await-bound task overridden to a synchronous class (the disallowed
-    // direction per C5).
+    // direction).
     let mut flow = Flow::new();
     let _ = flow.register_source_with(
         "awaitish",

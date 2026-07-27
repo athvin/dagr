@@ -1,29 +1,27 @@
-//! `dagr-crashy-run` — a **test-support** pipeline-run harness for T68 (ticket
-//! 060): the crashed-run finalize path.
+//! `dagr-crashy-run` — a **test-support** pipeline-run harness for the
+//! crashed-run finalize path.
 //!
 //! # Why this exists
 //!
-//! T68 proves system criterion 3's *crash clause* (arch.md `### C22 · Run
-//! artifact`, acceptance: "a crashed run's stream folds into an artifact, marked
-//! interrupted, containing everything up to the crash — produced by a later
-//! invocation of the binary"). The honest way to test that is to launch a **real**
-//! run as a **separate OS process** writing its C19 event stream continuously to a
-//! real on-disk `events.jsonl`, then kill that process **abruptly with an
-//! uncatchable signal** (so no exit handler runs — "the dominant failure mode in a
-//! container is an abrupt kill with no chance to run an exit handler", arch.md
-//! C19) and fold the surviving bytes with the standalone T42 fold. This binary is
-//! the run under kill.
+//! This harness proves the *crash clause*: a crashed run's stream folds into an
+//! artifact, marked interrupted, containing everything up to the crash —
+//! produced by a later invocation of the binary. The honest way to test that is
+//! to launch a **real** run as a **separate OS process** writing its event
+//! stream continuously to a real on-disk `events.jsonl`, then kill that process
+//! **abruptly with an uncatchable signal** (so no exit handler runs — the
+//! dominant failure mode in a container is an abrupt kill with no chance to run
+//! an exit handler) and fold the surviving bytes with the standalone fold. This
+//! binary is the run under kill.
 //!
-//! The M1 driver writes its stream through an **injected** [`EventSink`] (T0.6),
-//! and the production local-file sink (T0.6 / C18) is not yet wired into a
-//! runnable `dagr` verb (that is T55). So this harness drives the **real** merged
-//! C19 [`EventStreamWriter`] directly through a minimal append-only file sink and
-//! emits exactly the transition sequence a real run would (`run-started`,
-//! `node-ready`/`node-admitted`/`attempt-started`/`attempt-succeeded`/
-//! `attempt-outcome`/`node-terminal` per node, and `run-finished` only when it is
-//! allowed to finish). It is **not** production code and ships in no released
-//! binary — it is checked-in, reusable scaffolding the T68 integration test (and
-//! T49, the M3 demo) launch and kill.
+//! The driver writes its stream through an **injected** [`EventSink`], and the
+//! production local-file sink is not yet wired into a runnable `dagr` verb. So
+//! this harness drives the **real** [`EventStreamWriter`] directly through a
+//! minimal append-only file sink and emits exactly the transition sequence a
+//! real run would (`run-started`, `node-ready`/`node-admitted`/
+//! `attempt-started`/`attempt-succeeded`/`attempt-outcome`/`node-terminal` per
+//! node, and `run-finished` only when it is allowed to finish). It is **not**
+//! production code and ships in no released binary — it is checked-in, reusable
+//! scaffolding the crash-integration test and the demo launch and kill.
 //!
 //! # Determinism contract (no fixed sleeps)
 //!
@@ -62,9 +60,9 @@ use dagr_artifact::event_stream::{
 /// A minimal append-only local-file [`EventSink`]: it appends each complete line
 /// to the run's `events.jsonl` and flushes to the OS on `flush`. It models the
 /// default local-file sink's crash-relevant property — it does **not** fsync per
-/// append (T0.6 §6), so the bytes an abrupt kill leaves on disk are exactly the
+/// append, so the bytes an abrupt kill leaves on disk are exactly the
 /// appends that reached the file, possibly cut mid-line. That is precisely the
-/// crash surface T68 folds.
+/// crash surface the fold must handle.
 struct FileSink {
     file: File,
 }
@@ -117,7 +115,7 @@ impl MonotonicClock for StepClock {
 }
 
 /// The full run-artifact header known at start — every field populated, so the
-/// folded artifact's header is complete from `run-started` alone (C19).
+/// folded artifact's header is complete from `run-started` alone.
 fn header() -> RunStartedHeader {
     let mut parameters = std::collections::BTreeMap::new();
     parameters.insert("date".to_string(), "2026-07-23".to_string());
@@ -213,7 +211,7 @@ fn main() -> ExitCode {
     let marker = Path::new(marker);
 
     // The run store path this run writes under: <base>/<pipeline>/<run-id>/events.jsonl
-    // (T0.6 §3) — the same layout the writer's `stream_path` computes.
+    // — the same layout the writer's `stream_path` computes.
     let stream_path = PathBuf::from(format!(
         "{base}/crashy-pipeline/{run_id}/{EVENTS_FILE_NAME}"
     ));
@@ -277,7 +275,7 @@ fn main() -> ExitCode {
         // Model a kill accepted only PART-WAY through the sink's next append: put
         // a byte-truncated (unterminated) fragment of a would-be next record onto
         // the on-disk stream, so the surviving file ends mid-record. The fold must
-        // tolerate and discard exactly this one trailing partial (C19), raising no
+        // tolerate and discard exactly this one trailing partial, raising no
         // error. Written by re-opening the same file so it is a genuine on-disk
         // byte-truncation, not an in-memory splice.
         if let Ok(mut f) = OpenOptions::new().append(true).open(&stream_path) {

@@ -1,61 +1,60 @@
-//! The C7 flow builder and node identity — accumulating node registrations into
-//! an **immutable pipeline** (arch.md `### C7 · Flow assembly`).
+//! The flow builder and node identity — accumulating node registrations into
+//! an **immutable pipeline**.
 //!
 //! A [`Flow`] builder accepts node registrations — each carrying an **explicit,
-//! caller-supplied node name** — and hands back the typed [`Handle`] from T10
-//! for each. Finalization ([`Flow::finish`]) **consumes** the builder and yields
+//! caller-supplied node name** — and hands back the typed [`Handle`] for each.
+//! Finalization ([`Flow::finish`]) **consumes** the builder and yields
 //! an immutable [`Pipeline`]: once produced, no further registration or mutation
 //! is possible (that immutability is enforced at compile time — the pipeline has
 //! no registration method, and `finish` takes the builder by value).
 //!
 //! # Node identity is the registration name — never the order
 //!
-//! The one decision everything downstream binds to (T0.7, C2): **a node's
-//! identity is derived solely from its explicit registration name.** It is
-//! *never* derived from registration order, an insertion index, or any implicit
-//! counter. Two consequences the tests pin:
+//! The one decision everything downstream binds to: **a node's identity is
+//! derived solely from its explicit registration name.** It is *never* derived
+//! from registration order, an insertion index, or any implicit counter. Two
+//! consequences the tests pin:
 //!
 //! - **Renaming a node changes its identity** (and, downstream, its structural
-//!   fingerprint — C21).
+//!   fingerprint).
 //! - **Reordering registrations changes nothing**: the same set of names, in any
 //!   registration order, yields the same node identities and the same immutable
 //!   pipeline content. The node set is keyed by name, so identity comparison and
 //!   lookup are order-insensitive.
 //!
 //! Node names are **unique across the whole pipeline** — that uniqueness is the
-//! identity contract this ticket establishes and preserves. *Detecting* a
-//! duplicate (and reporting both declarations) is an **assembly** check deferred
-//! to T14; this module assumes uniqueness and does not diagnose a violation.
+//! identity contract this module establishes and preserves. *Detecting* a
+//! duplicate (and reporting both declarations) is an **assembly** check performed
+//! elsewhere; this module assumes uniqueness and does not diagnose a violation.
 //!
 //! # The group label is carried alongside identity, never part of it
 //!
-//! Each node carries an optional, flat **group label** (C6 — groups do not
-//! nest). A group label is **presentation metadata**: it feeds artifact
-//! organization and diagram clustering only (the C24 renderer draws each group
-//! as a cluster, T46), and is **excluded from node identity** (and from both
-//! graph fingerprints — C21), so a rename or regroup is review-visible in the
-//! structure diff (C28) but never breaks resume (C27). Two nodes with the same
-//! name but different group labels have the *same* identity — and because a name
-//! is unique across the whole pipeline regardless of grouping, that pair is a
-//! duplicate-name assembly error, not two distinct nodes. The label carries **no**
-//! execution semantics. Attach it at registration with the `register_*_in_group`
-//! API (e.g. [`Flow::register_source_in_group`], [`Flow::register_in_group`]).
+//! Each node carries an optional, flat **group label** (groups do not nest). A
+//! group label is **presentation metadata**: it feeds artifact organization and
+//! diagram clustering only (the renderer draws each group as a cluster), and is
+//! **excluded from node identity** (and from both graph fingerprints), so a
+//! rename or regroup is review-visible in the structure diff but never breaks
+//! resume. Two nodes with the same name but different group labels have the
+//! *same* identity — and because a name is unique across the whole pipeline
+//! regardless of grouping, that pair is a duplicate-name assembly error, not two
+//! distinct nodes. The label carries **no** execution semantics. Attach it at
+//! registration with the `register_*_in_group` API (e.g.
+//! [`Flow::register_source_in_group`], [`Flow::register_in_group`]).
 //!
 //! # Assembly is pure
 //!
 //! Registration and finalization perform **no I/O** and reach **no parameter
 //! value** — no network, filesystem, clock, credentials, or parameters. The type
 //! surface offers no parameter accessor at all: parameters are a bootstrap
-//! concern that arrives *after* assembly (C7), so the graph provably cannot
-//! depend on them. The full mechanical empty-environment proof is T14/T15; this
-//! module guarantees only that the builder+finalize path introduces no such
-//! dependency.
+//! concern that arrives *after* assembly, so the graph provably cannot depend on
+//! them. This module guarantees only that the builder+finalize path introduces no
+//! such dependency; the full mechanical empty-environment proof lives in assembly.
 //!
 //! # What lives elsewhere
 //!
-//! This ticket lands the builder skeleton, node identity, and the immutable
-//! pipeline **only**. Deferred to **T14** (assembly validation and
-//! precomputation), for which this module lays only the data *seams*:
+//! This module lands the builder skeleton, node identity, and the immutable
+//! pipeline **only**. Assembly validation and precomputation are performed
+//! elsewhere, for which this module lays only the data *seams*:
 //!
 //! - **Duplicate-name reporting** (naming both declarations), the empty-pipeline
 //!   check, execution-class-override validation, duplicate stable-name checking,
@@ -66,27 +65,25 @@
 //!   those checks read.
 //!
 //! Data/ordering **dependency binding** (the exact-type match, tuple arities,
-//! fan-out, ordering edges) is C3/C4 (T11/T12); this module *drives* the T11
+//! fan-out, ordering edges) lives in the binding module; this module *drives* the
 //! [`NodeBinding`] seam to record a data-dependent node's edges, it does not
 //! re-implement the binding. Groups (the real API), fingerprints, the graph
-//! artifact, and the event-stream writer are C6/C21/C20/C19 (T51/T41/T40/T19).
+//! artifact, and the event-stream writer live in their own modules.
 //!
-//! # Node identity here vs the stable *type* name (T0.7)
+//! # Node identity here vs the stable *type* name
 //!
 //! **Node identity** — this module's subject — is the explicit **registration
 //! name**, a per-node `String` the author supplies at each registration. It is
-//! *distinct* from the **stable task/payload *type* name** the T0.7 ADR fixes: a
-//! [`StableName`] associated-constant carried by task and payload *types*, feeding
-//! the graph artifact (C20 / T40) and the two fingerprints (C21 / T41). T13 built
-//! node identity on the registration *name* alone; the [`StableName`] trait lands
-//! with its first consumer, **T40** (C20 graph-artifact emission), which is where
-//! the
-//! stable-name-aware registrars
+//! *distinct* from the **stable task/payload *type* name**: a [`StableName`]
+//! associated-constant carried by task and payload *types*, feeding the graph
+//! artifact and the two fingerprints. Node identity is built on the registration
+//! *name* alone; the [`StableName`] trait is consumed by the graph-artifact
+//! emitter, where the stable-name-aware registrars
 //! ([`register_source_named`](Flow::register_source_named) /
 //! [`register_named`](Flow::register_named)) capture a node's
 //! [stable type names](StableTypeNames) into [`PipelineNode::stable_names`].
 //! Duplicate *stable-type-name* checking (like duplicate *node-name* checking) is
-//! an assembly concern deferred to T14.
+//! an assembly concern performed elsewhere.
 
 use std::collections::BTreeMap;
 
@@ -97,20 +94,20 @@ use crate::stable_name::{StableInputNames, StableName};
 use crate::task::{ExecutionClass, Task};
 use crate::Deps;
 
-/// The **author-declared stable names** a node carries for the graph artifact
-/// (arch.md C20; T0.7 §1–§2) — the stable *task* name, the ordered stable *input*
-/// type names, and the stable *output* type name, all captured at the typed
-/// registration site from the [`StableName`] constants on the task and payload
-/// types.
+/// The **author-declared stable names** a node carries for the graph artifact —
+/// the stable *task* name, the ordered stable *input* type names, and the stable
+/// *output* type name, all captured at the typed registration site from the
+/// [`StableName`] constants on the task and payload types.
 ///
 /// Distinct from the node's **identity name** (the registration `String`): the
-/// identity name is how the pipeline keys and wires the node (C2/C7), while these
-/// are the author-declared *type* names the C20 artifact records and the C21
-/// fingerprints hash (never [`std::any::type_name`], which is admitted only as an
-/// informational debug field — T0.7 §1). They are captured **only** by the
+/// identity name is how the pipeline keys and wires the node, while these are the
+/// author-declared *type* names the graph artifact records and the fingerprints
+/// hash (never [`std::any::type_name`], which is admitted only as an
+/// informational debug field). They are captured **only** by the
 /// stable-name-aware registrars ([`Flow::register_source_named`],
 /// [`Flow::register_named`]); a node registered through the type-erased registrars
-/// carries [`None`] and is not emittable to the C20 contract (which requires them).
+/// carries [`None`] and is not emittable to the graph artifact (which requires
+/// them).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StableTypeNames {
     task: &'static str,
@@ -119,22 +116,22 @@ pub struct StableTypeNames {
 }
 
 impl StableTypeNames {
-    /// The author-declared stable **task** name (C20) — the `STABLE_NAME` of the
-    /// task type registered for this node.
+    /// The author-declared stable **task** name — the `STABLE_NAME` of the task
+    /// type registered for this node.
     #[must_use]
     pub fn task(&self) -> &'static str {
         self.task
     }
 
-    /// The ordered author-declared stable **input** type names (C20) — one per
-    /// bound input in declaration order, empty for a consume-nothing node.
+    /// The ordered author-declared stable **input** type names — one per bound
+    /// input in declaration order, empty for a consume-nothing node.
     #[must_use]
     pub fn inputs(&self) -> &[&'static str] {
         &self.inputs
     }
 
-    /// The author-declared stable **output** type name (C20) — the `STABLE_NAME`
-    /// of the produced payload type, or the reserved unit sentinel
+    /// The author-declared stable **output** type name — the `STABLE_NAME` of the
+    /// produced payload type, or the reserved unit sentinel
     /// ([`UNIT_STABLE_NAME`](crate::stable_name::UNIT_STABLE_NAME)) for an
     /// effect-only (`()`-output) node.
     #[must_use]
@@ -144,18 +141,16 @@ impl StableTypeNames {
 }
 
 /// The run-level **failure mode** — what happens to the *rest* of the run when a
-/// node reaches a failure-like terminal state (arch.md `### C15 · Failure policy
-/// and propagation`; C15 / T34).
+/// node reaches a failure-like terminal state.
 ///
 /// It is a **run policy**, not a graph fact: it is excluded from node identity and
-/// from both graph fingerprints (C21), so flipping it re-runs the same graph under
-/// a different failure discipline. It is selected at the builder/assembly seam
+/// from both graph fingerprints, so flipping it re-runs the same graph under a
+/// different failure discipline. It is selected at the builder/assembly seam
 /// ([`Flow::failure_mode`] / [`Pipeline::failure_mode`]); the operator/CLI
-/// override that also sets it is deferred to T55 (C26) and slots into the same
-/// seam without a signature change.
+/// override that also sets it slots into the same seam without a signature change.
 ///
-/// In **both** modes propagation is governed by trigger rules (Vocabulary): a node
-/// is marked `upstream-failed` only when its rule can no longer be satisfied, so an
+/// In **both** modes propagation is governed by trigger rules: a node is marked
+/// `upstream-failed` only when its rule can no longer be satisfied, so an
 /// `all-terminal` cleanup node downstream of a failure still runs regardless of
 /// mode. The mode governs only the *scheduling* of still-eligible work after the
 /// first failure, never the propagated-state table.
@@ -163,7 +158,7 @@ impl StableTypeNames {
 pub enum FailureMode {
     /// **Continue independent** (the default): a failure cancels nothing; branches
     /// with no ancestral relationship to the failure run to completion. This is the
-    /// least-surprising default and the behaviour the M1 run loop already had (it
+    /// least-surprising default and the behaviour the run loop already had (it
     /// never cancelled anything), so selecting nothing changes nothing.
     #[default]
     ContinueIndependent,
@@ -172,153 +167,153 @@ pub enum FailureMode {
     /// consume-nothing node with a *non-default* trigger rule whose rule fires on
     /// the resulting terminal picture still executes (a notify/cleanup contingency
     /// is exactly the work a failure is meant to trigger). Pending default-rule
-    /// nodes unrelated to the failure end `cancelled`. Teardown ordering (C17) is a
-    /// documented, deliberately-unimplemented carve-out left to T52.
+    /// nodes unrelated to the failure end `cancelled`. Teardown ordering is a
+    /// documented, deliberately-unimplemented carve-out.
     StopOnFirstFailure,
 }
 
 /// A single node inside the immutable [`Pipeline`] — its identity, its
 /// group-label slot, and the structure downstream tickets read.
 ///
-/// Every field a downstream ticket reads is preserved here: the identity
+/// Every field a downstream stage reads is preserved here: the identity
 /// [`name`](PipelineNode::name) (and its derived [`id`](PipelineNode::id)), the
 /// [`group`](PipelineNode::group) label slot (presentation metadata, **not**
-/// identity — C6/T51), and the recorded [`data_edges`](PipelineNode::data_edges)
-/// and [`trigger_rule`](PipelineNode::trigger_rule) the binding produced (the
-/// seam assembly (T14), readiness (C11), and slot wiring (C10) consume).
+/// identity), and the recorded [`data_edges`](PipelineNode::data_edges) and
+/// [`trigger_rule`](PipelineNode::trigger_rule) the binding produced (the seam
+/// assembly, readiness, and slot wiring consume).
 ///
 /// It is a **read-only** record: it exposes accessors and no mutators, so a node
 /// cannot be altered once the pipeline is finalized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineNode {
-    /// The explicit registration name — the node's identity (T0.7 / C2).
+    /// The explicit registration name — the node's identity.
     name: String,
-    /// The name-derived identity token (opaque; T10). Redundant with `name` but
-    /// kept so identity comparison never re-hashes.
+    /// The name-derived identity token (opaque). Redundant with `name` but kept so
+    /// identity comparison never re-hashes.
     id: NodeId,
-    /// The group label (C6), or `None`. A flat, presentation-only label
-    /// (groups do **not** nest) — **excluded** from identity and from both
-    /// fingerprints (C21), so a rename/regroup is review-visible in the artifact
-    /// (C28) but never breaks resume. Set it at registration through the
-    /// `register_*_in_group` API; it carries no execution semantics.
+    /// The group label, or `None`. A flat, presentation-only label (groups do
+    /// **not** nest) — **excluded** from identity and from both fingerprints, so a
+    /// rename/regroup is review-visible in the artifact but never breaks resume.
+    /// Set it at registration through the `register_*_in_group` API; it carries no
+    /// execution semantics.
     group: Option<String>,
-    /// The declared data edges, in input order (T11). Empty for a source node.
+    /// The declared data edges, in input order. Empty for a source node.
     edges: Vec<DataEdge>,
-    /// The declared ordering edges (C4 / T50) — the upstreams this node runs
-    /// *after* without consuming their value, in declaration order. Empty for a
-    /// node with no ordering dependencies. Distinct from `edges`: an ordering edge
-    /// carries no value, so it feeds readiness/assembly and the structural
-    /// fingerprint but demands no input slot.
+    /// The declared ordering edges — the upstreams this node runs *after* without
+    /// consuming their value, in declaration order. Empty for a node with no
+    /// ordering dependencies. Distinct from `edges`: an ordering edge carries no
+    /// value, so it feeds readiness/assembly and the structural fingerprint but
+    /// demands no input slot.
     ordering_edges: Vec<OrderingEdge>,
-    /// The node's trigger rule (T0.4 / T11). `AllSucceeded` for a data-dependent
-    /// node (the typestate makes any other rule inexpressible on it).
+    /// The node's trigger rule. `AllSucceeded` for a data-dependent node (the
+    /// typestate makes any other rule inexpressible on it).
     trigger_rule: TriggerRule,
-    /// The minimal assembly-validation policy seam (C5 / T14) — the fields
-    /// assembly reads to validate this registration, with conservative defaults.
-    /// The full C5 policy struct is T29's; this is what T14 must read.
+    /// The minimal assembly-validation policy seam — the fields assembly reads to
+    /// validate this registration, with conservative defaults. This is what
+    /// assembly must read.
     policy: NodePolicy,
-    /// The execution class the task *declared* (its work shape, C1) — the
-    /// baseline the class-override validity check (C5) is judged against.
+    /// The execution class the task *declared* (its work shape) — the baseline the
+    /// class-override validity check is judged against.
     declared_class: ExecutionClass,
     /// The [durable-contract witness](DurableWitness) captured at registration —
     /// whether the node's statically-known output type is proven to implement the
-    /// [`DurableOutput`] contract (T0.8 §5). A node whose policy marks it durable
-    /// but whose witness is [`Absent`](DurableWitness::Absent) fails assembly.
+    /// [`DurableOutput`] contract. A node whose policy marks it durable but whose
+    /// witness is [`Absent`](DurableWitness::Absent) fails assembly.
     durable_witness: DurableWitness,
     /// Whether the node's output type is `()` — captured at registration so the
-    /// zero-consumer warning (C7) never fires on a legitimate effect-only node.
+    /// zero-consumer warning never fires on a legitimate effect-only node.
     output_is_unit: bool,
     /// How many registrations collided under this node's name — 1 normally, >1
     /// when a duplicate name was registered. The pipeline's name-keyed map
     /// collapses duplicates to one node, so this count is where assembly reads
-    /// that both declarations existed (C7).
+    /// that both declarations existed.
     registration_count: usize,
     /// The author-declared [stable type names](StableTypeNames) captured at the
-    /// typed registration site (C20 / T0.7), or [`None`] when the node was
-    /// registered through a type-erased registrar. Present only via the
-    /// stable-name-aware registrars; the graph artifact (T40) requires it.
+    /// typed registration site, or [`None`] when the node was registered through a
+    /// type-erased registrar. Present only via the stable-name-aware registrars;
+    /// the graph artifact requires it.
     stable_names: Option<StableTypeNames>,
 }
 
 impl PipelineNode {
     /// This node's **identity name** — the explicit name supplied at
     /// registration, recorded verbatim (no prefix, suffix, index, or
-    /// normalization). This *is* node identity (T0.7 / C2).
+    /// normalization). This *is* node identity.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// This node's opaque, name-derived [identity token](NodeId) (T10). Equal for
-    /// two nodes registered under the same name, regardless of order; different
-    /// for two different names. The group label is **not** part of it.
+    /// This node's opaque, name-derived [identity token](NodeId). Equal for two
+    /// nodes registered under the same name, regardless of order; different for
+    /// two different names. The group label is **not** part of it.
     #[must_use]
     pub fn id(&self) -> NodeId {
         self.id
     }
 
-    /// This node's **group label** (C6), or `None` if it belongs to no group.
+    /// This node's **group label**, or `None` if it belongs to no group.
     ///
     /// The group label is **presentation metadata carried alongside identity** —
     /// it feeds artifact organization and diagram clustering only, and is
-    /// **excluded** from node identity and from both fingerprints (C21). Renaming
-    /// or removing a group changes neither this node's [`id`](PipelineNode::id)
-    /// nor the pipeline's structural identity. This is the seam T51 populates
-    /// through its real group-labelling API.
+    /// **excluded** from node identity and from both fingerprints. Renaming or
+    /// removing a group changes neither this node's [`id`](PipelineNode::id) nor
+    /// the pipeline's structural identity. This is the seam the group-labelling
+    /// API populates.
     #[must_use]
     pub fn group(&self) -> Option<&str> {
         self.group.as_deref()
     }
 
-    /// This node's declared **data** edges, in input order (T11) — empty for a
-    /// source node. Each names its upstream, input position, and declared receive
-    /// mode, recorded verbatim (mode conflicts are adjudicated at assembly, T14).
+    /// This node's declared **data** edges, in input order — empty for a source
+    /// node. Each names its upstream, input position, and declared receive mode,
+    /// recorded verbatim (mode conflicts are adjudicated at assembly).
     #[must_use]
     pub fn data_edges(&self) -> &[DataEdge] {
         &self.edges
     }
 
-    /// This node's declared **ordering** edges (C4 / T50) — the upstreams it runs
-    /// *after* without consuming their value, in declaration order. Empty for a
-    /// node with no ordering dependencies.
+    /// This node's declared **ordering** edges — the upstreams it runs *after*
+    /// without consuming their value, in declaration order. Empty for a node with
+    /// no ordering dependencies.
     ///
     /// An ordering edge carries no value (unlike a [data edge](PipelineNode::data_edges)):
-    /// readiness (C11) waits for its upstream's terminal state and propagates a
+    /// readiness waits for its upstream's terminal state and propagates a
     /// failure/skip across it under the default rule, but no value slot is wired.
     /// Ordering edges are part of the graph shape, so they feed the structural
-    /// fingerprint (C21) and the graph artifact (C20).
+    /// fingerprint and the graph artifact.
     #[must_use]
     pub fn ordering_edges(&self) -> &[OrderingEdge] {
         &self.ordering_edges
     }
 
-    /// This node's [trigger rule](TriggerRule) (T0.4 / T11). A node with any data
-    /// edge is necessarily [`AllSucceeded`](TriggerRule::AllSucceeded) — the T11
+    /// This node's [trigger rule](TriggerRule). A node with any data edge is
+    /// necessarily [`AllSucceeded`](TriggerRule::AllSucceeded) — the binding
     /// typestate makes any other rule inexpressible on a data-dependent node.
     #[must_use]
     pub fn trigger_rule(&self) -> TriggerRule {
         self.trigger_rule
     }
 
-    /// This node's [policy](NodePolicy) — the full C5 node-policy value (T29)
-    /// carrying every author-settable field (durability, retention, retries,
-    /// backoff, per-attempt timeout, teardown, cost, class override), each with
-    /// its conservative default. The trigger rule and group label are carried on
-    /// the node (not this value) and appear on the resolved
+    /// This node's [policy](NodePolicy) — the full node-policy value carrying every
+    /// author-settable field (durability, retention, retries, backoff, per-attempt
+    /// timeout, teardown, cost, class override), each with its conservative
+    /// default. The trigger rule and group label are carried on the node (not this
+    /// value) and appear on the resolved
     /// [`effective_policy`](PipelineNode::effective_policy).
     #[must_use]
     pub fn policy(&self) -> NodePolicy {
         self.policy
     }
 
-    /// This node's **full effective policy** (C5) — every policy field resolved to
-    /// its concrete value with defaults written out, plus the effective
+    /// This node's **full effective policy** — every policy field resolved to its
+    /// concrete value with defaults written out, plus the effective
     /// [execution class](PipelineNode::effective_class) (override applied), the
     /// binding [trigger rule](PipelineNode::trigger_rule), and the
     /// [group](PipelineNode::group) label. This is the complete effective policy
-    /// that reaches the graph artifact (arch.md C5) and that the two hashes (C21)
-    /// run over; a no-policy node and an all-defaults node produce field-for-field
-    /// equal effective policies.
+    /// that reaches the graph artifact and that the two hashes run over; a
+    /// no-policy node and an all-defaults node produce field-for-field equal
+    /// effective policies.
     #[must_use]
     pub fn effective_policy(&self) -> EffectivePolicy {
         EffectivePolicy::resolve(
@@ -329,55 +324,54 @@ impl PipelineNode {
         )
     }
 
-    /// The execution class the task **declared** (its work shape, C1) — before any
-    /// C5 override. The class-override validity check (C5) is judged against this.
+    /// The execution class the task **declared** (its work shape) — before any
+    /// override. The class-override validity check is judged against this.
     #[must_use]
     pub fn declared_class(&self) -> ExecutionClass {
         self.declared_class
     }
 
     /// The node's **effective** execution class: its policy override if one is
-    /// set, else the class the task declared (C5). This is the class the policy
-    /// hash (C21 / T0.7) covers.
+    /// set, else the class the task declared. This is the class the policy hash
+    /// covers.
     #[must_use]
     pub fn effective_class(&self) -> ExecutionClass {
         self.policy.class_override().unwrap_or(self.declared_class)
     }
 
     /// Whether the node's statically-known output type is proven to implement the
-    /// [`DurableOutput`] contract (T0.8 §5) — the witness captured at
-    /// registration. A node marked durable whose output type does not satisfy
-    /// this fails assembly.
+    /// [`DurableOutput`] contract — the witness captured at registration. A node
+    /// marked durable whose output type does not satisfy this fails assembly.
     #[must_use]
     pub fn output_is_durable(&self) -> bool {
         matches!(self.durable_witness, DurableWitness::Present)
     }
 
     /// Whether the node's output type is `()` (an effect-only node). The
-    /// zero-consumer warning (C7) never fires on such a node.
+    /// zero-consumer warning never fires on such a node.
     #[must_use]
     pub fn output_is_unit(&self) -> bool {
         self.output_is_unit
     }
 
     /// How many registrations collided under this node's name — >1 signals a
-    /// duplicate name that assembly rejects, naming both declarations (C7).
+    /// duplicate name that assembly rejects, naming both declarations.
     #[must_use]
     pub fn registration_count(&self) -> usize {
         self.registration_count
     }
 
-    /// The node's author-declared [stable type names](StableTypeNames) (C20 /
-    /// T0.7) — the stable task name and the stable input/output type names — or
-    /// [`None`] when the node was registered through a type-erased registrar.
+    /// The node's author-declared [stable type names](StableTypeNames) — the
+    /// stable task name and the stable input/output type names — or [`None`] when
+    /// the node was registered through a type-erased registrar.
     ///
     /// A node carries these **only** when registered through a stable-name-aware
     /// registrar ([`Flow::register_source_named`], [`Flow::register_named`]),
     /// which captures them from the [`StableName`] constants on the task and
-    /// payload types. The C20 graph artifact (T40) records them; a node lacking
-    /// them cannot be emitted to that contract. They are the **author-declared**
-    /// identity — never [`std::any::type_name`], which the artifact admits only as
-    /// an informational debug field (T0.7 §1).
+    /// payload types. The graph artifact records them; a node lacking them cannot
+    /// be emitted to that contract. They are the **author-declared** identity —
+    /// never [`std::any::type_name`], which the artifact admits only as an
+    /// informational debug field.
     #[must_use]
     pub fn stable_names(&self) -> Option<&StableTypeNames> {
         self.stable_names.as_ref()
@@ -385,14 +379,14 @@ impl PipelineNode {
 }
 
 /// The flow builder — it accumulates node registrations and produces an
-/// immutable [`Pipeline`] (arch.md `### C7 · Flow assembly`).
+/// immutable [`Pipeline`].
 ///
 /// A registration supplies an **explicit node name** and the task value, and
-/// hands back the typed [`Handle`] from T10. There is **no** other way to obtain
-/// a handle for a node (C2): a handle is the return value of a registration, and
-/// registration is the only route into the flow. Identity is the name
-/// ([module docs](self)); the builder never derives identity from the order in
-/// which registrations arrive.
+/// hands back the typed [`Handle`]. There is **no** other way to obtain a handle
+/// for a node: a handle is the return value of a registration, and registration
+/// is the only route into the flow. Identity is the name ([module docs](self));
+/// the builder never derives identity from the order in which registrations
+/// arrive.
 ///
 /// [`finish`](Flow::finish) **consumes** the builder and yields the immutable
 /// [`Pipeline`]. There is no route by which the graph shape can change after
@@ -405,24 +399,24 @@ impl PipelineNode {
 /// It performs **no** assembly validation and **no** precomputation — duplicate
 /// names, empty pipelines, class overrides, stable-name uniqueness, the
 /// durable-contract check, the zero-consumer warning, consumer/dependency counts,
-/// execution order, and the fingerprint are all **T14's**. It only accumulates
-/// the identity, handle linkage, group-label slot, and recorded edges those
-/// checks will later read.
+/// execution order, and the fingerprint are all **assembly's**. It only
+/// accumulates the identity, handle linkage, group-label slot, and recorded edges
+/// those checks will later read.
 #[derive(Debug, Default)]
 pub struct Flow {
     /// Nodes keyed by identity name, so accumulation is order-insensitive:
-    /// iteration and lookup are by name (unique across the pipeline, C7), never
-    /// by the order registrations arrived. Assembly (T14) diagnoses a duplicate
-    /// name; this map records the last write under a name and counts collisions
-    /// (see [`PipelineNode::registration_count`]) so assembly can name both.
+    /// iteration and lookup are by name (unique across the pipeline), never by the
+    /// order registrations arrived. Assembly diagnoses a duplicate name; this map
+    /// records the last write under a name and counts collisions (see
+    /// [`PipelineNode::registration_count`]) so assembly can name both.
     nodes: BTreeMap<String, PipelineNode>,
     /// The declared **environment-capture allowlist** — the names bootstrap is
-    /// permitted to capture later (C7 / C22). Empty by default; a pure
-    /// *declaration* — assembly captures no values. Recorded in declared order.
+    /// permitted to capture later. Empty by default; a pure *declaration* —
+    /// assembly captures no values. Recorded in declared order.
     env_allowlist: Vec<String>,
-    /// The run-level [failure mode](FailureMode) (C15 / T34) — the mode-selection
-    /// seam. A run policy, excluded from identity and both fingerprints. Defaults
-    /// to [`ContinueIndependent`](FailureMode::ContinueIndependent).
+    /// The run-level [failure mode](FailureMode) — the mode-selection seam. A run
+    /// policy, excluded from identity and both fingerprints. Defaults to
+    /// [`ContinueIndependent`](FailureMode::ContinueIndependent).
     failure_mode: FailureMode,
 }
 
@@ -438,10 +432,10 @@ impl Flow {
     }
 
     /// Declare that bootstrap may later capture the given **environment variable
-    /// names** into the run artifact (arch.md C7 / C22). This is a **pure
-    /// declaration**: assembly stores the names and captures **no** value itself
-    /// (the actual capture is bootstrap's, T24/T29). The allowlist is empty by
-    /// default; each call appends the given names, recording exactly them.
+    /// names** into the run artifact. This is a **pure declaration**: assembly
+    /// stores the names and captures **no** value itself (the actual capture is
+    /// bootstrap's). The allowlist is empty by default; each call appends the
+    /// given names, recording exactly them.
     pub fn allow_env_capture<I, S>(&mut self, names: I)
     where
         I: IntoIterator<Item = S>,
@@ -450,15 +444,15 @@ impl Flow {
         self.env_allowlist.extend(names.into_iter().map(Into::into));
     }
 
-    /// Select the run-level [failure mode](FailureMode) (C15 / T34) — the
-    /// builder/assembly mode-selection seam.
+    /// Select the run-level [failure mode](FailureMode) — the builder/assembly
+    /// mode-selection seam.
     ///
     /// The mode is a **run policy**, not a graph fact: it is excluded from node
-    /// identity and from both graph fingerprints (C21), so the same graph runs
-    /// under either mode without changing its structural fingerprint. Defaults to
+    /// identity and from both graph fingerprints, so the same graph runs under
+    /// either mode without changing its structural fingerprint. Defaults to
     /// [`ContinueIndependent`](FailureMode::ContinueIndependent); the operator/CLI
-    /// override deferred to T55 (C26) sets this same value through the same seam
-    /// without a signature change.
+    /// override sets this same value through the same seam without a signature
+    /// change.
     pub fn failure_mode(&mut self, mode: FailureMode) {
         self.failure_mode = mode;
     }
@@ -466,12 +460,11 @@ impl Flow {
     /// Register a **source** node (one whose task consumes nothing) under an
     /// explicit `name`, returning its output [`Handle`].
     ///
-    /// The name is the node's identity (T0.7 / C2), recorded verbatim. The task
-    /// value pins the output type `T::Output`; it is not consumed here (execution
-    /// is a later ticket). The returned handle is the **only** way to refer to
-    /// this node's output downstream. The node carries the **default**
-    /// [`NodePolicy`] — use [`register_source_with`](Flow::register_source_with)
-    /// to state a policy.
+    /// The name is the node's identity, recorded verbatim. The task value pins the
+    /// output type `T::Output`; it is not consumed here (execution happens later).
+    /// The returned handle is the **only** way to refer to this node's output
+    /// downstream. The node carries the **default** [`NodePolicy`] — use
+    /// [`register_source_with`](Flow::register_source_with) to state a policy.
     #[must_use]
     pub fn register_source<T>(&mut self, name: impl Into<String>, task: &T) -> Handle<T::Output>
     where
@@ -483,11 +476,10 @@ impl Flow {
     /// Register a **source** node under `name` with an explicit [`NodePolicy`],
     /// returning its output [`Handle`].
     ///
-    /// The policy is the minimal assembly-validation seam (C5 / T14): assembly
-    /// reads its durability, retention, retries, teardown, cost, and
-    /// class-override fields to validate the registration (an invalid override, a
-    /// durable node lacking the contract, a nonzero teardown cost, …). The full
-    /// C5 policy struct is T29's.
+    /// The policy is the minimal assembly-validation seam: assembly reads its
+    /// durability, retention, retries, teardown, cost, and class-override fields to
+    /// validate the registration (an invalid override, a durable node lacking the
+    /// contract, a nonzero teardown cost, …).
     ///
     /// This path records the durable-contract witness as
     /// [`Absent`](DurableWitness::Absent): to mark a node durable **and** prove
@@ -495,7 +487,7 @@ impl Flow {
     /// [`register_source_durable`](Flow::register_source_durable), whose bound
     /// captures a [`Present`](DurableWitness::Present) witness. Marking a node
     /// durable here (without the bound) is precisely the durable-without-contract
-    /// case assembly rejects (T0.8 §5).
+    /// case assembly rejects.
     #[must_use]
     pub fn register_source_with<T>(
         &mut self,
@@ -521,10 +513,10 @@ impl Flow {
     /// [`Handle`].
     ///
     /// The `T::Output: DurableOutput` bound is what **captures the durable
-    /// witness** (T0.8 §5): only a node whose output type proves the durable
-    /// contract can be registered here, so assembly sees a
-    /// [`Present`](DurableWitness::Present) witness and the durability flag is
-    /// honored. `policy` is applied with its durability flag forced on. (A node
+    /// witness**: only a node whose output type proves the durable contract can be
+    /// registered here, so assembly sees a [`Present`](DurableWitness::Present)
+    /// witness and the durability flag is honored. `policy` is applied with its
+    /// durability flag forced on. (A node
     /// marked durable whose output type does **not** implement the contract is
     /// registered through [`register_source_with`](Flow::register_source_with)
     /// instead, and fails assembly.)
@@ -553,17 +545,17 @@ impl Flow {
     /// Register a **source** node under `name` **in a group**, returning its
     /// output [`Handle`].
     ///
-    /// `group` attaches the node's C6 **group label** — a flat, presentation-only
-    /// label used for artifact organization and diagram clustering (the C24
-    /// renderer draws each group as a cluster, T46). It is carried alongside
-    /// identity and **excluded** from it ([module docs](self)): passing a different
-    /// label leaves the node's [identity](NodeId) unchanged, and the label feeds
-    /// **neither** C21 fingerprint hash — so a rename or regroup is review-visible
-    /// but never breaks resume. Groups do **not** nest (there is no way to express
-    /// a nested group), node names stay unique across the whole pipeline regardless
-    /// of grouping, and the label carries **no** execution semantics (no
-    /// group-level concurrency limit, no group-level failure handling). Pass
-    /// `None::<String>` for an ungrouped node.
+    /// `group` attaches the node's **group label** — a flat, presentation-only
+    /// label used for artifact organization and diagram clustering (the renderer
+    /// draws each group as a cluster). It is carried alongside identity and
+    /// **excluded** from it ([module docs](self)): passing a different label leaves
+    /// the node's [identity](NodeId) unchanged, and the label feeds **neither**
+    /// fingerprint hash — so a rename or regroup is review-visible but never breaks
+    /// resume. Groups do **not** nest (there is no way to express a nested group),
+    /// node names stay unique across the whole pipeline regardless of grouping, and
+    /// the label carries **no** execution semantics (no group-level concurrency
+    /// limit, no group-level failure handling). Pass `None::<String>` for an
+    /// ungrouped node.
     #[must_use]
     pub fn register_source_in_group<T>(
         &mut self,
@@ -586,17 +578,17 @@ impl Flow {
     }
 
     /// Register a **source** (consume-nothing) node under `name` with an explicit
-    /// [`NodePolicy`] **and a non-default trigger rule** (T0.4 / C5), returning its
-    /// output [`Handle`].
+    /// [`NodePolicy`] **and a non-default trigger rule**, returning its output
+    /// [`Handle`].
     ///
     /// A non-default trigger rule (`all-terminal`, `any-failed`) is expressible
-    /// **only** on a node that consumes nothing (arch.md Vocabulary; C4) — a source
-    /// is exactly such a node, so this registrar exposes the rule for sources
-    /// without weakening the compile-time constraint: the data-dependent
-    /// registrars ([`register`](Flow::register) / [`register_with`](Flow::register_with))
+    /// **only** on a node that consumes nothing — a source is exactly such a node,
+    /// so this registrar exposes the rule for sources without weakening the
+    /// compile-time constraint: the data-dependent registrars
+    /// ([`register`](Flow::register) / [`register_with`](Flow::register_with))
     /// offer **no** trigger-rule parameter, so a data node is still forced to
     /// `all-succeeded` at compile time. The trigger rule feeds the **structural
-    /// fingerprint** (C21), not the policy hash.
+    /// fingerprint**, not the policy hash.
     #[must_use]
     pub fn register_source_with_trigger<T>(
         &mut self,
@@ -620,13 +612,13 @@ impl Flow {
     }
 
     /// Register a **consume-nothing** node under `name` attached **only by
-    /// ordering edges** (C4 / T50) — it runs *after* each `ordering_upstreams`
-    /// node without consuming any value, and receives nothing.
+    /// ordering edges** — it runs *after* each `ordering_upstreams` node without
+    /// consuming any value, and receives nothing.
     ///
     /// This is the cleanup-after-publish / cache-warm-before-read shape: reach for
     /// an ordering edge (over a [data dependency](Flow::register)) when a task's
-    /// *effect* rather than its *value* matters to this node (arch.md `### C4`).
-    /// The upstreams are type-erased [`OrderingHandle`]s
+    /// *effect* rather than its *value* matters to this node. The upstreams are
+    /// type-erased [`OrderingHandle`]s
     /// ([`Handle::ordering`](crate::handle::Handle::ordering)), so ordering
     /// upstreams of different value types can be mixed. The node keeps the default
     /// `all-succeeded` rule (so a failed/skipped ordering upstream propagates to
@@ -655,16 +647,16 @@ impl Flow {
     }
 
     /// Register a **consume-nothing** node under `name` attached only by ordering
-    /// edges, with an explicit [`NodePolicy`] and a
-    /// [trigger rule](TriggerRule) (C4 / T50) — the ordering-edge counterpart of
+    /// edges, with an explicit [`NodePolicy`] and a [trigger rule](TriggerRule) —
+    /// the ordering-edge counterpart of
     /// [`register_source_with_trigger`](Flow::register_source_with_trigger).
     ///
     /// A non-default rule (`all-terminal` / `any-failed`) is expressible here
-    /// because the node consumes nothing (arch.md Vocabulary; C4): the motivating
-    /// case is a cleanup / notify node ordered after the work it guards that must
-    /// run even when that work failed (`all-terminal`) or that fires precisely when
-    /// it failed (`any-failed`). Ordering edges do not weaken this — a
-    /// data-consuming node still has no way to set a non-default rule.
+    /// because the node consumes nothing: the motivating case is a cleanup /
+    /// notify node ordered after the work it guards that must run even when that
+    /// work failed (`all-terminal`) or that fires precisely when it failed
+    /// (`any-failed`). Ordering edges do not weaken this — a data-consuming node
+    /// still has no way to set a non-default rule.
     #[must_use]
     pub fn register_source_ordered_after_with_trigger<T>(
         &mut self,
@@ -688,9 +680,9 @@ impl Flow {
         )
     }
 
-    /// Register a **teardown node** (C17) covering an explicit set of already-
-    /// registered upstream handles, with the conservative default policy. Equivalent
-    /// to [`register_teardown_with`](Flow::register_teardown_with) with
+    /// Register a **teardown node** covering an explicit set of already-registered
+    /// upstream handles, with the conservative default policy. Equivalent to
+    /// [`register_teardown_with`](Flow::register_teardown_with) with
     /// [`NodePolicy::new`].
     ///
     /// A teardown is a consume-nothing node ordered *after* the covered set, firing
@@ -698,16 +690,16 @@ impl Flow {
     /// every covered node is terminal in any state* (`succeeded`, `failed`,
     /// `skipped`, `cancelled`, `abandoned`, and the propagated `upstream-failed`/
     /// `upstream-skipped` forms). Its context exposes the covered nodes' terminal
-    /// states so cleanup can no-op when setup never ran (C8). It bypasses admission
+    /// states so cleanup can no-op when setup never ran. It bypasses admission
     /// and its declared cost must be zero (assembly rejects a nonzero-cost teardown,
-    /// which is what keeps the bypass consistent with C12's capacity invariant). At
+    /// which is what keeps the bypass consistent with the capacity invariant). At
     /// run end the driver runs it on **every** exit path — success, failure,
     /// stop-on-first-failure, and external cancellation — under a *fresh,
     /// uncancelled* signal with its own deadline, so a cancelled run still cleans up
     /// after itself; a teardown's own failure is recorded but changes neither the
     /// run's outcome nor the other teardowns.
     ///
-    /// Because a teardown fires on the non-default `all-terminal` rule, and C3's
+    /// Because a teardown fires on the non-default `all-terminal` rule, and the
     /// builder typestate makes any non-default rule inexpressible on a node that
     /// consumes data, a teardown **can never have a data dependency** — this
     /// registrar accepts only a consume-nothing task (`Task<Input = ()>`), so a
@@ -715,7 +707,7 @@ impl Flow {
     ///
     /// # Resume is not affected for outputs a teardown deletes
     ///
-    /// **Outputs that teardown deletes are not resume-safe.** On resume (C27) a node
+    /// **Outputs that teardown deletes are not resume-safe.** On resume a node
     /// covered by a teardown that executed in the prior run is re-executed — added
     /// to the must-run seed and never marked `satisfied-from-prior` — because its
     /// durable output may have been destroyed by the cleanup. Design a covered
@@ -734,8 +726,8 @@ impl Flow {
         self.register_teardown_with::<T>(name, task, covered, NodePolicy::new())
     }
 
-    /// Register a **teardown node** (C17) covering an explicit set of upstream
-    /// handles, with an explicit [`NodePolicy`] — the policy-taking counterpart of
+    /// Register a **teardown node** covering an explicit set of upstream handles,
+    /// with an explicit [`NodePolicy`] — the policy-taking counterpart of
     /// [`register_teardown`](Flow::register_teardown).
     ///
     /// The teardown flag and the [`all-terminal`](TriggerRule::AllTerminal) trigger
@@ -743,7 +735,7 @@ impl Flow {
     /// policy states the *other* facets (retries, backoff, timeout, retention). A
     /// teardown's declared cost must be zero — assembly rejects a nonzero-cost
     /// teardown with a distinct, review-visible error naming the node, keeping the
-    /// admission bypass consistent with C12's capacity invariant.
+    /// admission bypass consistent with the capacity invariant.
     ///
     /// See [`register_teardown`](Flow::register_teardown) for the full teardown
     /// contract and the "outputs that teardown deletes are not resume-safe" rule.
@@ -759,7 +751,7 @@ impl Flow {
         T: Task<Input = ()>,
     {
         // Pin the teardown flag and the `all-terminal` rule; the covered set is the
-        // ordering upstreams the teardown is ordered after (C4 backward-reference
+        // ordering upstreams the teardown is ordered after (the backward-reference
         // discipline preserves the compile-time acyclicity guarantee). A nonzero
         // cost on the supplied policy is still rejected at assembly.
         self.register_source_in_group_with::<T>(
@@ -773,11 +765,11 @@ impl Flow {
         )
     }
 
-    /// Register a **stable-name-aware teardown node** (C17) covering an explicit set
-    /// of upstream handles — the [`register_teardown`](Flow::register_teardown)
+    /// Register a **stable-name-aware teardown node** covering an explicit set of
+    /// upstream handles — the [`register_teardown`](Flow::register_teardown)
     /// counterpart that also captures the node's author-declared
-    /// [stable names](StableName) for the C20 graph artifact / C28 structure snapshot,
-    /// so a pipeline **with** a teardown is snapshottable and its structure is
+    /// [stable names](StableName) for the graph artifact / structure snapshot, so a
+    /// pipeline **with** a teardown is snapshottable and its structure is
     /// review-visible like any other node. Pins the teardown flag and the
     /// [`all-terminal`](TriggerRule::AllTerminal) rule exactly as
     /// [`register_teardown`](Flow::register_teardown).
@@ -814,7 +806,7 @@ impl Flow {
     /// `T::Output: DurableOutput` ([`register_source_durable`](Flow::register_source_durable));
     /// the trigger rule is `all-succeeded` for every registrar except
     /// [`register_source_with_trigger`](Flow::register_source_with_trigger). The
-    /// `ordering` slice adds C4 ordering edges (empty for a non-ordered node).
+    /// `ordering` slice adds ordering edges (empty for a non-ordered node).
     //
     // The many parameters are the full, orthogonal set of registration facets
     // (name, task, group, policy, durable witness, trigger rule, ordering edges);
@@ -836,12 +828,12 @@ impl Flow {
         T: Task<Input = ()>,
     {
         let name = name.into();
-        // Route through the T11 binding seam so a handle is obtained only by
-        // registration (C2). A source consumes nothing, so the binding's
+        // Route through the binding seam so a handle is obtained only by
+        // registration. A source consumes nothing, so the binding's
         // consume-nothing typestate is where a non-default trigger rule is
-        // legitimately expressible (C4 / Vocabulary); a default source keeps
-        // `AllSucceeded`. Ordering edges (C4 / T50) declared here deliver no value,
-        // so the node stays consume-nothing and the trigger rule remains settable.
+        // legitimately expressible; a default source keeps `AllSucceeded`.
+        // Ordering edges declared here deliver no value, so the node stays
+        // consume-nothing and the trigger rule remains settable.
         let (handle, registered): (Handle<T::Output>, _) = NodeBinding::consuming_nothing(&name)
             .trigger_rule(trigger_rule)
             .ordered_after(ordering)
@@ -868,12 +860,12 @@ impl Flow {
     /// value types must **exactly match** `T::Input`), and returning its output
     /// [`Handle`].
     ///
-    /// The exact-type / arity / cycle checks all live in the T11
+    /// The exact-type / arity / cycle checks all live in the
     /// `D: Deps<Inputs = T::Input>` bound — a wrong-type, wrong-arity, or
     /// forward-referencing binding is a **compile error**, not something this
     /// builder validates at run time. Each bound upstream is recorded as one
     /// [`DataEdge`] in input order; the receive mode is recorded verbatim and
-    /// adjudicated at assembly (T14), never here. The node carries the **default**
+    /// adjudicated at assembly, never here. The node carries the **default**
     /// [`NodePolicy`] — use [`register_with`](Flow::register_with) to state one.
     #[must_use]
     pub fn register<T, D>(
@@ -892,11 +884,11 @@ impl Flow {
     /// Register a **data-dependent** node under `name`, binding `deps`, with an
     /// explicit [`NodePolicy`], returning its output [`Handle`].
     ///
-    /// As [`register`](Flow::register), plus the assembly-validation policy seam
-    /// (C5 / T14). A retrying node taking an owned input edge with no
-    /// clone-on-read opt-in, for example, fails assembly (arch.md C1 "Ownership of
-    /// inputs"). Records an [`Absent`](DurableWitness::Absent) durable witness;
-    /// use [`register_durable`](Flow::register_durable) for a durable node.
+    /// As [`register`](Flow::register), plus the assembly-validation policy seam.
+    /// A retrying node taking an owned input edge with no clone-on-read opt-in, for
+    /// example, fails assembly (the "ownership of inputs" rule). Records an
+    /// [`Absent`](DurableWitness::Absent) durable witness; use
+    /// [`register_durable`](Flow::register_durable) for a durable node.
     #[must_use]
     pub fn register_with<T, D>(
         &mut self,
@@ -924,9 +916,9 @@ impl Flow {
     /// returning its output [`Handle`].
     ///
     /// The `T::Output: DurableOutput` bound captures a
-    /// [`Present`](DurableWitness::Present) durable witness (T0.8 §5); `policy` is
-    /// applied with its durability flag forced on. A node marked durable whose
-    /// output type does **not** implement the contract is registered through
+    /// [`Present`](DurableWitness::Present) durable witness; `policy` is applied
+    /// with its durability flag forced on. A node marked durable whose output type
+    /// does **not** implement the contract is registered through
     /// [`register_with`](Flow::register_with) and fails assembly.
     #[must_use]
     pub fn register_durable<T, D>(
@@ -953,17 +945,17 @@ impl Flow {
     }
 
     /// Register a **data-dependent** node under `name` that **also** carries
-    /// additional **ordering edges** (C4 / T50): it consumes `deps`' value **and**
-    /// runs *after* each `ordering_upstreams` node, without consuming a value from
-    /// the ordering upstreams.
+    /// additional **ordering edges**: it consumes `deps`' value **and** runs
+    /// *after* each `ordering_upstreams` node, without consuming a value from the
+    /// ordering upstreams.
     ///
-    /// This is the "both kinds on one node" shape (arch.md §142): the body sees the
-    /// bound `deps` value, and the extra ordering edges only sequence the node
-    /// after side-effect upstreams whose *effect* it depends on. The node stays
-    /// locked to `all-succeeded` (C3) — adding an ordering edge does **not** unlock
-    /// a non-default rule on a data-consuming node (the typestate offers no
-    /// `trigger_rule` method once a data dependency is bound). Pass an empty
-    /// `ordering_upstreams` slice for a plain data node.
+    /// This is the "both kinds on one node" shape: the body sees the bound `deps`
+    /// value, and the extra ordering edges only sequence the node after
+    /// side-effect upstreams whose *effect* it depends on. The node stays locked to
+    /// `all-succeeded` — adding an ordering edge does **not** unlock a non-default
+    /// rule on a data-consuming node (the typestate offers no `trigger_rule` method
+    /// once a data dependency is bound). Pass an empty `ordering_upstreams` slice
+    /// for a plain data node.
     #[must_use]
     pub fn register_ordered_after<T, D>(
         &mut self,
@@ -990,12 +982,12 @@ impl Flow {
     /// Register a **data-dependent** node under `name` **in a group**, binding
     /// `deps`, and returning its output [`Handle`].
     ///
-    /// As [`register`](Flow::register), plus the node's C6 **group label** — a
-    /// flat, presentation-only label for artifact organization and diagram
-    /// clustering (T46). It is excluded from identity ([module docs](self)) and
-    /// from both C21 fingerprints, groups do not nest, and it carries no execution
-    /// semantics. See [`register_source_in_group`](Flow::register_source_in_group)
-    /// for the full group contract. Pass `None::<String>` for an ungrouped node.
+    /// As [`register`](Flow::register), plus the node's **group label** — a flat,
+    /// presentation-only label for artifact organization and diagram clustering. It
+    /// is excluded from identity ([module docs](self)) and from both fingerprints,
+    /// groups do not nest, and it carries no execution semantics. See
+    /// [`register_source_in_group`](Flow::register_source_in_group) for the full
+    /// group contract. Pass `None::<String>` for an ungrouped node.
     #[must_use]
     pub fn register_in_group<T, D>(
         &mut self,
@@ -1021,7 +1013,7 @@ impl Flow {
 
     /// Register a **data-dependent** node under `name`, in an optional group, with
     /// an explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness),
-    /// plus any C4 `ordering` edges — the full data-node-registration surface the
+    /// plus any `ordering` edges — the full data-node-registration surface the
     /// other data registrars delegate to.
     //
     // The many parameters are the full, orthogonal set of registration facets;
@@ -1043,14 +1035,13 @@ impl Flow {
         D: Deps<Inputs = T::Input>,
     {
         let name = name.into();
-        // Drive the T11 binding seam: it records the data edges (in input order),
-        // any additional ordering edges (C4 / T50 — value-less "run after"), and
-        // the trigger rule, and mints the output handle. We copy the recorded
-        // structure into the pipeline node, adding the identity name, the
-        // group-label slot, and the assembly-validation policy seam this ticket
-        // owns. Adding ordering edges does NOT unlock a non-default rule: a
-        // data-dependent node stays `all-succeeded` (the typestate has no
-        // `trigger_rule` method).
+        // Drive the binding seam: it records the data edges (in input order),
+        // any additional ordering edges (value-less "run after"), and the trigger
+        // rule, and mints the output handle. We copy the recorded structure into
+        // the pipeline node, adding the identity name, the group-label slot, and
+        // the assembly-validation policy seam this module owns. Adding ordering
+        // edges does NOT unlock a non-default rule: a data-dependent node stays
+        // `all-succeeded` (the typestate has no `trigger_rule` method).
         let (handle, node) = NodeBinding::consuming_nothing(&name)
             .depends_on::<T, D>(task, deps)
             .ordered_after(ordering)
@@ -1075,8 +1066,8 @@ impl Flow {
 
     /// Register a **source** node under `name` whose task and output payload types
     /// carry author-declared [`StableName`]s, capturing those
-    /// [stable names](StableTypeNames) for the C20 graph artifact (arch.md C20;
-    /// T0.7 §1–§2), and returning its output [`Handle`].
+    /// [stable names](StableTypeNames) for the graph artifact, and returning its
+    /// output [`Handle`].
     ///
     /// This is the stable-name-aware source registrar: alongside the identity name
     /// (the registration `String`) it records `T::STABLE_NAME` (the stable *task*
@@ -1084,7 +1075,8 @@ impl Flow {
     /// `T::Output`'s stable name (or the reserved unit sentinel for a `()`-output
     /// effect node). The type-erased [`register_source`](Flow::register_source)
     /// captures no stable names; a node needs this registrar to be emittable to the
-    /// C20 contract. `policy` is the C5 policy (defaults via [`NodePolicy::new`]).
+    /// graph artifact. `policy` is the node policy (defaults via
+    /// [`NodePolicy::new`]).
     #[must_use]
     pub fn register_source_named<T>(
         &mut self,
@@ -1112,19 +1104,19 @@ impl Flow {
 
     /// Register a **durable, stable-name-aware source** node under `name`, in an
     /// optional group — the [`register_source_named`](Flow::register_source_named)
-    /// counterpart that also marks the node's output **durable** (C27 / C5) and
-    /// carries the [`DurableWitness::Present`] the durable-without-contract assembly
-    /// check consumes (T0.8 §5).
+    /// counterpart that also marks the node's output **durable** and carries the
+    /// [`DurableWitness::Present`] the durable-without-contract assembly check
+    /// consumes.
     ///
     /// This is the registrar an **expensive stage-boundary producer** uses: its
     /// output type implements the [`DurableOutput`] reference contract so a resume
-    /// (C27) rehydrates the value instead of recomputing it, **and** it carries the
-    /// author-declared [stable names](StableName) the C20 graph artifact / C28
-    /// structure snapshot need — so the same durable producer participates in both
-    /// the resume machinery and the review structure fixture (the M4 gate demo's
-    /// reference stage boundary). Assembly rejects a durable-marked node whose output
-    /// type does not implement [`DurableOutput`] (enforced through the `T::Output:
-    /// DurableOutput` bound + the witness), exactly as
+    /// rehydrates the value instead of recomputing it, **and** it carries the
+    /// author-declared [stable names](StableName) the graph artifact / structure
+    /// snapshot need — so the same durable producer participates in both the resume
+    /// machinery and the review structure fixture (a reference stage boundary).
+    /// Assembly rejects a durable-marked node whose output type does not implement
+    /// [`DurableOutput`] (enforced through the `T::Output: DurableOutput` bound +
+    /// the witness), exactly as
     /// [`register_source_durable`](Flow::register_source_durable) does.
     #[must_use]
     pub fn register_source_named_durable<T>(
@@ -1152,14 +1144,14 @@ impl Flow {
     }
 
     /// Register a **consume-nothing**, stable-name-aware node under `name` attached
-    /// only by **ordering edges** (C4 / T50), capturing its
-    /// [stable names](StableTypeNames) for the C20 graph artifact.
+    /// only by **ordering edges**, capturing its [stable names](StableTypeNames)
+    /// for the graph artifact.
     ///
     /// The ordering-edge, graph-emittable counterpart of
     /// [`register_source_named`](Flow::register_source_named): the node runs *after*
     /// each `ordering_upstreams` node without consuming its value, and its ordering
     /// edges are recorded distinctly in the graph artifact (kind `ordering`, no
-    /// carried type) and feed the structural fingerprint (C21). It keeps the default
+    /// carried type) and feed the structural fingerprint. It keeps the default
     /// `all-succeeded` rule.
     #[must_use]
     pub fn register_source_named_ordered_after<T>(
@@ -1189,15 +1181,15 @@ impl Flow {
 
     /// Register a **data-dependent** node under `name` whose task and payload types
     /// carry author-declared [`StableName`]s, binding `deps` and capturing the
-    /// node's [stable names](StableTypeNames) for the C20 graph artifact (arch.md
-    /// C20; T0.7 §1–§2), returning its output [`Handle`].
+    /// node's [stable names](StableTypeNames) for the graph artifact, returning its
+    /// output [`Handle`].
     ///
     /// As [`register`](Flow::register) (the exact-type / arity binding is the same
     /// `D: Deps<Inputs = T::Input>` compile-time check), plus capture of
     /// `T::STABLE_NAME` (the stable *task* name), the ordered stable *input* type
     /// names of `T::Input` (via [`StableInputNames`]), and `T::Output`'s stable
     /// name. A node registered through the type-erased [`register`](Flow::register)
-    /// captures none of these and is not emittable to the C20 contract.
+    /// captures none of these and is not emittable to the graph artifact.
     #[must_use]
     pub fn register_named<T, D>(
         &mut self,
@@ -1227,16 +1219,15 @@ impl Flow {
     }
 
     /// Register a **data-dependent**, stable-name-aware node under `name` that
-    /// **also** carries additional **ordering edges** (C4 / T50), binding `deps`
-    /// and capturing the node's [stable names](StableTypeNames) for the C20 graph
-    /// artifact.
+    /// **also** carries additional **ordering edges**, binding `deps` and capturing
+    /// the node's [stable names](StableTypeNames) for the graph artifact.
     ///
-    /// The "both kinds on one node" (arch.md §142), graph-emittable counterpart of
+    /// The "both kinds on one node", graph-emittable counterpart of
     /// [`register_named`](Flow::register_named): the body sees the bound `deps`
     /// value, the extra `ordering_upstreams` only sequence the node after
     /// side-effect upstreams. The data edges carry their stable type names and the
     /// ordering edges carry none — both recorded distinctly in the artifact. Stays
-    /// `all-succeeded` (C3). Pass an empty slice for a plain named data node.
+    /// `all-succeeded`. Pass an empty slice for a plain named data node.
     #[must_use]
     pub fn register_named_ordered_after<T, D>(
         &mut self,
@@ -1311,12 +1302,11 @@ impl Flow {
 
     /// Insert a node under its name, **counting** a name collision.
     ///
-    /// The node set is keyed by name (order-insensitive, C7), so a duplicate name
-    /// would silently overwrite. Instead we carry the collision count on the
-    /// surviving node ([`PipelineNode::registration_count`]) so **assembly** can
-    /// diagnose the duplicate and name that both declarations existed (C7) — the
-    /// builder still records only the identity/edges/policy, it does not itself
-    /// diagnose (that is T14's).
+    /// The node set is keyed by name (order-insensitive), so a duplicate name would
+    /// silently overwrite. Instead we carry the collision count on the surviving
+    /// node ([`PipelineNode::registration_count`]) so **assembly** can diagnose the
+    /// duplicate and name that both declarations existed — the builder still records
+    /// only the identity/edges/policy, it does not itself diagnose.
     fn insert_node(&mut self, name: String, mut node: PipelineNode) {
         if let Some(existing) = self.nodes.get(&name) {
             node.registration_count = existing.registration_count + 1;
@@ -1330,8 +1320,8 @@ impl Flow {
     /// This is the point after which the graph shape is fixed permanently. The
     /// builder is taken **by value** (consumed), and the returned [`Pipeline`]
     /// exposes only read access — so no registration or mutation is possible once
-    /// the pipeline exists (C7). This performs **no** assembly validation and
-    /// **no** precomputation (T14); it simply freezes the accumulated node set.
+    /// the pipeline exists. This performs **no** assembly validation and **no**
+    /// precomputation; it simply freezes the accumulated node set.
     #[must_use]
     pub fn finish(self) -> Pipeline {
         Pipeline {
@@ -1342,8 +1332,7 @@ impl Flow {
     }
 }
 
-/// The **immutable pipeline** a finalized [`Flow`] produces (arch.md `### C7 ·
-/// Flow assembly`).
+/// The **immutable pipeline** a finalized [`Flow`] produces.
 ///
 /// It exposes **only read access** to its node set: iterate the nodes, look one
 /// up by [identity](NodeId), or resolve a [`Handle`] to the node it names. There
@@ -1352,34 +1341,33 @@ impl Flow {
 /// fact (the checked-in UI fixture `flow_pipeline_immutable` asserts a
 /// registration call on a `Pipeline` fails to compile).
 ///
-/// Node identity being name-derived (T0.7 / C2), the node set is keyed by name,
-/// so two pipelines assembled from the same registrations in different orders
-/// compare **equal** (order-insensitive content) and iterate their nodes in the
-/// same deterministic order. The group label is presentation metadata carried on
-/// each node and excluded from identity ([`Flow`] docs).
+/// Node identity being name-derived, the node set is keyed by name, so two
+/// pipelines assembled from the same registrations in different orders compare
+/// **equal** (order-insensitive content) and iterate their nodes in the same
+/// deterministic order. The group label is presentation metadata carried on each
+/// node and excluded from identity ([`Flow`] docs).
 ///
 /// # What it does *not* carry yet
 ///
-/// This ticket lands the node set and its read surface only. Assembly validation
-/// and precomputation — consumer counts, dependency counts, execution order, the
-/// fingerprint slot, and every diagnostic — are **T14's**; this pipeline is the
-/// value T14 bolts those onto, and the value the graph-artifact writer (T40) and
-/// event-stream writer (T19) later read.
+/// This value is the node set and its read surface only. Assembly validation and
+/// precomputation — consumer counts, dependency counts, execution order, the
+/// fingerprint slot, and every diagnostic — are **assembly's**; this pipeline is
+/// the value assembly bolts those onto, and the value the graph-artifact writer
+/// and event-stream writer later read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pipeline {
     /// Nodes keyed by identity name — a total, deterministic, order-insensitive
-    /// ordering independent of registration order (the canonical sort key of
-    /// T0.7 §6). Read-only from outside this module.
+    /// ordering independent of registration order (the canonical sort key).
+    /// Read-only from outside this module.
     nodes: BTreeMap<String, PipelineNode>,
-    /// The declared environment-capture allowlist (names only, C7 / C22),
-    /// carried forward from the builder for assembly to freeze into its artifact.
-    /// A pure declaration — no value was ever captured.
+    /// The declared environment-capture allowlist (names only), carried forward
+    /// from the builder for assembly to freeze into its artifact. A pure
+    /// declaration — no value was ever captured.
     env_allowlist: Vec<String>,
-    /// The run-level [failure mode](FailureMode) (C15 / T34), carried from the
-    /// builder. A run policy excluded from identity and both fingerprints — two
-    /// pipelines that differ *only* in mode still have identical graph
-    /// fingerprints (the fingerprint reads node/edge/rule/policy fields, never
-    /// this one).
+    /// The run-level [failure mode](FailureMode), carried from the builder. A run
+    /// policy excluded from identity and both fingerprints — two pipelines that
+    /// differ *only* in mode still have identical graph fingerprints (the
+    /// fingerprint reads node/edge/rule/policy fields, never this one).
     failure_mode: FailureMode,
 }
 
@@ -1400,18 +1388,18 @@ impl Pipeline {
     }
 
     /// The declared **environment-capture allowlist** — the names bootstrap may
-    /// later capture (C7 / C22), carried verbatim from the builder. Empty by
-    /// default; a pure declaration, no value captured. Assembly freezes this into
-    /// its [artifact](crate::assembly::AssemblyArtifact::env_allowlist).
+    /// later capture, carried verbatim from the builder. Empty by default; a pure
+    /// declaration, no value captured. Assembly freezes this into its
+    /// [artifact](crate::assembly::AssemblyArtifact::env_allowlist).
     #[must_use]
     pub fn env_allowlist(&self) -> &[String] {
         &self.env_allowlist
     }
 
     /// The run-level [failure mode](FailureMode) selected at the builder/assembly
-    /// seam (C15 / T34). A run policy excluded from identity and both graph
-    /// fingerprints — the run-loop driver (T24/T34) reads it to decide how to treat
-    /// still-eligible work after the first failure. Defaults to
+    /// seam. A run policy excluded from identity and both graph fingerprints — the
+    /// run-loop driver reads it to decide how to treat still-eligible work after
+    /// the first failure. Defaults to
     /// [`ContinueIndependent`](FailureMode::ContinueIndependent).
     #[must_use]
     pub fn failure_mode(&self) -> FailureMode {
@@ -1428,7 +1416,7 @@ impl Pipeline {
     /// node carries that identity.
     ///
     /// This is **not** a runtime node-output lookup and **not** a route to forge
-    /// a handle (C2): it maps an identity a registration already stamped to the
+    /// a handle: it maps an identity a registration already stamped to the
     /// read-only node record. There is deliberately no lookup by *name*, *index*,
     /// or *string key* into node outputs — the graph shape is fixed and outputs
     /// are never addressed by name.
@@ -1450,20 +1438,20 @@ impl Pipeline {
         self.node(handle.id())
     }
 
-    /// The **teardown → covered-node-names** map (C17): for every teardown node in
-    /// the pipeline, the names of the nodes it covers (its ordering upstreams).
-    /// Empty when the pipeline has no teardown node.
+    /// The **teardown → covered-node-names** map: for every teardown node in the
+    /// pipeline, the names of the nodes it covers (its ordering upstreams). Empty
+    /// when the pipeline has no teardown node.
     ///
-    /// A teardown covers exactly the nodes it is ordered after (C4), so the covered
-    /// set is that node's ordering-edge upstreams resolved to names, in
-    /// deterministic name order. This is the query the driver's teardown phase reads
-    /// to inject a teardown's covered terminal states into its context (C8), and the
-    /// contribution this ticket makes to the resume algorithm (C27): every node
-    /// named here — a node covered by a teardown — joins the resume must-run seed and
-    /// is re-executed, never `satisfied-from-prior`, because a teardown that ran in
-    /// the prior run may have destroyed its durable output ("outputs that teardown
-    /// deletes are not resume-safe"). The full seed/closure/demand algorithm is T58;
-    /// this method is the fixed input it consumes.
+    /// A teardown covers exactly the nodes it is ordered after, so the covered set
+    /// is that node's ordering-edge upstreams resolved to names, in deterministic
+    /// name order. This is the query the driver's teardown phase reads to inject a
+    /// teardown's covered terminal states into its context, and the contribution
+    /// this pipeline makes to the resume algorithm: every node named here — a node
+    /// covered by a teardown — joins the resume must-run seed and is re-executed,
+    /// never `satisfied-from-prior`, because a teardown that ran in the prior run
+    /// may have destroyed its durable output ("outputs that teardown deletes are
+    /// not resume-safe"). The full seed/closure/demand algorithm lives in the
+    /// resume core; this method is the fixed input it consumes.
     #[must_use]
     pub fn teardown_covered_nodes(&self) -> BTreeMap<String, Vec<String>> {
         let mut out = BTreeMap::new();

@@ -1,16 +1,14 @@
 //! Author-declared **stable names** for task and payload types — the identity
-//! the C20 graph artifact and the C21 fingerprints record (arch.md `### C20 ·
-//! Graph artifact`, `### C21 · Graph fingerprint`; the T0.7 ADR,
-//! `docs/implementation/013-T0.7-stable-name-and-fingerprint-adr.md` §1).
+//! the graph artifact and the fingerprints record.
 //!
 //! Node and pipeline-shape identity rest on **author-declared** names, never on
 //! a compiler-derived string. [`std::any::type_name`] is **explicitly unstable
 //! across compiler versions** (its output format is not a stability guarantee),
 //! so it may appear **only as an informational debug field** in the artifact —
-//! never as identity, never in either fingerprint (T0.7 §1). This module carries
-//! the author-declared alternative.
+//! never as identity, never in either fingerprint. This module carries the
+//! author-declared alternative.
 //!
-//! # The contract (T0.7 §1)
+//! # The contract
 //!
 //! A [`StableName`] carries the name as an **associated constant**, implemented by
 //! **both task types and payload (input/output) value types** — the types a task
@@ -35,72 +33,69 @@
 //! An author who needs the recorded name to survive a *Rust* rename (or to
 //! disambiguate two types that share a short name) writes the constant explicitly
 //! with a different value; that explicit name is then the stable identity and a
-//! later Rust rename does not move it (T0.7 §1). The one-line **derive** the ADR
-//! anticipates is a later ergonomic convenience; the trait itself — the identity
-//! contract every consumer binds to — is this module's.
+//! later Rust rename does not move it. A one-line **derive** is a later ergonomic
+//! convenience; the trait itself — the identity contract every consumer binds to
+//! — is this module's.
 //!
-//! # Well-formedness (T0.7 §1)
+//! # Well-formedness
 //!
 //! A stable name is **non-empty** and drawn from a **fixed character set / shape**
 //! — ASCII letters, digits, and a small punctuation set (`_`, `-`, `.`, and `::`
 //! for namespacing) with **no whitespace and no control characters** — so it
-//! round-trips through the artifact encoding (T4), the run-store path segment
-//! where a pipeline name is a directory component (T0.6), and the DOT/Mermaid
-//! renderers (T46) without escaping surprises. A malformed stable name is an
-//! **assembly** failure, not a silent truncation; [`is_well_formed`] is the
-//! predicate the assembly check applies. **Uniqueness** of declared task and
-//! payload names is likewise a **whole-pipeline assembly check**, not a
-//! compile-time one (T0.7 §1) — the check and its "names both declarations" error
-//! are assembly's (C7 / T14), not this module's; this module fixes only the
-//! per-name well-formedness rule and the trait its consumers read.
+//! round-trips through the artifact encoding, the run-store path segment where a
+//! pipeline name is a directory component, and the DOT/Mermaid renderers without
+//! escaping surprises. A malformed stable name is an **assembly** failure, not a
+//! silent truncation; [`is_well_formed`] is the predicate the assembly check
+//! applies. **Uniqueness** of declared task and payload names is likewise a
+//! **whole-pipeline assembly check**, not a compile-time one — the check and its
+//! "names both declarations" error are assembly's, not this module's; this module
+//! fixes only the per-name well-formedness rule and the trait its consumers read.
 
-/// An author-declared, toolchain-stable name for a task or payload type
-/// (arch.md C20; T0.7 §1).
+/// An author-declared, toolchain-stable name for a task or payload type.
 ///
 /// Implemented by **task types** (the stable *task* name the artifact records)
 /// and by **payload (input/output) value types** (the stable *type* name a data
 /// edge and a node's input/output list record). The associated
 /// [`STABLE_NAME`](StableName::STABLE_NAME) constant is the **author-declared**
 /// identity — never [`std::any::type_name`], which is unstable across toolchains
-/// and admitted only as an informational debug field (T0.7 §1).
+/// and admitted only as an informational debug field.
 ///
 /// # Well-formedness
 ///
 /// A conforming implementation supplies a [well-formed](is_well_formed) name:
 /// non-empty, ASCII letters/digits and the punctuation set `_ - . :`, no
 /// whitespace and no control characters. A malformed name is rejected at
-/// **assembly** (C7 / T14) or by the artifact builder (T40), not here — the trait
-/// cannot enforce a `const`'s shape at the type level, so the enforcement point
-/// is the whole-pipeline pass, consistent with the ADR's "assembly failure, not a
-/// compile error" rule.
+/// **assembly** or by the artifact builder, not here — the trait cannot enforce a
+/// `const`'s shape at the type level, so the enforcement point is the
+/// whole-pipeline pass: an assembly failure, not a compile error.
 pub trait StableName {
     /// The author-declared stable name of this type — the identity the graph
-    /// artifact (C20) records and the fingerprints (C21) hash. It must be
+    /// artifact records and the fingerprints hash. It must be
     /// [well-formed](is_well_formed); a malformed value fails at the whole-pipeline
     /// check.
     const STABLE_NAME: &'static str;
 }
 
 /// The unit type `()` — a consume-nothing task's input and an **effect-only**
-/// (`()`-output) node's output type (C1). It carries the reserved
+/// (`()`-output) node's output type. It carries the reserved
 /// [`UNIT_STABLE_NAME`] sentinel so that an effect node's produced type still has
 /// an author-stable name (the stable-name-aware registrar's `T::Output:
 /// StableName` bound is satisfied), rather than being an un-nameable special case.
 /// The sentinel is exempt from the general [`is_well_formed`] rule; the artifact
-/// builder accepts it as a reserved name (T0.7 §2).
+/// builder accepts it as a reserved name.
 impl StableName for () {
     const STABLE_NAME: &'static str = UNIT_STABLE_NAME;
 }
 
 /// The reserved stable name of the unit type `()` — a consume-nothing input list
 /// records **no** entry, and an effect-only (`()`-output) node records this
-/// sentinel as its output name rather than an absent field (arch.md C1; T0.7 §2).
-/// It is a **reserved** name, exempt from the [`is_well_formed`] character-set
-/// rule (the parentheses are not in the general set), so the artifact builder
-/// accepts it without a whole-pipeline rejection.
+/// sentinel as its output name rather than an absent field. It is a **reserved**
+/// name, exempt from the [`is_well_formed`] character-set rule (the parentheses
+/// are not in the general set), so the artifact builder accepts it without a
+/// whole-pipeline rejection.
 pub const UNIT_STABLE_NAME: &str = "()";
 
-/// Whether `name` is a **well-formed** stable name (arch.md C20; T0.7 §1).
+/// Whether `name` is a **well-formed** stable name.
 ///
 /// A well-formed stable name is **non-empty** and composed **only** of ASCII
 /// letters, ASCII digits, and the punctuation set `_`, `-`, `.`, and `:` (the
@@ -111,9 +106,9 @@ pub const UNIT_STABLE_NAME: &str = "()";
 /// **not** well-formed under this predicate — it is handled as a reserved name by
 /// the artifact builder, not by this general rule.
 ///
-/// This is the predicate the **whole-pipeline** stable-name validity check (C7 /
-/// T14; the artifact builder, T40) applies; a malformed name is a failure, never a
-/// silent truncation (T0.7 §1).
+/// This is the predicate the **whole-pipeline** stable-name validity check (in
+/// assembly and the artifact builder) applies; a malformed name is a failure,
+/// never a silent truncation.
 #[must_use]
 pub fn is_well_formed(name: &str) -> bool {
     !name.is_empty()
@@ -122,11 +117,10 @@ pub fn is_well_formed(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
-/// Declare the **stable names of a task's declared input types**, positionally
-/// (arch.md C20; T0.7 §2).
+/// Declare the **stable names of a task's declared input types**, positionally.
 ///
 /// A **data-dependent** task's [`Input`](crate::task::Task::Input) is either a
-/// single payload type or a tuple of payload types (the C3 binding, up to
+/// single payload type or a tuple of payload types (the input binding, up to
 /// [`MAX_INPUT_ARITY`](crate::binding::MAX_INPUT_ARITY)). This sealed trait maps
 /// that input shape to the **ordered list of author-declared stable input type
 /// names** the graph artifact records for the node, so the recorded input names

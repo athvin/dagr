@@ -1,11 +1,11 @@
-//! C26 · **Command-line contract** tests — ticket T55 (068). Written first, TDD.
+//! **Command-line contract** tests. Written first, TDD.
 //!
-//! These exercise the library-owned verb surface every pipeline binary inherits
-//! (arch.md `### C26`): the verb table, no-arg help, `validate` printing every
-//! problem, `render` reachable from artifacts alone (with optional run overlay),
-//! `fold` producing the interrupted artifact, the `resume` stub, the typed
-//! parameter seam and reserved library-flag namespace, and the single-node
-//! non-durable-input refusal that shares the resume-refusal exit code.
+//! These exercise the library-owned verb surface every pipeline binary inherits:
+//! the verb table, no-arg help, `validate` printing every problem, `render`
+//! reachable from artifacts alone (with optional run overlay), `fold` producing the
+//! interrupted artifact, the `resume` stub, the typed parameter seam and reserved
+//! library-flag namespace, and the single-node non-durable-input refusal that
+//! shares the resume-refusal exit code.
 //!
 //! Verb *parsing* and the verb *set* are asserted against the library
 //! `dagr_cli::contract` surface, so two distinct pipelines built on the library
@@ -85,8 +85,8 @@ fn beta() -> Pipeline {
 // Verb table + parity across pipelines
 // ===========================================================================
 
-/// The library verb table lists exactly the C26 verbs, in a fixed order — and it
-/// is a library constant, so it is identical regardless of which pipeline hosts
+/// The library verb table lists exactly the contract verbs, in a fixed order — and
+/// it is a library constant, so it is identical regardless of which pipeline hosts
 /// it (verb parity is structural).
 #[test]
 fn the_verb_table_is_the_c26_set() {
@@ -193,14 +193,13 @@ fn validate_on_a_good_pipeline_succeeds_with_no_problems() {
 }
 
 /// `validate` on a pipeline with *two independent* assembly failures exits with
-/// the assembly-failure code and prints **both** problems (not just the first) —
-/// arch.md C7/C26.
+/// the assembly-failure code and prints **both** problems (not just the first).
 #[test]
 fn validate_prints_every_assembly_problem() {
     // Build a pipeline that fails assembly with two distinct problems: two nodes
     // each marked durable but whose output type lacks the durable contract
     // (`Rows` does not implement `DurableOutput`). Assembly reports all problems
-    // it finds (C7), so both appear.
+    // it finds, so both appear.
     let mut flow = Flow::new();
     let _a = flow.register_source_named::<AlphaSource>(
         "durable-a",
@@ -243,7 +242,7 @@ fn validate_prints_every_assembly_problem() {
 // ===========================================================================
 
 /// `render` produces diagram source from a graph artifact with no live pipeline —
-/// proving the renderer (C24) is reachable purely from artifacts.
+/// proving the renderer is reachable purely from artifacts.
 #[test]
 fn render_produces_diagram_from_a_graph_artifact_alone() {
     let pipeline = alpha();
@@ -269,7 +268,7 @@ fn render_produces_diagram_from_a_graph_artifact_alone() {
 }
 
 /// `render` given a run artifact to overlay colours nodes by terminal state —
-/// the run-overlay path (C24), still from artifacts only.
+/// the run-overlay path, still from artifacts only.
 #[test]
 fn render_with_a_run_overlay_colours_nodes_by_state() {
     let pipeline = alpha();
@@ -282,7 +281,7 @@ fn render_with_a_run_overlay_colours_nodes_by_state() {
     .expect("emits");
 
     // A minimal run artifact overlaying node `a` as succeeded, produced by folding
-    // a tiny event stream (the real C22 fold).
+    // a tiny event stream (the real fold).
     let run_artifact = fold_tiny_success_run("a");
 
     let mut out = Vec::new();
@@ -320,7 +319,7 @@ fn render_refuses_a_malformed_graph_artifact() {
 // ===========================================================================
 
 /// `fold` on a crash-truncated stream (no `run-finished`) produces the
-/// interrupted run artifact — the standalone C22/T42 function wired as a verb.
+/// interrupted run artifact — the standalone fold function wired as a verb.
 #[test]
 fn fold_produces_the_interrupted_artifact_from_a_crashed_stream() {
     // A stream that starts a run but is killed before `run-finished`.
@@ -331,7 +330,7 @@ fn fold_produces_the_interrupted_artifact_from_a_crashed_stream() {
     let artifact = String::from_utf8(out).unwrap();
     let value: serde_json::Value = serde_json::from_str(&artifact).expect("fold output is JSON");
     // The crash clause: the folded artifact is flagged interrupted (matching the
-    // standalone function's output, T42/T68).
+    // standalone function's output).
     assert_eq!(
         value
             .get("interrupted")
@@ -345,8 +344,8 @@ fn fold_produces_the_interrupted_artifact_from_a_crashed_stream() {
 // resume — recognized, stubbed, defined exit
 // ===========================================================================
 
-/// The `resume` verb is recognized and parses (its surface exists so T58 can
-/// replace the body without changing the surface).
+/// The `resume` verb is recognized and parses (its surface exists so a later
+/// implementation can replace the body without changing the surface).
 #[test]
 fn resume_is_a_recognized_verb() {
     match parse_cli(["dagr", "resume", "some-run-id"]) {
@@ -360,7 +359,8 @@ fn resume_is_a_recognized_verb() {
 }
 
 /// The stubbed `resume` verb reports "not yet implemented" and exits with the
-/// resume-refusal code — a defined code so T58 replaces only the body.
+/// resume-refusal code — a defined code so a later implementation replaces only
+/// the body.
 #[test]
 fn resume_stub_reports_not_yet_implemented_with_a_defined_code() {
     let mut out = Vec::new();
@@ -383,7 +383,7 @@ fn resume_stub_reports_not_yet_implemented_with_a_defined_code() {
 
 /// A pipeline-declared parameter whose flag name lands in the reserved
 /// library-flag namespace is a **named, hard collision error** — the run does not
-/// proceed (arch.md C26).
+/// proceed.
 #[test]
 fn a_parameter_colliding_with_a_library_flag_is_a_named_error() {
     // Pick a genuinely reserved library flag name.
@@ -433,9 +433,9 @@ fn the_no_banner_toggle_is_reserved() {
     }
 }
 
-/// Every knob in ADR 089's table has its own reserved library-flag name so a
+/// Every pool/failure-mode knob has its own reserved library-flag name so a
 /// pipeline parameter can never shadow one: a parameter named after any of the
-/// newly reserved flags is the same named, hard collision error (ticket T76).
+/// reserved flags is the same named, hard collision error.
 #[test]
 fn every_adr_089_knob_flag_is_reserved() {
     for flag in [
@@ -465,9 +465,9 @@ fn every_adr_089_knob_flag_is_reserved() {
     }
 }
 
-/// The generic `pool` name was **replaced** by the specific `dagr.pool.*` entries
-/// (ticket T76 / ADR 089), so it is no longer reserved: a pipeline may now declare
-/// a parameter named `pool` without a collision.
+/// The generic `pool` name was **replaced** by the specific `dagr.pool.*` entries,
+/// so it is no longer reserved: a pipeline may now declare a parameter named `pool`
+/// without a collision.
 #[test]
 fn the_generic_pool_flag_is_no_longer_reserved() {
     assert!(
@@ -501,7 +501,7 @@ fn an_invalid_parameter_value_is_invalid_usage() {
 }
 
 /// Valid typed parameters and a data interval are carried verbatim (the values
-/// the run verb records into the artifact header, C22).
+/// the run verb records into the artifact header).
 #[test]
 fn valid_parameters_and_interval_are_carried_verbatim() {
     let params = vec![ParamSpec::new("region", "a region")];

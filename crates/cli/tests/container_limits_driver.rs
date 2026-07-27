@@ -1,12 +1,12 @@
-//! C12 · **Container-limit bootstrap rejection** driver integration test —
-//! ticket T32 (042). Written first, TDD.
+//! **Container-limit bootstrap rejection** driver integration test.
+//! Written first, TDD.
 //!
-//! This exercises the **real** T24 run-loop driver ([`dagr_cli::driver::drive`])
+//! This exercises the **real** run-loop driver ([`dagr_cli::driver::drive`])
 //! on the too-big-node path: a node whose declared cost exceeds a pool's total
 //! capacity is rejected **at bootstrap, before any node executes**, and the run
 //! records a `bootstrap-failed` outcome — distinct from `assembly-failed`, and
-//! distinct from T31's admission-time can-never-fit guard (which is a per-node
-//! `Failed` terminal *inside* the loop). Capacity is pinned via the T32 flag so
+//! distinct from the admission-time can-never-fit guard (which is a per-node
+//! `Failed` terminal *inside* the loop). Capacity is pinned via the capacity flag so
 //! the scenario is deterministic in CI (never reads the real host).
 //!
 //! The key assertions the ticket names: bootstrap fails **fast** (no
@@ -29,7 +29,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam)
+// In-memory sink + clock (the injection seam)
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -185,7 +185,7 @@ fn too_big_plan(over: u64, ok: u64) -> (Pipeline, RunPlan) {
 // ===========================================================================
 
 /// **too-big node rejected at bootstrap, not admission.** With the memory pool
-/// pinned to a small value (via the T32 flag), a node demanding more than the
+/// pinned to a small value (via the capacity flag), a node demanding more than the
 /// pool's total capacity fails the run at **bootstrap** — before any attempt runs.
 /// The run records a `bootstrap-failed` outcome (distinct from `assembly-failed`),
 /// no `attempt-started` record exists (nothing executed), and the run terminates

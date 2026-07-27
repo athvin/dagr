@@ -1,22 +1,20 @@
-//! The `dagr` pipeline-binary entry point — the C26 command-line contract's
-//! reference driver (arch.md `### C26 · Command-line contract`; tickets T55, T74).
+//! The `dagr` pipeline-binary entry point — the command-line contract's
+//! reference driver.
 //!
 //! Every dagr pipeline binary inherits the same command surface from the library
 //! ([`dagr_cli::contract`]): the standard verbs, the typed-parameter seam, the
 //! reserved library-flag namespace, and the exhaustive exit-code table. This
 //! binary is the library's own reference driver. It **delegates flow selection to
-//! [`dagr_cli::registry::run_registry`]** over a single-flow registry (ADR 086),
-//! so every *flow-selecting* verb — `run`, `graph`, `validate`, `single-node`,
-//! `prune`, plus the registry's `list` — routes through the many-flows-per-binary
-//! seam rather than being hand-dispatched (T74 shipped `run`/`list`; T75 added the
-//! `graph`/`validate` routing and the `single-node`/`prune` selection). The
-//! reference driver therefore emits its own flow's C20 graph (`dagr graph`) and
-//! validates it (`dagr validate`) instead of reporting "needs a pipeline-specific
-//! binary" for those verbs.
+//! [`dagr_cli::registry::run_registry`]** over a single-flow registry, so every
+//! *flow-selecting* verb — `run`, `graph`, `validate`, `single-node`, `prune`,
+//! plus the registry's `list` — routes through the many-flows-per-binary seam
+//! rather than being hand-dispatched. The reference driver therefore emits its own
+//! flow's graph (`dagr graph`) and validates it (`dagr validate`) instead of
+//! reporting "needs a pipeline-specific binary" for those verbs.
 //!
 //! The **artifact-only** verbs (`render`, `fold`) and the `resume` stub carry no
 //! flow, so they are dispatched **directly** here (reading their artifact from
-//! standard input), mapping each outcome to its C26 exit code.
+//! standard input), mapping each outcome to its exit code.
 
 use std::io::{self, Read};
 use std::process::ExitCode as ProcExit;
@@ -37,7 +35,7 @@ use dagr_core::TaskError;
 /// registry needs a factory, so this is the minimal flow that lets every
 /// flow-selecting verb route through [`run_registry`] end to end on the reference
 /// binary. It carries an author-declared [`StableName`] so it registers through the
-/// stable-name-aware surface and is emittable to the C20 graph contract — i.e.
+/// stable-name-aware surface and is emittable to the graph contract — i.e.
 /// `dagr graph` on the reference binary emits a real (if trivial) graph artifact.
 struct ReferenceSource;
 impl StableName for ReferenceSource {
@@ -71,12 +69,12 @@ fn main() -> ProcExit {
         let _ = print_banner(&mut io::stderr().lock());
     }
 
-    // Every flow-selecting verb routes through the registry (ADR 086): the reference
-    // driver hosts one trivial flow, so `dagr run` drives it, `dagr graph` emits its
-    // C20 artifact, `dagr validate` assembles it, and `dagr list` prints its name.
+    // Every flow-selecting verb routes through the registry: the reference driver
+    // hosts one trivial flow, so `dagr run` drives it, `dagr graph` emits its graph
+    // artifact, `dagr validate` assembles it, and `dagr list` prints its name.
     // Recognizing these before the direct dispatch keeps the artifact-only verbs
     // (render/fold/resume) handled here and delegates flow selection to the shared
-    // entrypoint. `list` is registry-specific; the rest are C26 verbs.
+    // entrypoint. `list` is registry-specific; the rest are standard verbs.
     if routes_through_registry(&argv) {
         let registry = FlowRegistry::single_flow(build_reference_flow);
         // Pass the banner-stripped argv so the registry never re-sees `--no-banner`.
@@ -136,7 +134,7 @@ fn dispatch(verb: Verb) -> ExitCode {
         },
         Verb::Resume => resume_verb_stub(&mut stdout),
         // Every flow-selecting verb routes through the registry in `main` and never
-        // reaches here (recognized by `routes_through_registry`).
+        // reaches here (recognized by [`routes_through_registry`]).
         Verb::Run | Verb::Graph | Verb::Validate | Verb::SingleNode | Verb::Prune => {
             unreachable!("flow-selecting verbs route through the registry in main")
         }

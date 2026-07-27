@@ -1,11 +1,11 @@
-//! C25 · logging and tracing integration acceptance (ticket T45 / 056).
+//! Logging and tracing integration acceptance.
 //!
-//! These tests pin arch.md `### C25`'s machine acceptance against the real
+//! These tests pin the logging contract's machine acceptance against the real
 //! `dagr_cli::logging` surface: every attempt runs beneath a span carrying run /
 //! node / attempt identity so any line — framework or third-party — is
 //! attributable without timestamp correlation; output is structured by default
 //! and human-readable via an environment variable with no code change; and
-//! marked secrets from the C9 registry never surface on framework output paths.
+//! marked secrets from the secret registry never surface on framework output paths.
 //!
 //! The subscriber is exercised through a **scoped** capturing subscriber
 //! (`tracing::subscriber::with_default`) writing into a shared in-memory buffer,

@@ -1,4 +1,4 @@
-//! **Layer B — the execution core** (arch.md "Layer B"; ticket T64).
+//! **Layer B — the execution core.**
 //!
 //! The parts that *run* the pipeline — readiness, admission, the attempt runner,
 //! retries — which a pipeline developer should be able to ignore entirely. This
@@ -6,7 +6,7 @@
 //! with one retry) and drives the whole graph in **one call** through
 //! [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow), writing a real event
 //! stream. The author writes tasks + a flow and **never** a scheduler, a
-//! `NodeRunner`, or any retry/permit code (arch.md C1). Run it with
+//! `NodeRunner`, or any retry/permit code. Run it with
 //! `cargo run --example layer_b_execution -- ./layer-b-runs`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,7 +67,7 @@ fn main() -> std::process::ExitCode {
     // Register three real tasks. The flaky middle node gets one retry via its
     // policy; because a retrying node's owned input cannot be re-formed, the edge
     // opts into clone-on-read (each attempt gets a fresh input) — assembly would
-    // reject an owned edge into a retrying node otherwise (arch.md C1).
+    // reject an owned edge into a retrying node otherwise.
     let mut flow = RunnableFlow::new();
     let seed = flow.register_source("seed", Seed { value: 21 });
     let doubled = flow.register_with::<FlakyDouble, _>(

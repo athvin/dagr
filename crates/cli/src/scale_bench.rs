@@ -1,17 +1,16 @@
 //! The **scale benchmark** — the CI-runnable measurement of pure dagr framework
-//! overhead across a thousand-node no-op graph (arch.md `## Performance
-//! envelope`; ticket T69).
+//! overhead across a thousand-node no-op graph.
 //!
 //! # What the budget covers
 //!
-//! arch.md's Performance envelope fixes a hard budget: *framework overhead per
+//! The performance envelope fixes a hard budget: *framework overhead per
 //! node — scheduling, admission, event writing; everything but the task's own
 //! work — is budgeted at **under one millisecond**, held by a CI benchmark that
 //! runs a thousand-node no-op graph and fails on regression.* This module is that
 //! benchmark's reusable core: it constructs a graph of exactly
-//! [`SCALE_NODE_COUNT`] no-op nodes, drives it through the **real** T24 run-loop
-//! driver ([`crate::driver::drive`]) — readiness (C11), admission (C12), attempt
-//! running (C14), and event-stream writing (C19), no stubbed scheduler — and
+//! [`SCALE_NODE_COUNT`] no-op nodes, drives it through the **real** run-loop
+//! driver ([`crate::driver::drive`]) — readiness, admission, attempt
+//! running, and event-stream writing, no stubbed scheduler — and
 //! reports the per-node framework overhead so the caller can threshold it.
 //!
 //! Because every node's task body does **no** real work (it returns immediately),
@@ -52,8 +51,8 @@
 //!
 //! # Pinned, deterministic capacity (not host-discovered)
 //!
-//! The benchmark pins the C12 admission-pool capacities to
-//! [`bench_capacities`] via the T32 pinning flag ([`crate::driver::RunConfig::capacities`]),
+//! The benchmark pins the admission-pool capacities to
+//! [`bench_capacities`] via the pinning flag ([`crate::driver::RunConfig::capacities`]),
 //! so the measurement is a property of dagr's overhead and **not** of the CI
 //! host's discovered cgroup/host limits. Two runs on the same host use identical
 //! pinned capacity, so the number is reproducible run to run and machine to
@@ -90,15 +89,14 @@ use dagr_core::TaskError;
 use crate::driver::{drive, NodeRunner, RunConfig, RunPlan};
 
 /// The exact node count the benchmark exercises — the thousand-node ceiling the
-/// spec's Performance envelope names (arch.md `## Performance envelope`: *"a
-/// thousand-node no-op graph"*). Fixed: the benchmark targets the top of the
-/// 10–1,000-node envelope, no more and no less.
+/// spec's performance envelope names (*"a thousand-node no-op graph"*). Fixed: the
+/// benchmark targets the top of the 10–1,000-node envelope, no more and no less.
 pub const SCALE_NODE_COUNT: usize = 1_000;
 
 /// The spec's **hard ceiling**: framework overhead per node must stay under **one
-/// millisecond** (arch.md `## Performance envelope`). Expressed in nanoseconds so
+/// millisecond**. Expressed in nanoseconds so
 /// it composes with the [`Instant`]-measured overhead. The measured per-node
-/// overhead must never exceed this; it is the number the Performance envelope
+/// overhead must never exceed this; it is the number the performance envelope
 /// budgets and is **not** to be raised — it is the spec's limit.
 pub const SPEC_CEILING_NS_PER_NODE: u64 = 1_000_000; // 1 ms
 
@@ -114,8 +112,8 @@ pub const SPEC_CEILING_NS_PER_NODE: u64 = 1_000_000; // 1 ms
 /// carried by the benchmark's **deterministic** assertions, not by this number.
 pub const CI_BUDGET_NS_PER_NODE: u64 = 16 * SPEC_CEILING_NS_PER_NODE; // 16 ms, generous
 
-/// The pinned C12 admission-pool capacities the benchmark drives under (arch.md
-/// C12 / T32 pinning flag). Every pool is pinned to a fixed, finite, benchmark-
+/// The pinned admission-pool capacities the benchmark drives under (via the
+/// pinning flag). Every pool is pinned to a fixed, finite, benchmark-
 /// owned value so admission uses this fixed configuration rather than the CI
 /// host's discovered cgroup/host limits — the measurement is a property of
 /// dagr's overhead, deterministic run to run and machine to machine.
@@ -123,8 +121,8 @@ pub const CI_BUDGET_NS_PER_NODE: u64 = 16 * SPEC_CEILING_NS_PER_NODE; // 16 ms, 
 /// The no-op nodes declare zero working-memory cost, so a memory pinned large
 /// enough to admit them all keeps every ready node admissible immediately (the
 /// benchmark measures overhead, not contention); the point of pinning is host-
-/// independence, not to create a binding ceiling (that is the M2 overcommit
-/// demo's concern, T38).
+/// independence, not to create a binding ceiling (that is the overcommit
+/// demo's concern).
 #[must_use]
 pub fn bench_capacities() -> PoolCapacities {
     PoolCapacities::new()
@@ -195,7 +193,7 @@ pub struct ScaleBenchResult {
     pub outcome: RunOutcome,
     /// Each node's terminal state, keyed by node name.
     pub terminal_states: BTreeMap<String, TerminalState>,
-    /// The raw recorded C19 event stream (JSON Lines) the real driver wrote — the
+    /// The raw recorded event stream (JSON Lines) the real driver wrote — the
     /// authoritative record the benchmark's tests fold and walk.
     pub stream: Vec<u8>,
     /// The node names in build order.
@@ -214,7 +212,7 @@ impl ScaleBenchResult {
 }
 
 /// Run the scale benchmark once: build the thousand-node no-op graph, drive it
-/// through the **real** T24 driver with capacity **pinned** to
+/// through the **real** driver with capacity **pinned** to
 /// [`bench_capacities`] under a **private per-run temp base**, measuring the total
 /// framework overhead with a real [`Instant`], and return the
 /// [`ScaleBenchResult`].
@@ -231,7 +229,7 @@ impl ScaleBenchResult {
 pub fn run_scale_benchmark() -> ScaleBenchResult {
     let (pipeline, node_names) = build_scale_graph();
 
-    // A type-erased no-op runner per node, over the real C14 caught-attempt path.
+    // A type-erased no-op runner per node, over the real caught-attempt path.
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     for name in &node_names {
         runners.insert(name.clone(), NoOpRunner::boxed(name));
@@ -265,8 +263,7 @@ pub fn run_scale_benchmark() -> ScaleBenchResult {
     }
 }
 
-/// The pure **budget check** the CI benchmark fails on regression (arch.md
-/// `## Performance envelope`; T69).
+/// The pure **budget check** the CI benchmark fails on regression.
 ///
 /// Returns [`None`] when `measured_ns_per_node` is at or under `threshold_ns`, and
 /// `Some(diagnostic)` when it exceeds it — a message naming the **measured value,
@@ -292,7 +289,7 @@ pub fn over_budget(
 }
 
 // ===========================================================================
-// The no-op task + type-erased runner (real C14 caught-attempt path)
+// The no-op task + type-erased runner (real caught-attempt path)
 // ===========================================================================
 
 /// A **no-op** source task: it does no real work and returns immediately, so the
@@ -310,8 +307,8 @@ impl Task for NoOp {
 }
 
 /// The type-erased [`NodeRunner`] the benchmark hands the driver for each no-op
-/// node, driving the [`NoOp`] task through the **real** C14 caught-attempt path so
-/// the emitted C14/C19 records — and therefore the overhead they cost — are
+/// node, driving the [`NoOp`] task through the **real** caught-attempt path so
+/// the emitted attempt/event records — and therefore the overhead they cost — are
 /// genuine, not stubbed.
 struct NoOpRunner {
     name: String,
@@ -397,11 +394,11 @@ impl MonotonicClock for TickClock {
     }
 }
 
-/// A **private per-run temp base** for a benchmark run (arch.md C16; the
-/// shared-`/tmp` flake class the CI reliability notes call out). Created fresh
-/// under the process temp dir with a per-run unique suffix, and removed when the
-/// run's captures are collected — so two benchmark runs, even concurrent ones,
-/// never collide on the run store.
+/// A **private per-run temp base** for a benchmark run (the shared-`/tmp` flake
+/// class the CI reliability notes call out). Created fresh under the process temp
+/// dir with a per-run unique suffix, and removed when the run's captures are
+/// collected — so two benchmark runs, even concurrent ones, never collide on the
+/// run store.
 struct PrivateTempBase {
     path: std::path::PathBuf,
 }

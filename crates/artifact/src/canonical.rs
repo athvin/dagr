@@ -1,17 +1,16 @@
-//! The T4 §6 **canonical JSON** serializer — the single byte-form every dagr
-//! artifact and record is compared for equality on (arch.md C19/C20/C22; the T4
-//! ADR, `docs/implementation/017-T4-...` §6).
+//! The **canonical JSON** serializer — the single byte-form every dagr
+//! artifact and record is compared for equality on.
 //!
 //! Canonical form is what makes "two emissions of the same record are
-//! byte-identical" (C19 event stream, C20 graph artifact) a *byte* fact rather
-//! than a structural one. It is:
+//! byte-identical" (for the event stream and graph artifact) a *byte* fact
+//! rather than a structural one. It is:
 //!
 //! - **object keys sorted** lexicographically by byte order (`serde_json` does
 //!   not sort keys itself — this module does),
 //! - **compact** — no insignificant whitespace,
 //! - **numbers via `serde_json`'s deterministic formatter** — most dagr numeric
-//!   fields are integers (T4 §6), but a C23/T44 node-metric value is a JSON
-//!   `number` (`schemas/run/v1.schema.json` types `metrics` as `number`, not
+//!   fields are integers, but a node-metric value is a JSON `number`
+//!   (`schemas/run/v1.schema.json` types `metrics` as `number`, not
 //!   `integer`) and MAY be non-integer. Non-integer numbers reach the output only
 //!   via `serde_json::Value::to_string` below, which formats floats with **ryu**
 //!   (locale-independent, shortest round-trip, byte-stable) — so the canonical
@@ -21,19 +20,18 @@
 //!   `U+0000`–`U+001F`); printable non-ASCII is emitted literally as UTF-8, never
 //!   `\u`-escaped.
 //!
-//! Both the C19 event-stream writer (T19) and the C20 graph-artifact emitter
-//! (T40) serialize through [`to_canonical_string`], so their byte-identity
-//! guarantees rest on one authoritative canonicalizer rather than two that might
-//! drift.
+//! Both the event-stream writer and the graph-artifact emitter serialize through
+//! [`to_canonical_string`], so their byte-identity guarantees rest on one
+//! authoritative canonicalizer rather than two that might drift.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-/// Serialize `value` to its **canonical** JSON string (T4 §6): object keys sorted
+/// Serialize `value` to its **canonical** JSON string: object keys sorted
 /// lexicographically, compact, minimally escaped, numbers via `serde_json`'s
 /// deterministic (ryu-backed, byte-stable) formatter — so even a non-integer
-/// number (e.g. a C23/T44 metric value) serializes deterministically. Two
+/// number (e.g. a metric value) serializes deterministically. Two
 /// canonical serializations of equal [`Value`]s are byte-identical.
 #[must_use]
 pub fn to_canonical_string(value: &Value) -> String {
@@ -42,7 +40,7 @@ pub fn to_canonical_string(value: &Value) -> String {
     out
 }
 
-/// Write `value` in the T4 canonical form into `out` (see [`to_canonical_string`]).
+/// Write `value` in canonical form into `out` (see [`to_canonical_string`]).
 pub(crate) fn write_canonical(value: &Value, out: &mut String) {
     match value {
         Value::Object(map) => {
@@ -71,16 +69,16 @@ pub(crate) fn write_canonical(value: &Value, out: &mut String) {
         }
         Value::String(s) => write_json_string(s, out),
         // Booleans, numbers, and null render identically to serde_json's compact
-        // form. Integers (T4 §6) format exactly; a non-integer number — e.g. a
-        // C23/T44 metric value, typed `number` (not `integer`) by the run schema —
-        // formats via serde_json's ryu-backed float writer (locale-independent,
-        // shortest round-trip, byte-stable), so no float-formatting nondeterminism
+        // form. Integers format exactly; a non-integer number — e.g. a metric
+        // value, typed `number` (not `integer`) by the run schema — formats via
+        // serde_json's ryu-backed float writer (locale-independent, shortest
+        // round-trip, byte-stable), so no float-formatting nondeterminism
         // arises for non-integer values either.
         other => out.push_str(&other.to_string()),
     }
 }
 
-/// Emit a JSON string with minimal, deterministic escaping (T4 §6): escape only
+/// Emit a JSON string with minimal, deterministic escaping: escape only
 /// what JSON requires (`"`, `\`, and control chars `U+0000`–`U+001F`); non-ASCII
 /// printable characters are emitted literally as UTF-8, never `\u`-escaped.
 pub(crate) fn write_json_string(s: &str, out: &mut String) {

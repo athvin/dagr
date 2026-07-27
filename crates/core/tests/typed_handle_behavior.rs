@@ -1,5 +1,5 @@
-//! Public-surface (no-construction) tests for the C2 typed handle (ticket T10 /
-//! 020). Written first, TDD.
+//! Public-surface (no-construction) tests for the typed handle. Written first,
+//! TDD.
 //!
 //! These prove the properties that hold **without minting a handle**, so they
 //! can live in an external integration test that has no access to the
@@ -14,7 +14,7 @@
 //! What THIS file proves through the public surface alone:
 //! - `Handle<T>` is `Copy + Send + Sync` for **every** value type `T`, including
 //!   a `T` that is itself `!Send + !Sync + !Copy` (the `PhantomData<fn() -> T>`
-//!   property the T5 ADR fixed);
+//!   property);
 //! - `NodeId` is a small, comparable identity token (`Copy + Eq + Hash`);
 //! - the public surface exposes the handle type and its identity accessor and
 //!   nothing that mints or looks up a handle.
@@ -25,9 +25,9 @@ use dagr_core::handle::{Handle, NodeId};
 
 /// A handle is `Copy` (not just `Clone`), `Send`, and `Sync` for **every** value
 /// type — even a `T` that is itself `!Send + !Sync + !Copy`. This is the
-/// `PhantomData<fn() -> T>` property the T5 ADR fixed: the handle carries the
-/// value type at compile time without inheriting its auto-traits, which is what
-/// makes it "cheap and freely copyable" regardless of what it names (C2).
+/// `PhantomData<fn() -> T>` property: the handle carries the value type at
+/// compile time without inheriting its auto-traits, which is what makes it
+/// "cheap and freely copyable" regardless of what it names.
 #[test]
 fn handle_is_copy_send_sync_for_any_value_type() {
     fn assert_copy<T: Copy>() {}
@@ -47,7 +47,7 @@ fn handle_is_copy_send_sync_for_any_value_type() {
 
 /// The identity token a handle carries is itself a small, comparable value:
 /// `Copy` (so it is cheap to observe and pass around) and `Eq + Hash` (so
-/// downstream code — the builder's uniqueness check, T13 — can key on it).
+/// downstream code — the builder's uniqueness check — can key on it).
 #[test]
 fn node_id_is_a_small_comparable_token() {
     fn assert_copy<T: Copy>() {}

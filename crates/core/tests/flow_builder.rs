@@ -1,18 +1,18 @@
-//! Positive (compiles + runtime-shape) tests for the C7 flow builder and node
-//! identity — ticket T13 (023). Written first, TDD.
+//! Positive (compiles + runtime-shape) tests for the flow builder and node
+//! identity. Written first, TDD.
 //!
 //! These exercise the **real** flow builder in [`dagr_core::flow`]: a builder
 //! that accumulates node registrations (each carrying an explicit
-//! caller-supplied name), hands back the typed [`Handle`] from T10, and
-//! finalizes into an **immutable** [`Pipeline`]. The one decision everything
-//! downstream binds to is asserted here: **node identity is the explicit
-//! registration name** — name-derived, reorder-stable, rename-sensitive, and
-//! with the group label carried alongside identity but excluded from it.
+//! caller-supplied name), hands back the typed [`Handle`], and finalizes into an
+//! **immutable** [`Pipeline`]. The one decision everything downstream binds to
+//! is asserted here: **node identity is the explicit registration name** —
+//! name-derived, reorder-stable, rename-sensitive, and with the group label
+//! carried alongside identity but excluded from it.
 //!
 //! Assembly *validation* (duplicate-name reporting, empty-pipeline, class
 //! overrides, fingerprint computation, consumer/dependency counts, execution
-//! order) is deliberately **not** here — that is T14. This ticket lands only the
-//! builder skeleton, node identity, and the immutable pipeline the seams read.
+//! order) is deliberately **not** here. This file covers only the builder
+//! skeleton, node identity, and the immutable pipeline the seams read.
 
 use dagr_core::flow::{Flow, Pipeline, PipelineNode};
 use dagr_core::handle::{Handle, NodeId};
@@ -231,7 +231,7 @@ fn handle_to_node_linkage_survives_finalization() {
 
 /// **Handle-to-node linkage records data edges.** A data-dependent node's
 /// registration records one data edge per upstream, in input order — the seam
-/// assembly (T14) reads. (This ticket records; it does not adjudicate.)
+/// assembly reads. (Registration records; it does not adjudicate.)
 #[test]
 fn data_dependent_node_records_its_edges() {
     let mut flow = Flow::new();
@@ -259,8 +259,8 @@ fn data_dependent_node_records_its_edges() {
 /// pipeline completes with no filesystem, network, clock, credentials, or
 /// parameters reachable. The builder+finalize path introduces no such
 /// dependency — the type surface offers no parameter accessor at all (the full
-/// empty-environment proof is T15; this asserts the API surface introduces no
-/// dependency).
+/// empty-environment proof lives elsewhere; this asserts the API surface
+/// introduces no dependency).
 #[test]
 fn builder_does_not_touch_the_environment() {
     // Pure construction: no I/O primitives are constructed or reachable here,

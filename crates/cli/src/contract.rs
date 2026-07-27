@@ -1,7 +1,6 @@
-//! C26 · **Command-line contract** — the standard verb surface, typed-parameter
+//! **Command-line contract** — the standard verb surface, typed-parameter
 //! seam, reserved library-flag namespace, and the exhaustive exit-code table
-//! every pipeline binary inherits unchanged (arch.md `### C26 · Command-line
-//! contract`; ticket T55).
+//! every pipeline binary inherits unchanged.
 //!
 //! # What this module owns
 //!
@@ -10,26 +9,27 @@
 //! get truthful exit codes. This module supplies:
 //!
 //! - the **library-owned verb set** ([`Verb`] / [`verb_table`]) — `graph`,
-//!   `validate`, `render`, `run`, `single-node`, `resume` (stubbed until T58),
-//!   `fold`, `prune` — identical across every pipeline built on the library, and
-//!   the derived argument parser ([`parse_cli`]) built on `clap`;
-//! - the **exit-code table** ([`ExitCode`]) — the crux of C26: every run outcome
-//!   / error class maps to a **specific numbered code**, by cause, with
-//!   precedence, documented in exactly one place ([`ExitCode::as_u8`]) and stable
-//!   within a major version. [`exit_code_for_run`] applies the precedence rules to
-//!   a completed [`RunReport`];
+//!   `validate`, `render`, `run`, `single-node`, `resume` (stubbed for a binary
+//!   that has not wired the real behaviour), `fold`, `prune` — identical across
+//!   every pipeline built on the library, and the derived argument parser
+//!   ([`parse_cli`]) built on `clap`;
+//! - the **exit-code table** ([`ExitCode`]): every run outcome / error class maps
+//!   to a **specific numbered code**, by cause, with precedence, documented in
+//!   exactly one place ([`ExitCode::as_u8`]) and stable within a major version.
+//!   [`exit_code_for_run`] applies the precedence rules to a completed
+//!   [`RunReport`];
 //! - the **typed-parameter seam** ([`ParamSpec`] / [`validate_params`]) — the
 //!   pipeline declares its typed parameters, the library validates them at
-//!   bootstrap (after assembly, which never sees them — C7) and carries them into
+//!   bootstrap (after assembly, which never sees them) and carries them into
 //!   the context / run-artifact header;
 //! - the **reserved library-flag namespace** ([`reserved_flag_names`] /
 //!   [`check_reserved_collision`]) — a pipeline parameter can never shadow a
 //!   library-owned flag; a collision is a hard, named error
 //!   ([`LibraryFlagCollision`]);
 //! - the **verb bodies** that wire already-built machinery: [`validate_verb`]
-//!   (assembly only, prints every problem), [`render_verb`] (the C24 renderer
+//!   (assembly only, prints every problem), [`render_verb`] (the renderer
 //!   reachable from artifacts alone, with an optional run overlay), [`fold_verb`]
-//!   (the standalone C22/T42 fold), [`resume_verb`] (the real C27/T58 resume:
+//!   (the standalone event-stream fold), [`resume_verb`] (the real resume:
 //!   gate + seed/closure/demand plan + resumed-artifact recording, wired to a
 //!   pipeline; [`resume_verb_stub`] remains for the pipeline-less reference
 //!   driver), and the [`single_node_refusal_check`] durability gate.
@@ -40,15 +40,15 @@
 //!   gating) — [`dagr_core::resume`]. This module wires it ([`resume_verb`]): it
 //!   reads the prior artifact, derives parameters/interval, and records the
 //!   resumed artifact around the pure plan.
-//! - **Scratch carry-forward** for re-executing nodes — T54b. [`resume_verb`]
-//!   only surfaces which nodes re-execute (the plan's must-run set) so T54b can
-//!   copy their retained scratch forward.
-//! - The **durable-output reference contract** and reference *recording* — T57.
+//! - **Scratch carry-forward** for re-executing nodes. [`resume_verb`]
+//!   only surfaces which nodes re-execute (the plan's must-run set) so the
+//!   carry-forward step can copy their retained scratch forward.
+//! - The **durable-output reference contract** and reference *recording*.
 //!   This module only *consumes* recorded references for the single-node check.
-//! - The **renderer internals** — T46/T47. This module only wires the verb.
+//! - The **renderer internals**. This module only wires the verb.
 //! - **When** a pipeline runs — permanent scope boundary. The CLI never schedules,
 //!   never advances a data interval, and never coordinates between concurrent
-//!   runs (arch.md Operational model).
+//!   runs.
 //!
 //! # Determinism
 //!
@@ -74,13 +74,13 @@ use dagr_render::{render_dot, render_mermaid, GraphArtifact};
 use crate::driver::{RunReport, ShutdownExit};
 
 // ===========================================================================
-// The exit-code table (the crux of C26)
+// The exit-code table
 // ===========================================================================
 
-/// The C26 **exit-code table** — every run outcome / error class mapped to a
-/// **specific numbered exit code**, by cause, with precedence (arch.md
-/// `### C26`). This is the *one place* the numbering is documented; the numbers
-/// are stable within a major version (a change here is a review-visible diff).
+/// The **exit-code table** — every run outcome / error class mapped to a
+/// **specific numbered exit code**, by cause, with precedence. This is the
+/// *one place* the numbering is documented; the numbers are stable within a
+/// major version (a change here is a review-visible diff).
 ///
 /// The numbering (see [`as_u8`](ExitCode::as_u8)):
 ///
@@ -89,13 +89,13 @@ use crate::driver::{RunReport, ShutdownExit};
 /// | [`Success`](ExitCode::Success) | `0` | the run/verb completed cleanly (**includes skip-only runs**) |
 /// | [`RunFailure`](ExitCode::RunFailure) | `1` | a non-teardown node ended `failed` or `timed-out` |
 /// | [`InvalidUsage`](ExitCode::InvalidUsage) | `2` | bad arguments / invalid parameters / a malformed input artifact |
-/// | [`AssemblyFailure`](ExitCode::AssemblyFailure) | `3` | assembly (C7) failed before execution |
-/// | [`BootstrapFailure`](ExitCode::BootstrapFailure) | `4` | a fail-fast bootstrap check failed (§63) |
+/// | [`AssemblyFailure`](ExitCode::AssemblyFailure) | `3` | assembly failed before execution |
+/// | [`BootstrapFailure`](ExitCode::BootstrapFailure) | `4` | a fail-fast bootstrap check failed |
 /// | [`Cancelled`](ExitCode::Cancelled) | `5` | externally-originated termination with **no** run failure |
 /// | [`ResumeRefusal`](ExitCode::ResumeRefusal) | `6` | resume refused (also a single-node replay refused for a non-durable input) |
-/// | [`SinkFailure`](ExitCode::SinkFailure) | `7` | the event sink was unwritable at shutdown (§358) |
+/// | [`SinkFailure`](ExitCode::SinkFailure) | `7` | the event sink was unwritable at shutdown |
 ///
-/// **Precedence** (arch.md C26 "Exit codes are by cause, with precedence"):
+/// **Precedence** — exit codes are by cause, with precedence:
 /// *run failure wins whenever it occurred* — even when the failure then triggered
 /// cancellation (stop-on-first-failure) and even over a sink failure at shutdown.
 /// Cancellation is reported only for externally-originated termination with no run
@@ -117,21 +117,21 @@ pub enum ExitCode {
     /// parameter, or a malformed input artifact handed to a verb. Number `2`
     /// (Unix usage-error convention).
     InvalidUsage,
-    /// Assembly (C7) failed before execution — the graph's fault. Number `3`.
+    /// Assembly failed before execution — the graph's fault. Number `3`.
     AssemblyFailure,
     /// A fail-fast bootstrap check failed (a declared cost that cannot fit, a
-    /// missing declared resource — §63) — the machine's fault, distinct from an
+    /// missing declared resource) — the machine's fault, distinct from an
     /// assembly failure. Number `4`.
     BootstrapFailure,
     /// The run was cancelled by externally-originated termination (a signal / the
     /// `CancelHandle` seam) with **no** run failure. Number `5`.
     Cancelled,
     /// A resume was refused, **or** a single-node replay was refused for a
-    /// non-durable input (the two share this code, arch.md C26). The `resume`
-    /// stub also returns this until T58 lands the algorithm. Number `6`.
+    /// non-durable input (the two share this code). The `resume` stub also
+    /// returns this when a binary has not wired the real algorithm. Number `6`.
     ResumeRefusal,
     /// The event sink was unwritable at the final flush (a bounded wait, not a
-    /// hang — §358) with no run failure. Number `7`.
+    /// hang) with no run failure. Number `7`.
     SinkFailure,
 }
 
@@ -149,9 +149,9 @@ impl ExitCode {
         ExitCode::SinkFailure,
     ];
 
-    /// The documented C26 process exit number for this cause (arch.md C26: "the
-    /// exact numbering is documented in one table and never changes within a
-    /// major version"). This is the single authoritative mapping.
+    /// The documented process exit number for this cause: the exact numbering
+    /// is documented in one table and never changes within a major version. This
+    /// is the single authoritative mapping.
     #[must_use]
     pub fn as_u8(self) -> u8 {
         match self {
@@ -179,13 +179,13 @@ impl From<ExitCode> for std::process::ExitCode {
     }
 }
 
-/// Select the C26 exit code for a **completed** run from the report the driver
-/// surfaced (arch.md `### C26`), applying the precedence rules.
+/// Select the exit code for a **completed** run from the report the driver
+/// surfaced, applying the precedence rules.
 ///
 /// The driver reports the outcome, the cancellation origin, and the
 /// [`ShutdownExit`] selection (which of run-failure / sink-failure / cancellation
-/// / success applies by C26 precedence); this function is the *numeric* half of
-/// the table T55 owns. The precedence:
+/// / success applies by precedence); this function is the *numeric* half of
+/// the table. The precedence:
 ///
 /// 1. **Run failure wins** whenever a non-teardown node ended `failed`/`timed-out`
 ///    — even when that failure triggered a self-inflicted cancellation
@@ -208,7 +208,7 @@ pub fn exit_code_for_run(report: &RunReport) -> ExitCode {
         RunOutcome::BootstrapFailed => return ExitCode::BootstrapFailure,
         _ => {}
     }
-    // For an executed run, the driver's ShutdownExit already applied C26
+    // For an executed run, the driver's ShutdownExit already applied the
     // precedence (run failure beats sink failure beats cancellation beats
     // success), including the stop-on-first-failure case where a FailureUnderStop
     // cancellation is surfaced as RunFailure. Map it straight through.
@@ -224,28 +224,29 @@ pub fn exit_code_for_run(report: &RunReport) -> ExitCode {
 // The library-owned verb set
 // ===========================================================================
 
-/// The C26 **library-owned verbs** every pipeline binary inherits unchanged
-/// (arch.md `### C26`). The set and its order are fixed here, so it is identical
+/// The **library-owned verbs** every pipeline binary inherits unchanged.
+/// The set and its order are fixed here, so it is identical
 /// across every pipeline built on the library — verb parity is *structural*, not
 /// a per-pipeline convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
-    /// Emit the graph artifact (C20) for this binary; no store required.
+    /// Emit the graph artifact for this binary; no store required.
     Graph,
-    /// Run assembly (C7) only; exit non-zero on any failure, print every problem.
+    /// Run assembly only; exit non-zero on any failure, print every problem.
     Validate,
-    /// Produce a diagram (C24) from a graph artifact, optionally overlaying a run
+    /// Produce a diagram from a graph artifact, optionally overlaying a run
     /// artifact; no live pipeline needed.
     Render,
     /// Mint run identity and open the store/stream before assembly, then execute.
     Run,
     /// Replay node N from a prior run R, rehydrating inputs from durable
-    /// references (C27/T57).
+    /// references.
     SingleNode,
-    /// Resume a prior run — **stubbed** until T58; recognized and help-listed,
-    /// returns a defined "not yet implemented" outcome.
+    /// Resume a prior run — **stubbed** for a binary that has not wired the real
+    /// behaviour; recognized and help-listed, returns a defined "not yet
+    /// implemented" outcome.
     Resume,
-    /// Fold an event stream into a run artifact (the crashed-run path, C22/T42).
+    /// Fold an event stream into a run artifact (the crashed-run path).
     Fold,
     /// Delete old runs from the run store by count or age; nothing is deleted
     /// implicitly by any other verb.
@@ -285,9 +286,8 @@ impl Verb {
     }
 }
 
-/// The complete C26 verb table, in fixed order — library-owned, so identical
-/// across every pipeline built on the library (arch.md C26: "every verb behaves
-/// identically across all pipelines built with the library").
+/// The complete verb table, in fixed order — library-owned, so every verb
+/// behaves identically across all pipelines built with the library.
 #[must_use]
 pub fn verb_table() -> &'static [Verb] {
     &[
@@ -320,8 +320,7 @@ pub struct Cli {
     pub verb: Verb,
     /// The **flow name** selected on the command line — the first *positional*
     /// token after the verb (e.g. `etl` in `dagr run etl --store DIR`), or `None`
-    /// when none is present (arch.md `### C26`; ADR 086 — an operator-approved M5
-    /// addition).
+    /// when none is present.
     ///
     /// This is the additive contract extension that lets one binary host **many**
     /// named flows and select one per invocation ([`crate::registry::FlowRegistry`] /
@@ -333,14 +332,14 @@ pub struct Cli {
     pub flow_name: Option<String>,
 }
 
-/// Build the library-owned `dagr` [`clap::Command`] — one subcommand per C26
+/// Build the library-owned `dagr` [`clap::Command`] — one subcommand per
 /// [`Verb`], in the fixed [`verb_table`] order.
 ///
 /// The command is configured for **deterministic** help/usage: the crate builds
 /// `clap` with `color`/`wrap_help`/`suggestions` OFF, so output carries no
-/// terminal-width- or TTY-dependent formatting (arch.md C26 / Determinism). A
-/// later ticket adds a verb's flags by extending its subcommand here — the public
-/// [`Verb`]/[`Cli`] surface is unaffected.
+/// terminal-width- or TTY-dependent formatting. A later change adds a verb's
+/// flags by extending its subcommand here — the public [`Verb`]/[`Cli`] surface
+/// is unaffected.
 #[must_use]
 pub fn build_command() -> clap::Command {
     let mut cmd = clap::Command::new("dagr")
@@ -349,7 +348,7 @@ pub fn build_command() -> clap::Command {
         .arg_required_else_help(false)
         .disable_help_subcommand(true);
     for verb in verb_table() {
-        // Each verb's own flags/arguments are added by a later ticket; T55 owns the
+        // Each verb's own flags/arguments are added elsewhere; this module owns the
         // verb *set*, not the per-verb option surface. Accept trailing arguments
         // permissively so an invocation like `dagr resume <run-id>` or
         // `dagr single-node --node N` parses to its verb here (the verb body /
@@ -375,7 +374,7 @@ fn verb_from_name(name: &str) -> Option<Verb> {
 }
 
 /// Extract the **flow name** — the first *positional* token — from a verb's
-/// trailing arguments (arch.md `### C26`; ADR 086). The subcommand collects every
+/// trailing arguments. The subcommand collects every
 /// trailing token into an undifferentiated `args` vector ([`build_command`]'s
 /// `trailing_var_arg`); the first token that is neither a `--flag` **nor the value
 /// of a value-taking library flag** is the flow name. A leading `--store DIR`
@@ -427,15 +426,14 @@ fn flag_takes_value(flag: &str) -> bool {
     )
 }
 
-/// The outcome of parsing the command line (arch.md C26).
+/// The outcome of parsing the command line.
 #[derive(Debug)]
 pub enum ParseOutcome {
     /// A verb was selected; carry the parsed [`Cli`].
     Parsed(Cli),
     /// Print help/usage and exit with the carried code. Produced for a bare
-    /// invocation with **no arguments** (the C26 "print the available verbs and
-    /// exit cleanly" case — [`ExitCode::Success`]) and for an explicit
-    /// `--help`/`-h`.
+    /// invocation with **no arguments** (print the available verbs and exit
+    /// cleanly — [`ExitCode::Success`]) and for an explicit `--help`/`-h`.
     Help {
         /// The exit code to leave with after printing.
         exit: ExitCode,
@@ -452,12 +450,10 @@ pub enum ParseOutcome {
     },
 }
 
-/// Parse a command line (argv, program name first) into a [`ParseOutcome`]
-/// (arch.md C26).
+/// Parse a command line (argv, program name first) into a [`ParseOutcome`].
 ///
 /// - No arguments → [`ParseOutcome::Help`] listing the available verbs, exiting
-///   [`ExitCode::Success`] (arch.md C26: "print the available verbs and exit
-///   cleanly").
+///   [`ExitCode::Success`] (print the available verbs and exit cleanly).
 /// - `--help`/`-h` → the same help listing, exiting success.
 /// - A recognized verb → [`ParseOutcome::Parsed`].
 /// - An unknown verb / malformed arguments → [`ParseOutcome::Error`] with
@@ -469,7 +465,7 @@ where
 {
     let raw_args: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
     // A bare invocation (program name only) prints the verb listing and exits
-    // cleanly — the C26 no-argument contract.
+    // cleanly — the no-argument contract.
     if raw_args.len() <= 1 {
         return ParseOutcome::Help {
             exit: ExitCode::Success,
@@ -513,7 +509,7 @@ where
     }
 }
 
-/// The deterministic verb-listing help text (arch.md C26 no-arg contract). Lists
+/// The deterministic verb-listing help text (the no-arg contract). Lists
 /// every library verb with its one-line summary, in the fixed [`verb_table`]
 /// order. Deterministic: no colour, no terminal-width wrapping.
 #[must_use]
@@ -543,7 +539,7 @@ pub const NO_BANNER_FLAG: &str = "--no-banner";
 /// (<https://no-color.org>) suppresses it too; either one is enough.
 pub const NO_BANNER_ENV: &str = "DAGR_NO_BANNER";
 
-/// The deterministic startup banner (arch.md C26 / Determinism): a **static,
+/// The deterministic startup banner: a **static,
 /// colour-free** constant — no timestamps, no runtime version, no terminal-width
 /// or TTY-dependent formatting — so it never perturbs machine-readable stdout or
 /// the structural-determinism guarantees. Printed to **stderr** at startup
@@ -574,7 +570,7 @@ pub fn print_banner<W: Write>(w: &mut W) -> std::io::Result<()> {
 /// [`NO_BANNER_FLAG`] was present and the argv with **every** occurrence removed.
 ///
 /// The flag is a purely cosmetic startup toggle with no verb semantics, so it is
-/// stripped here — before [`parse_cli`] — rather than threaded through the C26
+/// stripped here — before [`parse_cli`] — rather than threaded through the
 /// verb parser. Stripping (instead of registering a clap arg) makes it
 /// position-independent (`dagr --no-banner run` and `dagr run --no-banner` behave
 /// identically) and leaves the public [`Cli`]/[`Verb`]/[`build_command`] surface
@@ -612,7 +608,7 @@ pub fn banner_suppressed_by_env() -> bool {
 // Reserved library-flag namespace
 // ===========================================================================
 
-/// The reserved **library-flag namespace** (arch.md C26): the long-flag names the
+/// The reserved **library-flag namespace**: the long-flag names the
 /// library owns, which a pipeline parameter can never shadow or collide with. A
 /// collision is a hard, named error ([`LibraryFlagCollision`]).
 ///
@@ -622,11 +618,11 @@ pub fn banner_suppressed_by_env() -> bool {
 /// startup-banner toggle, and the always-reserved `help`/`version`). Fixed and
 /// library-owned, so the namespace is identical across every pipeline.
 ///
-/// ADR 089 (ticket T76) replaced the generic `pool` entry with the specific
-/// `dagr.pool.compute-threads` / `dagr.pool.blocking-threads` / `dagr.pool.memory`
-/// pins and added `teardown-deadline` and `dagr.headroom-fraction`, so every
-/// runtime knob that gains a `DAGR_*` env fallback (T77) has its own reserved flag
-/// a pipeline parameter can never shadow.
+/// The specific `dagr.pool.compute-threads` / `dagr.pool.blocking-threads` /
+/// `dagr.pool.memory` pins (in place of a generic `pool` entry), together with
+/// `teardown-deadline` and `dagr.headroom-fraction`, ensure every runtime knob
+/// that gains a `DAGR_*` env fallback has its own reserved flag a pipeline
+/// parameter can never shadow.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -648,8 +644,8 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
     ]
 }
 
-/// A pipeline parameter's flag name collided with a reserved library flag
-/// (arch.md C26). Names the offending flag so the diagnostic is actionable; the
+/// A pipeline parameter's flag name collided with a reserved library flag.
+/// Names the offending flag so the diagnostic is actionable; the
 /// run does not proceed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryFlagCollision {
@@ -673,7 +669,7 @@ impl std::fmt::Display for LibraryFlagCollision {
 impl std::error::Error for LibraryFlagCollision {}
 
 /// Reject any pipeline parameter whose flag name lands in the reserved
-/// library-flag namespace (arch.md C26). Returns the first collision as a named,
+/// library-flag namespace. Returns the first collision as a named,
 /// hard error; the caller must not proceed with the run.
 ///
 /// # Errors
@@ -694,7 +690,7 @@ pub fn check_reserved_collision(params: &[ParamSpec]) -> Result<(), LibraryFlagC
 // ===========================================================================
 
 /// The scalar type a pipeline parameter is declared with — the library uses it to
-/// validate the supplied value at bootstrap (arch.md C26).
+/// validate the supplied value at bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamType {
     /// A free-form string value (accepted verbatim).
@@ -705,7 +701,7 @@ pub enum ParamType {
     Bool,
 }
 
-/// One declared pipeline parameter (arch.md C26): its flag name, its declared
+/// One declared pipeline parameter: its flag name, its declared
 /// [type](ParamType), and a help description. The pipeline declares a set of
 /// these once; the library derives the parsing and validates values against the
 /// declared type at bootstrap.
@@ -752,12 +748,12 @@ impl ParamSpec {
 }
 
 /// Validate the `supplied` parameter values against their declared
-/// [specs](ParamSpec) at bootstrap (arch.md C26 / C7: parameters are validated at
-/// bootstrap, *after* assembly, which never sees them).
+/// [specs](ParamSpec) at bootstrap: parameters are validated at
+/// bootstrap, *after* assembly, which never sees them.
 ///
 /// On success, returns the validated values as a name→value map (verbatim string
 /// values — an integer/boolean is validated but carried as its verbatim string),
-/// which the run verb records into the run-artifact header (C22) and carries in
+/// which the run verb records into the run-artifact header and carries in
 /// the context. On any invalid value it returns [`ExitCode::InvalidUsage`] — the
 /// run must not proceed, so no node executes (rejected at bootstrap, before
 /// execution).
@@ -793,14 +789,14 @@ pub fn validate_params(
 // Verb bodies
 // ===========================================================================
 
-/// The `validate` verb (arch.md C26): run assembly (C7) only and report the
+/// The `validate` verb: run assembly only and report the
 /// result. Exits [`ExitCode::Success`] with no problems on a clean assembly, or
 /// [`ExitCode::AssemblyFailure`] printing **every** problem assembly found (not
-/// just the first, C7).
+/// just the first).
 ///
-/// Assembly is pure (C7) — no store, no parameters, no network — so this verb
-/// runs it with no store at all (arch.md "the inspection verbs run assembly with
-/// no store").
+/// Assembly is pure — no store, no parameters, no network — so this verb
+/// runs it with no store at all (the inspection verbs run assembly with
+/// no store).
 pub fn validate_verb<W: Write>(pipeline: &Pipeline, out: &mut W) -> ExitCode {
     match pipeline.assemble() {
         Ok(_) => {
@@ -810,7 +806,7 @@ pub fn validate_verb<W: Write>(pipeline: &Pipeline, out: &mut W) -> ExitCode {
         Err(error) => {
             let problems = error.problems();
             let _ = writeln!(out, "assembly failed with {} problem(s):", problems.len());
-            // Print EVERY problem, not just the first (arch.md C7/C26).
+            // Print EVERY problem, not just the first.
             for problem in problems {
                 let _ = writeln!(out, "  - {}", problem.message());
             }
@@ -819,7 +815,7 @@ pub fn validate_verb<W: Write>(pipeline: &Pipeline, out: &mut W) -> ExitCode {
     }
 }
 
-/// The output format the `render` verb emits (arch.md C24).
+/// The output format the `render` verb emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum RenderFormat {
     /// Graphviz DOT (the default).
@@ -829,15 +825,15 @@ pub enum RenderFormat {
     Mermaid,
 }
 
-/// The `render` verb (arch.md C26 / C24): produce diagram source from a graph
+/// The `render` verb: produce diagram source from a graph
 /// artifact, **optionally overlaying** a run artifact — reachable from artifacts
 /// alone, needing no live pipeline.
 ///
-/// `graph_bytes` is a published C20 graph artifact; `run_bytes`, if present, is a
-/// C22 run artifact whose per-node terminal states colour the diagram (the T47
-/// overlay). A malformed graph artifact is refused with [`ExitCode::InvalidUsage`]
-/// and a diagnostic to `out` — never a partial diagram (C24). This verb wires the
-/// already-built T46/T47 renderer; it re-implements nothing.
+/// `graph_bytes` is a published graph artifact; `run_bytes`, if present, is a
+/// run artifact whose per-node terminal states colour the diagram (the overlay).
+/// A malformed graph artifact is refused with [`ExitCode::InvalidUsage`]
+/// and a diagnostic to `out` — never a partial diagram. This verb wires the
+/// already-built renderer; it re-implements nothing.
 pub fn render_verb<W: Write>(
     graph_bytes: &[u8],
     run_bytes: Option<&[u8]>,
@@ -860,8 +856,8 @@ pub fn render_verb<W: Write>(
     };
 
     // The optional run overlay: parse the run artifact and render with the overlay
-    // if it was supplied. The overlay is a pure function of (graph, run) → text
-    // (T47), so this stays artifact-only.
+    // if it was supplied. The overlay is a pure function of (graph, run) → text,
+    // so this stays artifact-only.
     let run_artifact = match run_bytes {
         Some(bytes) => {
             let run_str = match std::str::from_utf8(bytes) {
@@ -892,11 +888,11 @@ pub fn render_verb<W: Write>(
     ExitCode::Success
 }
 
-/// The `fold` verb (arch.md C26 / C22): wire the standalone C22/T42 stream-fold
+/// The `fold` verb: wire the standalone stream-fold
 /// function to produce the (possibly interrupted) run artifact from a run's event
-/// stream — the crashed-run path (system criterion 3's crash clause).
+/// stream — the crashed-run path.
 ///
-/// `stream_bytes` is the C19 event stream; `graph_nodes` is the node roster
+/// `stream_bytes` is the event stream; `graph_nodes` is the node roster
 /// (for coverage). Writes the canonical run-artifact JSON to `out` and exits
 /// [`ExitCode::Success`]. A stream that cannot be folded (no `run-started`, or a
 /// non-tolerated corruption) is [`ExitCode::InvalidUsage`] with a diagnostic. This
@@ -914,15 +910,15 @@ pub fn fold_verb<W: Write>(stream_bytes: &[u8], graph_nodes: &[String], out: &mu
     }
 }
 
-/// The `resume` verb **stub** (arch.md C26). It is a recognized, help-listed verb
+/// The `resume` verb **stub**. It is a recognized, help-listed verb
 /// that reports "not yet implemented" for a binary that has **not wired** the real
 /// resume behaviour, and exits with the [resume-refusal code](ExitCode::ResumeRefusal).
 ///
-/// T58 lands the real resume as [`resume_verb`] (the C27 gate + seed/closure/demand
+/// The real resume is [`resume_verb`] (the gate + seed/closure/demand
 /// plan + resumed-artifact recording), which a pipeline binary calls with its own
 /// assembled pipeline. A binary that does not opt to wire it — the reference `dagr`
 /// driver (no pipeline) and any pipeline that has not adopted resume — keeps this
-/// stub, so the verb stays recognized and the C26 refusal code is reserved without
+/// stub, so the verb stays recognized and the refusal code is reserved without
 /// changing the surface. The phrase "not yet implemented" marks the unwired seam.
 pub fn resume_verb_stub<W: Write>(out: &mut W) -> ExitCode {
     let _ = writeln!(
@@ -935,18 +931,18 @@ pub fn resume_verb_stub<W: Write>(out: &mut W) -> ExitCode {
 }
 
 // ===========================================================================
-// The real resume verb (C27 / T58) — wired to a pipeline
+// The real resume verb — wired to a pipeline
 // ===========================================================================
 
 /// The tool-version string this binary records into (and gates resume against),
-/// per the C27 no-cross-tool-version promise. v1: a single stable token.
+/// per the no-cross-tool-version promise. v1: a single stable token.
 pub const TOOL_VERSION: &str = "dagr@1";
 
-/// The operator-supplied inputs to a [`resume_verb`] invocation (arch.md C27).
+/// The operator-supplied inputs to a [`resume_verb`] invocation.
 ///
 /// The library-owned flags (`--run-id`, `--store`, `--force`, `--data-interval`)
-/// and the typed parameters are parsed by the C26 surface (T55) and handed here as
-/// this struct; `resume_verb` derives the *rest* — the prior parameters and
+/// and the typed parameters are parsed by the command-line surface and handed here
+/// as this struct; `resume_verb` derives the *rest* — the prior parameters and
 /// interval — from the prior artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumeOptions {
@@ -956,7 +952,7 @@ pub struct ResumeOptions {
     /// [`TOOL_VERSION`]).
     pub tool_version: String,
     /// Whether the prior run's **run store** is still present. A run whose store
-    /// is gone is not resumable and is refused up front (arch.md C27).
+    /// is gone is not resumable and is refused up front.
     pub store_present: bool,
     /// Whether `--force` was given: override a parameter/interval conflict with the
     /// prior run (recorded in the resumed artifact).
@@ -969,14 +965,15 @@ pub struct ResumeOptions {
     pub interval_override: Option<[String; 2]>,
 }
 
-/// The outcome of a [`resume_verb`] invocation (arch.md C27).
+/// The outcome of a [`resume_verb`] invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeOutcome {
     /// Resume proceeded: the resumed run's own artifact (a `serde_json::Value`
-    /// conforming to the published run schema, T39 — satisfied-from-prior nodes
+    /// conforming to the published run schema — satisfied-from-prior nodes
     /// recorded with their originating run identity, durable references copied
     /// forward, lineage linked) and the computed [plan](ResumePlan) the caller
-    /// executes (the must-run set is the hand-off T54b consumes).
+    /// executes (the must-run set is the hand-off the scratch carry-forward
+    /// consumes).
     Resumed {
         /// The resumed run artifact (schema-valid, self-contained).
         artifact: serde_json::Value,
@@ -985,7 +982,7 @@ pub enum ResumeOutcome {
         plan: ResumePlan,
     },
     /// Resume was refused. The [`code`](ResumeOutcome::Refused::code) is always
-    /// [`ExitCode::ResumeRefusal`] (aligned with the C26 exit-code table — the
+    /// [`ExitCode::ResumeRefusal`] (aligned with the exit-code table — the
     /// resume-refusal code shared with a single-node replay refusal), and the
     /// `message` is the printable diagnostic (a gate diff, a store-gone message, a
     /// parameter-conflict diff, or a dangling-reference plan failure).
@@ -1006,8 +1003,7 @@ impl ResumeOutcome {
     }
 }
 
-/// The `resume` verb (arch.md `### C27 · Resume`; ticket T58) — the real resume
-/// behaviour T58 wires behind the T55 stub.
+/// The `resume` verb — the real resume behaviour wired behind the stub.
 ///
 /// Given `pipeline` (this binary's assembled graph), the prior run's folded
 /// artifact bytes (`prior_run_bytes`), the operator [`options`](ResumeOptions),
@@ -1030,10 +1026,11 @@ impl ResumeOutcome {
 ///    self-contained, and the header linked to both the immediate parent run and
 ///    the lineage-root run.
 ///
-/// Every refusal maps to [`ExitCode::ResumeRefusal`] (the C26 resume-refusal code,
+/// Every refusal maps to [`ExitCode::ResumeRefusal`] (the resume-refusal code,
 /// shared with a single-node replay refusal). The `must_run` set the returned
-/// [`ResumePlan`] carries is the hand-off T54b consumes to copy retained scratch
-/// forward; **this verb does not re-execute nodes** (that is the driver's).
+/// [`ResumePlan`] carries is the hand-off the scratch carry-forward consumes to
+/// copy retained scratch forward; **this verb does not re-execute nodes** (that
+/// is the driver's).
 ///
 /// # Determinism
 ///
@@ -1104,7 +1101,7 @@ where
     let prior = build_prior_run(header, &prior_json, &prior_run_id);
     let plan = match plan_resume(pipeline, &prior, &options.tool_version, probe) {
         Ok(plan) => plan,
-        // Every gate / dangling-reference refusal maps to the C26 resume-refusal
+        // Every gate / dangling-reference refusal maps to the resume-refusal
         // code and prints the carried diff (the `ResumeRefusal` Display).
         Err(refusal) => return ResumeOutcome::refused(refusal.to_string()),
     };
@@ -1302,7 +1299,7 @@ fn terminal_from_str(status: &str) -> TerminalState {
     }
 }
 
-/// Build the resumed run's own artifact (arch.md C22/C27): a schema-valid
+/// Build the resumed run's own artifact: a schema-valid
 /// `serde_json::Value` that records satisfied-from-prior nodes with their
 /// originating run identity, copies durable references forward so it is
 /// self-contained, and links the header to both the immediate parent run and the
@@ -1372,15 +1369,15 @@ fn build_resumed_artifact(
     );
     if forced {
         // Additive marker: the resumed artifact records that --force was used
-        // (open-world schema, T0.10 — validates against the unmodified schema).
+        // (open-world schema — validates against the unmodified schema).
         header.insert("resume_forced".into(), serde_json::json!(true));
     }
     header.insert("overall_outcome".into(), serde_json::json!("succeeded"));
 
     // Attempts: one record per satisfied-from-prior node (recorded distinctly with
     // its originating run identity + copied-forward durable reference). Nodes in
-    // the must-run set are re-executed by the driver (T54b hand-off) and record
-    // their own attempts there — not here.
+    // the must-run set are re-executed by the driver (the scratch carry-forward
+    // hand-off) and record their own attempts there — not here.
     let mut attempts: Vec<serde_json::Value> = Vec::new();
     for (node, origin) in plan.satisfied_from_prior() {
         let mut record = serde_json::Map::new();
@@ -1411,16 +1408,16 @@ fn build_resumed_artifact(
     })
 }
 
-/// The single-node **durability gate** (arch.md C26): given the prior run
+/// The single-node **durability gate**: given the prior run
 /// artifact and node `node`'s required input-producer node names, refuse the
 /// replay if any required input is not durable — i.e. its producer's attempt
-/// recorded **no** durable reference in R's artifact (C27/T57).
+/// recorded **no** durable reference in R's artifact.
 ///
 /// Returns `Some(`[`ExitCode::ResumeRefusal`]`)` (the code shared with resume
 /// refusal) and writes a message naming the offending input and why to `out` when
 /// a required input is not durable; returns `None` when every required input has a
 /// recorded durable reference (the replay may proceed). This is the *consume*
-/// side of the durable-output contract T57 records — this verb interprets no
+/// side of the durable-output contract — this verb interprets no
 /// reference bytes, it only checks presence.
 ///
 /// A consume-nothing node (`inputs` empty) never refuses here — it can run

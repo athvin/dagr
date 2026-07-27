@@ -1,20 +1,18 @@
-//! Behavioral unit tests for the C1 task abstraction and its classified error
-//! (ticket T9 / 019). Written first, TDD: these exercise the public authoring
-//! surface `dagr_core` exposes — the [`Task`] trait, its four declared elements
-//! (input type, output type, execution class, work), the `&mut self` work
-//! signature over a stub run context, constructor-captured configuration, the
-//! no-input task, and the three-valued task-facing [`TaskError`].
+//! Behavioral unit tests for the task abstraction and its classified error.
+//! Written first, TDD: these exercise the public authoring surface `dagr_core`
+//! exposes — the [`Task`] trait, its four declared elements (input type, output
+//! type, execution class, work), the `&mut self` work signature over a stub run
+//! context, constructor-captured configuration, the no-input task, and the
+//! three-valued task-facing [`TaskError`].
 //!
-//! Every scenario here mirrors one bullet of the ticket's Test plan. The
-//! compile-fail scenarios (non-`Send` capture, missing-`Sync`/`'static` output,
-//! shared-reference invocation) live in the T8 UI harness under `tests/ui/`,
-//! not here, because their assertion is *failure to compile*.
+//! The compile-fail scenarios (non-`Send` capture, missing-`Sync`/`'static`
+//! output, shared-reference invocation) live in the UI harness under
+//! `tests/ui/`, not here, because their assertion is *failure to compile*.
 //!
 //! These are await-bound tasks; their work returns a future. The tests drive
 //! that future to completion with a tiny hand-rolled block-on so the suite
-//! needs no async runtime and no framework machinery (the real runner is C14 /
-//! T20; the real run context is C8 / T16 — this ticket references both only by
-//! shape).
+//! needs no async runtime and no framework machinery (the real runner and run
+//! context are referenced here only by shape).
 
 use dagr_core::task::{ExecutionClass, RunContext, Task};
 use dagr_core::TaskError;
@@ -29,9 +27,9 @@ use std::task::{Context, Poll, Waker};
 /// futures under test never actually suspend on external I/O in these unit
 /// tests, so a busy-poll with the standard no-op waker ([`Waker::noop`], stable
 /// since 1.85, well within the workspace MSRV) is sufficient and keeps the suite
-/// runtime-free and `unsafe`-free (arch.md C28: a synchronous single-task test
-/// needs no runtime; here we exercise await-bound tasks with the minimal poller
-/// a test needs — the real runner is C14 / T20).
+/// runtime-free and `unsafe`-free: a synchronous single-task test needs no
+/// runtime; here we exercise await-bound tasks with the minimal poller a test
+/// needs.
 fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
@@ -303,8 +301,8 @@ fn execution_class_defaults_to_await_bound() {
 
 /// **Re-runnability contract holds.** The unit is safely re-runnable in shape:
 /// two invocations with equivalent input succeed and produce equivalent output.
-/// (Retry itself is out of scope — C14; this checks only that the shape permits
-/// it: `&mut self` sequential re-runs are sound.)
+/// (Retry itself is out of scope; this checks only that the shape permits it:
+/// `&mut self` sequential re-runs are sound.)
 #[test]
 fn work_is_safely_re_runnable_in_shape() {
     let ctx = RunContext::for_test();

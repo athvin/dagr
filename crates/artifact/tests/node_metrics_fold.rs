@@ -1,11 +1,9 @@
-//! C23 · Node metrics **reach the run artifact unmodified** — ticket T44 (055).
-//! Written first, TDD.
+//! Node metrics **reach the run artifact unmodified**. Written first, TDD.
 //!
-//! The C23↔C22 boundary: a collected metric set (task entries + framework
-//! entries under the reserved `dagr.` prefix) rides in an `attempt-outcome`
-//! record's `metrics` object, folds through T42's `fold_stream`, and appears in
-//! the run artifact **byte-for-value identical** to what was collected — the
-//! fold copies metrics unmodified (arch.md `### C22`, `### C23`). The
+//! A collected metric set (task entries + framework entries under the reserved
+//! `dagr.` prefix) rides in an `attempt-outcome` record's `metrics` object, folds
+//! through `fold_stream`, and appears in the run artifact **byte-for-value
+//! identical** to what was collected — the fold copies metrics unmodified. The
 //! schema-round-trip half (behind the `schema-validation` feature) proves a REAL
 //! metrics-carrying folded artifact validates against the published
 //! `schemas/run/v1.schema.json` with the schema UNCHANGED (the metrics map is an
@@ -89,7 +87,7 @@ fn stream_with_metrics(metrics: &Value) -> Vec<u8> {
 #[test]
 fn collected_metrics_reach_the_artifact_byte_for_value_identical() {
     // A mix of task metrics (unit-suffixed names) and framework metrics under the
-    // reserved `dagr.` prefix — exactly what C23's collector produces.
+    // reserved `dagr.` prefix — exactly what the metrics collector produces.
     let metrics = json!({
         "rows_read": 42,
         "bytes_spilled": 1_048_576,
@@ -154,7 +152,7 @@ mod schema {
     }
 
     /// A metric value is schema-typed `number` (not `integer`), and its Rust type
-    /// is `f64` (arch.md C23), so a NON-INTEGER value is type- and schema-legal.
+    /// is `f64`, so a NON-INTEGER value is type- and schema-legal.
     /// canonical.rs is documented "integers only", and every OTHER fold/schema test
     /// uses integer-valued metrics only — so this proves the one untested case:
     /// a non-integer f64 metric serializes through the PRODUCTION canonical JSON
@@ -188,7 +186,7 @@ mod schema {
         assert_eq!(
             first, second,
             "non-integer metric values must serialize byte-identically across \
-             independent folds (canonical JSON determinism, C19/C20)"
+             independent folds (canonical JSON determinism)"
         );
 
         // Non-vacuous: the emitted bytes actually carry the non-integer values in

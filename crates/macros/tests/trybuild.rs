@@ -1,9 +1,8 @@
-//! **The `#[task]` accept/reject boundary, pinned as a `trybuild` corpus**
-//! (ticket T73 / 085; ADR 082 "Known limitation").
+//! **The `#[task]` accept/reject boundary, pinned as a `trybuild` corpus.**
 //!
-//! ADR 082 records that the `#[task]` macro is the primary task-authoring style
-//! and that proc-macro diagnostics "can point at the `#[task]` site rather than
-//! the offending line." This suite turns that footnote into a **tested, versioned
+//! The `#[task]` macro is the primary task-authoring style, and proc-macro
+//! diagnostics "can point at the `#[task]` site rather than the offending
+//! line." This suite turns that known limitation into a **tested, versioned
 //! contract**: every arity and execution-class variant the macro accepts compiles
 //! here, and every documented misuse fails with a committed, byte-stable `.stderr`
 //! snapshot. The cookbook "common mistakes" section cross-references this corpus
@@ -11,8 +10,8 @@
 //!
 //! # Why `trybuild` here, and a hand-built UI harness in `dagr-core`
 //!
-//! The T8 UI harness (`crates/core/tests/ui.rs`) is deliberately **not**
-//! `trybuild`: C3's wrong-type diagnostics must assert only that both type-name
+//! The UI harness (`crates/core/tests/ui.rs`) is deliberately **not**
+//! `trybuild`: its wrong-type diagnostics must assert only that both type-name
 //! substrings appear and tolerate prose churn, which `trybuild`'s exact,
 //! line-by-line `.stderr` match cannot express. This corpus is the opposite case:
 //! it *wants* the exact, whole-diagnostic snapshot, because the point is to pin
@@ -27,10 +26,10 @@
 //! build-time dep of `serde_derive`) and `Unicode-3.0` is already allowed in
 //! `deny.toml`, so this corpus adds no new licence surface.
 //!
-//! # Toolchain pinning (the same contract as the T8 harness)
+//! # Toolchain pinning (the same contract as the core UI harness)
 //!
 //! `trybuild` matches `.stderr` **exactly**, so a snapshot is only reproducible
-//! under a fixed toolchain. dagr pins one in `rust-toolchain.toml` (T7 policy),
+//! under a fixed toolchain. dagr pins one in `rust-toolchain.toml`,
 //! and CI runs this corpus under it (`cargo test --workspace`, `crates/macros`).
 //! When the pinned toolchain changes, regenerate the snapshots **deliberately**
 //! with `TRYBUILD=overwrite cargo test -p dagr-macros --test trybuild` and review

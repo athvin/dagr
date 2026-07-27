@@ -1,7 +1,7 @@
 //! `dagr-t56-alpha` — one of the two structurally-distinct **sample pipeline
-//! binaries** the C26 CLI acceptance suite (ticket T56, 069) drives as a
+//! binaries** the CLI acceptance suite drives as a
 //! subprocess. It carries the `alpha` pipeline (a durable stage boundary
-//! `load → transform` plus a `standalone` no-input node) and wires the real C26
+//! `load → transform` plus a `standalone` no-input node) and wires the real
 //! command surface through the shared harness. Test-support scaffolding only —
 //! ships in no released binary; it composes merged library entry points and adds
 //! no framework capability.

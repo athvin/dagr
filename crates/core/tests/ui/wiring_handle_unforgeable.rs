@@ -1,8 +1,8 @@
-// UI compile-failure fixture — ticket T12 (024), case `wiring_handle_unforgeable`.
+// UI compile-failure fixture — case `wiring_handle_unforgeable`.
 //
-// PROVES (C2; arch.md `### C2 · Handle`): a handle is obtainable ONLY by
+// PROVES: a handle is obtainable ONLY by
 // registering a node — there is NO public constructor to FABRICATE one. This is
-// the REAL `dagr_core::handle::Handle`, not the throwaway T5 sketch: both of the
+// the REAL `dagr_core::handle::Handle`, not the throwaway typed-handle sketch: both of the
 // handle's fields (`id`, `value`) are PRIVATE and its only constructor
 // (`Handle::for_registration`) is crate-private, so a struct literal from an
 // external crate names private fields and fails to compile (E0451). This is the
@@ -10,9 +10,9 @@
 // acceptance criterion — the only currency for referring to a node's output is a
 // handle a registration already returned.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain (C28).
+// sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::handle::{Handle, NodeId};
 use std::marker::PhantomData;

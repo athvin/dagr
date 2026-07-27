@@ -1,6 +1,5 @@
-//! C12 · **Container limit detection** — the bootstrap probe that sizes the
-//! admission pools from the container's actual limits (ticket T32, 042). Written
-//! first, TDD.
+//! **Container limit detection** — the bootstrap probe that sizes the admission
+//! pools from the container's actual limits. Written first, TDD.
 //!
 //! These are the acceptance tests for the ordered limit probe: cgroup v2 first,
 //! then cgroup v1, then host resources when neither cgroup source exists (the
@@ -10,7 +9,7 @@
 //! `/sys` and `/proc` are never read here. The derived [`PoolCapacities`] are
 //! asserted exactly.
 //!
-//! The mapped headline facet for this ticket is
+//! The headline facet is
 //! [`container_limits_size_the_admission_pools_from_cgroup_v2`] (cgroup v2 is
 //! preferred when present); its siblings cover v1 fallback, host fallback, the
 //! per-dimension unlimited-sentinel fallback, the 20% headroom default, the
@@ -257,7 +256,7 @@ fn the_pinning_flag_overrides_cgroup_detection() {
 
 /// **pinning flag overrides host fallback.** No cgroup source (the host-fallback
 /// path) plus the pinning flag → the pinned pool equals the flag value, not the
-/// host-derived value; the flag beats both detection sources C12 names.
+/// host-derived value; the flag beats both detection sources.
 #[test]
 fn the_pinning_flag_overrides_host_fallback() {
     let fx = FixtureRoot::new("pin-host");
@@ -335,7 +334,7 @@ fn a_too_big_node_is_rejected_at_bootstrap_not_at_admission() {
 /// **bootstrap-failure artifact is asserted, not assumed.** The too-big-node
 /// scenario yields exactly one bootstrap-failure artifact with outcome
 /// `bootstrap-failed` (distinct from assembly-failed), carrying the complete error
-/// list and **zero attempts** — the same assertion T30's resource-check test makes.
+/// list and **zero attempts** — the same assertion the resource-check test makes.
 #[test]
 fn the_too_big_rejection_produces_the_bootstrap_failure_artifact() {
     let caps = dagr_core::admission::PoolCapacities::new().compute_threads(2);
@@ -374,8 +373,8 @@ fn a_node_exactly_at_capacity_is_admitted_not_rejected() {
 }
 
 /// **every too-big node is reported, not just the first.** Bootstrap collects the
-/// complete error list across all nodes (the "complete error report" C12/T14
-/// discipline), not short-circuiting on the first offender.
+/// complete error list across all nodes (the "complete error report" discipline),
+/// not short-circuiting on the first offender.
 #[test]
 fn bootstrap_reports_every_too_big_node() {
     let caps = dagr_core::admission::PoolCapacities::new().memory(100);

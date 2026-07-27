@@ -1,10 +1,10 @@
-//! C12 / C14 · **permit-release outcome matrix** (T37, 047). Written first, TDD.
+//! **Permit-release outcome matrix**. Written first, TDD.
 //!
-//! The admission controller (C12) is honest only if its permit ledger never
-//! lies — including the honest exception where timed-out or cancelled-but-still
-//! -running work stays counted against the pools until the closure actually
-//! returns (T0.3 ADR §2). T31 (041) shipped the ledger and *sampled* a few
-//! outcomes; this suite drives the **full matrix** T31 deferred:
+//! The admission controller is honest only if its permit ledger never lies —
+//! including the honest exception where timed-out or cancelled-but-still-running
+//! work stays counted against the pools until the closure actually returns. The
+//! ledger and a sampling of outcomes are already shipped; this suite drives the
+//! **full matrix**:
 //!
 //! ```text
 //!                | succeeded | failed(perm) | retry-elig | timed-out | panicked | cancelled | abandoned
@@ -15,39 +15,39 @@
 //!
 //! - `(a)` an **await-bound** attempt cannot be *abandoned*: its future is
 //!   droppable, so cancellation drops it and releases immediately (there is no
-//!   unkillable thread to leave behind — arch.md C14, T0.3 ADR §1). The
-//!   abandonment cell is therefore blocking/compute-only, which is exactly why
-//!   the matrix is not a full Cartesian product.
-//! - `(b)` the **one honest exception** (arch.md C12): a blocking/compute closure
-//!   cannot be killed, so a timed-out or abandoned-past-grace attempt is
-//!   *marked* (its fate decided) yet its permit stays counted — HELD — until the
-//!   closure **actually returns**, then releases. The ledger counts zombies
-//!   because "a ledger that releases what is still running is a ledger that
-//!   lies, and the container's OOM killer audits it."
+//!   unkillable thread to leave behind). The abandonment cell is therefore
+//!   blocking/compute-only, which is exactly why the matrix is not a full
+//!   Cartesian product.
+//! - `(b)` the **one honest exception**: a blocking/compute closure cannot be
+//!   killed, so a timed-out or abandoned-past-grace attempt is *marked* (its fate
+//!   decided) yet its permit stays counted — HELD — until the closure **actually
+//!   returns**, then releases. The ledger counts zombies because "a ledger that
+//!   releases what is still running is a ledger that lies, and the container's OOM
+//!   killer audits it."
 //!
 //! For every cell we assert the pool returns to full (no leak) exactly per the
 //! cell's rule, that the combined counted cost — **including any live zombie** —
 //! never exceeds capacity at any sample, and that a whole run ends with every
-//! pool full and zero live zombies. We also cross-check the C10 companion
+//! pool full and zero live zombies. We also cross-check the companion residency
 //! invariant: a slot pinned by a zombie consumer stays counted until that
 //! consumer's closure returns.
 //!
 //! # System under test — merged, unchanged
 //!
-//! This is a **tests-only** ticket. It exercises the already-merged production
-//! code and changes none of it:
-//! - the C12 ledger (`AdmissionController`, `Permit`/`Drop`-release, `mark_zombie`
-//!   mark-and-hold, `ResidencyLease`, `all_pools_full`, `zombie_report`) — T31.
-//! - the C14 blocking-timeout mark (`TimeoutDecision::mark_blocking_timed_out`,
-//!   its `LateResultBarrier`, and `retry_may_start`/`ZombieObserver` deferral) — T21.
-//! - the C10 residency ledger (`ResidencyLedger`) a zombie consumer pins — T17.
+//! This is a **tests-only** suite. It exercises the already-merged production code
+//! and changes none of it:
+//! - the ledger (`AdmissionController`, `Permit`/`Drop`-release, `mark_zombie`
+//!   mark-and-hold, `ResidencyLease`, `all_pools_full`, `zombie_report`).
+//! - the blocking-timeout mark (`TimeoutDecision::mark_blocking_timed_out`, its
+//!   `LateResultBarrier`, and `retry_may_start`/`ZombieObserver` deferral).
+//! - the residency ledger (`ResidencyLedger`) a zombie consumer pins.
 //! - the `AttemptOutcome`/`AttemptEvent` taxonomy (panicked → permanent failure,
-//!   cancelled/abandoned terminals) — T23 / T35.
+//!   cancelled/abandoned terminals).
 //!
 //! # Determinism (CI): counts + explicit gates, never sleeps / wall clocks
 //!
-//! The load-bearing T0.3 trick is that "the work has returned" is *definitionally*
-//! "the permit was dropped." So a still-running blocking/compute closure is
+//! The load-bearing trick is that "the work has returned" is *definitionally* "the
+//! permit was dropped." So a still-running blocking/compute closure is
 //! modelled by **holding the permit** (keeping the guard alive) behind an explicit
 //! gate; the gate "opens" when the test drops the permit. No timer, no thread, no
 //! wall clock, no network — every sample is taken at a point the test controls, so
@@ -61,7 +61,7 @@
 //! HELD cell that releases too early / never) makes the corresponding `assert_eq!`
 //! fail. This was verified locally by temporarily neutralising `Permit::drop`'s
 //! release in production (`crates/core/src/admission.rs`) — the whole matrix went
-//! red — then reverting (see the ticket's Open questions for the exact probe).
+//! red — then reverting.
 
 use std::sync::Arc;
 
@@ -81,8 +81,8 @@ use dagr_core::task::ExecutionClass;
 // ===========================================================================
 
 /// The pinned per-pool capacity every matrix cell runs against. Small, exact, and
-/// one-unit-per-node so admission and release are individually observable (the
-/// C12 pin flag is the CI determinism lever — here we pin the pools outright).
+/// one-unit-per-node so admission and release are individually observable (the pin
+/// flag is the CI determinism lever — here we pin the pools outright).
 ///
 /// Threads are pinned to 1 each so a single node saturates its class pool exactly:
 /// a leaked thread permit is then directly visible as `remaining == 0`.
@@ -101,8 +101,8 @@ fn cost_for(class: ExecutionClass) -> PoolCost {
     let base = PoolCost::new().working_memory(400);
     match class {
         // Await-bound work runs on the async runtime — it draws no dedicated
-        // thread-pool permit, only memory (arch.md C13). Its "release" is the
-        // memory permit returning.
+        // thread-pool permit, only memory. Its "release" is the memory permit
+        // returning.
         ExecutionClass::AwaitBound => base,
         ExecutionClass::Blocking => base.blocking_threads(1),
         ExecutionClass::Compute => base.compute_threads(1),
@@ -146,7 +146,7 @@ fn assert_all_pools_full(ctrl: &AdmissionController) {
     );
 }
 
-/// The **capacity invariant** probe (arch.md C12): the combined counted cost —
+/// The **capacity invariant** probe: the combined counted cost —
 /// **including abandoned-but-running work** — never exceeds any pool's `caps`
 /// capacity. Sampled at every interesting instant; a ledger that over-counted
 /// (double admission) or a rig that over-charged would trip this. `caps` is the
@@ -164,8 +164,8 @@ fn assert_within_capacity(ctrl: &AdmissionController, caps: PoolCapacities) {
     }
 }
 
-/// A capturing C19-shaped sink (the same shape T20/T21 tests use) that counts the
-/// exactly-one attempt-outcome record and reports the decided terminal states.
+/// A capturing event sink that counts the exactly-one attempt-outcome record and
+/// reports the decided terminal states.
 #[derive(Default)]
 struct CapturingSink {
     records: Vec<AttemptEvent>,
@@ -177,7 +177,7 @@ impl AttemptEventSink for CapturingSink {
 }
 impl CapturingSink {
     /// The count of closing attempt-outcome records (succeeded / failed / timed
-    /// -out / panicked) — the "exactly one per attempt" contract (arch.md C14).
+    /// -out / panicked) — the "exactly one per attempt" contract.
     fn attempt_outcome_count(&self) -> usize {
         self.records
             .iter()
@@ -215,7 +215,7 @@ fn ctx_for(node: &str, attempt: u32, max: u32) -> RunContext {
 }
 
 // ===========================================================================
-// The mapped C12/C14 headline test — the whole matrix, no leak.
+// The headline test — the whole matrix, no leak.
 // ===========================================================================
 
 /// **The permit-release outcome matrix leaks nothing.** Drive one node of every
@@ -224,8 +224,8 @@ fn ctx_for(node: &str, attempt: u32, max: u32) -> RunContext {
 /// outcome's rule — immediately for the release outcomes, HELD-until-return for a
 /// blocking/compute timeout or abandonment — and that no cell ever exceeds
 /// capacity. After the whole matrix, every pool is back to full with zero live
-/// zombies. This is the invariant the ticket protects: across the full outcome ×
-/// class grid the ledger never lies and never leaks.
+/// zombies. This is the invariant under test: across the full outcome × class
+/// grid the ledger never lies and never leaks.
 #[test]
 fn permit_release_outcome_matrix_leaks_nothing_across_every_class_and_outcome() {
     for class in CLASSES {
@@ -393,8 +393,8 @@ fn retry_eligible_failure_releases_between_attempts_and_never_doubly_holds() {
 }
 
 /// **A panic releases the permit immediately as a permanent failure, and an
-/// unrelated co-scheduled node proceeds.** The panic is contained (T23) and maps
-/// to `failed`; its permit drops at once, freeing the pool for other work.
+/// unrelated co-scheduled node proceeds.** The panic is contained and maps to
+/// `failed`; its permit drops at once, freeing the pool for other work.
 #[test]
 fn panic_releases_the_permit_immediately_and_the_rest_of_the_run_proceeds() {
     // A panic is a permanent failure whose terminal state is `failed`.
@@ -452,8 +452,8 @@ fn cooperative_cancellation_releases_the_permit_immediately() {
 
 /// **A blocking/compute timeout is decided `timed-out` immediately while the
 /// permit stays HELD until the closure returns, then releases — and the state
-/// never flips to a second terminal.** Drives the real `TimeoutDecision` mark:
-/// it emits exactly one attempt-outcome record and one `timed-out` node-terminal
+/// never flips to a second terminal.** Drives the real `TimeoutDecision` mark,
+/// which emits exactly one attempt-outcome record and one `timed-out` node-terminal
 /// at the mark, holds the permit (the closure runs on), and only the permit's
 /// eventual drop releases the cost. The state stays `timed-out` — never
 /// `abandoned` (that arises only on the cancellation path).
@@ -465,7 +465,7 @@ fn blocking_and_compute_timeout_hold_the_permit_until_return_and_stay_timed_out(
         let permit = ctrl.try_admit("slow", &cost_for(class)).expect("fits");
 
         // (a) The timeout fires: mark the attempt (its fate is decided now). The
-        //     real T21 mark emits the closing records; the ledger marks the zombie.
+        //     mark emits the closing records; the ledger marks the zombie.
         let mut sink = CapturingSink::default();
         let decision =
             TimeoutDecision::mark_blocking_timed_out("slow", &ctx_for("slow", 1, 1), &mut sink);
@@ -501,7 +501,7 @@ fn blocking_and_compute_timeout_hold_the_permit_until_return_and_stay_timed_out(
         assert!(ctrl.has_live_zombie());
         assert_within_capacity(&ctrl, pinned_pools()); // capacity honoured with the zombie counted
 
-        // Any late value the abandoned closure computes is refused (T0.3 §4).
+        // Any late value the abandoned closure computes is refused.
         let slot: Slot<u32> = Slot::new(
             NodeId::from_name("slow"),
             "slow",
@@ -612,7 +612,7 @@ fn abandonment_holds_the_permit_until_the_closure_returns() {
 }
 
 // ===========================================================================
-// C10 cross-check — a zombie consumer pins slot residency until it returns.
+// Residency cross-check — a zombie consumer pins slot residency until it returns.
 // ===========================================================================
 
 /// **A slot value pinned by a zombie consumer stays counted against the memory
@@ -622,7 +622,7 @@ fn abandonment_holds_the_permit_until_the_closure_returns() {
 /// released, the slot's residency stays counted because the zombie consumer still
 /// holds read access; only when the consumer's closure returns is the residency
 /// reclaimed to the allocator. The memory pool never regains capacity for bytes a
-/// leftover thread still pins (arch.md C10; the same honesty rule as C12).
+/// leftover thread still pins (the same honesty rule as the permit ledger).
 #[test]
 fn a_zombie_consumer_pins_slot_residency_until_its_closure_returns() {
     let ledger = ResidencyLedger::new();
@@ -630,7 +630,7 @@ fn a_zombie_consumer_pins_slot_residency_until_its_closure_returns() {
     let ctrl = AdmissionController::new(caps).with_residency_ledger(Arc::clone(&ledger));
 
     // The producer runs and produces its value: output residency transfers from
-    // the producing attempt to the output slot (the slot lease, C10).
+    // the producing attempt to the output slot (the slot lease).
     let producer = ctrl
         .try_admit(
             "producer",

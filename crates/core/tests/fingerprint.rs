@@ -1,19 +1,17 @@
-//! C21 · Graph fingerprint — ticket T41 (052). Written first, TDD.
+//! Graph fingerprint. Written first, TDD.
 //!
-//! These exercise the **two hashes** (arch.md `### C21 · Graph fingerprint`; the
-//! T0.7 ADR `docs/implementation/013-T0.7-stable-name-and-fingerprint-adr.md`
-//! §§3–7) computed over a **real** assembled [`Pipeline`], keyed by the
-//! author-declared stable names captured through the stable-name-aware registrars
-//! (`register_source_named` / `register_named`).
+//! These exercise the **two hashes** computed over a **real** assembled
+//! [`Pipeline`], keyed by the author-declared stable names captured through the
+//! stable-name-aware registrars (`register_source_named` / `register_named`).
 //!
-//! The policy-hash-vs-structural-fingerprint split for the C5 *policy* fields is
-//! already covered by T29's `node_policy.rs`; this suite covers the T41-owned
-//! surface the earlier one does not:
+//! The policy-hash-vs-structural-fingerprint split for the *policy* fields is
+//! already covered by `node_policy.rs`; this suite covers the surface the earlier
+//! one does not:
 //!
 //! - the **structural** fingerprint covering the node set's **stable task /
 //!   input / output type names** and each data edge's **carried type stable
-//!   name** (T0.7 §3) — so renaming a stable name or changing a carried type
-//!   moves the structural fingerprint;
+//!   name** — so renaming a stable name or changing a carried type moves the
+//!   structural fingerprint;
 //! - the full **structural change matrix** (add / remove / rename node, rewire an
 //!   edge, change a carried type, change a trigger rule) each moving the
 //!   structural fingerprint;
@@ -22,7 +20,7 @@
 //!   feed the hash;
 //! - the **algorithm version** identifier carried alongside the two digests, and
 //!   that the `Pipeline`-level computation equals the assembled artifact's slot
-//!   (the reuse surface C22 / C27 bind against, without reaching into internals).
+//!   (the reuse surface consumers bind against, without reaching into internals).
 
 use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::{RunContext, Task};
@@ -158,8 +156,8 @@ fn baseline() -> Pipeline {
 fn algorithm_version_is_declared_and_carried() {
     // Pin the current version: a non-zero, schema-valid identifier, currently v1.
     // A deliberate algorithm bump must update this assertion, catching a silent
-    // change (T0.7 §7 / C21). Compared through the runtime slot value so the
-    // constant is not treated as a compile-time-constant assertion.
+    // change. Compared through the runtime slot value so the constant is not
+    // treated as a compile-time-constant assertion.
     let slot = fp(&baseline());
     assert_eq!(
         slot.algorithm_version(),
@@ -176,7 +174,7 @@ fn algorithm_version_is_declared_and_carried() {
 // === Structural fingerprint covers the stable names =========================
 
 /// Renaming a node's **stable task name** (interface unchanged otherwise) moves
-/// the structural fingerprint. The structural fp covers stable names (T0.7 §3).
+/// the structural fingerprint. The structural fp covers stable names.
 #[test]
 fn a_stable_task_name_change_moves_the_structural_fingerprint() {
     let base = fp(&baseline());
@@ -200,7 +198,7 @@ fn a_stable_task_name_change_moves_the_structural_fingerprint() {
 }
 
 /// Changing a **data edge's carried type stable name** (same shape, different
-/// value type flowing along the edge) moves the structural fingerprint (T0.7 §3).
+/// value type flowing along the edge) moves the structural fingerprint.
 #[test]
 fn a_carried_type_change_moves_the_structural_fingerprint() {
     let base = fp(&baseline());
@@ -322,7 +320,7 @@ fn rewiring_an_edge_moves_the_structural_fingerprint() {
 // === Canonical ordering & determinism =======================================
 
 /// Registration order does not change either hash, even with stable names in the
-/// structural fingerprint (canonical ordering is total, T0.7 §6).
+/// structural fingerprint (canonical ordering is total).
 #[test]
 fn registration_order_does_not_change_either_hash() {
     // Order A: source then consumer.
@@ -408,7 +406,7 @@ fn repeated_computation_is_deterministic() {
     }
 }
 
-/// The `Pipeline`-level fingerprint (the reuse surface for C22 / C27) equals the
+/// The `Pipeline`-level fingerprint (the reuse surface for consumers) equals the
 /// assembled artifact's slot — consumers need not re-run assembly or reach into
 /// internals to obtain the same digests.
 #[test]

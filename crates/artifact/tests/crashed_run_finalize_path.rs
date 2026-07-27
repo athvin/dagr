@@ -1,30 +1,29 @@
-//! C22 · Crashed-run finalize path — ticket T68 (060). Written first, TDD.
+//! Crashed-run finalize path. Written first, TDD.
 //!
-//! This is the **integration proof of the crash clause** of system criterion 3
-//! (arch.md `## System-level acceptance` criterion 3: "Every run produces
-//! artifacts — including runs that crashed …"; `### C22 · Run artifact`
-//! acceptance: "A crashed run's stream folds into an artifact, marked
-//! interrupted, containing everything up to the crash — produced by a later
-//! invocation of the binary"; `### C19 · Event stream`: "Killing the process
-//! abruptly at any moment leaves a stream whose every record but at most one
-//! trailing partial is valid and parseable", and "A stream can be folded into a
-//! run artifact by a function that needs no access to the original run").
+//! This is the **integration proof of the crash clause** of the system-level
+//! acceptance criterion "Every run produces artifacts — including runs that
+//! crashed …". A crashed run's stream folds into an artifact, marked interrupted,
+//! containing everything up to the crash — produced by a later invocation of the
+//! binary. Killing the process abruptly at any moment leaves a stream whose every
+//! record but at most one trailing partial is valid and parseable, and that
+//! stream can be folded into a run artifact by a function that needs no access to
+//! the original run.
 //!
-//! # What makes this the integration proof (vs T27 / T42)
+//! # What makes this the integration proof
 //!
-//! T42 folds **hand-built** truncated streams; T27 simulates a crash as a
-//! **deterministic byte-truncation** of a captured writer buffer **inside the
-//! test process**. Neither one actually kills a live process. This suite closes
-//! the remaining gap: it launches a **real run as a separate OS process**
-//! (`dagr-crashy-run`, the checked-in test-support harness) that writes its C19
-//! event stream **continuously to a real on-disk `events.jsonl`**, kills that
-//! process **abruptly with an uncatchable signal** (`Child::kill` — SIGKILL on
-//! unix, `TerminateProcess` on Windows; no exit handler can run), and folds the
-//! **surviving on-disk bytes** with T42's **standalone** [`fold_stream`] — with
-//! **no access to the dead run's live state**, exactly as a later binary
-//! invocation would. The crash surface is genuine: an abrupt kill mid-append can
-//! leave the file cut mid-line, which is the trailing-partial the fold must
-//! tolerate.
+//! The behavioral fold suite folds **hand-built** truncated streams, and the
+//! crash-safety suite simulates a crash as a **deterministic byte-truncation** of
+//! a captured writer buffer **inside the test process**. Neither one actually
+//! kills a live process. This suite closes the remaining gap: it launches a
+//! **real run as a separate OS process** (`dagr-crashy-run`, the checked-in
+//! test-support harness) that writes its event stream **continuously to a real
+//! on-disk `events.jsonl`**, kills that process **abruptly with an uncatchable
+//! signal** (`Child::kill` — SIGKILL on unix, `TerminateProcess` on Windows; no
+//! exit handler can run), and folds the **surviving on-disk bytes** with the
+//! **standalone** [`fold_stream`] — with **no access to the dead run's live
+//! state**, exactly as a later binary invocation would. The crash surface is
+//! genuine: an abrupt kill mid-append can leave the file cut mid-line, which is
+//! the trailing-partial the fold must tolerate.
 //!
 //! # Determinism (no fixed sleeps)
 //!
@@ -35,13 +34,13 @@
 //! that never becomes ready (a bug, not a race) — a poll loop, not a sleep the
 //! assertion depends on.
 //!
-//! # Scope (T68)
+//! # Scope
 //!
-//! This suite consumes the merged C19 writer (T19) and C22 fold (T42) unchanged
-//! and asserts only the **`interrupted` marking** and **up-to-crash completeness**
-//! over a real killed run, plus the negative control. The CLI `fold` *verb* is
-//! T55; the assembly-failed / bootstrap-failed variants, allowlist sentinels, and
-//! the fixture-corpus CI are T42/T48 — all out of scope here.
+//! This suite consumes the event-stream writer and the fold unchanged and asserts
+//! only the **`interrupted` marking** and **up-to-crash completeness** over a real
+//! killed run, plus the negative control. The CLI `fold` verb, the assembly-failed
+//! / bootstrap-failed variants, allowlist sentinels, and the fixture-corpus CI are
+//! all out of scope here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -127,8 +126,8 @@ fn launch_kill_and_read(base: &Path, run_id: &str, checkpoint: &str) -> Vec<u8> 
     );
 
     // Abruptly kill the child with an uncatchable signal (SIGKILL on unix) — no
-    // exit handler can run, exactly the abrupt-container-kill failure mode C19
-    // exists to survive.
+    // exit handler can run, exactly the abrupt-container-kill failure mode the
+    // event stream exists to survive.
     child.kill().expect("the mid-run child is killed abruptly");
     let status = child.wait().expect("reap the killed child");
     assert!(
@@ -313,8 +312,8 @@ fn header_is_complete_despite_the_crash() {
 /// **At most one trailing partial is tolerated, and no error is raised for it.**
 /// An abrupt kill mid-append can leave the last write byte-truncated. The fold
 /// tolerates at most one trailing partial, raises no error, still folds, and marks
-/// the artifact interrupted — the real-kill counterpart to T42's hand-built
-/// trailing-partial test.
+/// the artifact interrupted — the real-kill counterpart to the hand-built
+/// trailing-partial test in the behavioral fold suite.
 ///
 /// The `partial-tail` checkpoint **deterministically** leaves the surviving
 /// on-disk stream ending mid-record (the harness appends a genuine byte-truncated
@@ -391,7 +390,7 @@ fn at_most_one_trailing_partial_is_tolerated_silently() {
 /// bytes.** After the kill, copy the surviving stream bytes out and delete the
 /// entire run-store directory, then fold the bytes alone. The fold succeeds using
 /// only the bytes — it opens no run store, no live graph, no network — matching
-/// the "produced by the next invocation" contract (C19 fold criterion; C22).
+/// the "produced by the next invocation" contract.
 ///
 /// Non-vacuous: if the fold reached back for any run-store file or live state, the
 /// fold-after-deletion would fail (there is nothing left but the in-memory bytes).
@@ -430,7 +429,7 @@ fn the_dead_runs_live_state_is_never_touched() {
 /// a node reached a terminal state (with `b` pending) each yields a valid
 /// interrupted artifact whose recorded kinds grow monotonically with the kill
 /// point — demonstrating "killing at any moment" survives through the finalize
-/// path (C19 abrupt-kill; C22 crashed-run).
+/// path.
 #[test]
 fn kill_at_different_points_all_fold() {
     // Each successively-later checkpoint must record a superset of the earlier
@@ -550,13 +549,13 @@ fn interrupted_marking_is_not_always_on_negative_control() {
 // ===========================================================================
 
 /// **The crash path uses only an on-disk run-store directory — no server,
-/// database, or scheduler (system criterion 7 crash-survival clause).** The child
-/// writes to a plain on-disk directory with nothing else running; after the kill,
-/// the interrupted artifact is produced from the on-disk stream alone.
+/// database, or scheduler.** The child writes to a plain on-disk directory with
+/// nothing else running; after the kill, the interrupted artifact is produced from
+/// the on-disk stream alone.
 ///
 /// The `base` here is an ordinary directory under the OS temp dir — the whole
 /// operational requirement. Nothing else (no listening socket, no DB handle, no
-/// scheduler) participates, which is exactly the point of criterion 7.
+/// scheduler) participates: crash survival needs only a persistent store.
 #[test]
 fn crash_surviving_artifact_requires_only_a_persistent_store() {
     let base = temp_base();

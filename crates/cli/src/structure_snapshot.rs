@@ -1,5 +1,5 @@
-//! C28 · **Structure-snapshot testing** — the middle level of the C28 testing
-//! surface (arch.md `### C28 · Testing surface`; ticket T61).
+//! **Structure-snapshot testing** — the middle level of the testing
+//! surface.
 //!
 //! This is a **shipped** library API: a pipeline's structure is captured as a
 //! canonical, human-readable [`StructureSnapshot`] and asserted against a
@@ -11,27 +11,27 @@
 //!
 //! # What the snapshot captures — and deliberately excludes
 //!
-//! The snapshot is a **semantic** comparison surface built directly on the T40
-//! C20 graph artifact ([`crate::graph::build_artifact`]): for **every node** its
-//! stable identity name, **group** label (C6), stable task/input/output type
-//! names (T0.7), effective **execution class**, the **complete effective policy**
-//! (C5, every field written out — defaulted values compare identically to
+//! The snapshot is a **semantic** comparison surface built directly on the
+//! graph artifact ([`crate::graph::build_artifact`]): for **every node** its
+//! stable identity name, **group** label, stable task/input/output type
+//! names, effective **execution class**, the **complete effective policy**
+//! (every field written out — defaulted values compare identically to
 //! written-out defaults), declared resource requirements, and its dependency
 //! list; for **every edge** its **kind** (data vs ordering) and, for a data edge,
 //! the stable **carried-type name**. Nodes and edges are emitted in the canonical,
-//! registration-order-independent order T40 fixes (node name; edge
+//! registration-order-independent order the graph artifact fixes (node name; edge
 //! `(from, to, kind)`), so the fixture is byte-stable across builds, machines, and
 //! toolchains.
 //!
 //! It **excludes** the artifact's volatile header entirely — the generation time,
 //! the build provenance (tool version, git commit, lockfile hash), and the schema/
 //! tool version — so a rebuild or a toolchain bump produces the identical snapshot
-//! (arch.md C28: *"does not fail on a rebuild or a toolchain bump"*). The C21
+//! (*"does not fail on a rebuild or a toolchain bump"*). The
 //! fingerprints are **not** part of the compared bytes; they are exposed
 //! separately ([`StructureSnapshot::structural_fingerprint`] /
 //! [`StructureSnapshot::policy_fingerprint`]) as a companion check, which is what
 //! lets a test prove a **group rename** is review-visible in the snapshot diff yet
-//! moves neither fingerprint (C6 / C21) — the one place the C6/C28 distinction is
+//! moves neither fingerprint — the one place the group-vs-snapshot distinction is
 //! shown together.
 //!
 //! # The failure output is a **structural** diff
@@ -41,10 +41,10 @@
 //! **renamed**, **rewired**, **regrouped**, or **repolicied** — never a raw text
 //! or byte diff.
 //!
-//! # A limitation, stated at the point of use (C21)
+//! # A limitation, stated at the point of use
 //!
 //! **A structure snapshot does not detect a change to a task's *internal logic*
-//! that leaves its interface unchanged.** The snapshot (like the C21 fingerprint
+//! that leaves its interface unchanged.** The snapshot (like the fingerprint
 //! it rests on) is composed from author-declared names, edges, trigger rules, and
 //! policy — never from a task's function body — so a task whose stable name,
 //! input/output types, edges, trigger rule, and policy are unchanged snapshots
@@ -53,8 +53,7 @@
 //! needed, the honest answer is a **hand-maintained version marker** on the task
 //! (a visible, reviewable, obviously-manual constant that *is* part of the task's
 //! declared interface and therefore *does* move the structure and the fingerprint)
-//! — never an automatic content hash that silently under-detects (arch.md C21;
-//! T0.7 §9).
+//! — never an automatic content hash that silently under-detects.
 //!
 //! # Example
 //!
@@ -85,8 +84,8 @@ use crate::graph::{build_artifact, BuildProvenance, GraphEmitError};
 /// keeps capture clock-free and the snapshot deterministic.
 const SNAPSHOT_INSTANT: &str = "1970-01-01T00:00:00Z";
 
-/// A canonical, deterministic, human-readable capture of a pipeline's **structure**
-/// (arch.md C28 · structure level), built on the T40 graph artifact.
+/// A canonical, deterministic, human-readable capture of a pipeline's **structure**,
+/// built on the graph artifact.
 ///
 /// Capture one with [`from_pipeline`](Self::from_pipeline); serialize the golden
 /// fixture bytes with [`to_canonical_string`](Self::to_canonical_string); compare
@@ -100,10 +99,10 @@ pub struct StructureSnapshot {
     /// header excluded. This is exactly what the fixture serializes and what the
     /// diff is computed over.
     body: Value,
-    /// The C21 structural fingerprint, carried for the **companion** check only —
+    /// The structural fingerprint, carried for the **companion** check only —
     /// it is not part of the compared body (see the module docs).
     structural_fingerprint: u64,
-    /// The C21 policy hash, carried for the companion check only.
+    /// The policy hash, carried for the companion check only.
     policy_fingerprint: u64,
 }
 
@@ -112,14 +111,14 @@ impl StructureSnapshot {
     /// `pipeline_name` identity.
     ///
     /// Clock-free and environment-free: capture reads only the assembled pipeline
-    /// (assembly is pure, C7) and excludes the volatile header, so two captures of
+    /// (assembly is pure) and excludes the volatile header, so two captures of
     /// the same structure are byte-identical across runs, machines, and toolchains.
     ///
     /// # Errors
     ///
-    /// Returns [`GraphEmitError`] if the pipeline is not emittable to the C20
+    /// Returns [`GraphEmitError`] if the pipeline is not emittable to the graph
     /// contract — a node lacking author-declared stable names, or a malformed
-    /// stable name (the same emittability rule the graph artifact enforces, T40).
+    /// stable name (the same emittability rule the graph artifact enforces).
     pub fn from_pipeline(pipeline: &Pipeline, pipeline_name: &str) -> Result<Self, GraphEmitError> {
         Self::from_pipeline_with(
             pipeline,
@@ -156,7 +155,7 @@ impl StructureSnapshot {
     }
 
     /// The **canonical** golden-fixture bytes: the node/edge structure serialized
-    /// through the shared T4 §6 canonicalizer (sorted keys, integer-only scalars,
+    /// through the shared canonicalizer (sorted keys, integer-only scalars,
     /// no locale), with a trailing newline. Byte-stable across builds and machines
     /// and independent of registration order — this is exactly what
     /// [`bless_structure`] writes and what [`assert_structure`] compares.
@@ -167,16 +166,16 @@ impl StructureSnapshot {
         s
     }
 
-    /// The C21 **structural fingerprint** (node set + carried types + edge kinds +
+    /// The **structural fingerprint** (node set + carried types + edge kinds +
     /// trigger rules) of the captured pipeline. Exposed as a **companion** check —
     /// it is not part of the compared snapshot — so a test can prove a group rename
-    /// is review-visible in the diff yet leaves this hash unchanged (C6 / C21).
+    /// is review-visible in the diff yet leaves this hash unchanged.
     #[must_use]
     pub fn structural_fingerprint(&self) -> u64 {
         self.structural_fingerprint
     }
 
-    /// The C21 **policy hash** of the captured pipeline (the companion counterpart
+    /// The **policy hash** of the captured pipeline (the companion counterpart
     /// of [`structural_fingerprint`](Self::structural_fingerprint)).
     #[must_use]
     pub fn policy_fingerprint(&self) -> u64 {
@@ -193,7 +192,7 @@ impl StructureSnapshot {
 }
 
 /// The node-and-edge-oriented **structural diff** returned when a snapshot does not
-/// match its golden fixture (arch.md C28: the failure output is a structural diff,
+/// match its golden fixture (the failure output is a structural diff,
 /// not a raw text/byte diff).
 ///
 /// It names exactly what changed — nodes **added**/**removed**, edges
@@ -319,8 +318,8 @@ pub enum StructureAssertError {
     /// node-and-edge-oriented [`StructureDiff`]. Re-bless deliberately with
     /// [`bless_structure`] if the change is intended.
     Mismatch(StructureDiff),
-    /// The pipeline is not emittable to the C20 contract (a node without stable
-    /// names, or a malformed stable name — T40).
+    /// The pipeline is not emittable to the graph contract (a node without stable
+    /// names, or a malformed stable name).
     Emit(GraphEmitError),
     /// The golden fixture could not be read (for example it does not exist yet —
     /// bless it first). Names the underlying I/O failure.
@@ -356,7 +355,7 @@ impl From<std::io::Error> for StructureAssertError {
 }
 
 /// Assert an assembled `pipeline`'s structure against the golden fixture at
-/// `fixture_path` (arch.md C28 · structure level). The whole structure test is
+/// `fixture_path`. The whole structure test is
 /// this one call — no pipeline writes its own comparison or serialization code.
 ///
 /// Passes with no output when the structure matches; otherwise returns
@@ -365,18 +364,18 @@ impl From<std::io::Error> for StructureAssertError {
 ///
 /// The comparison is **semantic**: it ignores the volatile header (generation
 /// time, build provenance, tool version), so a rebuild or a toolchain bump never
-/// fails it, while a group rename **is** review-visible here (C6) even though it
-/// never moves the C21 fingerprint. When the structure has legitimately changed,
+/// fails it, while a group rename **is** review-visible here even though it
+/// never moves the fingerprint. When the structure has legitimately changed,
 /// regenerate the fixture with [`bless_structure`].
 ///
-/// **Limitation (C21):** this does not detect a change to a task's *internal
+/// **Limitation:** this does not detect a change to a task's *internal
 /// logic* that leaves its interface unchanged — see the [module docs](self) for the
 /// hand-maintained-version-marker answer.
 ///
 /// # Errors
 ///
 /// - [`StructureAssertError::Mismatch`] — the structure differs from the fixture.
-/// - [`StructureAssertError::Emit`] — the pipeline is not snapshottable (T40).
+/// - [`StructureAssertError::Emit`] — the pipeline is not snapshottable.
 /// - [`StructureAssertError::Io`] — the fixture could not be read (bless it first).
 pub fn assert_structure(
     pipeline: &Pipeline,
@@ -394,7 +393,7 @@ pub fn assert_structure(
     }
 }
 
-/// The **bless / update** flow (arch.md C28: *"a single documented command … that
+/// The **bless / update** flow (*"a single documented command … that
 /// rewrites the canonical, stably-ordered fixture for review"*): deliberately
 /// (re)generate the golden fixture for `pipeline` at `fixture_path` from the
 /// current structure.
@@ -408,7 +407,7 @@ pub fn assert_structure(
 ///
 /// # Errors
 ///
-/// - [`StructureAssertError::Emit`] — the pipeline is not snapshottable (T40).
+/// - [`StructureAssertError::Emit`] — the pipeline is not snapshottable.
 /// - [`StructureAssertError::Io`] — the fixture could not be written.
 pub fn bless_structure(
     pipeline: &Pipeline,
@@ -424,13 +423,13 @@ pub fn bless_structure(
 
 /// The fixed provenance used when capturing a snapshot — its values are excluded
 /// from the snapshot, so the constants are immaterial; they exist only to satisfy
-/// the T40 emitter's signature without probing the build environment.
+/// the graph emitter's signature without probing the build environment.
 fn fixed_provenance() -> BuildProvenance {
     BuildProvenance::new("", "", "")
 }
 
 /// Strip the volatile header from a graph artifact, leaving exactly the semantic
-/// comparison surface `{nodes, edges}` (arch.md C28: volatile header fields —
+/// comparison surface `{nodes, edges}` (the volatile header fields —
 /// generation time, build provenance, tool/schema version — are excluded).
 fn strip_header(mut artifact: Value) -> Value {
     if let Some(obj) = artifact.as_object_mut() {

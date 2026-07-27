@@ -1,6 +1,6 @@
-//! **Layer C — artifacts and observability** (arch.md "Layer C"; ticket T64).
+//! **Layer C — artifacts and observability.**
 //!
-//! The parts that make a finished run *explicable*. The event stream (C19) is the
+//! The parts that make a finished run *explicable*. The event stream is the
 //! crash-proof record everything else derives from; this example runs a small
 //! flow through [`RunnableFlow`](dagr_cli::run_flow::RunnableFlow), captures the
 //! stream in memory, then reads it back with the public
@@ -68,7 +68,7 @@ fn main() {
 
     // Every state transition is an event. Count attempts per node — the retry on
     // `triple` shows up as two `attempt-started` records, which is exactly the
-    // capacity-planning signal a per-attempt record preserves (C22).
+    // capacity-planning signal a per-attempt record preserves.
     let attempts_of = |node: &str| -> usize {
         stream
             .records

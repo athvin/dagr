@@ -1,23 +1,23 @@
-//! The C16 **per-run temp-directory convention** — where a run confines its local
-//! debris, and how it is reclaimed (arch.md `### C16`; T0.6 §3; ticket T36).
+//! The **per-run temp-directory convention** — where a run confines its local
+//! debris, and how it is reclaimed.
 //!
 //! # The convention
 //!
 //! Everything a task writes *locally* — scratch files, intermediate outputs a task
-//! materializes on the local filesystem before uploading a reference (C2 output
+//! materializes on the local filesystem before uploading a reference (task output
 //! ownership) — goes under the **run's own per-run temp directory**, reached
 //! through the [`RunContext`](dagr_core::context::RunContext::temp_dir). The temp
 //! directory lives under the run-store base at
-//! `<base>/<pipeline>/<run-id>/tmp/` (T0.6 §3 reserves the run directory; the
+//! `<base>/<pipeline>/<run-id>/tmp/` (the run directory is reserved; the
 //! `tmp/` subtree is this convention's, sitting alongside the reserved
 //! `events.jsonl`/`graph.json`/`run.json`/`scratch/` names, **never** colliding
 //! with them). Because the path embeds both the pipeline identity and the
 //! run-unique id, **two runs — even of the same binary and pipeline — get disjoint
 //! temp directories** (the confinement guarantee).
 //!
-//! # What C16 actually promises about cleanup — and what it does not
+//! # What the convention promises about cleanup — and what it does not
 //!
-//! Cleanup guarantees are scoped to what is *enforceable* (arch.md C16):
+//! Cleanup guarantees are scoped to what is *enforceable*:
 //!
 //! - A **cooperative** task that observes cancellation within grace cleans up its
 //!   own temp artifacts (it removes what it wrote under the temp dir before
@@ -30,8 +30,8 @@
 //!   [`reclaim_leftover_temp_dirs`] **regardless of how the prior process ended** —
 //!   an abrupt `SIGKILL` leaves the temp dir behind, and the following run of the
 //!   same binary+pipeline sweeps the stale `tmp/` subtrees while leaving every
-//!   reserved run output (`events.jsonl`, artifacts, `scratch/`) untouched, per
-//!   T0.6 (nothing is deleted implicitly *except* this temp-dir reclamation and the
+//!   reserved run output (`events.jsonl`, artifacts, `scratch/`) untouched
+//!   (nothing is deleted implicitly *except* this temp-dir reclamation and the
 //!   prune verb).
 //!
 //! This module is pure filesystem plumbing over **injected paths** — no clock, no
@@ -41,12 +41,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// The reserved per-run temp-directory subtree name under a run directory. Sits
-/// alongside the T0.6 §3 reserved names (`events.jsonl`, `graph.json`, `run.json`,
+/// alongside the reserved names (`events.jsonl`, `graph.json`, `run.json`,
 /// `scratch/`) and never collides with them.
 pub const TEMP_DIR_NAME: &str = "tmp";
 
 /// The per-run temp directory for one run:
-/// `<base>/<pipeline>/<run-id>/tmp` (T0.6 §3; arch.md C16).
+/// `<base>/<pipeline>/<run-id>/tmp`.
 ///
 /// Because the path embeds both the pipeline identity and the run-unique id, two
 /// runs — even of the same binary and pipeline — resolve to **disjoint** temp
@@ -81,36 +81,35 @@ pub fn create_temp_dir(path: &Path) -> io::Result<()> {
 
 /// Remove a per-run temp directory and everything under it, **best-effort**.
 ///
-/// Called at run end (normal or cancelled) and — per the C16 convention — the
+/// Called at run end (normal or cancelled) and — per the convention — the
 /// deletion is best-effort by design: a missing directory is a harmless no-op (the
 /// abrupt-end / already-cleaned path), and an I/O error is swallowed rather than
 /// held against the run, because after grace the process exits promptly rather than
-/// blocking on a zombie that may be racing the deletion (arch.md C16).
+/// blocking on a zombie that may be racing the deletion.
 pub fn cleanup_temp_dir(path: &Path) {
     // A missing directory is the common, expected case (nothing was written, or a
     // prior sweep already removed it) and any I/O error is likewise swallowed:
-    // best-effort by design (C16) — a racing zombie thread may hold a file open, and
+    // best-effort by design — a racing zombie thread may hold a file open, and
     // the process exits promptly rather than blocking or failing the run over
     // residual debris.
     let _ = std::fs::remove_dir_all(path);
 }
 
 /// Reclaim leftover per-run temp directories under `<base>/<pipeline>/`,
-/// **keeping** the current run's, regardless of how the prior process ended
-/// (arch.md C16; T0.6).
+/// **keeping** the current run's, regardless of how the prior process ended.
 ///
 /// For every sibling run directory `<base>/<pipeline>/<run-id>/` other than
 /// `keep_run_id`, remove its `tmp/` subtree if present. This sweeps the debris an
 /// abrupt kill (`SIGKILL`, power loss) left behind on the *previous* run without
 /// touching any reserved run output — `events.jsonl`, `graph.json`, `run.json`, and
-/// `scratch/` are left intact (retention stays operator-owned via prune, T0.6 §8;
+/// `scratch/` are left intact (retention stays operator-owned via prune;
 /// only the ephemeral `tmp/` subtree is this convention's to reclaim). A missing
 /// pipeline directory (the first ever run) is a no-op.
 ///
 /// This is deliberately scoped to the *same pipeline*: dagr does not become a
-/// distributed-cleanup service reaping other pipelines' or other processes' debris
-/// (arch.md permanent non-goals; the ticket's Out of scope). Residual debris beyond
-/// this enforceable next-invocation sweep is the province of the operator.
+/// distributed-cleanup service reaping other pipelines' or other processes' debris.
+/// Residual debris beyond this enforceable next-invocation sweep is the province of
+/// the operator.
 pub fn reclaim_leftover_temp_dirs(base: &str, pipeline: &str, keep_run_id: &str) {
     let pipeline_dir = PathBuf::from(base).join(pipeline);
     let keep = run_dir(base, pipeline, keep_run_id);

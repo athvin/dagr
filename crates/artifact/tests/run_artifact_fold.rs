@@ -1,17 +1,17 @@
-//! C22 · Run-artifact **fold** — behavioral test suite (T42 / ticket 053).
+//! Run-artifact **fold** — behavioral test suite.
 //!
-//! Each `#[test]` realizes one Setup/Action/Expected scenario from the ticket's
-//! Test plan against the standalone fold ([`dagr_artifact::fold::fold_stream`]).
-//! The fold is a *reader* over the append-only C19 event stream (T19) that
-//! produces the C22 run artifact — it needs no run store, no live graph, and no
-//! network. These tests drive it over hand-built streams (the published T39
-//! event-stream wire form, `kind`-discriminated JSON Lines) and assert on the
-//! produced [`RunArtifact`] and its serialized JSON.
+//! Each `#[test]` realizes one Setup/Action/Expected scenario against the
+//! standalone fold ([`dagr_artifact::fold::fold_stream`]). The fold is a *reader*
+//! over the append-only event stream that produces the run artifact — it needs no
+//! run store, no live graph, and no network. These tests drive it over hand-built
+//! streams (the published event-stream wire form, `kind`-discriminated JSON Lines)
+//! and assert on the produced [`RunArtifact`] and its serialized JSON.
 //!
 //! The schema round-trip (validating a REAL folded artifact against the
-//! published `schemas/run/v1.schema.json` via the T39 helper) lives behind the
-//! `schema-validation` feature in `run_artifact_fold_schema.rs`; this suite runs
-//! in the default `cargo test --workspace` and covers C22's behavioral criteria.
+//! published `schemas/run/v1.schema.json` via the validation helper) lives behind
+//! the `schema-validation` feature in `run_artifact_fold_schema.rs`; this suite
+//! runs in the default `cargo test --workspace` and covers the fold's behavioral
+//! criteria.
 
 use serde_json::{json, Value};
 
@@ -21,7 +21,7 @@ use dagr_artifact::fold::{
 
 // === stream-building helpers ==============================================
 
-/// The shared C19 record envelope every event carries (published T39 wire form:
+/// The shared record envelope every event carries (published wire form:
 /// `kind`-discriminated, `wall` an informational string, `offset_ns` the
 /// authoritative monotonic offset).
 fn env(seq: u64, offset_ns: u64, kind: &str) -> Value {

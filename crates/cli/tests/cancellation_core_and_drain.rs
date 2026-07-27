@@ -1,8 +1,8 @@
-//! C16 · cancellation core and graceful drain — ticket T35 (045). Written first, TDD.
+//! Cancellation core and graceful drain. Written first, TDD.
 //!
-//! These exercise the **real** T24/T34 run-loop driver ([`dagr_cli::driver::drive`])
-//! end-to-end for the C16 cancellation core: a run-scoped token with per-attempt
-//! children, a **programmatic** cancellation trigger (no OS signals — that is T36),
+//! These exercise the **real** run-loop driver ([`dagr_cli::driver::drive`])
+//! end-to-end for the cancellation core: a run-scoped token with per-attempt
+//! children, a **programmatic** cancellation trigger (no OS signals),
 //! the cooperative grace period, drain-before-exit, and the `cancelled`-vs-
 //! `abandoned` terminal classification. Every scenario asserts against the parsed
 //! event stream and the returned per-node terminal states — never internal state.
@@ -34,7 +34,7 @@ use dagr_core::task::Task;
 use dagr_core::TaskError;
 
 // ===========================================================================
-// In-memory sink + clock (the C19 injection seam).
+// In-memory sink + clock (the injection seam).
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -146,7 +146,7 @@ fn stream_is_complete_and_parseable(bytes: &[u8]) {
 
 /// A task that fires the programmatic cancel trigger the instant it runs, then
 /// returns success — the deterministic in-run cancellation trigger (a scripted
-/// task holding the external `CancelHandle`, standing in for T36's signal source).
+/// task holding the external `CancelHandle`, standing in for a real signal source).
 struct FiresCancel {
     handle: CancelHandle,
 }
@@ -159,7 +159,7 @@ impl Task for FiresCancel {
     }
 }
 
-/// A cancel trigger that fires the programmatic cancel, then **holds its C12 permit
+/// A cancel trigger that fires the programmatic cancel, then **holds its admission permit
 /// until the cancellation it fired has provably taken effect in the run loop** — it
 /// cooperatively spins on its own per-attempt cancellation signal (a child of the
 /// run token) and returns only once it observes the flip. The driver flips the
@@ -290,7 +290,7 @@ impl Task for Succeeds {
 }
 
 // ===========================================================================
-// A type-erased source runner over the real C14 caught attempt path.
+// A type-erased source runner over the real caught attempt path.
 // ===========================================================================
 
 use dagr_core::execution::run_attempt_caught;
@@ -360,7 +360,7 @@ fn order(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
 const SHORT_GRACE: Duration = Duration::from_millis(150);
 
 // ===========================================================================
-// Core token semantics (arch.md C16 — run token / per-attempt children).
+// Core token semantics (run token / per-attempt children).
 // ===========================================================================
 
 /// **Run token cancels all live children exactly once and is idempotent.**
@@ -724,7 +724,7 @@ fn no_new_admission_after_cancellation() {
 
 /// **Stop-on-first-failure triggers cancellation via the core with a failure
 /// origin.** A failing node under stop mode leaves a pending unrelated default-rule
-/// node `cancelled` (T34's resolved rule) and the recorded origin is
+/// node `cancelled` (the resolved rule) and the recorded origin is
 /// failure-under-stop, so later exit-code logic can prefer run failure.
 #[test]
 fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() {
@@ -874,7 +874,7 @@ fn shutdown_budget_is_grace_plus_teardown_plus_flush_and_reflects_flags() {
 }
 
 // ===========================================================================
-// Natural run end still bounds the zombie wait (T24, not double-counted).
+// Natural run end still bounds the zombie wait (not double-counted).
 // ===========================================================================
 
 /// **Natural run end (no cancellation) is unchanged.** A run that completes

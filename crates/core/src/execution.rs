@@ -1,26 +1,24 @@
-//! The C14 **single-attempt execution core** — the load-bearing spine of the
-//! attempt runner (arch.md `### C14 · Attempt runner`).
+//! The **single-attempt execution core** — the load-bearing spine of the
+//! attempt runner.
 //!
 //! This module runs **one** attempt of **one** node end to end:
 //!
 //! 1. open the attempt span (already carried on the [`RunContext`], keyed on
-//!    run / node / attempt — the C25 surface T45 consumes) *before* the work
-//!    runs, so everything beneath it is attributable;
+//!    run / node / attempt) *before* the work runs, so everything beneath it is
+//!    attributable;
 //! 2. record the informational admission phase marker;
 //! 3. emit the `attempt-started` per-transition event;
 //! 4. dispatch the **already-placed** work — [`Task::run`] — and await its
 //!    result (this runner is runtime-agnostic: the caller's runtime drives the
-//!    future; execution-class placement is C13 / T33, not this ticket);
-//! 5. **classify** the outcome into the normative taxonomy (arch.md
-//!    Vocabulary) — success, permanent failure, retry-eligible failure, or a
-//!    deliberate skip;
-//! 6. on success **only**, fill the node's once-writable output slot (C10 /
-//!    T17) with the produced value (declared output residency transfers to the
-//!    slot at fill);
+//!    future; execution-class placement is not this module's concern);
+//! 5. **classify** the outcome into the normative taxonomy — success, permanent
+//!    failure, retry-eligible failure, or a deliberate skip;
+//! 6. on success **only**, fill the node's once-writable output slot with the
+//!    produced value (declared output residency transfers to the slot at fill);
 //! 7. emit the closing per-transition event (`attempt-succeeded` /
 //!    `attempt-failed`) — which is the **exactly-one attempt-outcome record**
-//!    for this attempt (arch.md C14) — and the `node-terminal` record carrying
-//!    the classified terminal state.
+//!    for this attempt — and the `node-terminal` record carrying the classified
+//!    terminal state.
 //!
 //! Every attempt, regardless of outcome, produces exactly one attempt-outcome
 //! record alongside its per-transition events. A non-success attempt never
@@ -29,44 +27,41 @@
 //! # Runtime-agnostic, dependency-free
 //!
 //! [`run_attempt`] is an `async fn` awaited by a caller-provided runtime; it
-//! adds **no** async-runtime dependency to `dagr-core`. Per the T2 ADR (004)
-//! await-bound work ultimately runs on tokio, but *placement* — choosing the
-//! class and spawning onto the await / blocking / compute pool — is C13 / T33.
+//! adds **no** async-runtime dependency to `dagr-core`. Await-bound work
+//! ultimately runs on tokio, but *placement* — choosing the class and spawning
+//! onto the await / blocking / compute pool — is not this module's concern.
 //! This core "receives work that is already on the correct thread/runtime" and
-//! assumes the work returns (T20 Out of scope).
+//! assumes the work returns.
 //!
 //! # Event emission through an abstract port (keeps `dagr-core` dependency-free)
 //!
-//! The C19 event-stream writer lives in `dagr-artifact`, and `dagr-core` must
-//! not depend on it (workspace ADR T1: core depends on nothing; the C24
-//! renderer boundary). So the runner emits through the **abstract**
-//! [`AttemptEventSink`] port defined here. The run-loop driver (T24, in
-//! `dagr-cli`, which depends on both crates) adapts the concrete
-//! `dagr_artifact::event_stream::EventStreamWriter` to this port; tests use a
-//! plain capturing sink with no runtime. The [`AttemptEvent`] variants this
-//! runner emits map one-to-one onto C19's closed event vocabulary.
+//! The event-stream writer lives in `dagr-artifact`, and `dagr-core` must not
+//! depend on it (core depends on nothing; the renderer boundary). So the runner
+//! emits through the **abstract** [`AttemptEventSink`] port defined here. The
+//! run-loop driver (in `dagr-cli`, which depends on both crates) adapts the
+//! concrete `dagr_artifact::event_stream::EventStreamWriter` to this port; tests
+//! use a plain capturing sink with no runtime. The [`AttemptEvent`] variants this
+//! runner emits map one-to-one onto the closed event vocabulary.
 //!
-//! # What this ticket owns, and what it reserves
+//! # What this module owns, and what it reserves
 //!
-//! T20 owns the **single-attempt** path only. Deliberately **not** here, each
-//! with its owning ticket:
+//! This core owns the **single-attempt** path only. Deliberately **not** here:
 //!
-//! - **retry / backoff / attempt loop (T22)** — this runner classifies an
-//!   outcome as retry-eligible but never loops, schedules no second attempt,
-//!   and computes no delay;
-//! - **per-attempt timeout / abandonment (T21)** — no timer is started, no
-//!   future is dropped, no zombie accounting; the work is assumed to return;
-//! - **panic containment (T23)** — no `catch_unwind` boundary; a panicking task
-//!   unwinds through this core (T23 wraps that boundary);
-//! - **execution-class dispatch (C13 / T33)** — the runner does not choose the
-//!   class or spawn onto a pool;
-//! - **the run-loop driver (T24)** — admission, readiness feedback,
-//!   run-started / run-finished events, and run-identity minting are the
-//!   driver's.
+//! - **retry / backoff / attempt loop** — this runner classifies an outcome as
+//!   retry-eligible but never loops, schedules no second attempt, and computes
+//!   no delay;
+//! - **per-attempt timeout / abandonment** — no timer is started, no future is
+//!   dropped, no zombie accounting; the work is assumed to return;
+//! - **panic containment** — no `catch_unwind` boundary; a panicking task
+//!   unwinds through this core (a separate boundary wraps that);
+//! - **execution-class dispatch** — the runner does not choose the class or
+//!   spawn onto a pool;
+//! - **the run-loop driver** — admission, readiness feedback, run-started /
+//!   run-finished events, and run-identity minting are the driver's.
 //!
 //! The [`AttemptOutcome`] enum is `#[non_exhaustive]` and its rustdoc names the
-//! `TimedOut` (T21) and `Panicked` (T23) variants those tickets add **without
-//! reshaping** the four T20 owns.
+//! `TimedOut` and `Panicked` variants added **without reshaping** the four this
+//! core owns.
 
 use crate::context::{PipelineId, RunContext, RunId, TerminalState};
 use crate::error::{TaskError, TaskErrorClass};
@@ -74,124 +69,119 @@ use crate::handle::NodeId;
 use crate::slot::Slot;
 use crate::task::Task;
 
-/// One record the single-attempt runner emits, mapped one-to-one onto the C19
-/// event vocabulary (arch.md `### C19 · Event stream`; the writer is T19).
+/// One record the single-attempt runner emits, mapped one-to-one onto the
+/// event vocabulary.
 ///
 /// This is the **abstract** event shape the runner produces; the run-loop
-/// driver (T24) translates each variant into the concrete
-/// `dagr_artifact::event_stream::Event` and stamps the C19 envelope (run
-/// identity, schema version, gapless sequence, wall stamp, monotonic offset).
-/// Keeping it abstract is what lets `dagr-core` emit events without depending on
-/// `dagr-artifact` (workspace ADR T1 / the C24 boundary).
+/// driver translates each variant into the concrete
+/// `dagr_artifact::event_stream::Event` and stamps the envelope (run identity,
+/// schema version, gapless sequence, wall stamp, monotonic offset). Keeping it
+/// abstract is what lets `dagr-core` emit events without depending on
+/// `dagr-artifact` (the renderer boundary).
 ///
 /// Only the records a **single attempt** is responsible for appear here. The
 /// `node-ready`, `run-started`, `run-finished`, and `zombie-at-exit` records
-/// are the driver's / readiness tracker's (T24), not this runner's.
+/// are the driver's / readiness tracker's, not this runner's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AttemptEvent {
     /// Informational admission phase marker: the node moved from waiting into
-    /// running (arch.md C14 *Behavior*: "record the waiting and admission
-    /// phases"). Permit accounting itself is C12 / T31 — this marker is
+    /// running. Permit accounting itself is separate — this marker is
     /// informational, not an admission decision.
     NodeAdmitted {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
     },
     /// The attempt began — the opening per-transition event.
     AttemptStarted {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
-        /// The 1-based attempt number, from the C8 context.
+        /// The 1-based attempt number, from the run context.
         attempt: u32,
     },
     /// The attempt returned a value — the closing per-transition event and the
     /// **exactly-one attempt-outcome record** for a successful attempt.
     AttemptSucceeded {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
-        /// The 1-based attempt number, from the C8 context.
+        /// The 1-based attempt number, from the run context.
         attempt: u32,
     },
     /// The attempt failed (permanent, retry-eligible, or a deliberate skip) —
     /// the closing per-transition event and the **exactly-one attempt-outcome
     /// record** for a non-successful attempt.
     AttemptFailed {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
-        /// The 1-based attempt number, from the C8 context.
+        /// The 1-based attempt number, from the run context.
         attempt: u32,
     },
-    /// The attempt exceeded its per-attempt timeout (T21) — the closing
-    /// per-transition event and the **exactly-one attempt-outcome record** for a
-    /// timed-out attempt (arch.md C14: "Every attempt produces exactly one
-    /// *attempt-outcome* record … including attempts that timed out").
+    /// The attempt exceeded its per-attempt timeout — the closing per-transition
+    /// event and the **exactly-one attempt-outcome record** for a timed-out
+    /// attempt (every attempt produces exactly one attempt-outcome record,
+    /// including attempts that timed out).
     ///
     /// This is emitted **immediately at the timeout mark** for *every* execution
     /// class: an await-bound attempt whose future was dropped, and a
     /// blocking/compute attempt whose fate is decided while its closure runs on
-    /// as abandoned-but-running work (T0.3 ADR §1). The node's terminal state is
-    /// decided once here; a lingering thread's eventual return is a
-    /// `zombie-at-exit` **event** (the driver's, C19 / T24), never a second
-    /// terminal state.
+    /// as abandoned-but-running work. The node's terminal state is decided once
+    /// here; a lingering thread's eventual return is a `zombie-at-exit`
+    /// **event** (the driver's), never a second terminal state.
     AttemptTimedOut {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
-        /// The 1-based attempt number, from the C8 context.
+        /// The 1-based attempt number, from the run context.
         attempt: u32,
     },
-    /// The node entered a **backoff/waiting phase** between two attempts (T22):
-    /// a retry-eligible attempt failed and the retry loop is waiting `delay`
+    /// The node entered a **backoff/waiting phase** between two attempts: a
+    /// retry-eligible attempt failed and the retry loop is waiting `delay`
     /// before dispatching the next attempt. This names the backoff interval as a
-    /// distinct, measurable phase (feeding the C23 phase timings — arch.md C14
-    /// "record the waiting … phases"), so the interval between the failing
-    /// attempt and the next attempt start is attributable to *backoff*, not to
+    /// distinct, measurable phase, so the interval between the failing attempt
+    /// and the next attempt start is attributable to *backoff*, not to
     /// executing.
     ///
     /// It is emitted **after** the failing attempt's closing outcome record and
     /// **before** the next attempt's `attempt-started`. `attempt` is the number
     /// of the attempt that just failed (the one being backed off *from*); the
-    /// next attempt is `attempt + 1`. Only the retry loop (T22) emits this; a
-    /// single attempt (T20 / T21) never does.
+    /// next attempt is `attempt + 1`. Only the retry loop emits this; a single
+    /// attempt never does.
     BackoffStarted {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The 1-based number of the attempt that just failed — the retry loop
         /// waits before dispatching attempt `attempt + 1`.
         attempt: u32,
         /// The scheduled backoff delay (base·factor^n, capped, with jitter) the
         /// loop waits before the next attempt. Recorded as the phase's measured
-        /// interval; the actual sleeping is the driver's (T24/T33).
+        /// interval; the actual sleeping is the driver's.
         delay: Duration,
     },
     /// The attempt **panicked** and the panic was contained at the catch
-    /// boundary (T23) — the closing per-transition event and the **exactly-one
-    /// attempt-outcome record** for a panicking attempt (arch.md C14: "Every
-    /// attempt produces exactly one *attempt-outcome* record … including
-    /// attempts that … panicked").
+    /// boundary — the closing per-transition event and the **exactly-one
+    /// attempt-outcome record** for a panicking attempt (every attempt produces
+    /// exactly one attempt-outcome record, including attempts that panicked).
     ///
     /// A caught panic is converted to a **permanent** failure (never
-    /// retry-eligible) whose terminal state is [`TerminalState::Failed`] (arch.md
-    /// Vocabulary: `failed` is "a caught panic"). The `message` is the panic
-    /// payload captured at the boundary — the `&str` / `String` payload, or the
-    /// literal `"unknown panic"` when the payload is neither (the dagx prior-art
-    /// normalization T3 adopted). The panic is attributed to `node` via
-    /// task-local state, so this record names the panicking node even when
-    /// several attempts run concurrently.
+    /// retry-eligible) whose terminal state is [`TerminalState::Failed`] (a
+    /// caught panic is `failed`). The `message` is the panic payload captured at
+    /// the boundary — the `&str` / `String` payload, or the literal
+    /// `"unknown panic"` when the payload is neither. The panic is attributed to
+    /// `node` via task-local state, so this record names the panicking node even
+    /// when several attempts run concurrently.
     AttemptPanicked {
-        /// The node's author-declared identity name (T13) — the panicking node,
+        /// The node's author-declared identity name — the panicking node,
         /// attributed via task-local state.
         node: String,
-        /// The 1-based attempt number, from the C8 context.
+        /// The 1-based attempt number, from the run context.
         attempt: u32,
         /// The captured panic message (payload downcast to `&str`/`String`, else
         /// `"unknown panic"`).
         message: String,
     },
-    /// The node reached a terminal state from the normative taxonomy (arch.md
-    /// Vocabulary), carrying the classified state.
+    /// The node reached a terminal state from the normative taxonomy, carrying
+    /// the classified state.
     NodeTerminal {
-        /// The node's author-declared identity name (T13).
+        /// The node's author-declared identity name.
         node: String,
         /// The normative terminal state this attempt decided.
         state: TerminalState,
@@ -202,66 +192,62 @@ pub enum AttemptEvent {
 /// through (see the [module docs](self)).
 ///
 /// The runner calls [`emit`](AttemptEventSink::emit) once per record, in order.
-/// The run-loop driver (T24) implements this over the concrete C19
-/// `EventStreamWriter` (stamping the envelope and appending to the run store);
-/// tests implement it with an in-memory capturing collector. Defining the port
-/// in `dagr-core` — rather than depending on `dagr-artifact` — is what keeps the
-/// execution core dependency-free (workspace ADR T1) and the C24 boundary
-/// intact.
+/// The run-loop driver implements this over the concrete `EventStreamWriter`
+/// (stamping the envelope and appending to the run store); tests implement it
+/// with an in-memory capturing collector. Defining the port in `dagr-core` —
+/// rather than depending on `dagr-artifact` — is what keeps the execution core
+/// dependency-free and the renderer boundary intact.
 ///
 /// # Note on fallibility
 ///
-/// A real C19 sink can fault mid-run (an unwritable event stream — C19 / T0.6),
-/// which the driver (T24) turns into run-level cancellation. That fault path is
-/// the driver's to own; this single-attempt port is **infallible** so the T20
-/// core stays focused on running one attempt. The driver's adaptor absorbs a
-/// `SinkFault` and reacts per C19; the runner is not the place to decide the
-/// run's fate on a sink error.
+/// A real sink can fault mid-run (an unwritable event stream), which the driver
+/// turns into run-level cancellation. That fault path is the driver's to own;
+/// this single-attempt port is **infallible** so the core stays focused on
+/// running one attempt. The driver's adaptor absorbs a `SinkFault` and reacts;
+/// the runner is not the place to decide the run's fate on a sink error.
 pub trait AttemptEventSink {
     /// Emit one attempt record. Called by the runner in emission order.
     fn emit(&mut self, event: AttemptEvent);
 }
 
-/// The classified outcome of **one** attempt, in the normative taxonomy
-/// (arch.md Vocabulary; the runner's C14 outcome surface).
+/// The classified outcome of **one** attempt, in the normative taxonomy.
 ///
 /// This is the framework-internal runner taxonomy — a strict superset of the
-/// task-facing [`TaskError`] three-valued surface (T3 ADR §11) — the four
-/// outcomes T20 owns plus the [`TimedOut`](AttemptOutcome::TimedOut) variant T21
-/// (031) adds and the [`Panicked`](AttemptOutcome::Panicked) variant T23 (033)
-/// adds:
+/// task-facing [`TaskError`] three-valued surface — the four base outcomes plus
+/// the [`TimedOut`](AttemptOutcome::TimedOut) and
+/// [`Panicked`](AttemptOutcome::Panicked) variants:
 ///
 /// - [`Succeeded`](AttemptOutcome::Succeeded) — the work returned a value; the
 ///   slot was filled.
 /// - [`PermanentFailure`](AttemptOutcome::PermanentFailure) — a retry-ineligible
 ///   error; **never** treated as retry-eligible regardless of remaining
-///   attempts (arch.md C14).
+///   attempts.
 /// - [`RetryEligibleFailure`](AttemptOutcome::RetryEligibleFailure) — a
-///   retry-eligible error; **distinct** from permanent so the retry driver (T22)
-///   can act on it. This runner schedules no retry.
+///   retry-eligible error; **distinct** from permanent so the retry driver can
+///   act on it. This runner schedules no retry.
 /// - [`Skipped`](AttemptOutcome::Skipped) — a deliberate (originated) skip;
 ///   distinct from both success and failure.
 ///
-/// # The T21 timeout variant, and the T23 panic variant
+/// # The timeout variant, and the panic variant
 ///
 /// The enum is `#[non_exhaustive]` precisely so the operationally-hard siblings
 /// extend it rather than rewrite it:
 ///
-/// - **`TimedOut`** — per-attempt timeout (T21). Timeout is retry-eligible by
-///   default, subject to the node's budget (arch.md C14). Its terminal state is
+/// - **`TimedOut`** — per-attempt timeout. Timeout is retry-eligible by default,
+///   subject to the node's budget. Its terminal state is
 ///   [`TerminalState::TimedOut`]. It is a failure, but a **distinct** one from
-///   the two T20 failure classes, because the per-class abandonment semantics
-///   (await-bound future-drop vs blocking/compute permit-held-until-return, T0.3
-///   ADR §1) are decided at the timeout mark, not by mapping to `PermanentFailure`
-///   / `RetryEligibleFailure`.
-/// - **`Panicked`** — a caught panic converted to a **permanent** failure (T23,
-///   added by **this** ticket). Its terminal state is [`TerminalState::Failed`]
-///   (arch.md Vocabulary: "a caught panic" is `failed`). It is a **distinct**
-///   classification from `PermanentFailure` so the runner can attribute the
-///   panic to its node and capture the panic message on the outcome record
-///   ([`AttemptEvent::AttemptPanicked`]); like a permanent failure it is **never**
-///   retry-eligible (retrying a body that panicked risks poisoned shared state —
-///   the prescribed pattern is resource poisoning, not blind retry; T3 ADR §4).
+///   the two base failure classes, because the per-class abandonment semantics
+///   (await-bound future-drop vs blocking/compute permit-held-until-return) are
+///   decided at the timeout mark, not by mapping to `PermanentFailure` /
+///   `RetryEligibleFailure`.
+/// - **`Panicked`** — a caught panic converted to a **permanent** failure. Its
+///   terminal state is [`TerminalState::Failed`] ("a caught panic" is `failed`).
+///   It is a **distinct** classification from `PermanentFailure` so the runner
+///   can attribute the panic to its node and capture the panic message on the
+///   outcome record ([`AttemptEvent::AttemptPanicked`]); like a permanent
+///   failure it is **never** retry-eligible (retrying a body that panicked risks
+///   poisoned shared state — the prescribed pattern is resource poisoning, not
+///   blind retry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AttemptOutcome {
@@ -270,30 +256,30 @@ pub enum AttemptOutcome {
     /// A permanent, retry-ineligible failure (`failed`). Never retry-eligible.
     PermanentFailure,
     /// A retry-eligible failure (`failed` once the budget is exhausted). The
-    /// retry driver (T22) may schedule another attempt; this runner does not.
+    /// retry driver may schedule another attempt; this runner does not.
     RetryEligibleFailure,
     /// A deliberate, originated skip (`skipped`).
     Skipped,
-    /// The attempt exceeded its per-attempt timeout (`timed-out`, T21).
+    /// The attempt exceeded its per-attempt timeout (`timed-out`).
     ///
-    /// **Retry-eligible by default**, subject to the node's retry budget (arch.md
-    /// C14) — a timeout enters the retry path rather than terminating the node
+    /// **Retry-eligible by default**, subject to the node's retry budget — a
+    /// timeout enters the retry path rather than terminating the node
     /// immediately; a timeout on the last permitted attempt yields terminal
     /// [`TerminalState::TimedOut`]. The per-class abandonment (an await-bound
     /// future is dropped and its permit released immediately; a blocking/compute
     /// closure runs on as abandoned-but-running work whose permit is held until
-    /// it returns) is handled by the runner at the timeout mark (T0.3 ADR §1),
-    /// not by this classification.
+    /// it returns) is handled by the runner at the timeout mark, not by this
+    /// classification.
     TimedOut,
     /// The attempt **panicked** and the panic was **caught** at the attempt
-    /// boundary (`failed`, T23) — converted to a permanent failure rather than
-    /// allowed to unwind the run (arch.md C14 *Panics*; T3 ADR §4).
+    /// boundary (`failed`) — converted to a permanent failure rather than
+    /// allowed to unwind the run.
     ///
     /// **Never retry-eligible** — a panic is a permanent failure regardless of
     /// remaining retry budget, so [`is_retry_eligible`](AttemptOutcome::is_retry_eligible)
     /// is `false` and the retry loop stops after a panicking attempt. Its
-    /// terminal state is [`TerminalState::Failed`] (arch.md Vocabulary). It is a
-    /// distinct classification from [`PermanentFailure`](AttemptOutcome::PermanentFailure)
+    /// terminal state is [`TerminalState::Failed`]. It is a distinct
+    /// classification from [`PermanentFailure`](AttemptOutcome::PermanentFailure)
     /// so the runner can attribute the panic to its node (task-local state) and
     /// capture the panic message on the [`AttemptEvent::AttemptPanicked`] outcome
     /// record.
@@ -301,14 +287,14 @@ pub enum AttemptOutcome {
 }
 
 impl AttemptOutcome {
-    /// The normative terminal state this outcome maps to (arch.md Vocabulary).
+    /// The normative terminal state this outcome maps to.
     ///
     /// Both failure classes map to [`TerminalState::Failed`] as a *single-attempt*
     /// terminal — a retry-eligible failure only becomes a non-`failed` fate when
-    /// a *later* attempt succeeds, which is the retry driver's (T22) concern, not
-    /// this single attempt's. The distinct [`RetryEligibleFailure`](AttemptOutcome::RetryEligibleFailure)
-    /// classification is what lets T22 decide to retry *before* this maps to a
-    /// terminal state.
+    /// a *later* attempt succeeds, which is the retry driver's concern, not this
+    /// single attempt's. The distinct [`RetryEligibleFailure`](AttemptOutcome::RetryEligibleFailure)
+    /// classification is what lets the retry driver decide to retry *before* this
+    /// maps to a terminal state.
     #[must_use]
     pub fn terminal_state(self) -> TerminalState {
         match self {
@@ -317,16 +303,16 @@ impl AttemptOutcome {
                 TerminalState::Failed
             }
             AttemptOutcome::Skipped => TerminalState::Skipped,
-            // A timeout is and stays `timed-out` (arch.md Vocabulary; T0.3 ADR
-            // §6) — it is decided once at the timeout mark and never becomes
-            // `abandoned` (that state arises only on the cancellation path, C16).
-            // On a non-final attempt this is a per-attempt terminal that the
-            // retry driver (T22) may still turn into a later success; on the last
-            // permitted attempt it is the node's terminal state.
+            // A timeout is and stays `timed-out` — it is decided once at the
+            // timeout mark and never becomes `abandoned` (that state arises only
+            // on the cancellation path). On a non-final attempt this is a
+            // per-attempt terminal that the retry driver may still turn into a
+            // later success; on the last permitted attempt it is the node's
+            // terminal state.
             AttemptOutcome::TimedOut => TerminalState::TimedOut,
             // A caught panic is a permanent failure whose terminal state is
-            // `failed` (arch.md Vocabulary: `failed` = "a caught panic"; T3 ADR
-            // §5) — never a distinct `panicked` state (there is none).
+            // `failed` (`failed` = "a caught panic") — never a distinct
+            // `panicked` state (there is none).
             AttemptOutcome::Panicked => TerminalState::Failed,
         }
     }
@@ -338,16 +324,15 @@ impl AttemptOutcome {
     }
 
     /// Whether this outcome is **retry-eligible** — the signal the retry driver
-    /// (T22) acts on. A permanent failure is **never** retry-eligible (arch.md
-    /// C14), and a success or skip is not a failure at all. A
-    /// [`TimedOut`](AttemptOutcome::TimedOut) attempt **is** retry-eligible by
-    /// default (arch.md C14: "Timeout is retry-eligible by default, subject to
-    /// the node's retry budget") — for a blocking/compute node that retry is
-    /// deferred until the previous closure returns (T0.3 ADR §5), which the
+    /// acts on. A permanent failure is **never** retry-eligible, and a success or
+    /// skip is not a failure at all. A [`TimedOut`](AttemptOutcome::TimedOut)
+    /// attempt **is** retry-eligible by default (timeout is retry-eligible by
+    /// default, subject to the node's retry budget) — for a blocking/compute node
+    /// that retry is deferred until the previous closure returns, which the
     /// runner enforces via the [`TimeoutDecision`] barrier, not this predicate.
     /// A [`Panicked`](AttemptOutcome::Panicked) attempt is **never**
-    /// retry-eligible (T23; T3 ADR §4): a caught panic is a permanent failure, so
-    /// the retry loop stops after it with the budget untouched.
+    /// retry-eligible: a caught panic is a permanent failure, so the retry loop
+    /// stops after it with the budget untouched.
     #[must_use]
     pub fn is_retry_eligible(self) -> bool {
         matches!(
@@ -357,11 +342,10 @@ impl AttemptOutcome {
     }
 
     /// Whether this attempt failed (permanent, retry-eligible, timed out, or
-    /// panicked). A skip is **not** a failure (arch.md Vocabulary: `skipped` is
-    /// skip-like), and a success is not. A [`TimedOut`](AttemptOutcome::TimedOut)
-    /// attempt and a [`Panicked`](AttemptOutcome::Panicked) attempt are both
-    /// failure-like (arch.md Vocabulary: `timed-out` and `failed` are
-    /// failure-like).
+    /// panicked). A skip is **not** a failure (`skipped` is skip-like), and a
+    /// success is not. A [`TimedOut`](AttemptOutcome::TimedOut) attempt and a
+    /// [`Panicked`](AttemptOutcome::Panicked) attempt are both failure-like
+    /// (`timed-out` and `failed` are failure-like).
     #[must_use]
     pub fn is_failure(self) -> bool {
         matches!(
@@ -374,36 +358,35 @@ impl AttemptOutcome {
     }
 }
 
-/// Run **one** attempt of one node to a decided outcome (arch.md `### C14`).
+/// Run **one** attempt of one node to a decided outcome.
 ///
-/// This is the single-attempt runner entry point. It drives the C14 order —
+/// This is the single-attempt runner entry point. It drives the ordered steps —
 /// open span, record the admission phase marker, dispatch the work, await the
 /// outcome, classify it, then fill the slot on success or report the classified
 /// failure/skip — emitting the ordered per-transition events plus exactly one
 /// attempt-outcome record through the injected [`AttemptEventSink`].
 ///
-/// - `task` is taken by `&mut self` (C1), the shape that makes sequential
-///   re-runs safe — this call performs **one** attempt; the loop is T22's.
-/// - `node` is the node's author-declared name (C19 records key nodes by name;
+/// - `task` is taken by `&mut self`, the shape that makes sequential re-runs
+///   safe — this call performs **one** attempt; the loop is elsewhere.
+/// - `node` is the node's author-declared name (records key nodes by name;
 ///   `NodeId` is opaque with no route back to a name, so the caller supplies it
 ///   from assembly).
-/// - `ctx` supplies the attempt number and maximum (C8) that appear identically
-///   in the span, the events, and the outcome record, and the attempt span the
+/// - `ctx` supplies the attempt number and maximum that appear identically in
+///   the span, the events, and the outcome record, and the attempt span the
 ///   work observes.
-/// - `slot` is the node's single once-writable output slot (C10 / T17); it is
-///   filled **only** on success and left untouched on any non-success outcome.
-/// - `sink` is the abstract C19 emission port (T24 adapts it to the real
+/// - `slot` is the node's single once-writable output slot; it is filled
+///   **only** on success and left untouched on any non-success outcome.
+/// - `sink` is the abstract emission port (the driver adapts it to the real
 ///   writer; tests capture in memory).
 ///
-/// The work is **already placed** on the correct runtime/thread (T33); this
-/// runner only awaits it. Returns the classified [`AttemptOutcome`].
+/// The work is **already placed** on the correct runtime/thread; this runner
+/// only awaits it. Returns the classified [`AttemptOutcome`].
 ///
 /// # Panics
 ///
-/// This single-attempt core installs **no** `catch_unwind` boundary (that is
-/// T23): a panic in the task's work unwinds through this future. T23 wraps the
-/// boundary that converts a caught panic into [`AttemptOutcome`]'s reserved
-/// `Panicked` variant.
+/// This single-attempt core installs **no** `catch_unwind` boundary: a panic in
+/// the task's work unwinds through this future. A separate boundary converts a
+/// caught panic into [`AttemptOutcome`]'s reserved `Panicked` variant.
 pub async fn run_attempt<T, S>(
     task: &mut T,
     node: &str,
@@ -417,9 +400,9 @@ where
 {
     // A single attempt IS terminal: run the attempt (emitting the opening
     // events + the exactly-one attempt-outcome record) and then, because the
-    // node ends here, emit the node-terminal record. The retry loop (T22)
-    // instead calls the no-terminal helper per attempt and emits *one*
-    // node-terminal record when the loop ends.
+    // node ends here, emit the node-terminal record. The retry loop instead
+    // calls the no-terminal helper per attempt and emits *one* node-terminal
+    // record when the loop ends.
     let outcome = run_one_attempt(task, node, ctx, slot, sink).await;
     emit_node_terminal(node, outcome.terminal_state(), sink);
     outcome
@@ -429,7 +412,7 @@ where
 /// attempt-outcome record**, but **not** the node-terminal record.
 ///
 /// This is the shared body of [`run_attempt`] and the retry loop
-/// ([`run_with_retries`], T22): the loop drives this once per attempt (so each
+/// ([`run_with_retries`]): the loop drives this once per attempt (so each
 /// attempt gets its own outcome record) and emits the single node-terminal
 /// record itself when the loop terminates. Splitting the terminal record out is
 /// what lets a retried node have many attempt-outcome records but exactly one
@@ -448,9 +431,9 @@ where
 {
     let attempt = ctx.attempt();
 
-    // (1) The attempt span is already open on the `RunContext` (C8/C25), keyed
-    // on run/node/attempt — opened before the work runs so everything beneath
-    // it is attributable. (2) Record the informational admission phase marker.
+    // (1) The attempt span is already open on the `RunContext`, keyed on
+    // run/node/attempt — opened before the work runs so everything beneath it
+    // is attributable. (2) Record the informational admission phase marker.
     sink.emit(AttemptEvent::NodeAdmitted { node: node.into() });
 
     // (3) Opening per-transition event, emitted before the work is dispatched.
@@ -460,18 +443,18 @@ where
     });
 
     // (4) Dispatch the already-placed work and await its result. The runner is
-    // runtime-agnostic; the caller's runtime drives this future (T33 places).
+    // runtime-agnostic; the caller's runtime drives this future.
     let result = task.run(ctx, ()).await;
 
     // (5) Classify into the normative taxonomy, and (6) fill the slot on
     // success only.
     let outcome = match result {
         Ok(value) => {
-            // Declared output residency transfers to the slot at fill (C10). A
-            // fresh slot is empty, so this fill succeeds; a refused second fill
-            // would be a framework defect (the runner fills a node's slot at
-            // most once — sequential attempts do not overlap, C1), so a rejected
-            // fill is dropped rather than silently swallowed as success.
+            // Declared output residency transfers to the slot at fill. A fresh
+            // slot is empty, so this fill succeeds; a refused second fill would
+            // be a framework defect (the runner fills a node's slot at most
+            // once — sequential attempts do not overlap), so a rejected fill is
+            // dropped rather than silently swallowed as success.
             let _ = slot.fill(value);
             AttemptOutcome::Succeeded
         }
@@ -496,13 +479,13 @@ where
 /// This is the one place the outcome→record mapping lives, so [`run_attempt`],
 /// [`run_attempt_with_timeout`], and the blocking/compute [`TimeoutDecision`]
 /// mark all emit the *same* records for the *same* outcome (the exactly-one
-/// contract, arch.md C14 / C19). Each outcome maps to exactly one outcome
-/// record: success → `attempt-succeeded`; timeout → `attempt-timed-out`;
-/// panic → `attempt-panicked`; permanent/retry-eligible/skip → `attempt-failed`.
+/// contract). Each outcome maps to exactly one outcome record: success →
+/// `attempt-succeeded`; timeout → `attempt-timed-out`; panic →
+/// `attempt-panicked`; permanent/retry-eligible/skip → `attempt-failed`.
 ///
 /// `panic_message` carries the captured payload for a [`Panicked`](AttemptOutcome::Panicked)
-/// outcome (T23) and is [`None`] for every other outcome; the non-panic callers
-/// (T20/T21/T22) pass [`None`].
+/// outcome and is [`None`] for every other outcome; the non-panic callers pass
+/// [`None`].
 fn emit_closing_events<S>(
     node: &str,
     attempt: u32,
@@ -516,18 +499,18 @@ fn emit_closing_events<S>(
     emit_node_terminal(node, outcome.terminal_state(), sink);
 }
 
-/// Emit **only** the exactly-one attempt-outcome record for one attempt (arch.md
-/// C14 / C19), without the node-terminal record.
+/// Emit **only** the exactly-one attempt-outcome record for one attempt,
+/// without the node-terminal record.
 ///
-/// Split out of [`emit_closing_events`] so the retry loop ([`run_with_retries`],
-/// T22) can emit one outcome record **per attempt** while deferring the *single*
+/// Split out of [`emit_closing_events`] so the retry loop ([`run_with_retries`])
+/// can emit one outcome record **per attempt** while deferring the *single*
 /// node-terminal record to the moment the loop actually terminates — a retried
 /// node has many attempt-outcome records but exactly one node-terminal record.
-/// A single attempt (T20 / T21) composes this with [`emit_node_terminal`] via
+/// A single attempt composes this with [`emit_node_terminal`] via
 /// [`emit_closing_events`], so their behaviour is byte-identical to before.
 ///
 /// `panic_message` is the captured panic payload for a
-/// [`Panicked`](AttemptOutcome::Panicked) outcome (T23); it is [`None`] for every
+/// [`Panicked`](AttemptOutcome::Panicked) outcome; it is [`None`] for every
 /// other outcome. A `Panicked` outcome with no message falls back to the
 /// canonical `"unknown panic"` string.
 fn emit_attempt_outcome_record<S>(
@@ -576,23 +559,21 @@ where
 }
 
 // ===========================================================================
-// C14 · per-attempt timeout (T21)
+// per-attempt timeout
 // ===========================================================================
 //
-// The per-attempt timeout is **runtime-agnostic**, exactly like the T20 core:
-// `dagr-core` adds **no** async-runtime dependency (workspace ADR T1). The runner
-// *races* the attempt future against a **caller-provided deadline future** —
-// whatever future resolves when the per-attempt timeout elapses. In production
-// that deadline is a `tokio::time` sleep armed on the framework's **isolated**
-// runtime (T2 ADR §5), so a saturated task pool cannot disable it (C13); in a
-// unit test it is any controllable pinned-clock future (no runtime needed). The
-// class fork is exactly the one the T0.3 ADR (009 §1) fixed:
+// The per-attempt timeout is **runtime-agnostic**, exactly like the core:
+// `dagr-core` adds **no** async-runtime dependency. The runner *races* the
+// attempt future against a **caller-provided deadline future** — whatever future
+// resolves when the per-attempt timeout elapses. In production that deadline is a
+// `tokio::time` sleep armed on the framework's **isolated** runtime, so a
+// saturated task pool cannot disable it; in a unit test it is any controllable
+// pinned-clock future (no runtime needed). The class fork is:
 //
 // - **await-bound** — the one shape Rust can cancel. On timeout the runner drops
-//   the attempt future (true cancellation, arch.md C14). A permit-shaped guard
-//   moved **into** that future is dropped with it, so the permit releases
-//   **immediately** and no zombie is recorded (T0.3 ADR §1, §2). This is
-//   [`run_attempt_with_timeout`].
+//   the attempt future (true cancellation). A permit-shaped guard moved **into**
+//   that future is dropped with it, so the permit releases **immediately** and no
+//   zombie is recorded. This is [`run_attempt_with_timeout`].
 //
 // - **blocking / compute** — synchronous, unkillable closures. The framework
 //   *cannot* stop the thread, so it **marks** the attempt `timed-out` at once and
@@ -600,21 +581,20 @@ where
 //   *abandoned-but-running* work whose permit is **held until it actually
 //   returns** (observed by the guard dropping when the closure body ends, off the
 //   run loop — never joined synchronously). A retry is deferred until that return
-//   (C1 exclusivity). This is [`TimeoutDecision::mark_blocking_timed_out`].
+//   (exclusivity). This is [`TimeoutDecision::mark_blocking_timed_out`].
 //
-// This ticket owns **only** the per-attempt timeout facet. The retry *loop*
-// (T22), panic containment (T23), the run-loop driver that arms the real timer
-// and adapts the sink (T24), execution-class dispatch that places the closure on
-// the blocking/compute pool (T33), and the concrete admission ledger the permit
-// guard is a stand-in for (T31) are their own tickets.
+// This section owns **only** the per-attempt timeout facet. The retry *loop*,
+// panic containment, the run-loop driver that arms the real timer and adapts the
+// sink, execution-class dispatch that places the closure on the blocking/compute
+// pool, and the concrete admission ledger the permit guard is a stand-in for live
+// elsewhere.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 /// Run one attempt of an **await-bound** node under a per-attempt timeout,
-/// racing its future against a caller-provided `deadline` (T21; arch.md C14
-/// "Timeout semantics differ by class, honestly").
+/// racing its future against a caller-provided `deadline`.
 ///
 /// This is the await-bound half of the per-class timeout — the one shape Rust
 /// can truly cancel. It emits the same admission / `attempt-started` opening as
@@ -627,29 +607,29 @@ use std::task::{Context, Poll};
 ///   guard drops), i.e. on the normal terminal path.
 /// - **the deadline wins** (the attempt exceeds its timeout): the attempt future
 ///   is **dropped** — true cancellation, so the awaited work does not run to
-///   completion — which drops `permit` and releases its cost **immediately**
-///   (T0.3 ADR §1). The node is marked [`AttemptOutcome::TimedOut`]: the
-///   `attempt-timed-out` outcome record and the `timed-out` node-terminal record
-///   are emitted, the slot is **never** filled, and no zombie is recorded (an
-///   await-bound future that is dropped leaves no leftover thread).
+///   completion — which drops `permit` and releases its cost **immediately**.
+///   The node is marked [`AttemptOutcome::TimedOut`]: the `attempt-timed-out`
+///   outcome record and the `timed-out` node-terminal record are emitted, the
+///   slot is **never** filled, and no zombie is recorded (an await-bound future
+///   that is dropped leaves no leftover thread).
 ///
-/// `permit` is any guard whose `Drop` returns its cost to the admission ledger
-/// (C12 / T31); moving it **into** the raced future is what makes future-drop
-/// release the permit for free (the T0.3 ownership trick). A caller that tracks
-/// no permit passes `()`.
+/// `permit` is any guard whose `Drop` returns its cost to the admission ledger;
+/// moving it **into** the raced future is what makes future-drop release the
+/// permit for free (the ownership trick). A caller that tracks no permit passes
+/// `()`.
 ///
 /// # Runtime-agnostic
 ///
 /// No async-runtime dependency is added: the caller's runtime drives this future
 /// and supplies `deadline` (a framework-timer future in production — armed on the
-/// isolated runtime so it fires even when task workers are saturated, C13 — or a
+/// isolated runtime so it fires even when task workers are saturated — or a
 /// pinned-clock future in a unit test). See the [module docs](self).
 ///
 /// # Panics
 ///
-/// Like [`run_attempt`], this installs **no** `catch_unwind` boundary (T23): a
-/// panic in the task's work unwinds through the future. Timeout and panic are
-/// independent facets.
+/// Like [`run_attempt`], this installs **no** `catch_unwind` boundary: a panic in
+/// the task's work unwinds through the future. Timeout and panic are independent
+/// facets.
 pub async fn run_attempt_with_timeout<T, S, D, P>(
     mut task: T,
     node: &str,
@@ -678,8 +658,8 @@ where
 
     // Move `permit` INTO the raced work future so that dropping the work future
     // (the timeout branch below) drops the permit and releases it immediately —
-    // the T0.3 ownership trick for await-bound cancellation. On the normal path
-    // the work future completes and `permit` is dropped when it is consumed here.
+    // the ownership trick for await-bound cancellation. On the normal path the
+    // work future completes and `permit` is dropped when it is consumed here.
     let work = async move {
         let result = task.run(ctx, ()).await;
         drop(permit); // released on the normal terminal path (explicit for clarity)
@@ -711,7 +691,7 @@ where
 {
     match result {
         Ok(value) => {
-            // Fill the once-writable slot (C10). A fresh slot is empty, so this
+            // Fill the once-writable slot. A fresh slot is empty, so this
             // succeeds; a refused fill is a framework defect, so the rejected
             // value is dropped rather than swallowed as success.
             let _ = slot.fill(value);
@@ -793,7 +773,7 @@ impl<A, B> Future for RaceFuture<'_, A, B> {
 }
 
 /// The decision the runner reaches when a **blocking or compute** attempt exceeds
-/// its per-attempt timeout (T21; arch.md C14; T0.3 ADR §1, §4, §5, §6).
+/// its per-attempt timeout.
 ///
 /// Blocking and compute closures are synchronous and **unkillable** — the
 /// framework cannot stop the thread, so it does not pretend to. Constructing a
@@ -805,20 +785,19 @@ impl<A, B> Future for RaceFuture<'_, A, B> {
 ///
 /// - the permit is held until the closure **actually returns** — the caller keeps
 ///   the permit guard alive inside the closure so the guard's drop (on return) is
-///   what releases the cost (C12; T0.3 ADR §2). The runner never joins the
-///   closure synchronously.
+///   what releases the cost. The runner never joins the closure synchronously.
 /// - a **retry is deferred** until the previous closure returns: while the node
 ///   still has a live zombie, [`retry_may_start`](TimeoutDecision::retry_may_start)
 ///   is `false`, preventing the same task instance from running concurrently with
-///   its own zombie (C1 exclusivity; T0.3 ADR §5).
+///   its own zombie (exclusivity).
 /// - a **late-result barrier** ([`barrier`](TimeoutDecision::barrier)) refuses any
 ///   post-timeout slot fill or scratch write, so whatever the abandoned closure
-///   computes after the mark is discarded (T0.3 ADR §4).
+///   computes after the mark is discarded.
 ///
 /// The terminal state is decided **exactly once** — `timed-out` — and never
-/// becomes `abandoned` (that arises only on the cancellation path, C16; T0.3 ADR
-/// §6). A leftover thread still running at process exit is a `zombie-at-exit`
-/// **event** (the driver's, C19 / T24), not a second terminal state.
+/// becomes `abandoned` (that arises only on the cancellation path). A leftover
+/// thread still running at process exit is a `zombie-at-exit` **event** (the
+/// driver's), not a second terminal state.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeoutDecision {
     outcome: AttemptOutcome,
@@ -826,7 +805,7 @@ pub struct TimeoutDecision {
 
 impl TimeoutDecision {
     /// Mark a **blocking or compute** attempt `timed-out` at the moment its
-    /// per-attempt timeout fires (arch.md C14; T0.3 ADR §1).
+    /// per-attempt timeout fires.
     ///
     /// Emits the `attempt-timed-out` outcome record and the `timed-out`
     /// node-terminal record **immediately** — the node's fate is decided now —
@@ -834,8 +813,8 @@ impl TimeoutDecision {
     /// [`TimedOut`](AttemptOutcome::TimedOut) outcome and mints the late-result
     /// [`barrier`](TimeoutDecision::barrier). It does **not** touch the permit or
     /// the slot: the caller holds the permit inside the still-running closure
-    /// (released on the closure's actual return, T0.3 ADR §2) and the barrier
-    /// bars any late fill/scratch.
+    /// (released on the closure's actual return) and the barrier bars any late
+    /// fill/scratch.
     #[must_use]
     pub fn mark_blocking_timed_out<S>(node: &str, ctx: &RunContext, sink: &mut S) -> Self
     where
@@ -850,14 +829,14 @@ impl TimeoutDecision {
     }
 
     /// The classified outcome — always [`AttemptOutcome::TimedOut`], which is
-    /// retry-eligible by default (arch.md C14).
+    /// retry-eligible by default.
     #[must_use]
     pub fn outcome(self) -> AttemptOutcome {
         self.outcome
     }
 
     /// The **late-result barrier** for the abandoned closure: any slot fill or
-    /// scratch write it attempts after the timeout mark is refused (T0.3 ADR §4).
+    /// scratch write it attempts after the timeout mark is refused.
     #[must_use]
     pub fn barrier(self) -> LateResultBarrier {
         LateResultBarrier { _private: () }
@@ -866,14 +845,14 @@ impl TimeoutDecision {
     /// Whether a retry of this timed-out node may begin yet.
     ///
     /// A blocking/compute retry is **deferred until the previous attempt's closure
-    /// has returned** (C1 exclusivity; T0.3 ADR §5) — the alternative is the same
-    /// task instance running concurrently with its own zombie. This returns
-    /// `false` while `zombies` reports a live zombie for the node and `true` once
-    /// the closure has returned (its permit dropped, clearing the zombie).
+    /// has returned** (exclusivity) — the alternative is the same task instance
+    /// running concurrently with its own zombie. This returns `false` while
+    /// `zombies` reports a live zombie for the node and `true` once the closure
+    /// has returned (its permit dropped, clearing the zombie).
     ///
-    /// `zombies` is any observer of the admission ledger's live-zombie state (the
-    /// concrete ledger is T31); the runner consults it rather than joining the
-    /// closure, so a live zombie never blocks the run loop.
+    /// `zombies` is any observer of the admission ledger's live-zombie state; the
+    /// runner consults it rather than joining the closure, so a live zombie never
+    /// blocks the run loop.
     #[must_use]
     pub fn retry_may_start<Z: ZombieObserver + ?Sized>(self, zombies: &Z) -> bool {
         // Timeout is retry-eligible, but only after the zombie has cleared.
@@ -883,27 +862,27 @@ impl TimeoutDecision {
 
 /// Observes whether abandoned-but-running (zombie) work is still live — the
 /// signal that defers a timed-out blocking/compute node's retry until its
-/// previous closure has returned (T0.3 ADR §5).
+/// previous closure has returned.
 ///
-/// The concrete admission ledger (C12 / T31) implements this; the runner reads it
-/// through this narrow port so the timeout facet does not depend on the ledger's
-/// full surface. A retry is barred while [`has_live_zombie`](ZombieObserver::has_live_zombie)
+/// The concrete admission ledger implements this; the runner reads it through
+/// this narrow port so the timeout facet does not depend on the ledger's full
+/// surface. A retry is barred while [`has_live_zombie`](ZombieObserver::has_live_zombie)
 /// is `true`.
 pub trait ZombieObserver {
     /// Whether any abandoned-but-running closure of this node is still live (its
-    /// permit not yet dropped). `true` bars a retry (C1 exclusivity).
+    /// permit not yet dropped). `true` bars a retry (exclusivity).
     fn has_live_zombie(&self) -> bool;
 }
 
 /// The producer-side **late-result barrier** raised at a blocking/compute timeout
-/// mark (arch.md C14; T0.3 ADR §4). A timed-out attempt's closure may run on and
-/// compute a value, but that value must never escape: this barrier refuses any
-/// slot fill and any scratch write the abandoned closure attempts **after** the
-/// mark, so whatever it computes is discarded.
+/// mark. A timed-out attempt's closure may run on and compute a value, but that
+/// value must never escape: this barrier refuses any slot fill and any scratch
+/// write the abandoned closure attempts **after** the mark, so whatever it
+/// computes is discarded.
 ///
-/// This is the *producer-side* mirror of the slot's *consumer-side* zombie rule
-/// (C10 / T17): a timed-out producer cannot fill, just as an abandoned consumer
-/// cannot reclaim.
+/// This is the *producer-side* mirror of the slot's *consumer-side* zombie rule:
+/// a timed-out producer cannot fill, just as an abandoned consumer cannot
+/// reclaim.
 #[derive(Debug, Clone, Copy)]
 pub struct LateResultBarrier {
     // Barred by construction: obtainable only from a `TimeoutDecision`, which
@@ -915,7 +894,7 @@ pub struct LateResultBarrier {
 impl LateResultBarrier {
     /// Attempt to fill `slot` with a late value the abandoned closure produced —
     /// **always refused**. Returns `false` (never filled) and drops `value`, so a
-    /// timed-out attempt never fills its output slot (arch.md C14; T0.3 ADR §4).
+    /// timed-out attempt never fills its output slot.
     ///
     /// The `slot` is taken by shared reference and left **untouched**: the barrier
     /// discards `value` rather than writing it.
@@ -931,8 +910,7 @@ impl LateResultBarrier {
 
     /// Attempt a late scratch write the abandoned closure performs after the
     /// timeout — **always refused**. Returns `false` (nothing written), so no
-    /// scratch value attributable to a timed-out attempt is persisted (arch.md
-    /// C14; T0.3 ADR §4).
+    /// scratch value attributable to a timed-out attempt is persisted.
     #[must_use]
     pub fn write_scratch(&self) -> bool {
         // A timed-out attempt never writes scratch.
@@ -941,15 +919,15 @@ impl LateResultBarrier {
 }
 
 // ===========================================================================
-// C14 · retry with jittered exponential backoff (T22)
+// retry with jittered exponential backoff
 // ===========================================================================
 //
 // This wraps the single-attempt core ([`run_one_attempt`], shared with
-// [`run_attempt`], T20) in a **bounded retry loop**. After each failed attempt
-// the loop consults the outcome classification and either schedules another
-// attempt after a jittered exponential backoff or terminates the node (arch.md
-// C14: "either fill the slot, schedule another attempt after a backoff, or reach
-// a terminal failure"). It re-decides nothing T20/T21 owns: it reuses their
+// [`run_attempt`]) in a **bounded retry loop**. After each failed attempt the
+// loop consults the outcome classification and either schedules another attempt
+// after a jittered exponential backoff or terminates the node (either fill the
+// slot, schedule another attempt after a backoff, or reach a terminal failure).
+// It re-decides nothing the single-attempt/timeout cores own: it reuses their
 // classification ([`AttemptOutcome::is_retry_eligible`]) and event contract, and
 // forks no attempt logic.
 //
@@ -964,35 +942,33 @@ impl LateResultBarrier {
 //   sequence is assertable.
 // - the **backoff wait** is a caller-supplied timer future factory
 //   (`FnMut(Duration) -> impl Future`). The loop only *computes* the delay and
-//   awaits the caller's future — it never reads the system clock. The driver
-//   (T24 / T33) arms a real `tokio::time` sleep on the isolated framework runtime
-//   there; a unit test passes a future that records the delay and resolves at
-//   once. This keeps `dagr-core` runtime-agnostic and dependency-free, exactly as
-//   the T21 timeout race did.
+//   awaits the caller's future — it never reads the system clock. The driver arms
+//   a real `tokio::time` sleep on the isolated framework runtime there; a unit
+//   test passes a future that records the delay and resolves at once. This keeps
+//   `dagr-core` runtime-agnostic and dependency-free, exactly as the timeout race
+//   did.
 //
-// # Retry config now lives in C5 policy; `RetryConfig` is the runner's input (T29)
+// # Retry config lives in the node policy; `RetryConfig` is the runner's input
 //
-// Retry/backoff configuration has exactly **one authoring home** — the C5
-// [`NodePolicy`](crate::assembly::NodePolicy) (T29). [`RetryConfig`] is no longer
-// an independently-authored knob: it is the **derived runner input**
+// Retry/backoff configuration has exactly **one authoring home** — the
+// [`NodePolicy`](crate::assembly::NodePolicy). [`RetryConfig`] is no longer an
+// independently-authored knob: it is the **derived runner input**
 // [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config) produces
 // from the policy's retry count and [`Backoff`] shape, and the attempt runner
 // ([`run_with_retries`]) reads it. Its conservative default is still **no retries**
-// (a single attempt), matching C5's stated default. The defaults hash and the
-// graph-artifact disclosure of the effective policy are the policy's (T29); the
-// concrete artifact schema and BLAKE3 hash are T40/T41.
+// (a single attempt), matching the policy's stated default. The defaults hash and
+// the graph-artifact disclosure of the effective policy are the policy's; the
+// concrete artifact schema and BLAKE3 hash live elsewhere.
 
 use std::time::Duration;
 
-/// An **injectable, deterministic** jitter source for backoff (T22).
+/// An **injectable, deterministic** jitter source for backoff.
 ///
-/// Jitter spreads simultaneous retries so a fan-out does not resynchronize
-/// (arch.md C14: "Backoff delays are jittered, so a fan-out of simultaneous
-/// retries does not resynchronize"). But tests must be reproducible, so the
-/// retry loop reads jitter **only** through this port — never a thread/global
-/// RNG or the system clock. Production passes a seeded PRNG ([`SeededJitter`]);
-/// tests pass a pinned source ([`NoJitter`], or a seeded one for the fan-out
-/// spread test).
+/// Jitter spreads simultaneous retries so a fan-out does not resynchronize. But
+/// tests must be reproducible, so the retry loop reads jitter **only** through
+/// this port — never a thread/global RNG or the system clock. Production passes a
+/// seeded PRNG ([`SeededJitter`]); tests pass a pinned source ([`NoJitter`], or a
+/// seeded one for the fan-out spread test).
 ///
 /// [`next_unit`](Jitter::next_unit) returns the next pseudo-random draw in the
 /// half-open unit interval `[0, 1)`; [`Backoff`] maps it into the jitter window
@@ -1020,10 +996,10 @@ impl Jitter for NoJitter {
 /// A tiny **dependency-free, seeded** PRNG usable as a [`Jitter`] source
 /// (`splitmix64`).
 ///
-/// `dagr-core` is kept dependency-free (arch.md "Stability"), so rather than pull
-/// `rand`/`fastrand` for the default jitter this uses `splitmix64` — a
-/// well-known, small, fast, `unsafe`-free integer generator — to produce the
-/// unit draws. A given seed **replays the identical sequence**, which is what
+/// `dagr-core` is kept dependency-free, so rather than pull `rand`/`fastrand` for
+/// the default jitter this uses `splitmix64` — a well-known, small, fast,
+/// `unsafe`-free integer generator — to produce the unit draws. A given seed
+/// **replays the identical sequence**, which is what
 /// makes the backoff schedule assertable in tests (a distinct seed per node
 /// produces distinct draws, which is what spreads a fan-out).
 ///
@@ -1065,8 +1041,8 @@ impl Jitter for SeededJitter {
     }
 }
 
-/// The **backoff schedule** (T22): exponential in the attempt index, clamped to a
-/// cap, and jittered so a fan-out does not resynchronize (arch.md C14).
+/// The **backoff schedule**: exponential in the attempt index, clamped to a cap,
+/// and jittered so a fan-out does not resynchronize.
 ///
 /// For a 0-based attempt index `n` (the wait *after* the `n`-th failed attempt,
 /// before attempt `n + 1`), the **nominal** delay is `base · factor^n`, clamped
@@ -1080,10 +1056,10 @@ impl Jitter for SeededJitter {
 /// # Why full jitter
 ///
 /// Full jitter (`[0, nominal]`) maximises decorrelation of simultaneous retries
-/// — the property the C14 acceptance criterion "a fan-out of simultaneous
-/// retries does not resynchronize" demands — and keeps the delay bounded above
-/// by the nominal (hence by the cap). The [`Backoff`] shape is carried by the C5
-/// [`NodePolicy`](crate::assembly::NodePolicy) (T29) and read by the runner.
+/// — the property "a fan-out of simultaneous retries does not resynchronize"
+/// demands — and keeps the delay bounded above by the nominal (hence by the
+/// cap). The [`Backoff`] shape is carried by the
+/// [`NodePolicy`](crate::assembly::NodePolicy) and read by the runner.
 #[derive(Debug, Clone, Copy)]
 pub struct Backoff {
     base: Duration,
@@ -1092,7 +1068,7 @@ pub struct Backoff {
 }
 
 // A backoff schedule is a **configuration value** that must sit inside the
-// `Eq`-and-`Hash` [`NodePolicy`] (T29) — but `f64` is not `Eq`/`Hash`. The growth
+// `Eq`-and-`Hash` [`NodePolicy`] — but `f64` is not `Eq`/`Hash`. The growth
 // `factor` is an author-declared constant (never NaN in practice, and a NaN would
 // be a defect either way), so total, deterministic equality over its **bit
 // pattern** is exactly the right choice: it is reflexive, agrees with the
@@ -1126,7 +1102,7 @@ impl Backoff {
 
     /// The schedule's **base** delay (the wait before the first retry, at 0-based
     /// attempt index 0 with no jitter). Read by the policy hash's canonical
-    /// encoding (T0.7) so a backoff change moves the policy hash.
+    /// encoding so a backoff change moves the policy hash.
     #[must_use]
     pub fn base(&self) -> Duration {
         self.base
@@ -1193,42 +1169,42 @@ impl Backoff {
     }
 }
 
-/// The **per-node retry configuration** the attempt runner reads (T22): maximum
+/// The **per-node retry configuration** the attempt runner reads: maximum
 /// attempt count plus the [`Backoff`] schedule, with a conservative default of
 /// **no retries**.
 ///
-/// # Derived from C5 policy — one authoring home (T29)
+/// # Derived from the node policy — one authoring home
 ///
-/// Since T29 this is the **runner's input**, not an independently-authored knob:
+/// This is the **runner's input**, not an independently-authored knob:
 /// [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config) derives
 /// it from the node's policy (retry count → `max_attempts = retries + 1`, plus the
 /// policy's [`Backoff`] shape), so retry configuration lives in exactly one home
-/// (the C5 policy) and the runner reads it from there.
+/// (the policy) and the runner reads it from there.
 ///
 /// # Classification-gated retry
 ///
 /// Only outcomes classified **retry-eligible** ([`AttemptOutcome::is_retry_eligible`]
-/// — a retry-eligible failure or a timeout, arch.md C14) consume the budget and
-/// trigger a backoff. A permanent failure, a deliberate skip, and success end the
-/// loop immediately with no further attempts and no backoff — a permanent error
-/// is never retried regardless of remaining budget.
+/// — a retry-eligible failure or a timeout) consume the budget and trigger a
+/// backoff. A permanent failure, a deliberate skip, and success end the loop
+/// immediately with no further attempts and no backoff — a permanent error is
+/// never retried regardless of remaining budget.
 ///
 /// # Conservative default
 ///
-/// [`RetryConfig::default`] is **one attempt** (no retries) — the C5 stated
+/// [`RetryConfig::default`] is **one attempt** (no retries) — the policy's stated
 /// default ("no retries"). A node with the default config performs exactly one
 /// attempt and then fails on a retry-eligible error, proving the default is
 /// honestly non-retrying.
 ///
-/// # One authoring home in C5 policy (T29)
+/// # One authoring home in the node policy
 ///
-/// Retry + backoff configuration lives in exactly one home — the C5
+/// Retry + backoff configuration lives in exactly one home — the
 /// [`NodePolicy`](crate::assembly::NodePolicy). This `RetryConfig` is the
 /// runner's **derived input**: [`NodePolicy::retry_config`](crate::assembly::NodePolicy::retry_config)
 /// produces it from the policy's retry count (`max_attempts = retries + 1`) and
 /// [`Backoff`] shape, and the attempt runner reads it. The policy owns the
-/// defaults hash and the graph-artifact disclosure of the effective policy (T29);
-/// the concrete artifact schema and BLAKE3 hash are T40/T41.
+/// defaults hash and the graph-artifact disclosure of the effective policy; the
+/// concrete artifact schema and BLAKE3 hash live elsewhere.
 #[derive(Debug, Clone, Copy)]
 pub struct RetryConfig {
     max_attempts: u32,
@@ -1276,10 +1252,10 @@ impl Default for RetryConfig {
     }
 }
 
-/// Run a node through the **bounded retry loop** (T22; arch.md `### C14`).
+/// Run a node through the **bounded retry loop**.
 ///
-/// This is the retry driver that turns the single-attempt runner into what C14
-/// describes: for each attempt in turn it runs the attempt (via the shared
+/// This is the retry driver that turns the single-attempt runner into a full
+/// retry policy: for each attempt in turn it runs the attempt (via the shared
 /// single-attempt core, emitting the opening events and the exactly-one
 /// attempt-outcome record per attempt), then:
 ///
@@ -1287,8 +1263,8 @@ impl Default for RetryConfig {
 ///   immediately; no backoff, no further attempt. (Only success fills the slot.)
 /// - **retry-eligible failure / timeout** — if the budget still has attempts
 ///   left, the loop enters a **named backoff phase** ([`AttemptEvent::BackoffStarted`],
-///   feeding C23 phase timings), waits the jittered exponential delay by awaiting
-///   the caller-provided `timer` future, then dispatches the next attempt; if the
+///   feeding phase timings), waits the jittered exponential delay by awaiting the
+///   caller-provided `timer` future, then dispatches the next attempt; if the
 ///   budget is exhausted, the node reaches its terminal failure (`failed` for a
 ///   retry-eligible failure whose retries ran out, `timed-out` for a timeout on
 ///   the last permitted attempt).
@@ -1305,30 +1281,30 @@ impl Default for RetryConfig {
 ///   nominal schedule.
 /// - `timer` is a caller-supplied factory `FnMut(Duration) -> impl Future<Output = ()>`.
 ///   The loop *computes* the delay and awaits the caller's future; it reads no
-///   system clock. The driver (T24 / T33) arms a real isolated-runtime sleep
-///   there; a test passes a future that records the delay and resolves at once.
+///   system clock. The driver arms a real isolated-runtime sleep there; a test
+///   passes a future that records the delay and resolves at once.
 ///
-/// # C1 exclusivity — no premature re-entry
+/// # Exclusivity — no premature re-entry
 ///
-/// `task` is taken by `&mut self` (C1) and each attempt is `await`ed to
-/// completion **before** the next is dispatched, so attempt `n + 1` never begins
-/// until attempt `n`'s closure has returned — the same task instance is never
-/// running concurrently with a prior attempt. (The await-bound future-drop and
-/// blocking/compute zombie-deferral of a *timed-out* attempt are T21's; this loop
-/// composes with them via the outcome classification and does not re-decide
-/// them.)
+/// `task` is taken by `&mut self` and each attempt is `await`ed to completion
+/// **before** the next is dispatched, so attempt `n + 1` never begins until
+/// attempt `n`'s closure has returned — the same task instance is never running
+/// concurrently with a prior attempt. (The await-bound future-drop and
+/// blocking/compute zombie-deferral of a *timed-out* attempt are the timeout
+/// path's; this loop composes with them via the outcome classification and does
+/// not re-decide them.)
 ///
 /// # Arguments
 ///
-/// - `task` — the node's work, taken by value and driven `&mut` per attempt (C1).
+/// - `task` — the node's work, taken by value and driven `&mut` per attempt.
 /// - `node` — the node's author-declared name (keys every emitted record).
 /// - `run` / `pipeline` — the run and pipeline identities the per-attempt
-///   [`RunContext`] carries (C8); the loop mints a fresh context per attempt with
-///   the incremented attempt number and the configured maximum, so the task
-///   observes which attempt it is on.
-/// - `slot` — the node's single once-writable output slot (C10), filled only on a
+///   [`RunContext`] carries; the loop mints a fresh context per attempt with the
+///   incremented attempt number and the configured maximum, so the task observes
+///   which attempt it is on.
+/// - `slot` — the node's single once-writable output slot, filled only on a
 ///   successful attempt.
-/// - `sink` — the abstract C19 emission port (T24 adapts it; tests capture).
+/// - `sink` — the abstract emission port (the driver adapts it; tests capture).
 /// - `config` — the interim [`RetryConfig`] (max attempts + backoff shape).
 /// - `jitter` — the injected deterministic [`Jitter`] source.
 /// - `timer` — the caller-provided backoff timer factory (the sleeping seam).
@@ -1361,20 +1337,20 @@ where
     let node_id = NodeId::from_name(node);
     let max_attempts = config.max_attempts();
 
-    // Attempt numbers are 1-based (C8); the backoff schedule is 0-based on the
+    // Attempt numbers are 1-based; the backoff schedule is 0-based on the
     // *failed*-attempt index. The loop runs attempt 1..=max_attempts, stopping
     // early on any non-retry-eligible outcome or once the budget is spent.
     let mut attempt: u32 = 1;
     loop {
         // Mint a fresh per-attempt context carrying this attempt number and the
-        // configured maximum (C8), so the task observes which attempt it is on.
+        // configured maximum, so the task observes which attempt it is on.
         let ctx = RunContext::builder(run.clone(), pipeline.clone(), node_id)
             .attempt(attempt)
             .max_attempts(max_attempts)
             .build();
 
         // One attempt end to end (opening events + exactly-one outcome record),
-        // driven `&mut` and awaited to completion before any next attempt (C1).
+        // driven `&mut` and awaited to completion before any next attempt.
         let outcome = run_one_attempt(&mut task, node, &ctx, slot, sink).await;
 
         // Classification-gated: only a retry-eligible outcome with budget left
@@ -1383,7 +1359,7 @@ where
         if outcome.is_retry_eligible() && budget_left {
             // Enter a named backoff phase: compute the jittered exponential delay
             // for this (0-based) failed-attempt index, record it as a distinct
-            // measurable interval (C23), then await the caller's timer future.
+            // measurable interval, then await the caller's timer future.
             let delay = config.backoff().delay_for(attempt - 1, jitter);
             sink.emit(AttemptEvent::BackoffStarted {
                 node: node.into(),
@@ -1407,34 +1383,34 @@ where
 }
 
 // ===========================================================================
-// C14 · panic containment (T23)
+// panic containment
 // ===========================================================================
 //
-// A task that panics must fail **only its own node**, not unwind the run
-// (arch.md C14 *Panics*; T3 ADR §4). This section closes that hole T20 deferred:
-// the attempt boundary catches a panic, converts it to a **permanent** failure
+// A task that panics must fail **only its own node**, not unwind the run. This
+// section closes the hole the single-attempt core deferred: the attempt boundary
+// catches a panic, converts it to a **permanent** failure
 // ([`AttemptOutcome::Panicked`] → [`TerminalState::Failed`], never
 // retry-eligible), captures the panic message, attributes the panic to its node
 // via task-local state, emits exactly one attempt-outcome record
 // ([`AttemptEvent::AttemptPanicked`]), and leaves the output slot empty.
 //
-// It composes with T21 timeout and T22 retry through the shared classification:
-// a `Panicked` outcome is not retry-eligible, so the retry loop
+// It composes with the timeout and retry facets through the shared
+// classification: a `Panicked` outcome is not retry-eligible, so the retry loop
 // ([`run_with_retries_caught`]) stops after the panicking attempt with the
 // budget untouched — the same way a permanent failure ends the loop.
 //
 // # Dependency-free, `unsafe`-free — catching a panic from an *async* future
 //
-// `dagr-core` stays dependency-free (workspace ADR T1), so this does **not** pull
-// the `futures` crate for `CatchUnwind`. Catching a panic from an async task
-// means wrapping the future's **poll** in [`std::panic::catch_unwind`] +
-// [`AssertUnwindSafe`], not just a sync closure — a panic can unwind *during* an
-// `.await`. [`CatchUnwindPoll`] is a small `unsafe`-free adapter over the poll
-// (heap-pinned like T21's `RaceFuture`, hence `Unpin`, so its inner future is
-// polled through safe pin projection). `catch_unwind` is **safe** (no `unsafe`
-// needed); `AssertUnwindSafe` is what lets an ordinary, not-`UnwindSafe` task
-// closure compile at the boundary without forcing every task author to reason
-// about unwind safety (arch.md C14).
+// `dagr-core` stays dependency-free, so this does **not** pull the `futures`
+// crate for `CatchUnwind`. Catching a panic from an async task means wrapping the
+// future's **poll** in [`std::panic::catch_unwind`] + [`AssertUnwindSafe`], not
+// just a sync closure — a panic can unwind *during* an `.await`.
+// [`CatchUnwindPoll`] is a small `unsafe`-free adapter over the poll (heap-pinned
+// like the timeout `RaceFuture`, hence `Unpin`, so its inner future is polled
+// through safe pin projection). `catch_unwind` is **safe** (no `unsafe` needed);
+// `AssertUnwindSafe` is what lets an ordinary, not-`UnwindSafe` task closure
+// compile at the boundary without forcing every task author to reason about
+// unwind safety.
 //
 // # Shared-resource integrity is the resource author's responsibility
 //
@@ -1446,8 +1422,8 @@ where
 // example in `tests/panic_containment.rs`).
 //
 // Not here: the run-loop driver that installs the hook at bootstrap and adapts
-// the sink (T24), execution-class dispatch (T33), and the full permit-release
-// outcome matrix under real pools (T37).
+// the sink, execution-class dispatch, and the full permit-release outcome matrix
+// under real pools.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -1455,16 +1431,15 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Once;
 
 /// The canonical message for a caught panic whose payload is neither a `&str`
-/// nor a `String` (the dagx prior-art normalization T3 adopted).
+/// nor a `String`.
 const UNKNOWN_PANIC: &str = "unknown panic";
 
 thread_local! {
     /// The node whose attempt is currently being polled behind the catch
     /// boundary, on this thread — the task-local attribution the panic hook reads
-    /// to name the panicking node (arch.md C14: "attributes panics to nodes via
-    /// task-local state"). Set by [`NodeAttribution`] for the duration of the
-    /// caught poll and cleared when the guard drops, so it is correct even when
-    /// several attempts run on different threads.
+    /// to name the panicking node. Set by [`NodeAttribution`] for the duration of
+    /// the caught poll and cleared when the guard drops, so it is correct even
+    /// when several attempts run on different threads.
     static CURRENT_NODE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
@@ -1511,8 +1486,8 @@ static FRAMEWORK_HOOK_INSTALLED: std::sync::atomic::AtomicBool =
 static INSTALL_ONCE: Once = Once::new();
 
 /// Install the framework's panic hook, idempotently and safely under concurrent
-/// first-use (arch.md C14: "installs its panic hook once … coexists with the
-/// test harness's own hook").
+/// first-use (installs its panic hook once, coexisting with the test harness's
+/// own hook).
 ///
 /// The hook **chains** to whatever hook was installed before it (including a test
 /// harness's own hook), so installing the framework hook never *replaces* the
@@ -1561,7 +1536,7 @@ fn install_chained_hook() {
         // flight on this thread (task-local state). The attribution is
         // observational here — the outcome record's message is captured at the
         // catch boundary itself; this keeps the chained hook informed and is
-        // where a future logging integration (C25) would attach the node.
+        // where a future logging integration would attach the node.
         let _attributed_node = current_panic_node();
         // Chain to the previously-installed hook so its behaviour (including the
         // test harness's) is preserved — never lost.
@@ -1571,7 +1546,7 @@ fn install_chained_hook() {
 }
 
 /// A future adapter that catches a panic unwinding out of the inner future's
-/// **poll**, yielding `Err(payload)` instead of propagating the unwind (T23).
+/// **poll**, yielding `Err(payload)` instead of propagating the unwind.
 ///
 /// This is the dependency-free, `unsafe`-free equivalent of `futures`'
 /// `CatchUnwind`: it wraps each `poll` in [`std::panic::catch_unwind`] with
@@ -1610,9 +1585,9 @@ impl<T> Future for CatchUnwindPoll<'_, T> {
             return Poll::Pending;
         };
         // Catching the panic from `poll` requires asserting unwind safety — the
-        // load-bearing `AssertUnwindSafe` (arch.md C14): it lets an ordinary,
-        // not-`UnwindSafe` task future compile at this boundary. `catch_unwind`
-        // itself is a **safe** function (no `unsafe`).
+        // load-bearing `AssertUnwindSafe`: it lets an ordinary, not-`UnwindSafe`
+        // task future compile at this boundary. `catch_unwind` itself is a
+        // **safe** function (no `unsafe`).
         match std::panic::catch_unwind(AssertUnwindSafe(|| inner.as_mut().poll(cx))) {
             Ok(Poll::Ready(value)) => {
                 this.inner = None; // completed cleanly — fuse.
@@ -1630,8 +1605,7 @@ impl<T> Future for CatchUnwindPoll<'_, T> {
 }
 
 /// Normalize a caught panic payload to a message string: the `&'static str` or
-/// `String` payload, else the canonical [`UNKNOWN_PANIC`] (the dagx prior-art /
-/// T3 normalization).
+/// `String` payload, else the canonical [`UNKNOWN_PANIC`].
 #[must_use]
 fn panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
@@ -1697,15 +1671,14 @@ where
     outcome
 }
 
-/// Run **one** attempt of one node **with panic containment** (arch.md `### C14`
-/// *Panics*; T23).
+/// Run **one** attempt of one node **with panic containment**.
 ///
 /// This is the panic-catching counterpart of [`run_attempt`]: identical in every
 /// respect except that a panic unwinding out of the task's work is **caught** at
 /// the attempt boundary rather than allowed to unwind the run. A caught panic is
 /// converted to a **permanent** failure ([`AttemptOutcome::Panicked`], never
-/// retry-eligible), maps to the [`TerminalState::Failed`] terminal state (arch.md
-/// Vocabulary: `failed` = "a caught panic"), captures the panic message onto the
+/// retry-eligible), maps to the [`TerminalState::Failed`] terminal state
+/// (`failed` = "a caught panic"), captures the panic message onto the
 /// [`AttemptEvent::AttemptPanicked`] outcome record, attributes the panic to
 /// `node` via task-local state, and leaves the output slot **empty**. A
 /// non-panicking attempt is byte-identical to [`run_attempt`].
@@ -1780,8 +1753,8 @@ where
     outcome
 }
 
-/// Run a node through the **bounded retry loop with panic containment** (arch.md
-/// `### C14`; T22 retry composed with T23 panic containment).
+/// Run a node through the **bounded retry loop with panic containment** (retry
+/// composed with panic containment).
 ///
 /// This is the panic-catching counterpart of [`run_with_retries`]: it drives the
 /// shared *caught* single-attempt core (the panic-catching sibling of
@@ -1795,7 +1768,7 @@ where
 /// exactly as in [`run_with_retries`].
 ///
 /// Every argument mirrors [`run_with_retries`]; see its rustdoc for the
-/// determinism (injected jitter, caller-provided timer future) and C1-exclusivity
+/// determinism (injected jitter, caller-provided timer future) and exclusivity
 /// guarantees, which are unchanged here.
 #[allow(
     clippy::too_many_arguments,
@@ -1855,8 +1828,8 @@ where
     }
 }
 
-/// The compiled panic strategy of a Rust binary (arch.md C14: the binary "checks
-/// its panic strategy at startup and refuses to run under `panic = \"abort\"`").
+/// The compiled panic strategy of a Rust binary: the binary checks its panic
+/// strategy at startup and refuses to run under `panic = "abort"`.
 ///
 /// dagr's panic containment depends on unwinding: under `panic = "abort"` a panic
 /// aborts the process immediately, so there is nothing to catch. The startup
@@ -1873,8 +1846,8 @@ pub enum PanicStrategy {
 }
 
 /// The bootstrap refusal returned by [`check_panic_strategy`] when the binary is
-/// compiled `panic = "abort"` — a **bootstrap-failure** condition (arch.md C14;
-/// the run verbs' bootstrap-failed outcome).
+/// compiled `panic = "abort"` — a **bootstrap-failure** condition (the run verbs'
+/// bootstrap-failed outcome).
 ///
 /// Its [`Display`](std::fmt::Display) message names the exact profile setting the
 /// operator must change (the fix, `panic = "unwind"`), so the operator can act
@@ -1900,8 +1873,8 @@ impl std::fmt::Display for BootstrapRefusal {
 
 impl std::error::Error for BootstrapRefusal {}
 
-/// The **startup panic-strategy check** (arch.md C14; T23): refuse to run under
-/// `panic = "abort"`, permit the unwinding strategy.
+/// The **startup panic-strategy check**: refuse to run under `panic = "abort"`,
+/// permit the unwinding strategy.
 ///
 /// Under `panic = "abort"` a panic aborts the process with no unwinding, so panic
 /// containment is impossible — the binary must refuse to start rather than run in
@@ -1910,8 +1883,8 @@ impl std::error::Error for BootstrapRefusal {}
 /// `panic = "unwind"` in the relevant Cargo profile.
 ///
 /// The unwinding strategy passes silently — the refusal is specific to abort, not
-/// a blanket gate. The driver (T24) calls [`detect_panic_strategy`] then this
-/// check at bootstrap; a test drives it with an explicit [`PanicStrategy`].
+/// a blanket gate. The driver calls [`detect_panic_strategy`] then this check at
+/// bootstrap; a test drives it with an explicit [`PanicStrategy`].
 ///
 /// # Errors
 ///
@@ -1929,11 +1902,11 @@ pub fn check_panic_strategy(strategy: PanicStrategy) -> Result<(), BootstrapRefu
     }
 }
 
-/// Detect the **compiled** panic strategy of the running binary (arch.md C14).
+/// Detect the **compiled** panic strategy of the running binary.
 ///
 /// Rust's `cfg(panic = "...")` reflects the strategy the current crate was
-/// compiled with (`"unwind"` — the default — or `"abort"`). The driver (T24)
-/// calls this at bootstrap and passes the result to [`check_panic_strategy`].
+/// compiled with (`"unwind"` — the default — or `"abort"`). The driver calls
+/// this at bootstrap and passes the result to [`check_panic_strategy`].
 ///
 /// A binary compiled `panic = "abort"` cannot itself *test* this by catching a
 /// panic (it would abort), which is exactly why the check is split: this detects

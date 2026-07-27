@@ -1,24 +1,24 @@
-// UI compile-failure fixture — ticket T5 (018),
+// UI compile-failure fixture,
 // case `typed_handle_non_default_rule_on_data_node`.
 //
-// PROVES (C3, Vocabulary): a node that carries a DATA dependency cannot be given
+// PROVES: a node that carries a DATA dependency cannot be given
 // any trigger rule other than `all-succeeded` — the builder TYPESTATE makes it
 // INEXPRESSIBLE, a COMPILE error rather than a runtime check. The builder starts
 // in a `ConsumesNothing` state where `.trigger_rule(..)` IS offered; binding a
 // data dependency transitions the typestate to `ConsumesData`, a state that
 // deliberately offers NO `trigger_rule` method. Calling it there is a "no method
-// in this state" error (E0599). This is the compile-time enforcement of
-// arch.md's "Data-dependent nodes always use `all-succeeded` (C3), and that
-// restriction is enforced at compile time."
+// in this state" error (E0599). This is the compile-time enforcement of the
+// rule that data-dependent nodes always use `all-succeeded`, and that
+// restriction is enforced at compile time.
 //
-// Wired to the T8 UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
 // names the substrings the diagnostic must contain, and the harness asserts
-// this sample FAILS to compile under the pinned toolchain (C28).
+// this sample FAILS to compile under the pinned toolchain.
 //
 // THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (the real flow builder / node policy lands in T11/T13). It models only the
-// settled T5 typestate decision. The trigger-rule NAMES are the normative
-// Vocabulary set (`all-succeeded` default, `all-terminal`, `any-failed`).
+// (the real flow builder / node policy lands later). It models only the
+// settled typestate decision. The trigger-rule NAMES are the normative
+// closed set (`all-succeeded` default, `all-terminal`, `any-failed`).
 
 #![allow(dead_code)]
 
@@ -38,7 +38,7 @@ impl<T> Clone for Handle<T> {
 }
 impl<T> Copy for Handle<T> {}
 
-// The closed, normative trigger-rule set (arch.md Vocabulary).
+// The closed, normative trigger-rule set.
 enum TriggerRule {
     AllSucceeded,
     AllTerminal,

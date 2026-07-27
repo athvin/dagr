@@ -1,7 +1,7 @@
-//! C12/C26 · **`DAGR_*` env fallbacks + the headroom knob** — integration tests
-//! for ticket T77 (091). Written first, TDD.
+//! **`DAGR_*` env fallbacks + the headroom knob** — integration tests.
+//! Written first, TDD.
 //!
-//! This exercises the T77 wiring half of ADR 089: the opt-in, fallible
+//! This exercises the CLI-side env-fallback wiring: the opt-in, fallible
 //! `RunConfig` env-fallback builder methods (grace / teardown-deadline /
 //! failure-mode), the CLI pool-pinning layer that resolves `DAGR_POOL_*` and
 //! `DAGR_HEADROOM` and hands parsed values to `PinnedPools` /
@@ -17,8 +17,8 @@
 //!
 //! These tests read the **real** `DAGR_*` variable names (the ticket's test plan
 //! names them literally), so every env-mutating test takes a shared process-global
-//! [`ENV_LOCK`] and sets/removes the variable **inside** the guard — the T35-class
-//! hardening: no two tests ever race over the same OS-global variable, even under
+//! [`ENV_LOCK`] and sets/removes the variable **inside** the guard — the
+//! process-global hardening: no two tests ever race over the same OS-global variable, even under
 //! cargo's default parallel runner. Edition 2021, so `set_var`/`remove_var` are
 //! safe.
 

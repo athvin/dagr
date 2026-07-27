@@ -1,18 +1,17 @@
-//! Behavioral tests for the C9 resource registry (ticket T30 / 040). Written
-//! first, TDD: each test mirrors one bullet of the ticket's Test plan. The
-//! registry is dependency injection built in `main` — a type-keyed, immutable,
+//! Behavioral tests for the resource registry. Written first, TDD. The registry
+//! is dependency injection built in `main` — a type-keyed, immutable,
 //! shared-for-the-run map the developer constructs by hand; the framework fetches
 //! nothing from anywhere to populate it.
 //!
-//! Scope note: this exercises **only** C9 (registration, typed acquisition,
-//! newtype disambiguation, ambiguity rejection, secret wrapping, and bootstrap
-//! validation against declared [`ResourceRequirements`], plus reading the
-//! registry through a [`RunContext`]). No concurrency dispatch/admission (T33),
-//! no owning-worker thread (documented only), no artifact rendering (C20/C22).
+//! Scope note: this exercises **only** the registry (registration, typed
+//! acquisition, newtype disambiguation, ambiguity rejection, secret wrapping, and
+//! bootstrap validation against declared [`ResourceRequirements`], plus reading
+//! the registry through a [`RunContext`]). No concurrency dispatch/admission, no
+//! owning-worker thread (documented only), no artifact rendering.
 //!
 //! The compile-time guarantees — the secret wrapper having no `Debug`/`Display`
 //! and the `Send + Sync + 'static` bound on stored resources — are covered by the
-//! T8 compile-fail harness (`tests/ui/secret_no_debug.rs`,
+//! compile-fail harness (`tests/ui/secret_no_debug.rs`,
 //! `tests/ui/secret_no_display.rs`, `tests/ui/registry_non_send_resource.rs`),
 //! not here; a runtime test cannot assert the *absence* of a trait impl.
 
@@ -28,9 +27,9 @@ use dagr_core::task::Task;
 use dagr_core::{PipelineId, RunId, TaskError};
 
 /// Drive a future to completion on the current thread with no runtime — the same
-/// no-op-waker busy-poll the C8/C28 task tests use (`Waker::noop`, stable since
-/// 1.85, within MSRV). The task futures here do no I/O, so one poll completes
-/// them; the real runner is C14 / T20.
+/// no-op-waker busy-poll the task tests use (`Waker::noop`, stable since 1.85,
+/// within MSRV). The task futures here do no I/O, so one poll completes them; the
+/// real runner lives elsewhere.
 fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
@@ -58,8 +57,7 @@ struct DbPool {
 }
 
 /// The underlying HTTP client type shared by two logically-distinct resources —
-/// distinguished only by the newtype wrappers below (the C9 disambiguation
-/// pattern).
+/// distinguished only by the newtype wrappers below (the disambiguation pattern).
 #[derive(Debug, PartialEq, Eq)]
 struct HttpClient {
     base_url: String,
@@ -219,12 +217,12 @@ fn a_built_registry_is_shared_read_only() {
     );
 }
 
-// === Backward-compat with T16 ==============================================
+// === Backward-compat: the empty registry ===================================
 
-/// **Empty registry (T16 back-compat).** The honest-empty registry T16's
-/// [`RunContext`] carries still behaves exactly as before: `get` is `None` for
-/// every type and `is_empty` is `true`. The default and the builder's
-/// zero-registration build agree.
+/// **Empty registry back-compat.** The honest-empty registry the [`RunContext`]
+/// carries still behaves exactly as before: `get` is `None` for every type and
+/// `is_empty` is `true`. The default and the builder's zero-registration build
+/// agree.
 #[test]
 fn the_empty_registry_still_behaves_as_before() {
     let default_registry = ResourceRegistry::default();
@@ -374,7 +372,7 @@ fn a_missing_declared_resource_fails_bootstrap_naming_the_resource_and_nodes() {
 /// resource condition yields a bootstrap-failure outcome (distinct from an
 /// assembly failure), carrying the resource-validation error in its error list,
 /// with **zero attempts recorded** — no node executed. The outcome is a value the
-/// downstream artifact emitter (C20/C22) renders; this ticket only produces it.
+/// downstream artifact emitter renders; this suite only produces it.
 #[test]
 fn a_missing_resource_produces_the_bootstrap_failure_artifact_with_zero_attempts() {
     let registry = ResourceRegistry::default(); // registers nothing
@@ -433,7 +431,7 @@ fn all_requirements_satisfied_passes_validation() {
 
 /// **Declared requirements are surfaced.** The declared requirements — resource
 /// type name and requiring node — are enumerable in a stable form so a downstream
-/// graph-artifact test (C20) can assert they appear. Surfacing does not depend on
+/// graph-artifact test can assert they appear. Surfacing does not depend on
 /// whether they are satisfied.
 #[test]
 fn declared_requirements_are_surfaced_for_artifact_emission() {
@@ -477,8 +475,8 @@ const SENTINEL: &str = "S3CR3T-SENTINEL-9c1f-do-not-log";
 /// sentinel through a framework-controlled emission path exercised here — the
 /// wrapper's `Debug` (used by any framework diagnostic path) is redacted, so
 /// formatting the *registry contents* never surfaces the sentinel. (Full
-/// framework-emitted log-line redaction is C25/T45; this establishes the wrapper
-/// and the sentinel hook.)
+/// framework-emitted log-line redaction lives elsewhere; this establishes the
+/// wrapper and the sentinel hook.)
 #[test]
 fn a_secret_sentinel_never_appears_in_a_framework_emission_path() {
     let secret = Secret::new(SENTINEL.to_string());

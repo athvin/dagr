@@ -1,10 +1,10 @@
-//! C11 · termination property — the **driver-level** half, ticket T25 (035).
+//! Termination property — the **driver-level** half.
 //!
 //! The deep, high-case-count termination property lives in
-//! `crates/core/tests/termination_property.rs`, driving the pure C11 tracker
-//! directly (deterministic, fast, no runtime). This companion suite closes the
-//! T25 definition-of-done requirement that each case also runs through the **real
-//! T24 run loop against fakes** — `dagr_cli::driver::drive` — so the full
+//! `crates/core/tests/termination_property.rs`, driving the pure termination
+//! tracker directly (deterministic, fast, no runtime). This companion suite closes
+//! the requirement that each case also runs through the **real
+//! run loop against fakes** — `dagr_cli::driver::drive` — so the full
 //! admit/spawn/feed-back loop (two tokio runtimes, the event-stream writer, the
 //! bounded zombie wait) is proven to terminate on random shapes too, not just the
 //! tracker in isolation.
@@ -14,7 +14,7 @@
 //! tracker suite carries the meaningful volume). Each generated DAG is built
 //! through the same real typed `Flow` builder, every node scripted to its assigned
 //! outcome via a fake [`NodeRunner`], and admission is capacity-pinned by
-//! construction — the M1 driver admits every ready node (no pool, C31 is T31), so
+//! construction — this driver admits every ready node (no pool), so
 //! results never depend on host resources. The assertions: the drive **returns**
 //! (does not hang — a hang is the deadlock this property forbids), the event
 //! stream ends with exactly one `run-finished`, and every node records exactly one
@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // ===========================================================================
-// A capturing in-memory sink + monotonic clock (C19 injection seam).
+// A capturing in-memory sink + monotonic clock (the injection seam).
 // ===========================================================================
 
 #[derive(Clone, Default)]
@@ -280,7 +280,7 @@ fn build_pipeline(case: &Case) -> Pipeline {
 //
 // The tracker admits a node only once its upstreams satisfied its `all-succeeded`
 // rule, so a fake runner that simply returns the scripted terminal is a faithful
-// fake (the C28 direction): it exercises the real driver loop (admission, spawn,
+// fake: it exercises the real driver loop (admission, spawn,
 // mpsc feed-back, writer drain, run-end condition) without needing real task
 // bodies or slot reads. Data-consuming nodes only run when every upstream
 // succeeded, so no scripted outcome contradicts the graph invariant.
@@ -365,10 +365,10 @@ fn is_taxonomy(state: TerminalState) -> bool {
 // The driver-level termination sweep.
 // ===========================================================================
 
-/// Over a small fixed set of random DAGs, driving each through the **real** T24
+/// Over a small fixed set of random DAGs, driving each through the **real**
 /// run loop with fake scripted runners: every `drive` returns (no hang — a hang is
 /// the deadlock this forbids), the stream ends with exactly one `run-finished`, and
-/// every node records exactly one taxonomy terminal state. (C11 — driven for real.)
+/// every node records exactly one taxonomy terminal state (driven for real).
 #[test]
 fn generated_runs_terminate_through_the_real_driver() {
     const BASE_SEED: u64 = 0x5EED_10AD_D46C_11E5;

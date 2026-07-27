@@ -1,47 +1,45 @@
-//! **M2 demo · part 1 — overcommit completes without exceeding capacity** —
-//! ticket T38 (049). Written first, TDD. **This is half of the M2 gate: the
-//! spec's "It survives" done-when for the overcommit path, executed in CI.**
+//! **Demo · part 1 — overcommit completes without exceeding capacity.** Written
+//! first, TDD. **This is half of the gate: the spec's "It survives" done-when for
+//! the overcommit path, executed in CI.**
 //!
-//! arch.md's **Build order** states M2 is *done when a pipeline whose combined
-//! declared demand exceeds the configured memory capacity completes without
-//! exceeding it* (the clean-stop half lives in `m2_demo_clean_stop.rs`). This file
-//! is the overcommit proof: a pipeline of parallel-ready nodes whose **combined**
-//! declared working-memory cost strictly exceeds a **pinned** memory-pool capacity
-//! `M`, while every **single** node's declared cost fits under `M`, driven through
-//! the **real** T24 run-loop driver ([`dagr_cli::driver::drive`]) with the memory
-//! pool pinned via the T32 [`PoolCapacities`] flag so the ceiling is deterministic
-//! on any runner.
+//! The "It survives" done-when is *a pipeline whose combined declared demand exceeds
+//! the configured memory capacity completes without exceeding it* (the clean-stop
+//! half lives in `m2_demo_clean_stop.rs`). This file is the overcommit proof: a
+//! pipeline of parallel-ready nodes whose **combined** declared working-memory cost
+//! strictly exceeds a **pinned** memory-pool capacity `M`, while every **single**
+//! node's declared cost fits under `M`, driven through the **real** run-loop driver
+//! ([`dagr_cli::driver::drive`]) with the memory pool pinned via the
+//! [`PoolCapacities`] flag so the ceiling is deterministic on any runner.
 //!
 //! # What the demo exercises (composes merged components — adds no capability)
 //!
 //! This is a **feature (demo)** ticket: it composes already-merged components and
 //! adds **zero** engine capability. Everything it drives is real:
 //!
-//! - the **admission controller** (C12 / T31) that turns the memory ceiling into a
-//!   throughput limit — the driver admits a ready node only when its declared cost
-//!   fits every pool's remaining capacity, so the combined admitted cost never
-//!   exceeds `M`;
-//! - the **T32 pinning flag** ([`RunConfig::capacities`] → [`PoolCapacities::memory`])
+//! - the **admission controller** that turns the memory ceiling into a throughput
+//!   limit — the driver admits a ready node only when its declared cost fits every
+//!   pool's remaining capacity, so the combined admitted cost never exceeds `M`;
+//! - the **pinning flag** ([`RunConfig::capacities`] → [`PoolCapacities::memory`])
 //!   that overrides cgroup/host detection so the ceiling is a fixed demo value,
 //!   portable across CI runners (this ticket only *exercises* the flag — the cgroup
-//!   v2/v1/host probing itself is T32's and is out of scope here);
-//! - the **single-oversized-node bootstrap rejection** (C12 / T32): a node whose
-//!   declared cost exceeds `M` fails fast at **bootstrap**, before any node is
-//!   admitted, with the `bootstrap-failed` outcome — never wedged at admission.
+//!   v2/v1/host probing itself is out of scope here);
+//! - the **single-oversized-node bootstrap rejection**: a node whose declared cost
+//!   exceeds `M` fails fast at **bootstrap**, before any node is admitted, with the
+//!   `bootstrap-failed` outcome — never wedged at admission.
 //!
 //! # How "never exceeds `M`" is observed without reaching into the driver
 //!
 //! The driver **owns** its [`AdmissionController`] internally and does not hand it
 //! out, so the demo cannot poll the ledger directly. Instead it observes the
 //! *effect* of admission with a **task-side concurrency probe**, the same
-//! observable-signal discipline the merged T34/T35 tests use (no wall clock, no
+//! observable-signal discipline the merged run-loop tests use (no wall clock, no
 //! sleep): every overcommit task, keyed off a shared [`Concurrency`] meter,
 //! increments an admitted-count on entry and decrements it on return, and records
 //! the **peak** count concurrently admitted. Because every overcommit node declares
 //! the **same** honest per-node cost `PER`, the combined declared cost of the nodes
 //! admitted at any instant is exactly `peak_concurrency · PER`, and asserting
-//! `peak_concurrency · PER <= M` is exactly the C12 capacity invariant *"the
-//! combined declared cost of executing nodes never exceeds pool capacity"* observed
+//! `peak_concurrency · PER <= M` is exactly the capacity invariant *"the combined
+//! declared cost of executing nodes never exceeds pool capacity"* observed
 //! end-to-end. A regression that admitted all nodes at once (a broken ceiling)
 //! would push `peak_concurrency` to `N` and the product past `M`, which the
 //! assertion bites on.
@@ -60,20 +58,21 @@
 //!
 //! # Determinism (pinned ceiling on any runner)
 //!
-//! Capacity is pinned to fixed demo values via the T32 flag, so the terminal-state
-//! picture and the pass/fail verdict are identical regardless of the runner's real
-//! cgroup/host memory — the pinning overrides detection. Admission is decided by
-//! **counts** (a pinned pool + declared costs), never by sleeps or a wall clock, so
-//! the concurrency probe's peak is bounded deterministically. The tasks cooperate
-//! through a shared gate so the peak is *reliably* driven up to the pool's real
-//! headroom under `--test-threads` variation, without ever exceeding it.
+//! Capacity is pinned to fixed demo values via the pinning flag, so the
+//! terminal-state picture and the pass/fail verdict are identical regardless of the
+//! runner's real cgroup/host memory — the pinning overrides detection. Admission is
+//! decided by **counts** (a pinned pool + declared costs), never by sleeps or a wall
+//! clock, so the concurrency probe's peak is bounded deterministically. The tasks
+//! cooperate through a shared gate so the peak is *reliably* driven up to the pool's
+//! real headroom under `--test-threads` variation, without ever exceeding it.
 //!
-//! # Scope (T38 — integration demo only)
+//! # Scope (integration demo only)
 //!
 //! Adds **no** framework surface. It does not re-prove the per-outcome permit-release
-//! matrix (T37) or the two-concurrent-runs guarantee (T67) — it consumes their
-//! invariants. It asserts terminal states, ledger balance (all pools full at end),
-//! and the capacity invariant; it renders nothing (artifacts/diagrams are M3, C20–C25).
+//! matrix or the two-concurrent-runs guarantee — it consumes their invariants. It
+//! asserts terminal states, ledger balance (all pools full at end), and the capacity
+//! invariant; it renders nothing (artifacts/diagrams are a separate concern —
+//! explaining a run from artifacts).
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -104,8 +103,8 @@ const PER: u64 = 300;
 /// node's cost `PER` fits under `M`.
 const N: u64 = 5;
 
-/// The **pinned** memory-pool capacity, in bytes (the T32 flag value). Chosen so
-/// that:
+/// The **pinned** memory-pool capacity, in bytes (the capacity-pinning flag value).
+/// Chosen so that:
 /// - `N · PER` (= 1500) strictly exceeds `M` — the run is genuinely overcommitted;
 /// - `PER` (= 300) fits under `M` — every single node can be admitted;
 /// - `floor(M / PER)` (= 3) is strictly below `N` (= 5) — the ceiling is *binding*:
@@ -118,7 +117,7 @@ const M: u64 = 900;
 const MAX_COFIT: u64 = M / PER; // = 3
 
 // ===========================================================================
-// A capturing in-memory sink + monotonic clock (the C19 injection seam)
+// A capturing in-memory sink + monotonic clock (the event-stream injection seam)
 // ===========================================================================
 
 /// An in-memory [`EventSink`] — the driver writes its stream here so the demo can
@@ -165,8 +164,8 @@ impl MonotonicClock for TickClock {
 /// The whole overcommit proof rests on this: because every node declares the same
 /// cost `PER`, the combined declared cost of the nodes admitted at any instant is
 /// `live · PER`, so `peak · PER` is the high-water combined admitted demand — which
-/// C12 promises never exceeds `M`. It is a plain integer meter (no wall clock), so
-/// the reading is deterministic.
+/// admission control promises never exceeds `M`. It is a plain integer meter (no
+/// wall clock), so the reading is deterministic.
 #[derive(Default)]
 struct Concurrency {
     live: AtomicU64,
@@ -227,7 +226,7 @@ impl Task for OvercommitTask {
 }
 
 // ===========================================================================
-// A type-erased source runner over the real C14 caught attempt path
+// A type-erased source runner over the real caught attempt path
 // ===========================================================================
 
 struct SourceRunner {
@@ -406,8 +405,8 @@ struct Overcommit {
 
 /// Build `N` independent (zero-dependency) parallel-ready source nodes, each
 /// declaring `PER` bytes of working memory, and drive them through the real driver
-/// with the memory pool **pinned to `M`** via the T32 flag. Every node shares one
-/// [`Concurrency`] meter so the peak concurrent admission is observable.
+/// with the memory pool **pinned to `M`** via the capacity-pinning flag. Every node
+/// shares one [`Concurrency`] meter so the peak concurrent admission is observable.
 fn drive_overcommit() -> Overcommit {
     let meter = Arc::new(Concurrency::default());
 
@@ -456,9 +455,9 @@ fn drive_overcommit() -> Overcommit {
 
 /// The overcommit pipeline's **combined** declared cost strictly exceeds the pinned
 /// capacity while each single node fits, and it completes with every node
-/// `succeeded` — the ceiling became a throughput limit, not a crash (arch.md C12;
-/// M2 done-when). And at the observed peak, the combined admitted declared cost
-/// never exceeded `M`.
+/// `succeeded` — the ceiling became a throughput limit, not a crash (the
+/// "It survives" done-when).
+/// And at the observed peak, the combined admitted declared cost never exceeded `M`.
 #[test]
 fn overcommit_completes_and_combined_admitted_cost_never_exceeds_capacity() {
     // The pipeline is genuinely overcommitted, each single node fits, and the
@@ -527,10 +526,10 @@ fn overcommit_completes_and_combined_admitted_cost_never_exceeds_capacity() {
 // ===========================================================================
 
 /// Capacity is genuinely binding, not incidentally sufficient: at least one node
-/// could not be co-admitted with the others and observably waited for a permit
-/// (arch.md C12). The deterministic, count-based proxy for "recorded permit-wait is
-/// nonzero" is `peak_concurrency < N` — the peak admitted concurrency is strictly
-/// below the node count, so at least one admission was serialized behind a release.
+/// could not be co-admitted with the others and observably waited for a permit. The
+/// deterministic, count-based proxy for "recorded permit-wait is nonzero" is
+/// `peak_concurrency < N` — the peak admitted concurrency is strictly below the node
+/// count, so at least one admission was serialized behind a release.
 #[test]
 fn capacity_is_binding_at_least_one_admission_serialized() {
     let run = drive_overcommit();
@@ -562,9 +561,9 @@ fn capacity_is_binding_at_least_one_admission_serialized() {
 
 /// A node whose declared cost exceeds the pinned pool's total capacity `M` fails at
 /// **bootstrap**, before any node is admitted, with the `bootstrap-failed` outcome
-/// and no attempt records — the fail-fast path, not a wedged admission queue
-/// (arch.md C12 / T32). The demo confirms the bootstrap-failure artifact is
-/// produced (run-started then a bootstrap-failed run-finished).
+/// and no attempt records — the fail-fast path, not a wedged admission queue. The
+/// demo confirms the bootstrap-failure artifact is produced (run-started then a
+/// bootstrap-failed run-finished).
 #[test]
 fn a_single_oversized_node_fails_fast_at_bootstrap() {
     // One node demands `M + 1` (strictly over the pinned pool total → can never
@@ -660,7 +659,7 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
     );
 
     // --- DoD #4 (literal clause): the bootstrap failure NAMES the offending node
-    // AND the pool. The node/pool identity does not travel on the C19 stream (the
+    // AND the pool. The node/pool identity does not travel on the event stream (the
     // `run-finished` body carries only `{ "outcome": "bootstrap-failed" }`) nor on
     // the `RunReport`; the driver surfaces it by rendering the very
     // `CapacityBootstrapFailure` that `detect_capacities` returns (driver::drive:
@@ -712,9 +711,9 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
 // ===========================================================================
 
 /// The overcommit demo produces the same terminal-state picture and the same
-/// pass/fail verdict across repetitions, because the T32 pinning flag overrides
+/// pass/fail verdict across repetitions, because the capacity-pinning flag overrides
 /// detection so the ceiling is a fixed value independent of the runner's real
-/// cgroup/host memory (arch.md C12; M2 test plan: deterministic on any runner).
+/// cgroup/host memory (this test's plan: deterministic on any runner).
 #[test]
 fn overcommit_is_deterministic_under_the_pinned_ceiling() {
     for _ in 0..3 {

@@ -1,36 +1,36 @@
-//! Positive (compiles) ordering-edge fixtures — ticket T0.9 (015).
+//! Positive (compiles) ordering-edge fixtures.
 //!
 //! These are the POSITIVE counterparts to the two compile-fail cycle fixtures in
 //! [`tests/ui/`](./ui): where those prove a misuse fails to compile, THIS file's
-//! very compilation is the assertion. It cannot live in `tests/ui/` — the T8 UI
+//! very compilation is the assertion. It cannot live in `tests/ui/` — the UI
 //! harness ([`tests/ui.rs`](./ui.rs)) asserts every `tests/ui/*.rs` sample FAILS
 //! to compile, so a positive sample there would break it. A normal integration
 //! test compiled by `cargo test --workspace` is the right home: if a future
 //! regression accidentally couples the value type into ordering, or gives an
 //! ordering-only node a bound value, this file fails to compile and the change
-//! fails review — exactly the guard T0.9's Test plan asks for.
+//! fails review — exactly the guard this file exists to provide.
 //!
 //! THROWAWAY SKETCHES, NOT dagr's real authoring API. Handles, the flow builder,
 //! ordering-edge declaration, and the ordering-only "receives no value" shape
-//! are IMPLEMENTED by T13 (builder / node identity) and T50 (ordering edges).
-//! These sketches model only the settled C4 mechanics this ADR locks:
+//! are implemented by the real builder and ordering-edge surfaces. These
+//! sketches model only the settled ordering mechanics:
 //!
 //!   * `ordering_edge_any_value_type_ok` — an ordering edge is TYPE-ERASED: a
 //!     handle of ANY `T` is an acceptable ordering upstream, and mixing ordering
-//!     upstreams of DIFFERENT value types is legal (arch.md C4).
+//!     upstreams of DIFFERENT value types is legal.
 //!   * `data_plus_ordering_and_ordering_only` — a node may carry BOTH a data
 //!     dependency and additional ordering edges, and a node attached ONLY by
 //!     ordering edges RECEIVES NO VALUE (its body input is `()`), distinguishing
-//!     it from a data-dependent node whose body sees the bound value (arch.md C4).
+//!     it from a data-dependent node whose body sees the bound value.
 
 use std::marker::PhantomData;
 
-/// A node's identity (mirrors C2 · Handle: identity comes from the node, not its
+/// A node's identity (mirrors the handle: identity comes from the node, not its
 /// value type). An ordering edge references this identity, never the value type.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct NodeId(u32);
 
-/// A typed claim on a value that does not exist yet (mirrors C2 · Handle). The
+/// A typed claim on a value that does not exist yet (mirrors the handle). The
 /// handle carries the node's IDENTITY (`id`) and the value type `T`; the value
 /// type is IGNORED by ordering edges.
 #[derive(Clone, Copy)]
@@ -40,7 +40,7 @@ struct Handle<T> {
 }
 
 /// A type-erased ordering upstream. It keeps the node's IDENTITY but drops the
-/// value type: an ordering edge constrains SEQUENCE, not DATA (C4). This is what
+/// value type: an ordering edge constrains SEQUENCE, not DATA. This is what
 /// makes mixing ordering upstreams of different value types legal.
 #[derive(Clone, Copy)]
 struct OrderingHandle(NodeId);
@@ -113,7 +113,7 @@ impl Flow {
     }
 
     /// A node attached ONLY by ordering edges: NO typed input; its body input is
-    /// `()` — it RECEIVES NO VALUE (C4).
+    /// `()` — it RECEIVES NO VALUE.
     fn register_ordering_only<Out>(
         &mut self,
         _ordering: &[OrderingHandle],

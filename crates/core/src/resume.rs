@@ -1,5 +1,4 @@
-//! C27 · **Resume core** — the pure gate + seed/closure/demand plan algorithm
-//! (arch.md `### C27 · Resume`; ticket T58).
+//! **Resume core** — the pure gate + seed/closure/demand plan algorithm.
 //!
 //! # What this module owns
 //!
@@ -15,10 +14,10 @@
 //! back a [`ResumePlan`] or a [`ResumeRefusal`]. Reading the prior run artifact,
 //! deriving parameters/interval, the run-store-gone refusal, and producing the
 //! resumed artifact recording — everything needing serde or the run store — is the
-//! **CLI**'s (`dagr_cli::contract`), which wires this plan behind the T55 `resume`
+//! **CLI**'s (`dagr_cli::contract`), which wires this plan behind the `resume`
 //! verb.
 //!
-//! # The gate (arch.md C27, "first verify")
+//! # The gate ("first verify")
 //!
 //! Before any planning, [`plan_resume`] verifies the prior run against this
 //! binary, each failure a **distinct** refusal:
@@ -38,12 +37,12 @@
 //! timeout and resuming the expensive half-finished run is the motivating case):
 //! it is surfaced as [`ResumePlan::policy_diff`] and the plan proceeds.
 //!
-//! # The demand-driven algorithm (arch.md C27, three steps)
+//! # The demand-driven algorithm (three steps)
 //!
 //! 1. **Seed** — every node whose prior terminal state was not `succeeded`, plus
-//!    every node covered by a teardown that executed in the prior run (C17: a
-//!    teardown may have destroyed the node's durable output, so it is not
-//!    resume-safe), plus any pipeline node the prior run has no record for.
+//!    every node covered by a teardown that executed in the prior run (a teardown
+//!    may have destroyed the node's durable output, so it is not resume-safe),
+//!    plus any pipeline node the prior run has no record for.
 //! 2. **Close downward** — everything reachable from the seed re-runs (a node
 //!    re-runs when any of its data or ordering upstreams re-runs).
 //! 3. **Resolve demand upward** — a re-running node demands the values of its
@@ -58,23 +57,23 @@
 //! stands (the cleanup-after-publish shape). Resuming a fully successful run has an
 //! empty seed and is a no-op.
 //!
-//! # The in-memory-producer pressure (arch.md C27, stated plainly to developers)
+//! # The in-memory-producer pressure (stated plainly to developers)
 //!
 //! Nodes whose outputs were **in-memory** values cannot be rehydrated: the moment
 //! a re-running consumer demands their value, they re-execute, and their demands
 //! cascade upward. This is a genuine property of the design, not a bug — it
 //! creates useful pressure to make expensive stage boundaries produce **durable,
-//! addressable** outputs (C10 authoring guidance). If your expensive producer's
-//! output is in-memory, a downstream re-run forces the producer to re-run too;
-//! mark it durable to be satisfied-from-prior and rehydrated instead.
+//! addressable** outputs. If your expensive producer's output is in-memory, a
+//! downstream re-run forces the producer to re-run too; mark it durable to be
+//! satisfied-from-prior and rehydrated instead.
 //!
-//! # Out of scope (T54b / T59, permanent non-goals)
+//! # Out of scope (permanent non-goals)
 //!
-//! Scratch **carry-forward** for re-executing nodes is T54b — this plan only
-//! surfaces [which nodes re-execute](ResumePlan::must_run) so T54b can copy their
-//! retained scratch forward. The exhaustive behavioural suite is T59. Resume never
-//! re-plans a *different* graph, never backfills, never schedules — those are
-//! permanent scope boundaries.
+//! Scratch **carry-forward** for re-executing nodes is handled elsewhere — this
+//! plan only surfaces [which nodes re-execute](ResumePlan::must_run) so that
+//! carry-forward can copy their retained scratch forward. Resume never re-plans a
+//! *different* graph, never backfills, never schedules — those are permanent
+//! scope boundaries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -88,12 +87,12 @@ pub struct PriorNode {
     /// The node's terminal state in the prior run. `succeeded` is the only state
     /// that can be carried forward; anything else seeds re-execution.
     pub terminal: TerminalState,
-    /// The durable reference the node's succeeded attempt recorded, if any
-    /// (C27/T57). `None` for a non-durable node — an in-memory value that cannot
-    /// be rehydrated.
+    /// The durable reference the node's succeeded attempt recorded, if any.
+    /// `None` for a non-durable node — an in-memory value that cannot be
+    /// rehydrated.
     pub durable_reference: Option<String>,
-    /// The run identity this node's success **originated** in (C22/C27). For a
-    /// node that ran in the prior run this is the prior run's own id; for a node
+    /// The run identity this node's success **originated** in. For a node that
+    /// ran in the prior run this is the prior run's own id; for a node
     /// the prior run itself carried `satisfied-from-prior`, it is the earlier
     /// originating run, so the identity is carried forward across generations.
     pub originating_run: String,
@@ -103,14 +102,14 @@ pub struct PriorNode {
 /// serde-free input the CLI assembles from the prior run artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PriorRun {
-    /// The prior run's recorded **structural fingerprint** (C21). Compared against
-    /// this binary's; a mismatch refuses ([`ResumeRefusal::StructuralMismatch`]).
+    /// The prior run's recorded **structural fingerprint**. Compared against this
+    /// binary's; a mismatch refuses ([`ResumeRefusal::StructuralMismatch`]).
     pub structural_fingerprint: u64,
-    /// The prior run's recorded **policy hash** (C21). A divergence is a
+    /// The prior run's recorded **policy hash**. A divergence is a
     /// proceed-with-diff, never a refusal.
     pub policy_hash: u64,
-    /// The fingerprint **algorithm version** the prior hashes were computed under
-    /// (C21). Incomparable to this binary's is the "cannot compare" refusal.
+    /// The fingerprint **algorithm version** the prior hashes were computed under.
+    /// Incomparable to this binary's is the "cannot compare" refusal.
     pub algorithm_version: u64,
     /// The **tool version** that recorded the prior run. v1 makes no
     /// cross-tool-version resume promise (a mismatch refuses).
@@ -119,8 +118,8 @@ pub struct PriorRun {
     pub nodes: BTreeMap<String, PriorNode>,
 }
 
-/// The outcome of a cheap **existence probe** of a durable reference (arch.md
-/// C27; T0.8 ADR §7): is the prior durable output still there?
+/// The outcome of a cheap **existence probe** of a durable reference: is the
+/// prior durable output still there?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceExistence {
     /// The referent is present — the value can be rehydrated.
@@ -138,7 +137,7 @@ pub enum ReferenceExistence {
 
 /// A per-node **policy diff** entry: a node whose effective policy hash contribution
 /// differs between the prior run and this binary. Surfaced informationally when the
-/// two runs' policy hashes diverge — resume proceeds regardless (arch.md C27).
+/// two runs' policy hashes diverge — resume proceeds regardless.
 ///
 /// The resume core has only the two aggregate policy hashes to compare (it is
 /// pure over the fingerprint slot, not the full per-node policy), so the diff it
@@ -155,9 +154,8 @@ pub struct PolicyDiff {
 }
 
 /// A **refusal** — resume verified the prior run against this binary and would not
-/// proceed (arch.md C27). Each variant is a **distinct**, testable cause; the CLI
-/// maps every one to the C26 resume-refusal exit code and prints the carried
-/// detail.
+/// proceed. Each variant is a **distinct**, testable cause; the CLI maps every one
+/// to the resume-refusal exit code and prints the carried detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeRefusal {
     /// The prior run's **structural fingerprint** differs from this binary's — the
@@ -179,8 +177,7 @@ pub enum ResumeRefusal {
         current: u64,
     },
     /// The prior run was recorded by a **different tool version** — v1 makes no
-    /// cross-tool-version resume promise (C27 / Stability), and this refusal is
-    /// its documentation.
+    /// cross-tool-version resume promise, and this refusal is its documentation.
     ToolVersionMismatch {
         /// The prior run's tool version.
         prior: String,
@@ -231,13 +228,14 @@ impl std::fmt::Display for ResumeRefusal {
 
 impl std::error::Error for ResumeRefusal {}
 
-/// A computed **resume plan** (arch.md C27): what must re-execute, what is carried
-/// forward satisfied-from-prior (with its originating run), and which durable
-/// references are rehydrated to fill re-running consumers' slots.
+/// A computed **resume plan**: what must re-execute, what is carried forward
+/// satisfied-from-prior (with its originating run), and which durable references
+/// are rehydrated to fill re-running consumers' slots.
 ///
 /// The plan is the hand-off the resume verb executes: it re-runs exactly
-/// [`must_run`](Self::must_run) (T54b copies their retained scratch forward),
-/// fills re-running consumers' input slots by rehydrating the producers in
+/// [`must_run`](Self::must_run) (scratch carry-forward copies their retained
+/// scratch forward), fills re-running consumers' input slots by rehydrating the
+/// producers in
 /// [`rehydrate`](Self::rehydrate), and records every node in
 /// [`satisfied_from_prior`](Self::satisfied_from_prior) as `satisfied-from-prior`
 /// carrying its originating run identity.
@@ -261,15 +259,16 @@ impl ResumePlan {
 
     /// The **must-run set**: the seed, closed downward (everything reachable
     /// re-runs), plus every demanded non-durable producer pulled in upward. These
-    /// nodes re-execute; T54b copies their retained scratch forward.
+    /// nodes re-execute; scratch carry-forward copies their retained scratch
+    /// forward.
     #[must_use]
     pub fn must_run(&self) -> &BTreeSet<String> {
         &self.must_run
     }
 
     /// The **satisfied-from-prior** nodes: every prior success left outside the
-    /// must-run set, mapped to its **originating run identity** (C22/C27). Not
-    /// re-executed; its prior success is carried forward — durable or not.
+    /// must-run set, mapped to its **originating run identity**. Not re-executed;
+    /// its prior success is carried forward — durable or not.
     #[must_use]
     pub fn satisfied_from_prior(&self) -> &BTreeMap<String, String> {
         &self.satisfied_from_prior
@@ -285,16 +284,15 @@ impl ResumePlan {
     }
 
     /// The **policy diff**, present when the prior run's policy hash diverges from
-    /// this binary's (arch.md C27). A policy divergence is a *proceed-with-diff*,
-    /// never a refusal — the CLI prints this and plans regardless.
+    /// this binary's. A policy divergence is a *proceed-with-diff*, never a
+    /// refusal — the CLI prints this and plans regardless.
     #[must_use]
     pub fn policy_diff(&self) -> Option<&PolicyDiff> {
         self.policy_diff.as_ref()
     }
 }
 
-/// Compute the C27 **resume plan** for `pipeline` against a `prior` run, or refuse
-/// (arch.md `### C27 · Resume`).
+/// Compute the **resume plan** for `pipeline` against a `prior` run, or refuse.
 ///
 /// The gate runs first (algorithm-version comparability, then tool version, then
 /// structural fingerprint — each a distinct [`ResumeRefusal`]); a policy-hash
@@ -326,7 +324,7 @@ where
 {
     let fingerprint = pipeline.fingerprint();
 
-    // --- The gate (arch.md C27, "first verify") ------------------------------
+    // --- The gate ("first verify") -------------------------------------------
     // Algorithm-version comparability gates everything: hashes from different
     // algorithm versions cannot be compared at all.
     if prior.algorithm_version != fingerprint.algorithm_version() {

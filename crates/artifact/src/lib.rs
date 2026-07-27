@@ -1,24 +1,22 @@
-//! `dagr-artifact` — dagr's artifact types (placeholder skeleton).
+//! `dagr-artifact` — dagr's artifact types.
 //!
-//! This crate will define the serializable records a run leaves behind — the
-//! graph artifact (arch.md C20), the run artifact (C22), and the event-record
-//! shapes they are derived from (C19) — together with their versioned schemas.
+//! This crate defines the serializable records a run leaves behind — the
+//! graph artifact, the run artifact, and the event-record shapes they are
+//! derived from — together with their versioned schemas.
 //!
-//! It is the deliberate boundary named by arch.md C24 · Renderers: a renderer
-//! consumes an artifact and nothing else, so this crate is the *only* thing the
+//! It is a deliberate boundary: a renderer consumes an artifact and nothing
+//! else, so this crate is the *only* thing the
 //! [`dagr-render`](../dagr_render/index.html) crate is allowed to depend on.
 //! Because `artifact` depends on no other workspace crate, it can never drag in
 //! the live-pipeline surface, and rendering stays "no access to the binary that
 //! produced the artifacts."
 //!
-//! The first concrete artifact code lands with ticket T19 (029): the C19
-//! **event-stream writer** in [`event_stream`]. The published versioned schemas
-//! (T39) and their validation helper live in the `schema` module — compiled only
-//! when the `schema-validation` feature is enabled, since its `jsonschema`
-//! dependency is CI-/dev-scoped (T4 ADR 017 §4). The C22 **run-artifact fold**
-//! — the standalone reader that folds a C19 event stream into a run artifact —
-//! lives in the [`fold`] module (T42). The graph artifact emitter (C20 / T40)
-//! lands elsewhere.
+//! The **event-stream writer** lives in [`event_stream`]. The published
+//! versioned schemas and their validation helper live in the `schema` module —
+//! compiled only when the `schema-validation` feature is enabled, since its
+//! `jsonschema` dependency is CI-/dev-scoped. The **run-artifact fold** — the
+//! standalone reader that folds an event stream into a run artifact — lives in
+//! the [`fold`] module. The graph artifact emitter lands elsewhere.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
@@ -27,20 +25,19 @@ pub mod canonical;
 pub mod event_stream;
 pub mod fold;
 
-/// The T39 published-artifact-schema validation helper (arch.md C19/C20/C22).
+/// The published-artifact-schema validation helper.
 ///
 /// Behind the `schema-validation` cargo feature (default OFF) because its
-/// `jsonschema` dependency is CI-/dev-scoped per the T4 ADR (017 §4); the
-/// runtime writers never pull it. The published schema documents themselves live
-/// at the repo root under `schemas/<kind>/v<version>.schema.json`.
+/// `jsonschema` dependency is CI-/dev-scoped; the runtime writers never pull it.
+/// The published schema documents themselves live at the repo root under
+/// `schemas/<kind>/v<version>.schema.json`.
 #[cfg(feature = "schema-validation")]
 pub mod schema;
 
 #[cfg(test)]
 mod tests {
     /// Placeholder test proving the crate is compiled and in the workspace
-    /// build graph (T1 Test plan: "every member crate is discoverable and
-    /// testable"). Real tests arrive with the artifact types in later tickets.
+    /// build graph — every member crate is discoverable and testable.
     #[test]
     fn crate_is_in_the_build_graph() {}
 }

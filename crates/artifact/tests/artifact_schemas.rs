@@ -1,17 +1,17 @@
-//! T39 (ticket 050) — published-artifact-schema validation suite.
+//! Published-artifact-schema validation suite.
 //!
-//! These tests realize the ticket's Test plan against the three published,
-//! versioned JSON Schema documents (arch.md C19 event stream, C20 graph
-//! artifact, C22 run artifact) and the shared validation helper. They are the
-//! covering suite for "the artifact validates against its published schema"
-//! that T40/T42/T48 lean on. Every scenario drives a hand-authored fixture (or a
-//! seeded corpus fixture) through [`dagr_artifact::schema`] and asserts the
-//! published schema accepts the valid shapes and rejects the invalid ones with
-//! an actionable, artifact-naming error.
+//! These tests run against the three published, versioned JSON Schema documents
+//! (the event stream, the graph artifact, and the run artifact) and the shared
+//! validation helper. They are the covering suite for "the artifact validates
+//! against its published schema" that the producer and compatibility suites lean
+//! on. Every scenario drives a hand-authored fixture (or a seeded corpus fixture)
+//! through [`dagr_artifact::schema`] and asserts the published schema accepts the
+//! valid shapes and rejects the invalid ones with an actionable, artifact-naming
+//! error.
 //!
-//! The validation helper depends on the `jsonschema` crate, which the T4 ADR
-//! (017 §4) scopes to CI/tests only; this suite therefore lives behind the
-//! `schema-validation` cargo feature and is run by CI with that feature on.
+//! The validation helper depends on the `jsonschema` crate, which is scoped to
+//! CI/tests only; this suite therefore lives behind the `schema-validation` cargo
+//! feature and is run by CI with that feature on.
 #![cfg(feature = "schema-validation")]
 
 use serde_json::{json, Value};
@@ -78,9 +78,9 @@ fn attempt_record(node: &str, attempt: u32, status: &str) -> Value {
     })
 }
 
-// === event stream (C19) ===================================================
+// === event stream =========================================================
 
-/// A minimal event record carrying the T0.6/§C19 header every record shares.
+/// A minimal event record carrying the header every record shares.
 fn event_header(kind: &str) -> Value {
     json!({
         "schema_version": "dagr.event-stream@1",
@@ -94,9 +94,8 @@ fn event_header(kind: &str) -> Value {
 
 #[test]
 fn event_record_of_every_kind_validates_and_carries_the_header() {
-    // Every event kind (arch.md C19 + Vocabulary) validates and carries the
-    // five shared header fields: run identity, schema version, sequence,
-    // wall-clock stamp, monotonic offset.
+    // Every event kind validates and carries the five shared header fields: run
+    // identity, schema version, sequence, wall-clock stamp, monotonic offset.
     let simple_kinds = [
         "node-ready",
         "node-admitted",
@@ -239,7 +238,7 @@ fn event_stream_supports_concatenation_and_partition_by_run_identity() {
     );
 }
 
-// === graph artifact (C20) =================================================
+// === graph artifact =======================================================
 
 fn graph_artifact() -> Value {
     json!({
@@ -353,7 +352,7 @@ fn stable_name_only_identity_type_name_is_informational_debug() {
     assert_invalid(ArtifactKind::Graph, 1, &misused);
 }
 
-// === run artifact (C22) ===================================================
+// === run artifact =========================================================
 
 fn run_artifact_full() -> Value {
     json!({
@@ -436,7 +435,7 @@ fn attempt_taxonomy_coverage() {
 
 #[test]
 fn durable_reference_field_present_and_copied_forward() {
-    // An attempt carrying a durable-output reference (T0.8 shape: an opaque,
+    // An attempt carrying a durable-output reference (an opaque,
     // serde-serializable reference) validates.
     let mut rec = attempt_record("n1", 1, "succeeded");
     rec.as_object_mut().unwrap().insert(
@@ -582,12 +581,12 @@ fn allowlisted_environment_capture() {
     assert_invalid(ArtifactKind::Run, 1, &unbounded);
 }
 
-// === evolution posture (T0.10) ============================================
+// === evolution posture ====================================================
 
 #[test]
 fn additive_only_evolution_ignores_unknown_and_defaults_missing() {
     // A version-1 artifact carrying an EXTRA field unknown to the v1 reader is
-    // tolerated (open-world schema): validation passes.
+    // tolerated (open-world schema, additive-only evolution): validation passes.
     let mut with_unknown = run_artifact_full();
     with_unknown["header"]
         .as_object_mut()
@@ -614,7 +613,7 @@ fn additive_only_evolution_ignores_unknown_and_defaults_missing() {
 #[test]
 fn published_schema_files_exist_for_every_family() {
     // Every artifact family publishes at least one versioned schema, at the
-    // T4-fixed path `schemas/<kind>/v<version>.schema.json`.
+    // fixed path `schemas/<kind>/v<version>.schema.json`.
     for kind in [
         ArtifactKind::EventStream,
         ArtifactKind::Graph,
@@ -632,22 +631,21 @@ fn published_schema_files_exist_for_every_family() {
 fn fixture_corpus_round_trip() {
     // Every checked-in corpus fixture validates against its declared version's
     // schema; the helper fails loudly (naming the offending fixture) if any does
-    // not. This is the standing CI obligation (T0.10 / Stability), exercised
+    // not. This is the standing CI obligation for schema stability, exercised
     // here over the seeded corpus.
     check_corpus()
         .unwrap_or_else(|e| panic!("corpus round-trip failed: {e}\nCORPUS_DIR={CORPUS_DIR}"));
 }
 
-// === writer → schema round-trip (C19 ↔ the published schema) ==============
+// === writer → schema round-trip (writer output ↔ the published schema) ====
 //
-// The missing end-to-end guarantee: a REAL `EventStreamWriter` (T19) must emit
-// records that validate against the published event-stream schema (T39) it is
-// contracted to. Before this reconciliation the writer emitted a divergent wire
-// form (`event`/`body`, integer `wall`, `captured_env`, an array `data_interval`,
-// and no `attempt-outcome`), so a real writer stream could not be folded (C22 /
-// T42). This test drives the writer to produce **every** record kind and
-// validates EACH emitted line — it FAILS if the writer ever diverges from the
-// schema again.
+// The missing end-to-end guarantee: a REAL `EventStreamWriter` must emit records
+// that validate against the published event-stream schema it is contracted to.
+// Before this reconciliation the writer emitted a divergent wire form
+// (`event`/`body`, integer `wall`, `captured_env`, an array `data_interval`, and
+// no `attempt-outcome`), so a real writer stream could not be folded. This test
+// drives the writer to produce **every** record kind and validates EACH emitted
+// line — it FAILS if the writer ever diverges from the schema again.
 
 use std::io;
 use std::path::PathBuf;
@@ -684,7 +682,7 @@ impl MonotonicClock for TickClock {
     }
 }
 
-/// A fixed RFC3339 wall stamp so the record bytes are deterministic (T4 §6).
+/// A fixed RFC3339 wall stamp so the record bytes are deterministic.
 fn fixed_wall() -> String {
     "2026-07-23T00:00:00.000Z".to_string()
 }
@@ -742,7 +740,7 @@ fn writer_output_validates_against_published_schema_for_every_kind() {
     outcome.cost_measured = Some(json!({ "memory_bytes": 900 }));
     outcome.durable_reference = Some(json!({ "storage_key": "s3://bucket/n/output" }));
     w.attempt_outcome(outcome).unwrap();
-    // A minimal attempt-outcome (the M1/M2 driver's shape: node/attempt/status).
+    // A minimal attempt-outcome (the driver's minimal shape: node/attempt/status).
     w.attempt_outcome(AttemptOutcomeRecord::new("n", 1, "succeeded"))
         .unwrap();
     w.node_terminal("n", TerminalState::Succeeded).unwrap();
@@ -841,7 +839,7 @@ fn invalid_input_rejected_with_a_usable_error() {
     );
 }
 
-// === writer-generated corpus fixtures (T39 corpus ← real writer) ==========
+// === writer-generated corpus fixtures (corpus ← real writer) ==============
 //
 // The event-stream corpus fixtures (tests/fixtures/corpus/event-stream/v1/*.json)
 // are generated from REAL `EventStreamWriter` output, so they double as a
