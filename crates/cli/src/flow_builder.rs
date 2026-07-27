@@ -15,19 +15,24 @@
 //! `FlowBuilder` is a thin newtype over `&mut RunnableFlow` that hands a DAG author
 //! exactly the *declaration* verbs and nothing else:
 //!
-//! - [`source`](FlowBuilder::source) / [`node`](FlowBuilder::node) — the
-//!   graph-emittable pair (the right default for a framework where `graph` /
-//!   `validate` are expected to work), forwarding to `register_source_named` /
-//!   `register_named`.
+//! - [`source`](FlowBuilder::source) — a **root** node (no upstream), returning its
+//!   output [`Handle`].
+//! - [`task`](FlowBuilder::task) + [`depends_on`](NodeBuilder::depends_on) — the
+//!   primary way to declare a **dependent** node, with the dependency direction
+//!   explicit: `f.task("double", Double).depends_on(count)` reads as *double depends
+//!   on count*. Because a [`Handle`] has no `depends_on`, edges point only backward —
+//!   a cycle is unrepresentable.
+//! - [`node`](FlowBuilder::node) — the equivalent **positional** form,
+//!   `node(name, task, deps)`, kept as a low-level fallback.
 //! - [`source_erased`](FlowBuilder::source_erased) /
-//!   [`node_erased`](FlowBuilder::node_erased) — the type-erased escape hatches,
-//!   forwarding to `register_source` / `register`; a DAG built with them is **not
-//!   graph-emittable**.
+//!   [`node_erased`](FlowBuilder::node_erased) — the type-erased escape hatches for a
+//!   `StableName`-less task; a DAG built with them is **not graph-emittable**.
 //!
-//! Each method forwards to the underlying registrar and returns the **real**
-//! [`Handle<T>`], so the existing `D: Deps<Inputs = T::Input>` bound keeps
-//! mis-wiring a **compile error** — the façade adds no runtime check and loses no
-//! compile-time guarantee.
+//! `source` / `task` / `node` are the **graph-emittable** surface (the right default
+//! where `graph` / `validate` are expected to work). Each forwards to the underlying
+//! registrar and returns the **real** [`Handle<T>`], so the exact-typed
+//! `D: Deps<Inputs = T::Input>` bound keeps mis-wiring a **compile error** — the
+//! façade adds no runtime check and loses no compile-time guarantee.
 //!
 //! # Why a newtype, not a type alias
 //!
@@ -108,6 +113,34 @@ impl<'a> FlowBuilder<'a> {
         self.0.register_named::<T, D>(name, task, deps)
     }
 
+    /// Begin declaring a **data-dependent node** under `name`, returning a
+    /// [`NodeBuilder`] whose [`depends_on`](NodeBuilder::depends_on) names the node's
+    /// upstream(s) explicitly and completes the registration.
+    ///
+    /// This is the primary, reads-like-English wiring surface:
+    ///
+    /// ```ignore
+    /// let count  = f.source("count", Count { up_to: 21 });
+    /// let double = f.task("double", Double).depends_on(count); // double DEPENDS ON count
+    /// ```
+    ///
+    /// A [`Handle`] has no `depends_on`, so an edge can only point **backward** — a
+    /// cycle is unrepresentable, no runtime cycle check needed. The type checks (the
+    /// exact-typed `Deps<Inputs = T::Input>` binding, the `StableName` bounds) all
+    /// land on [`depends_on`](NodeBuilder::depends_on), which is where a mis-wiring's
+    /// compile error points. It is equivalent to
+    /// [`node(name, task, deps)`](Self::node) — the positional form stays a low-level
+    /// fallback; `task(name, task).depends_on(deps)` is the same registration written
+    /// so the dependency direction is explicit. A **source** (no upstream) uses
+    /// [`source`](Self::source), not this.
+    pub fn task<T>(&mut self, name: impl Into<String>, task: T) -> NodeBuilder<'_, 'a, T> {
+        NodeBuilder {
+            builder: self,
+            name: name.into(),
+            task,
+        }
+    }
+
     /// Declare a **type-erased source** node under `name`, returning its output
     /// [`Handle`].
     ///
@@ -150,5 +183,50 @@ impl<'a> FlowBuilder<'a> {
         D: Deps<Inputs = T::Input> + InputWiring + Clone,
     {
         self.0.register::<T, D>(name, task, deps)
+    }
+}
+
+/// A **half-declared node**, awaiting its upstream(s): the value
+/// [`FlowBuilder::task`] returns, completed by [`depends_on`](Self::depends_on).
+///
+/// It captures the node's `name` and `task` but registers **nothing** until
+/// [`depends_on`](Self::depends_on) names its upstream(s) — so a node is wired
+/// exactly once, and because a [`Handle`] carries no `depends_on`, edges point only
+/// backward (cycles are unrepresentable). It borrows the [`FlowBuilder`] for its
+/// lifetime; each `f.task(..).depends_on(..)` statement fully consumes it, releasing
+/// the borrow before the next declaration.
+#[must_use = "a NodeBuilder registers nothing until you call `.depends_on(..)` to name its upstream(s)"]
+pub struct NodeBuilder<'b, 'a, T> {
+    builder: &'b mut FlowBuilder<'a>,
+    name: String,
+    task: T,
+}
+
+impl<T> NodeBuilder<'_, '_, T> {
+    /// Name this node's **upstream(s)** and complete the registration, returning its
+    /// output [`Handle`].
+    ///
+    /// `deps` is the upstream [`Handle`] (or, for a fan-in, a tuple of handles) whose
+    /// value types must **exactly match** the task's `Input` — the compile-time
+    /// `D: Deps<Inputs = T::Input>` check, so a wrong-typed or wrong-arity upstream is
+    /// a **compile error** here, never a runtime surprise:
+    ///
+    /// ```ignore
+    /// let double = f.task("double", Double).depends_on(count);        // one upstream
+    /// let report = f.task("join", Join).depends_on((left, right));    // fan-in: a tuple
+    /// ```
+    ///
+    /// Equivalent to [`FlowBuilder::node(name, task, deps)`](FlowBuilder::node); this
+    /// spelling makes the dependency direction explicit. For a `StableName`-less task
+    /// use [`FlowBuilder::node_erased`](FlowBuilder::node_erased) (not graph-emittable).
+    #[must_use]
+    pub fn depends_on<D>(self, deps: D) -> Handle<T::Output>
+    where
+        T: Task + StableName + Send + 'static,
+        T::Input: StableInputNames + Clone + Send + 'static,
+        T::Output: StableName + Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
+        self.builder.node(self.name, self.task, deps)
     }
 }

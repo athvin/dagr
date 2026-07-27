@@ -194,15 +194,15 @@ fn quickstart_is_authored_with_the_macro_trio_and_no_hand_written_plumbing() {
         "`main` is the one-line `dagr_cli::run` entrypoint"
     );
 
-    // The graph is declared through the `FlowBuilder` façade; a wrong-typed binding
-    // would be a compile error.
+    // The graph is declared through the `FlowBuilder` façade with the dependency
+    // direction explicit; a wrong-typed binding would be a compile error.
     assert!(
         region.contains("f.source(\"count\", Count { up_to: 21 })"),
-        "the source node is declared with `f.source`"
+        "the source (root) node is declared with `f.source`"
     );
     assert!(
-        region.contains("f.node(\"double\", Double, counted)"),
-        "the sink node is declared with `f.node`, bound to the source's handle"
+        region.contains("f.task(\"double\", Double).depends_on(count)"),
+        "the dependent node reads `f.task(..).depends_on(..)` — the direction is explicit"
     );
 
     // The macros generate every trait body, so the quickstart hand-writes none of the

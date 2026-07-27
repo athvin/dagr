@@ -448,18 +448,19 @@ line. It is the sugar over the [flow-registry](flow-registry.md) machinery: you 
 link time, builds the registry, and delegates to `run_registry` (which owns `list` /
 `graph <dag>` / `validate <dag>` / `run <dag>`).
 
-One authoring import brings the surface into scope; each `#[dag]` fn declares its
-nodes through the graph-emittable [`FlowBuilder::source`](../crates/cli/src/flow_builder.rs)
-/ [`node`](../crates/cli/src/flow_builder.rs) pair, and the whole binary is
-`dagr_cli::run`:
+One authoring import brings the surface into scope. Each `#[dag]` fn declares a root
+with [`FlowBuilder::source`](../crates/cli/src/flow_builder.rs) and each dependent node
+with [`f.task(name, task).depends_on(upstream)`](../crates/cli/src/flow_builder.rs) —
+the dependency direction is explicit, and because a `Handle` has no `depends_on`, edges
+point only backward (cycles are unrepresentable). The whole binary is `dagr_cli::run`:
 
 ```rust
 use dagr_cli::prelude::*; // #[task], #[dag], FlowBuilder, run, RunnableFlow, …
 
 #[dag] // name defaults to the fn name ("alpha"); #[dag(name = "nightly")] overrides
 fn alpha(f: &mut FlowBuilder) {
-    let rows = f.source("extract", Extract { rows: 3 }); // rows: Handle<Rows>
-    let _report = f.node("load", Load, rows);            // wrong wiring => COMPILE error
+    let rows = f.source("extract", Extract { rows: 3 });  // a root; rows: Handle<Rows>
+    let _report = f.task("load", Load).depends_on(rows);  // load DEPENDS ON extract
 }
 
 #[dag]

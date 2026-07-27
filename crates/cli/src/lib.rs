@@ -57,7 +57,7 @@ pub mod temp;
 /// also drops the `inventory` edge the expansion targets.
 #[cfg(feature = "dag")]
 pub use dagr_macros::dag;
-pub use flow_builder::FlowBuilder;
+pub use flow_builder::{FlowBuilder, NodeBuilder};
 pub use graph::{
     emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
     GRAPH_SCHEMA_VERSION,

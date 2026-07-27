@@ -69,10 +69,10 @@ impl Aggregate {
 #[dag]
 fn etl(f: &mut FlowBuilder) {
     let rows = f.source("extract", Extract { rows: 5 });
-    // Wrong wiring here would be a COMPILE error — the façade returns the real
-    // `Handle<T>` and the `Deps` bound is exact-typed. The sink handle is unused
-    // (nothing consumes it), so bind it to `_` to satisfy `#[must_use]`.
-    let _report = f.node("load", Load, rows);
+    // `load` depends on `extract`. Wrong wiring here would be a COMPILE error — the
+    // façade returns the real `Handle<T>` and the `Deps` bound is exact-typed. The
+    // sink handle is unused (nothing consumes it), so bind it to `_` for `#[must_use]`.
+    let _report = f.task("load", Load).depends_on(rows);
 }
 
 /// `#[dag(name = "nightly")]` on a fn named `foo`: the registered DAG name is
