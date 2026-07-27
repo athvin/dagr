@@ -69,6 +69,18 @@ fn main() -> ProcExit {
         let _ = print_banner(&mut io::stderr().lock());
     }
 
+    // The `metastore` verb (M7, T83) is recognized here, behind the default-off
+    // `metastore` feature, BEFORE the registry/clap dispatch: it carries no flow and
+    // its `dagr-metastore`/`libsql` edge is absent from a default build, so wiring it
+    // as an intercept (rather than a `#[cfg]` variant on the clap `Verb` enum) keeps
+    // the exit-code/verb contract untouched when the feature is off. A default binary
+    // simply never has this branch, and `metastore` falls through to the normal
+    // "unknown verb" handling.
+    #[cfg(feature = "metastore")]
+    if argv.get(1).and_then(|s| s.to_str()) == Some("metastore") {
+        return dagr_cli::metastore::metastore_verb(&argv[2..]).into();
+    }
+
     // Every flow-selecting verb routes through the registry: the reference driver
     // hosts one trivial flow, so `dagr run` drives it, `dagr graph` emits its graph
     // artifact, `dagr validate` assembles it, and `dagr list` prints its name.

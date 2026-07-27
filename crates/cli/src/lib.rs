@@ -31,6 +31,11 @@ pub mod flow_builder;
 pub mod full_pipeline;
 pub mod graph;
 pub mod logging;
+/// The `dagr metastore init` verb (M7, T83, ADR 097). Gated behind the default-off
+/// `metastore` feature so `--no-default-features` (and any default build) drops the
+/// `dagr-metastore`/`libsql` edge entirely — `dagr-core` never sees it.
+#[cfg(feature = "metastore")]
+pub mod metastore;
 pub mod prelude;
 pub mod registry;
 /// The `inventory`-backed DAG auto-discovery entrypoint (M6, ADR 092). Gated behind

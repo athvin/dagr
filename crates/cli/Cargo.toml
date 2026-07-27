@@ -82,10 +82,34 @@ schema-validation = ["dagr-artifact/schema-validation"]
 # `#[dag]` re-export (T80) work with no opt-in.
 dag = ["dep:inventory"]
 
+# --- The M7 run-index feature (T83, ADR 097), OFF by default -----------------
+# `metastore` turns on the `dagr metastore init` verb and the optional
+# `dagr-metastore` dependency edge (the libSQL/SQLite run index). It is DEFAULT-OFF
+# — the inverse of the default-on `dag` feature — because `libsql` is heavy and
+# pre-1.0 (a C fork pulling a bindgen/clang toolchain): a plain `cargo build --all`
+# and `cargo build -p dagr-cli --no-default-features` must pull NEITHER `libsql`
+# NOR `dagr-metastore`, keeping `dagr-core`'s zero-runtime-dependency guarantee
+# untouched (ADR 097 §5; proved by `scripts/check-metastore-feature-gating.sh` and
+# `cargo build --all --no-default-features`). The verb wiring in `src/main.rs` is
+# gated behind `#[cfg(feature = "metastore")]`, so a default binary has no
+# `metastore` verb. `dagr-metastore` depends only on `dagr-artifact` + `libsql` +
+# `tokio` and has NO path to `dagr-core`.
+metastore = ["dep:dagr-metastore"]
+
 [dependencies]
 dagr-core = { path = "../core" }
 dagr-artifact = { path = "../artifact" }
 dagr-render = { path = "../render" }
+
+# dagr-metastore — the OPTIONAL M7 run-index crate (T83, ADR 097), pulled ONLY
+# behind the default-off `metastore` feature above. `optional = true` means the
+# edge exists only when the feature is on, so `cargo build --all` and
+# `--no-default-features` build `dagr-cli` with NO edge onto `dagr-metastore` (and
+# therefore none onto `libsql`), and `dagr-core` never sees either — exactly as the
+# `dag` feature confines `inventory`. It is a normal workspace member, so
+# `cargo test --workspace` still builds it directly; this edge is what the cli
+# reaches it through, and only under the feature.
+dagr-metastore = { path = "../metastore", optional = true }
 
 # dagr-macros — the build-time-only, zero-runtime-dependency proc-macro crate (ADR
 # 082/092). dagr-cli depends on it for the M6 `#[dag]` attribute (T80), which it
