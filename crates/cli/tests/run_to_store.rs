@@ -13,7 +13,7 @@
 //! (disjoint per process + nanos), and no wall-clock sleeps. macOS is in CI.
 
 use dagr_artifact::event_stream::{read_records, MonotonicClock, RunOutcome};
-use dagr_cli::run_flow::{RunnableFlow, RunToStoreError};
+use dagr_cli::run_flow::{RunToStoreError, RunnableFlow};
 use dagr_cli::run_store::{SystemClock, TickClock};
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
@@ -77,7 +77,11 @@ fn run_to_store_writes_a_real_event_stream_with_no_hand_written_plumbing() {
         .run_to_store("quickstart", &base_str)
         .expect("the flow assembles and the store opens");
 
-    assert_eq!(report.outcome(), RunOutcome::Succeeded, "both nodes succeed");
+    assert_eq!(
+        report.outcome(),
+        RunOutcome::Succeeded,
+        "both nodes succeed"
+    );
     assert_eq!(report.output(doubled), Some(42), "double(21) == 42");
 
     // A real, parseable stream landed at the conventional store path, keyed by the
@@ -86,11 +90,14 @@ fn run_to_store_writes_a_real_event_stream_with_no_hand_written_plumbing() {
         .join("quickstart")
         .join(report.run_id())
         .join("events.jsonl");
-    let bytes = std::fs::read(&stream).unwrap_or_else(|e| {
-        panic!("the run store wrote a stream at {}: {e}", stream.display())
-    });
+    let bytes = std::fs::read(&stream)
+        .unwrap_or_else(|e| panic!("the run store wrote a stream at {}: {e}", stream.display()));
 
-    assert_eq!(count_kind(&bytes, "run-started"), 1, "one run-started bookend");
+    assert_eq!(
+        count_kind(&bytes, "run-started"),
+        1,
+        "one run-started bookend"
+    );
     assert_eq!(
         count_kind(&bytes, "run-finished"),
         1,
@@ -175,7 +182,10 @@ fn system_clock_is_monotonic_and_tick_clock_increments() {
     let sys = SystemClock::new();
     let a = sys.elapsed_ns();
     let b = sys.elapsed_ns();
-    assert!(b >= a, "SystemClock is monotonic non-decreasing: {b} >= {a}");
+    assert!(
+        b >= a,
+        "SystemClock is monotonic non-decreasing: {b} >= {a}"
+    );
 
     // `TickClock` advances exactly one per read (deterministic).
     let tick = TickClock::default();

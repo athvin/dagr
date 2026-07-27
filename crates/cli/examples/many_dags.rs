@@ -46,62 +46,49 @@ use dagr_cli::prelude::*;
 
 /// The rows an extract produced — a payload whose declared
 /// [`StableName`](dagr_core::stable_name::StableName) is what the graph artifact
-/// records for the edge that carries it.
-#[derive(Clone)]
+/// records for the edge that carries it. `#[derive(StableName)]` supplies the name
+/// (the type ident, `"Rows"`) — no hand-written trait body.
+#[derive(Clone, StableName)]
 struct Rows(u64);
-impl StableName for Rows {
-    const STABLE_NAME: &'static str = "Rows";
-}
 
 /// A loaded report. These DAGs are inspected by structure (`graph`/`validate`) and by
 /// run outcome (`run`), not by the produced value, so the wrapped total is unread.
-#[derive(Clone)]
+#[derive(Clone, StableName)]
 #[allow(dead_code)]
 struct Report(u64);
-impl StableName for Report {
-    const STABLE_NAME: &'static str = "Report";
-}
 
-/// A source node: extracts some rows. Stable-named, so it is graph-emittable.
+/// A source node: extracts some rows. `#[derive(StableName)]` names it (so it is
+/// graph-emittable); `#[task]` generates its `impl Task`.
+#[derive(StableName)]
 struct Extract {
     rows: u64,
 }
-impl StableName for Extract {
-    const STABLE_NAME: &'static str = "Extract";
-}
-impl Task for Extract {
-    type Input = ();
-    type Output = Rows;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Rows, TaskError> {
+#[task]
+impl Extract {
+    async fn run(&mut self, _input: ()) -> Result<Rows, TaskError> {
         Ok(Rows(self.rows))
     }
 }
 
 /// A sink node: consumes rows and produces a report.
+#[derive(StableName)]
 struct Load;
-impl StableName for Load {
-    const STABLE_NAME: &'static str = "Load";
-}
-impl Task for Load {
-    type Input = Rows;
-    type Output = Report;
-    async fn run(&mut self, _c: &RunContext, input: Rows) -> Result<Report, TaskError> {
+#[task]
+impl Load {
+    async fn run(&mut self, input: Rows) -> Result<Report, TaskError> {
         Ok(Report(input.0 * 2))
     }
 }
 
 /// A single-node aggregation source with a distinct stable name, so its graph shape
 /// differs from `alpha`'s two-node shape.
+#[derive(StableName)]
 struct Aggregate {
     seed: u64,
 }
-impl StableName for Aggregate {
-    const STABLE_NAME: &'static str = "Aggregate";
-}
-impl Task for Aggregate {
-    type Input = ();
-    type Output = Report;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Report, TaskError> {
+#[task]
+impl Aggregate {
+    async fn run(&mut self, _input: ()) -> Result<Report, TaskError> {
         Ok(Report(self.seed))
     }
 }

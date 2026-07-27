@@ -1,5 +1,12 @@
 # One binary, many named flows — the flow registry
 
+> **The ergonomic path is `#[dag]` auto-discovery** — write `#[dag]` fns and let
+> `dagr_cli::run` discover them (see the [cookbook](cookbook.md#declaring-dags-with-dag-and-running-them-with-one-line)
+> and [`crates/cli/examples/many_dags.rs`](../crates/cli/examples/many_dags.rs)). This
+> guide covers the explicit **`FlowRegistry`** fallback you hand-wire when you want the
+> registry spelled out in `main` (a computed flow set, a non-`#[dag]` factory, or no
+> `inventory` dependency). Both produce the same `list` / `graph` / `validate` / `run`.
+
 > **Status:** documentation deliverable, authored by ticket **T75** (ticket 088,
 > [`docs/implementation/088-T75-registry-graph-validate-and-example.md`](implementation/088-T75-registry-graph-validate-and-example.md)),
 > over the [ADR 086](implementation/086-flow-registry-adr.md) decision and the T74

@@ -1,5 +1,10 @@
 //! Cross-toolchain **structural-determinism** fixture.
 //!
+//! **CI fixture — do not change its printed output.** CI builds and runs this under
+//! two toolchains and diffs the emitted artifact byte-for-byte (kept in sync with
+//! `tests/system_acceptance_gate.rs`); changing the pipeline or the printed bytes
+//! breaks the determinism gate. Not a tutorial (see `examples/README.md`).
+//!
 //! Prints, for the checked-in reference pipeline, the **masked graph artifact**
 //! (the full graph artifact with the sole generation-time header field blanked) as
 //! canonical JSON on one line, followed by the two fingerprint strings:
