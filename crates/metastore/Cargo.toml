@@ -63,10 +63,25 @@ libsql = { version = "=0.10.0-pre.4", default-features = false, features = ["cor
 # already commits to as a supported public dependency (arch.md C13).
 tokio = { version = "1", default-features = false, features = ["rt", "time", "sync"] }
 
+# serde_json — the T4-sanctioned (017) serialization stack, already in the tree via
+# `dagr-artifact` (the `RunArtifact`/`AttemptRecord` getters hand back
+# `serde_json::Value`s). The T84 mapping (`src/mapping.rs`) serializes the rich
+# per-attempt fold fields — phase durations, error, metrics, declared/measured
+# cost, the durable reference — into the schema's `TEXT` JSON-blob columns, so it
+# needs `serde_json` directly (not just transitively). It is MIT, already resolved,
+# and adds no new advisory/license surface: `cargo audit`/`cargo deny` stay green.
+serde_json = "1"
+
 [dev-dependencies]
 # tokio's test macro + a current-thread runtime for the crate's async unit tests
-# (open / migrate / with_write_txn). Dev-only, so it never reaches a consumer.
+# (open / migrate / with_write_txn / mapping). Dev-only, so it never reaches a
+# consumer.
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync"] }
+
+# serde_json — the T84 mapping tests build fixture `AttemptOutcomeRecord`s with
+# `serde_json::json!` (metrics/error/durable-reference values). Already a direct
+# dependency above; listed here too so the dev-only test target resolves it.
+serde_json = "1"
 
 [lints]
 workspace = true
