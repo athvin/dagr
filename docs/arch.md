@@ -10,7 +10,7 @@ A developer writes units of work in Rust, declares how they connect, and compile
 
 There is no server, no scheduler, no database, no configuration file describing the graph, and no parsing step. The graph is expressed in code the compiler has already checked.
 
-**What it is not, permanently:** a scheduler, a distributed execution system, a metadata store, a web interface, a domain-specific language, or a backfill orchestrator. Every one of those is a reasonable thing to want and none of them belong here.
+**What it is not, permanently:** a scheduler, a distributed execution system, a *coordinating* metadata store, a web interface, a domain-specific language, or a backfill orchestrator. Every one of those is a reasonable thing to want and none of them belong here. "Metadata store" here means a store the engine *depends on to coordinate* — a cross-run scheduler index, a service other processes hand off to. What is **permitted** is a **local, embedded, opt-in, non-coordinating run index derived from the event stream**: an extension of the run store (see "The shape of a run") that the engine writes the way it already writes the event stream — no server, coordinating nothing, off by default, with the event stream remaining the source of truth. That carve-out is decided in ADR 097 (T82); it moves nothing else on this list.
 
 **Also permanent: the graph's shape never changes at runtime.** A task that discovers N files at runtime does not become N nodes. The blessed pattern is one node that iterates internally with bounded concurrency, declaring the cost of its internal parallelism honestly (C5, C12) and reporting per-item progress through metrics (C23) and scratch checkpoints (C18). A bounded intra-task executor that draws sub-permits from the admission pools may be added later; runtime graph expansion will not.
 
@@ -65,6 +65,8 @@ A run passes through four phases, and the boundary between the first two is load
 4. **Shutdown.** Drain or cancel in-flight work, run teardown nodes, flush the event stream, exit with a truthful code.
 
 **The run store.** One operator-supplied base location — a local path by default, supplied by flag or environment variable — under which everything a run leaves behind lives: `<base>/<pipeline>/<run-id>/` holds the event stream, both artifacts, and scratch. The event stream is written through an injected sink (append a line, flush); the default sink is a local file under the run store. Pointing the base at storage that survives the container — a mounted volume, a synced directory — is the operator's one job, and it is the *only* infrastructure this tool ever asks for. Runs whose store did not survive are not resumable; everything else works regardless.
+
+A **derived, opt-in run index** may be built over the event stream as an extension of the run store: a local, embedded, non-coordinating projection of the JSONL streams into a queryable form, off by default, giving one many-DAG binary a single place to query cross-run state. It coordinates nothing — the event stream stays the source of truth and the index is a guaranteed projection of it, not a second one. This is the "not a *coordinating* metadata store" carve-out above; the substrate and write model are decided in ADR 097 (T82).
 
 ---
 
