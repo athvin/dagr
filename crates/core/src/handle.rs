@@ -198,7 +198,7 @@ impl<T> Handle<T> {
     // binding; see `NodeId::from_name`.
     #[allow(
         dead_code,
-        reason = "crate-private registration seam consumed by T13 (flow builder) / T11 (binding)"
+        reason = "crate-private registration seam consumed by the flow builder and the binding module"
     )]
     pub(crate) fn for_registration(name: &str) -> Self {
         Self {

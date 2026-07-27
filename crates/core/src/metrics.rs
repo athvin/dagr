@@ -559,7 +559,7 @@ fn on_dealloc(size: usize) {
 // module.
 #[allow(
     unsafe_code,
-    reason = "GlobalAlloc is an inherently-unsafe trait; the C23 attributing allocator (arch.md C23) must implement it — it only forwards to System and updates atomics/thread-local"
+    reason = "GlobalAlloc is an inherently-unsafe trait; the attributing allocator must implement it — it only forwards to System and updates atomics/thread-local"
 )]
 unsafe impl GlobalAlloc for AttributingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
