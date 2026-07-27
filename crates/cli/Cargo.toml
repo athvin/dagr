@@ -180,6 +180,21 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
 
 [dev-dependencies]
+# trybuild — the `FlowBuilder` façade's compile-time safety corpus (T78,
+# tests/flow_builder_compile_fail.rs). The façade returns the real `Handle<T>` and
+# forwards to the stable-name-aware registrars, so its guarantees (wrong-type
+# wiring is a compile error, a `StableName`-less task cannot use the graph-emittable
+# `source`, no `run`/`into_pipeline` on the façade) are inherited from the engine and
+# must be *pinned* — a red build if any regresses. `trybuild` matches `.stderr`
+# byte-exactly under the workspace-pinned toolchain, which is exactly what pins those
+# diagnostics; it is a DEV-dependency only, so the shipped `dagr-cli` library and
+# binary never see it. Its transitive tree
+# (serde/serde_json/toml/glob/termcolor/unicode-ident) resolves to MIT + Unicode-3.0,
+# both already allowed in `deny.toml` (unicode-ident is already a build-time dep of
+# serde_derive), so it adds NO new licence surface — `cargo deny`/`cargo audit` stay
+# green. It is already a dev-dependency of `dagr-macros`, so it is in the lockfile.
+trybuild = "1"
+
 # libc — T36 (046) only. The C16 signal test proves the *end-to-end* OS-signal
 # path without killing the test-runner by `fork`ing a controlled child that
 # `raise`s SIGTERM/SIGINT at ITSELF and asserting the child took the cancellation
