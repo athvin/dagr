@@ -272,6 +272,31 @@ To host **many named flows** in one binary and select one per invocation
 the [flow-registry guide](docs/flow-registry.md) and the compiled example
 [`crates/cli/examples/multi_flow.rs`](crates/cli/examples/multi_flow.rs).
 
+To declare those DAGs with less boilerplate, use the **`#[dag]` attribute** — the
+declarative-DAG sugar (ADR 092): put `#[dag]` on a `fn(f: &mut FlowBuilder)`, and
+`dagr_cli::run` **auto-discovers** every DAG so the whole `main` is one line:
+
+```rust
+use dagr_cli::prelude::*; // or `use dagr_cli as dagr;` for the `dagr::run` spelling
+
+#[dag] // name defaults to the fn name; #[dag(name = "nightly")] overrides
+fn alpha(f: &mut FlowBuilder) {
+    let rows = f.source("extract", Extract { rows: 3 });
+    let _report = f.node("load", Load, rows); // wrong wiring => COMPILE error
+}
+
+fn main() -> std::process::ExitCode {
+    dagr_cli::run(std::env::args_os()).into()
+}
+```
+
+The app crate depends on `inventory = "0.3"`, and the `#[dag]`s live in the binary
+crate (`inventory` collects reliably only in the leaf binary; cross-crate DAG
+libraries are out of scope). See the [cookbook](docs/cookbook.md#declaring-dags-with-dag-and-running-them-with-one-line)
+and the compiled example
+[`crates/cli/examples/many_dags.rs`](crates/cli/examples/many_dags.rs). The
+hand-wired `FlowRegistry` above stays the explicit fallback.
+
 ## When not to use this
 
 A three-node script that runs one thing after another does not need a framework.

@@ -76,6 +76,7 @@ state classes, and the closed trigger-rule set — lives in
 6. [The non-`Send` capture error and its fixes](#the-non-send-capture-error-and-its-fixes)
 7. [Two same-typed resources via newtypes](#two-same-typed-resources-via-newtypes)
 8. [Common `#[task]` mistakes](#common-task-mistakes)
+9. [Declaring DAGs with `#[dag]` and running them with one line](#declaring-dags-with-dag-and-running-them-with-one-line)
 
 ---
 
@@ -432,3 +433,103 @@ actual types, so the mismatch is unambiguous. (Pinned: `fail/deps_mismatch.rs`.)
 > boundary under the workspace-pinned toolchain, and
 > `common_task_mistakes_have_compiling_fixes` in `crates/cli/tests/cookbook.rs`
 > proves each **fix** above compiles and runs through `RunnableFlow`.
+
+---
+
+## Declaring DAGs with `#[dag]` and running them with one line
+
+**The pattern:** just as [`#[task]`](#authoring-a-task-task-first-hand-written-impl-task-as-the-fallback)
+generates the `impl Task` so you write only `run`, the
+[`#[dag]`](../crates/macros/src/lib.rs) attribute (ADR 092) declares a DAG over the
+[`FlowBuilder`](../crates/cli/src/flow_builder.rs) façade and **auto-registers** it,
+so hosting many DAGs in one binary needs no hand-wired registry and `main` is one
+line. It is the sugar over the [flow-registry](flow-registry.md) machinery: you write
+`#[dag]` fns, and [`dagr_cli::run`](../crates/cli/src/run.rs) discovers every one at
+link time, builds the registry, and delegates to `run_registry` (which owns `list` /
+`graph <dag>` / `validate <dag>` / `run <dag>`).
+
+One authoring import brings the surface into scope; each `#[dag]` fn declares its
+nodes through the graph-emittable [`FlowBuilder::source`](../crates/cli/src/flow_builder.rs)
+/ [`node`](../crates/cli/src/flow_builder.rs) pair, and the whole binary is
+`dagr_cli::run`:
+
+```rust
+use dagr_cli::prelude::*; // #[task], #[dag], FlowBuilder, run, RunnableFlow, …
+
+#[dag] // name defaults to the fn name ("alpha"); #[dag(name = "nightly")] overrides
+fn alpha(f: &mut FlowBuilder) {
+    let rows = f.source("extract", Extract { rows: 3 }); // rows: Handle<Rows>
+    let _report = f.node("load", Load, rows);            // wrong wiring => COMPILE error
+}
+
+#[dag]
+fn beta(f: &mut FlowBuilder) {
+    let _report = f.source("aggregate", Aggregate { seed: 7 });
+}
+
+fn main() -> std::process::ExitCode {
+    // Discovers alpha + beta (sorted, deduped by name), delegates to run_registry.
+    dagr_cli::run(std::env::args_os()).into()
+}
+```
+
+The library owns every verb, so `list`, `graph <dag>`, `validate <dag>`, and
+`run <dag> --store DIR` all work against any declared DAG with no extra code — each
+`run <dag>` is its own independent run with its own run identity and store. Copy
+[`crates/cli/examples/many_dags.rs`](../crates/cli/examples/many_dags.rs) whole; it is
+the compiled, run reference for this pattern.
+
+**Two operator-facing obligations (ADR 092) — the docs state them because they are
+real:**
+
+1. **Your app crate depends on `inventory = "0.3"`.** `#[dag]` expands to
+   `::inventory::submit! { … }`, and `inventory`'s `$crate`-based macro resolves the
+   crate by the caller's own extern prelude with **no path override** — so your
+   `Cargo.toml` lists `inventory = "0.3"` directly, exactly as it already lists
+   `dagr-core` for `#[task]`:
+
+   ```toml
+   [dependencies]
+   dagr-cli = { git = "https://github.com/athvin/dagr" }
+   dagr-core = { git = "https://github.com/athvin/dagr" }
+   inventory = "0.3"
+   ```
+
+2. **`#[dag]` declarations live in the leaf binary crate.** `inventory` registers
+   life-before-`main` constructors in a linker section, so a submission is **reliably
+   collected only when it is compiled into the final linked binary** — a `#[dag]`
+   placed in a *dependency library* the binary does not otherwise reference is dropped
+   by linker dead-code elimination, and the binary sees zero DAGs. So put your
+   `#[dag]`s in the binary crate that calls `dagr_cli::run` (across as many of its
+   modules as you like). **Cross-crate DAG libraries are out of scope** for this
+   milestone — this is a real limitation of the `inventory` approach, not an
+   oversight. Prefer the short `dagr::run` spelling? Write `use dagr_cli as dagr;` at
+   zero cost — there is no `crates/dagr` facade crate (ADR 092 rejected it).
+
+**Grammar and its diagnostics.** `#[dag]` takes an optional `name = "…"` string
+literal (`#[dag]` alone = the fn name); anything else — `#[dag(bogus)]`,
+`#[dag(name = 42)]` — is a `compile_error!` naming the accepted form, and a fn with
+the wrong shape (no `&mut FlowBuilder` parameter) is a natural argument-count error at
+the generated factory. Each is a committed `trybuild` fixture in
+[`crates/macros/tests/expand/fail/`](../crates/macros/tests/expand)
+(`dag_bad_grammar.rs`, `dag_name_not_str.rs`, `dag_bad_signature.rs`). **Duplicate DAG
+*names* are not a compile error:** they surface at **runtime** — `dagr_cli::run`
+rejects two DAGs sharing a name with `InvalidUsage` before any flow is built (T79) —
+so there is no compile-fail fixture for a duplicate name.
+
+**The hand-wired `FlowRegistry` remains the explicit fallback.** `#[dag]` +
+`dagr_cli::run` is the auto-discovery *option*; when you want the registry spelled out
+in `main` (a computed flow set, a non-`#[dag]` factory, or simply no `inventory`
+dependency), build a [`FlowRegistry`](../crates/cli/src/registry.rs) by hand and call
+`run_registry` — see the [flow-registry guide](flow-registry.md) and
+[`crates/cli/examples/multi_flow.rs`](../crates/cli/examples/multi_flow.rs). Both
+produce the same `list` / `graph` / `validate` / `run` behaviour.
+
+> **Backing example + tests:** [`crates/cli/examples/many_dags.rs`](../crates/cli/examples/many_dags.rs)
+> is the compiled, run reference; `crates/cli/tests/dag_example_and_docs.rs`
+> (`many_dags_run_writes_an_on_disk_event_stream`,
+> `many_dags_graph_emits_through_the_sugar`) drives it end-to-end, and
+> `crates/cli/tests/dag_macro.rs` + `dag_auto_discovery.rs` prove `#[dag]` discovery
+> and the sort/dedup rules — all on both `ubuntu-latest` and `macos-latest`. The
+> grammar/signature diagnostics are pinned by
+> [`crates/macros/tests/trybuild.rs`](../crates/macros/tests/trybuild.rs).
