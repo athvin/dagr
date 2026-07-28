@@ -123,6 +123,7 @@ fn prior_for(pipeline: &Pipeline, states: &[(&str, TerminalState, Option<&str>)]
             PriorNode {
                 terminal: *terminal,
                 durable_reference: dref.map(str::to_string),
+                durable_reference_content_hash: None,
                 originating_run: "run-A".to_string(),
             },
         );
@@ -136,8 +137,9 @@ fn prior_for(pipeline: &Pipeline, states: &[(&str, TerminalState, Option<&str>)]
     }
 }
 
-/// The default probe: every reference exists.
-fn present(_node: &str, _reference: &str) -> ReferenceExistence {
+/// The default probe: every reference exists (the expected content hash, when
+/// present, is ignored — nothing is mutated).
+fn present(_node: &str, _reference: &str, _expected_hash: Option<&str>) -> ReferenceExistence {
     ReferenceExistence::Present
 }
 
@@ -270,7 +272,7 @@ fn dangling_durable_reference_fails_the_plan() {
             ("consume", TerminalState::Failed, None),
         ],
     );
-    let probe = |_node: &str, reference: &str| {
+    let probe = |_node: &str, reference: &str, _expected: Option<&str>| {
         if reference == "gone/ref" {
             ReferenceExistence::Absent
         } else {
@@ -306,10 +308,164 @@ fn undemanded_durable_success_with_a_dangling_ref_still_resumes() {
             ("consume", TerminalState::Succeeded, None),
         ],
     );
-    let probe = |_n: &str, _r: &str| ReferenceExistence::Absent;
+    let probe = |_n: &str, _r: &str, _e: Option<&str>| ReferenceExistence::Absent;
     let plan = plan_resume(&pipeline, &prior, "dagr@1", probe)
         .expect("an undemanded durable success is not existence-checked");
     assert!(plan.must_run().is_empty(), "a full success is a no-op");
+}
+
+// ===========================================================================
+// T89 · mutation detection: a recorded content hash that no longer matches the
+// referent's current hash REFUSES up front (parity with DanglingReference),
+// naming the node + expected/actual hash. Matching → rehydrate proceeds; no
+// recorded hash → behavior exactly as today (Present/Absent/CannotDetermine).
+// ===========================================================================
+
+/// A prior run like [`prior_for`] but recording a durable-reference content hash
+/// on the named producer, so the probe can verify it.
+fn prior_with_hash(
+    pipeline: &Pipeline,
+    states: &[(&str, TerminalState, Option<&str>, Option<&str>)],
+) -> PriorRun {
+    let fp = pipeline.fingerprint();
+    let mut nodes = BTreeMap::new();
+    for (name, terminal, dref, hash) in states {
+        nodes.insert(
+            (*name).to_string(),
+            PriorNode {
+                terminal: *terminal,
+                durable_reference: dref.map(str::to_string),
+                durable_reference_content_hash: hash.map(str::to_string),
+                originating_run: "run-A".to_string(),
+            },
+        );
+    }
+    PriorRun {
+        structural_fingerprint: fp.structural(),
+        policy_hash: fp.policy(),
+        algorithm_version: fp.algorithm_version(),
+        tool_version: "dagr@1".to_string(),
+        nodes,
+    }
+}
+
+/// **A mutated referent refuses.** A demanded durable reference still EXISTS, but
+/// its current content hash differs from the one recorded in the prior run — the
+/// referent was overwritten out-of-band. Resume refuses up front (naming the node
+/// and both hashes) rather than rehydrating stale bytes.
+#[test]
+fn a_mutated_durable_reference_refuses_the_plan() {
+    let pipeline = durable_chain();
+    let prior = prior_with_hash(
+        &pipeline,
+        &[
+            (
+                "produce",
+                TerminalState::Succeeded,
+                Some("live/ref"),
+                Some("sha256:original"),
+            ),
+            ("consume", TerminalState::Failed, None, None),
+        ],
+    );
+    // The referent exists but its content changed: the probe verifies the expected
+    // hash and reports the current (differing) one via `Changed`.
+    let probe = |_node: &str, _reference: &str, expected: Option<&str>| {
+        if expected == Some("sha256:original") {
+            ReferenceExistence::Changed {
+                actual: "sha256:overwritten".to_string(),
+            }
+        } else {
+            ReferenceExistence::Present
+        }
+    };
+    let refusal = plan_resume(&pipeline, &prior, "dagr@1", probe)
+        .expect_err("a mutated referent fails the plan before any node executes");
+    match refusal {
+        ResumeRefusal::MutatedReference {
+            node,
+            reference,
+            expected_hash,
+            actual_hash,
+        } => {
+            assert_eq!(node, "produce", "the refusal names the offending node");
+            assert_eq!(reference, "live/ref");
+            assert_eq!(expected_hash, "sha256:original");
+            assert_eq!(actual_hash, "sha256:overwritten");
+        }
+        other => panic!("expected a mutated-reference refusal, got {other:?}"),
+    }
+}
+
+/// **A matching content hash proceeds to rehydration.** The referent's current
+/// hash equals the recorded one — the value is intact, so it rehydrates as usual.
+#[test]
+fn a_matching_content_hash_rehydrates() {
+    let pipeline = durable_chain();
+    let prior = prior_with_hash(
+        &pipeline,
+        &[
+            (
+                "produce",
+                TerminalState::Succeeded,
+                Some("live/ref"),
+                Some("sha256:original"),
+            ),
+            ("consume", TerminalState::Failed, None, None),
+        ],
+    );
+    // The probe verifies the hash and finds it intact.
+    let probe = |_node: &str, _reference: &str, expected: Option<&str>| {
+        if expected == Some("sha256:original") {
+            ReferenceExistence::Present
+        } else {
+            ReferenceExistence::Present
+        }
+    };
+    let plan = plan_resume(&pipeline, &prior, "dagr@1", probe)
+        .expect("a matching content hash rehydrates, never refuses");
+    assert_eq!(
+        plan.rehydrate().get("produce").map(String::as_str),
+        Some("live/ref"),
+        "the intact durable producer is rehydrated for its re-running consumer"
+    );
+}
+
+/// **No recorded hash behaves exactly as today.** With no content hash on the
+/// prior record, the probe is called with `expected_hash == None` and the plan
+/// proceeds on Present/Absent/CannotDetermine alone (the pre-T89 contract).
+#[test]
+fn no_recorded_hash_behaves_as_before() {
+    let pipeline = durable_chain();
+    let prior = prior_with_hash(
+        &pipeline,
+        &[
+            (
+                "produce",
+                TerminalState::Succeeded,
+                Some("live/ref"),
+                None, // no recorded content hash
+            ),
+            ("consume", TerminalState::Failed, None, None),
+        ],
+    );
+    let seen_expected = std::cell::Cell::new(Some("sentinel"));
+    let probe = |_node: &str, _reference: &str, expected: Option<&str>| {
+        seen_expected.set(expected.map(|_| "some"));
+        ReferenceExistence::Present
+    };
+    let plan = plan_resume(&pipeline, &prior, "dagr@1", probe)
+        .expect("with no recorded hash the plan proceeds exactly as before");
+    assert_eq!(
+        seen_expected.get(),
+        None,
+        "the probe is handed no expected hash when none was recorded"
+    );
+    assert_eq!(
+        plan.rehydrate().get("produce").map(String::as_str),
+        Some("live/ref"),
+        "rehydration proceeds unchanged when no hash was recorded"
+    );
 }
 
 // ===========================================================================
