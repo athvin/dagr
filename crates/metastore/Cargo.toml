@@ -37,6 +37,23 @@ authors.workspace = true
 name = "dagr_metastore"
 path = "src/lib.rs"
 
+# write_worker — a TEST-SUPPORT binary only (T85). It is a real OS-process
+# metastore writer the multi-process harness (`tests/multiprocess_writes.rs`)
+# spawns via `std::process::Command`, so the "many processes write one file"
+# claim is proven with genuine *processes*, not threads. Nothing depends on it;
+# it exists purely so a test in this crate can `env!("CARGO_BIN_EXE_write_worker")`
+# it. `doc = false` keeps it off the rustdoc surface; `test = false`/`bench = false`
+# keep it out of the test/bench harness collection (it has its own `fn main`).
+# It compiles under `cargo build --all` (metastore is a normal member), which is
+# fine — the zero-dep-core guarantee is about `dagr-core`, and this bin lives in
+# the crate that already owns the `libsql` edge.
+[[bin]]
+name = "write_worker"
+path = "src/bin/write_worker.rs"
+doc = false
+test = false
+bench = false
+
 [dependencies]
 # dagr-artifact — the ONLY workspace edge (ADR 097 §5): this crate maps the
 # event/artifact types (and later folds event streams via `fold_stream`) into
