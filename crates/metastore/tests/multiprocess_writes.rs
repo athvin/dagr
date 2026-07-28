@@ -162,13 +162,16 @@ fn cleanup(store: &Path) {
         p.push(suffix);
         let _ = std::fs::remove_file(PathBuf::from(p));
     }
-    // Best-effort barrier-marker sweep.
+    // Best-effort sweep of the sidecar rendezvous markers (barrier ready/go files
+    // and the holder-acquired marker), so the temp dir does not accumulate.
     if let Some(dir) = store.parent() {
         if let Some(stem) = store.file_name().and_then(|s| s.to_str()) {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     if let Some(name) = entry.file_name().to_str() {
-                        if name.starts_with(stem) && name.contains(".barrier") {
+                        if name.starts_with(stem)
+                            && (name.contains(".barrier") || name.contains(".holder-acquired"))
+                        {
                             let _ = std::fs::remove_file(entry.path());
                         }
                     }
@@ -413,9 +416,24 @@ fn over_contention_past_the_cap_surfaces_a_hard_visible_error() {
 
     // Now the holder grabs and holds the single WAL writer ~2s (one run, held
     // inside the txn), monopolising it while the wedger tries to write. No barrier —
-    // it starts immediately, and its open is a no-op over the existing schema.
-    let holder = spawn_worker(&store, "holder", 1, 0, None, &["--hold-ms", "2000"]);
-    wait_until_holder_is_writing(&store);
+    // it starts immediately, and its open is a no-op over the existing schema. It
+    // writes an `--acquired-marker` the instant its BEGIN IMMEDIATE txn owns the
+    // writer (its INSERT landed, before the 2s hold), so we release the wedger on a
+    // deterministic *observable* signal — not on a `-wal`-exists guess or a sleep.
+    let acquired = holder_acquired_marker(&store);
+    let _ = std::fs::remove_file(&acquired);
+    let acquired_arg = acquired
+        .to_str()
+        .expect("the acquired-marker temp path is valid UTF-8");
+    let holder = spawn_worker(
+        &store,
+        "holder",
+        1,
+        0,
+        None,
+        &["--hold-ms", "2000", "--acquired-marker", acquired_arg],
+    );
+    wait_until_holder_holds_the_writer(&acquired);
 
     // Release the wedger into its data write against the held writer.
     fire_go(&barrier);
@@ -458,25 +476,33 @@ fn over_contention_past_the_cap_surfaces_a_hard_visible_error() {
     cleanup(&store);
 }
 
-/// Give the holder a moment to acquire the WAL writer before the wedger tries.
-/// The holder holds its lock *inside* an uncommitted transaction, so its row is
-/// not observable yet — instead we wait for its `-wal` sidecar to appear (proof
-/// the holder has begun writing) and add a short grace. This is a liveness nudge,
-/// not a correctness-ordering assumption between the two writes: the holder's 2 s
-/// hold dominates both this grace and the wedger's whole retry budget, so the
-/// wedge is deterministic regardless of the exact interleaving.
-fn wait_until_holder_is_writing(store: &Path) {
-    let mut wal = store.as_os_str().to_os_string();
-    wal.push("-wal");
-    let wal = PathBuf::from(wal);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !wal.exists() {
+/// The observable marker the holder creates the instant its `BEGIN IMMEDIATE`
+/// transaction owns the WAL writer (its INSERT landed, before the hold). The
+/// harness releases the wedger only after this appears.
+fn holder_acquired_marker(store: &Path) -> PathBuf {
+    let mut p = store.as_os_str().to_os_string();
+    p.push(".holder-acquired");
+    PathBuf::from(p)
+}
+
+/// Block until the holder *provably* holds the WAL writer, signalled by its
+/// `--acquired-marker` file (written inside its transaction, after `BEGIN
+/// IMMEDIATE` + the INSERT, before the 2 s hold). This is a **deterministic**
+/// rendezvous, not a timing guess: it does not fire the wedger until the holder
+/// genuinely owns the writer, so the wedge holds regardless of macOS's slower
+/// process-spawn timing (the prior `-wal`-exists heuristic could fire before the
+/// writer lock was taken — the file exists from the pre-created schema — letting
+/// a slowly-spawned holder lose the race and the wedger slip its write in). The
+/// holder's 2 s hold then dominates the wedger's entire retry budget, so the
+/// exhaustion is guaranteed.
+fn wait_until_holder_holds_the_writer(acquired: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !acquired.exists() {
         assert!(
             Instant::now() < deadline,
-            "the holder process never began writing (no -wal sidecar appeared)"
+            "the holder never signalled it acquired the WAL writer (its --acquired-marker \
+             never appeared — the holder process failed to start or to take the writer)"
         );
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(2));
     }
-    // Short grace so the holder's BEGIN IMMEDIATE has certainly acquired the writer.
-    std::thread::sleep(Duration::from_millis(150));
 }

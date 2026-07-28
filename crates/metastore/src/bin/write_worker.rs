@@ -35,6 +35,13 @@
 //! - `--hold-ms <ms>` — optional: hold each `BEGIN IMMEDIATE` write lock this long
 //!   inside the txn (used by the wedger to create pathological contention the
 //!   retry cap cannot outlast).
+//! - `--acquired-marker <path>` — optional: the instant this worker's first write
+//!   transaction has acquired the WAL writer (its INSERT succeeded, before the
+//!   `--hold-ms` hold begins), create this observable marker file. The
+//!   over-contention harness waits on it to release the contending writer only
+//!   once the holder *provably* owns the writer, so the wedge is deterministic
+//!   regardless of macOS's slower process-spawn timing (no `-wal`-exists guess,
+//!   no sleep).
 //!
 //! # Exit code
 //!
@@ -66,6 +73,7 @@ struct Args {
     barrier: Option<PathBuf>,
     max_attempts: Option<u32>,
     hold: Duration,
+    acquired_marker: Option<PathBuf>,
 }
 
 fn main() -> std::process::ExitCode {
@@ -132,7 +140,14 @@ async fn run(args: Args) -> std::process::ExitCode {
         // (run_id, node_id, try_number) key space this worker writes is disjoint
         // from every other worker's — zero row overlap by construction.
         let run_id = format!("{}-run-{run_idx}", args.run_prefix);
-        if let Err(code) = write_one_run(&store, &args, &run_id).await {
+        // The acquired-marker fires exactly once, on the FIRST run's dag_run write,
+        // the instant this worker holds the writer (see `write_one_run`).
+        let acquired = if run_idx == 0 {
+            args.acquired_marker.as_deref()
+        } else {
+            None
+        };
+        if let Err(code) = write_one_run(&store, &args, &run_id, acquired).await {
             return code;
         }
     }
@@ -148,14 +163,17 @@ async fn write_one_run(
     store: &MetaStore,
     args: &Args,
     run_id: &str,
+    acquired_marker: Option<&std::path::Path>,
 ) -> Result<(), std::process::ExitCode> {
     // The dag_run row (state='running', started at offset 0 — the mapping's
     // convention). One transaction.
     let rid = run_id.to_string();
     let hold = args.hold;
+    let marker = acquired_marker.map(std::path::Path::to_path_buf);
     let res = store
         .with_write_txn(move |c| {
             let rid = rid.clone();
+            let marker = marker.clone();
             Box::pin(async move {
                 c.execute(
                     &format!(
@@ -165,6 +183,11 @@ async fn write_one_run(
                     (),
                 )
                 .await?;
+                // The writer is now provably held (BEGIN IMMEDIATE succeeded and this
+                // INSERT committed to the txn). Announce it BEFORE the hold so the
+                // harness releases the contending writer only once this txn owns the
+                // WAL writer — a deterministic rendezvous, not a `-wal`-exists guess.
+                announce_acquired(marker.as_deref());
                 hold_lock(hold).await;
                 Ok(())
             })
@@ -196,6 +219,18 @@ async fn write_one_run(
         classify(res, &args.run_prefix)?;
     }
     Ok(())
+}
+
+/// Create the `--acquired-marker` file (best-effort) the instant the writer is
+/// held, so the over-contention harness can release the contending writer on an
+/// observable signal rather than guessing from the `-wal` sidecar (which exists
+/// well before the writer lock is taken). `None` (or a marker already present) is
+/// a no-op. A write error here does not fail the worker — the marker is a test
+/// rendezvous, not part of the write correctness.
+fn announce_acquired(marker: Option<&std::path::Path>) {
+    if let Some(path) = marker {
+        let _ = std::fs::write(path, b"acquired");
+    }
 }
 
 /// Optionally hold the write lock open for `hold` inside the transaction, to
@@ -272,6 +307,7 @@ fn parse_args() -> Result<Args, String> {
     let mut barrier: Option<PathBuf> = None;
     let mut max_attempts: Option<u32> = None;
     let mut hold_ms: u64 = 0;
+    let mut acquired_marker: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -288,6 +324,7 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--hold-ms" => hold_ms = parse_u64(&it_next(&mut it, &flag)?, "--hold-ms")?,
+            "--acquired-marker" => acquired_marker = Some(PathBuf::from(it_next(&mut it, &flag)?)),
             other => return Err(format!("unknown flag `{other}`")),
         }
     }
@@ -300,6 +337,7 @@ fn parse_args() -> Result<Args, String> {
         barrier,
         max_attempts,
         hold: Duration::from_millis(hold_ms),
+        acquired_marker,
     })
 }
 
