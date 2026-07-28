@@ -97,12 +97,34 @@ fi
 
 # --- 3. The M6->M7 diff introduces no scheduler/server/pgwire surface --------
 # Find the last M6 commit (the base the diff is measured from). Prefer the
-# checked-in T81 done-marker commit; if the SHA is unavailable (shallow clone),
-# fall back to the merge-base with main. The diff is over SHIPPED source only
-# (`crates/*/src`), never tests/examples (a gate's own test naturally mentions
-# these words in negation).
+# checked-in T81 done-marker commit (an immutable ancestor of this branch); if
+# that SHA is not yet present in the local object store — the CI case, where
+# `actions/checkout` makes a shallow (fetch-depth 1), detached-HEAD clone that
+# holds only the tip commit, so neither the old marker SHA nor a local/tracking
+# `main` ref exists — DEEPEN the clone by fetching exactly that pinned SHA from
+# `origin`. This keeps the diff base byte-identical to the dev box (the same
+# `620f511..HEAD` shipped-source diff, asserting the very same surface fact); it
+# only makes the base reachable where the clone was truncated. The fetch is a
+# best effort (non-fatal, quiet) so a full local clone — which already has the
+# ancestor — is unaffected. `origin/main`/`main` remain secondary fallbacks for
+# any environment where the marker SHA is genuinely gone. The diff is over
+# SHIPPED source only (`crates/*/src`), never tests/examples (a gate's own test
+# naturally mentions these words in negation).
+m6_marker=620f511
+if ! git rev-parse --verify --quiet "${m6_marker}^{commit}" >/dev/null 2>&1 \
+   && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+  # Shallow/CI clone: DEEPEN the already-fetched branch tip until the pinned M6
+  # ancestor is in the local object store. `--deepen` extends the existing ref's
+  # history (unlike a bare `fetch <sha>`, it needs no `uploadpack.allowAnySHA1InWant`
+  # on the server), so it works on any host. The marker is an ancestor of HEAD a
+  # few dozen commits back; 200 is generous headroom while staying far short of a
+  # full `--unshallow`. Best effort (quiet, non-fatal) — a full clone never enters
+  # this branch, and if it fails the `origin/main`/`main` fallbacks and the FAIL
+  # below still apply.
+  git fetch --quiet --deepen=200 origin >/dev/null 2>&1 || true
+fi
 m6_base=""
-for cand in 620f511 origin/main main; do
+for cand in "$m6_marker" origin/main main; do
   if git rev-parse --verify --quiet "${cand}^{commit}" >/dev/null 2>&1; then
     m6_base="$cand"; break
   fi
@@ -116,7 +138,11 @@ if [ -n "$m6_base" ]; then
   # any `sqld` URL FIELD are NOT a surface (they return ModeNotImplemented), so
   # the pattern targets wired symbols, not the seam's doc/field mentions.
   forbidden='pgwire|pg_wire|postgres.*wire protocol|TcpListener|UdpSocket|::bind\(|\.serve\(|\.listen\(|axum|actix|warp::|hyper::(Server|server)|tonic::|struct[[:space:]]+[A-Za-z_]*Scheduler|impl[[:space:]]+[A-Za-z_]*Scheduler|embedded_replica\(|sync_from_remote'
-  hits=$(git diff "$m6_base"..HEAD -- 'crates/*/src' 2>/dev/null \
+  # Pathspec note: `crates/*/src/*` (trailing `/*`) is what actually matches the
+  # CONTENTS of each crate's src tree — a bare `crates/*/src` matches only a path
+  # element literally named `src` and so diffs NOTHING (a silently-vacuous scan).
+  # This scans the real ~3k added M7 shipped-source lines (T83–T88 metastore code).
+  hits=$(git diff "$m6_base"..HEAD -- 'crates/*/src/*' 2>/dev/null \
            | grep -E '^\+' \
            | grep -vE '^\+\+\+' \
            | grep -EI "$forbidden")
