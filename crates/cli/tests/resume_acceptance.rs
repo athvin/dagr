@@ -58,8 +58,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use dagr_artifact::event_stream::{
-    record_durable_reference, AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock,
-    RunId as WireRunId, RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
+    record_durable_reference, record_durable_reference_meta, AttemptOutcomeRecord,
+    DurableReferenceMeta, EventSink, EventStreamWriter, MonotonicClock, RunId as WireRunId,
+    RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
     FINGERPRINT_ALGORITHM_VERSION,
 };
 use dagr_artifact::fold::fold_stream;
@@ -295,6 +296,9 @@ struct PriorAttempt {
     node: &'static str,
     status: WireTerminalState,
     durable_reference: Option<String>,
+    /// The durable-reference content hash the prior run recorded (T89), when the
+    /// durable output supplied one. `None` for the pre-T89 shape.
+    content_hash: Option<String>,
 }
 
 impl PriorAttempt {
@@ -303,6 +307,7 @@ impl PriorAttempt {
             node,
             status: WireTerminalState::Succeeded,
             durable_reference: None,
+            content_hash: None,
         }
     }
     fn durable_ok(node: &'static str, reference: String) -> Self {
@@ -310,6 +315,16 @@ impl PriorAttempt {
             node,
             status: WireTerminalState::Succeeded,
             durable_reference: Some(reference),
+            content_hash: None,
+        }
+    }
+    /// A durable success recording BOTH a reference and a content hash (T89).
+    fn durable_ok_with_hash(node: &'static str, reference: String, content_hash: String) -> Self {
+        Self {
+            node,
+            status: WireTerminalState::Succeeded,
+            durable_reference: Some(reference),
+            content_hash: Some(content_hash),
         }
     }
     fn failed(node: &'static str) -> Self {
@@ -317,6 +332,7 @@ impl PriorAttempt {
             node,
             status: WireTerminalState::Failed,
             durable_reference: None,
+            content_hash: None,
         }
     }
 }
@@ -394,6 +410,12 @@ fn stage_prior_run(
         if a.durable_reference.is_some() {
             record_durable_reference(&mut rec, a.durable_reference.clone());
         }
+        if let Some(hash) = &a.content_hash {
+            record_durable_reference_meta(
+                &mut rec,
+                Some(DurableReferenceMeta::new().content_hash(hash.clone())),
+            );
+        }
         writer.attempt_outcome(rec).unwrap();
         writer.node_terminal(a.node, a.status).unwrap();
         offset += 10;
@@ -422,14 +444,15 @@ fn stage_prior_run(
     json_bytes
 }
 
-/// The always-present existence probe: every durable reference resolves.
-fn present(_n: &str, _r: &str) -> ReferenceExistence {
+/// The always-present existence probe: every durable reference resolves (the
+/// recorded content hash, when any, is ignored — nothing was mutated).
+fn present(_n: &str, _r: &str, _expected_hash: Option<&str>) -> ReferenceExistence {
     ReferenceExistence::Present
 }
 
 /// The always-absent existence probe (a deleted object): every durable reference
 /// is gone — the dangling-reference plan failure.
-fn absent(_n: &str, _r: &str) -> ReferenceExistence {
+fn absent(_n: &str, _r: &str, _expected_hash: Option<&str>) -> ReferenceExistence {
     ReferenceExistence::Absent
 }
 
@@ -453,7 +476,7 @@ fn resume_with<P>(
     probe: P,
 ) -> ResumeOutcome
 where
-    P: Fn(&str, &str) -> ReferenceExistence,
+    P: Fn(&str, &str, Option<&str>) -> ReferenceExistence,
 {
     resume_verb(pipeline, prior_bytes, options, probe)
 }
@@ -1076,6 +1099,104 @@ fn dangling_durable_reference_fails_the_plan_up_front() {
     assert!(
         message.contains(&prior_ref),
         "and the dangling reference itself: {message}"
+    );
+}
+
+/// **A durable reference whose referent was overwritten out-of-band fails the
+/// resume plan up front (T89).** Prior run: `produce` (durable) succeeded recording
+/// BOTH a reference and a content hash; `consume` failed and demands it. The
+/// referent still exists, but the existence probe verifies the recorded hash and
+/// finds it CHANGED — so resume refuses with the resume-refusal exit code and a
+/// message naming the node and both hashes, rather than rehydrating stale bytes. No
+/// node re-executes; parity with the dangling-reference refusal, applied to content.
+#[test]
+fn a_mutated_durable_reference_fails_the_plan_up_front() {
+    let pipeline = durable_chain();
+    let prior_ref = Blob("PRIOR-VALUE".into()).serialize_reference();
+    let prior = stage_prior_run(
+        &pipeline,
+        PIPE,
+        "run-A",
+        &[],
+        None,
+        None,
+        &[
+            PriorAttempt::durable_ok_with_hash(
+                "produce",
+                prior_ref.clone(),
+                "sha256:original".to_string(),
+            ),
+            PriorAttempt::failed("consume"),
+        ],
+        RunOutcome::Failed,
+    );
+
+    // The demanded reference still EXISTS, but its content hash changed out-of-band:
+    // the probe verifies the recorded expected hash and reports the current one.
+    let mutated = |_n: &str, _r: &str, expected: Option<&str>| {
+        if expected == Some("sha256:original") {
+            ReferenceExistence::Changed {
+                actual: "sha256:overwritten".to_string(),
+            }
+        } else {
+            ReferenceExistence::Present
+        }
+    };
+    let (code, message) = expect_refused(resume_with(&pipeline, &prior, &opts("run-B"), mutated));
+    assert_eq!(
+        code,
+        ExitCode::ResumeRefusal,
+        "a mutated reference → resume-refusal exit code"
+    );
+    assert!(
+        message.contains("produce"),
+        "the plan failure names the offending node: {message}"
+    );
+    assert!(
+        message.contains("sha256:original") && message.contains("sha256:overwritten"),
+        "the refusal reports both the recorded and actual content hashes: {message}"
+    );
+}
+
+/// **A matching content hash rehydrates (T89 control).** Same prior run as the
+/// mutation test, but the probe verifies the recorded hash and finds it INTACT — so
+/// resume proceeds and rehydrates the demanded durable producer for `consume`.
+#[test]
+fn a_matching_content_hash_rehydrates_on_resume() {
+    let pipeline = durable_chain();
+    let prior_ref = Blob("PRIOR-VALUE".into()).serialize_reference();
+    let prior = stage_prior_run(
+        &pipeline,
+        PIPE,
+        "run-A",
+        &[],
+        None,
+        None,
+        &[
+            PriorAttempt::durable_ok_with_hash(
+                "produce",
+                prior_ref.clone(),
+                "sha256:original".to_string(),
+            ),
+            PriorAttempt::failed("consume"),
+        ],
+        RunOutcome::Failed,
+    );
+
+    // The probe verifies the hash and finds it intact.
+    let intact = |_n: &str, _r: &str, expected: Option<&str>| {
+        assert_eq!(
+            expected,
+            Some("sha256:original"),
+            "the recorded content hash reaches the probe"
+        );
+        ReferenceExistence::Present
+    };
+    let (_artifact, plan) = expect_resumed(resume_with(&pipeline, &prior, &opts("run-B"), intact));
+    assert_eq!(
+        plan.rehydrate().get("produce").map(String::as_str),
+        Some(prior_ref.as_str()),
+        "the intact durable producer is rehydrated for its re-running consumer"
     );
 }
 

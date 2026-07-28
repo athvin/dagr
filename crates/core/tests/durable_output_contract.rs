@@ -14,7 +14,7 @@
 //! choice), trivially serde-serializable downstream and round-tripping through the
 //! artifact schema's opaque `durable_reference` slot.
 
-use dagr_core::assembly::{DurableOutput, NodePolicy, ProblemKind};
+use dagr_core::assembly::{DurableOutput, DurableReferenceMeta, NodePolicy, ProblemKind};
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;
 use dagr_core::{RehydrateError, RunContext, TaskError};
@@ -184,6 +184,102 @@ fn durable_with_the_full_contract_assembles() {
     pipeline
         .assemble()
         .expect("a durable node whose output implements the full contract assembles");
+}
+
+// ---------------------------------------------------------------------------
+// T89 · optional durable-reference metadata on the OUTPUT TYPE.
+//
+// A `DurableOutput` impl MAY supply `durable_reference_meta { content_hash,
+// size_bytes, scheme, produced_at_offset_ns }` alongside its reference; the
+// default supplies NONE, so an existing impl is unchanged. The metadata is the
+// impl's choice — core forces no hashing and carries only an `Option`.
+// ---------------------------------------------------------------------------
+
+/// A durable output type that opts INTO metadata: it supplies a content hash,
+/// size, scheme, and produced-at offset for its reference. The hash here is a
+/// trivial inline digest — core demands no hashing dependency of an impl.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MetaSnapshot {
+    key: String,
+    payload: String,
+}
+
+impl DurableOutput for MetaSnapshot {
+    fn serialize_reference(&self) -> String {
+        self.key.clone()
+    }
+    fn rehydrate(reference: &str) -> Result<Self, RehydrateError> {
+        Ok(Self {
+            key: reference.to_string(),
+            payload: String::new(),
+        })
+    }
+    fn durable_reference_meta(&self) -> Option<DurableReferenceMeta> {
+        // A trivial inline FNV-ish hash of the payload — the impl's choice.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in self.payload.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(
+            DurableReferenceMeta::new()
+                .content_hash(format!("fnv:{h:016x}"))
+                .size_bytes(self.payload.len() as u64)
+                .scheme("file")
+                .produced_at_offset_ns(4242),
+        )
+    }
+}
+
+#[test]
+fn the_default_durable_reference_meta_is_none() {
+    // `Snapshot` does not override `durable_reference_meta`, so it supplies none —
+    // behavior unchanged from the pre-T89 contract.
+    let produced = Snapshot::write("nometa/key", "bytes");
+    assert_eq!(
+        produced.durable_reference_meta(),
+        None,
+        "an impl that supplies no metadata reports None (behavior unchanged)"
+    );
+}
+
+#[test]
+fn an_impl_may_supply_durable_reference_metadata() {
+    let produced = MetaSnapshot {
+        key: "meta/key".to_string(),
+        payload: "the-produced-bytes".to_string(),
+    };
+    let meta = produced
+        .durable_reference_meta()
+        .expect("this impl supplies metadata");
+    assert_eq!(meta.get_scheme(), Some("file"));
+    assert_eq!(
+        meta.get_size_bytes(),
+        Some("the-produced-bytes".len() as u64)
+    );
+    assert_eq!(meta.get_produced_at_offset_ns(), Some(4242));
+    let hash = meta.get_content_hash().expect("a content hash is supplied");
+    assert!(
+        hash.starts_with("fnv:"),
+        "the content hash is the impl's own opaque digest, carried verbatim"
+    );
+    // The reference itself stays the task's opaque string (T57 contract intact).
+    assert_eq!(produced.serialize_reference(), "meta/key");
+}
+
+#[test]
+fn durable_reference_meta_fields_are_each_optional() {
+    // A partial metadata value — only a content hash — is expressible; every
+    // other field stays None.
+    let meta = DurableReferenceMeta::new().content_hash("sha256:abc");
+    assert_eq!(meta.get_content_hash(), Some("sha256:abc"));
+    assert_eq!(meta.get_size_bytes(), None);
+    assert_eq!(meta.get_scheme(), None);
+    assert_eq!(meta.get_produced_at_offset_ns(), None);
+    // An entirely empty metadata value is also expressible (all fields None).
+    let empty = DurableReferenceMeta::new();
+    assert_eq!(empty.get_content_hash(), None);
+    assert!(empty.is_empty());
 }
 
 #[test]

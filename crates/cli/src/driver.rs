@@ -337,6 +337,7 @@ impl CancelTrigger {
                 state: TerminalState::Cancelled,
                 events: Vec::new(),
                 durable_reference: None,
+                durable_reference_meta: None,
             });
         }
     }
@@ -665,6 +666,23 @@ pub trait NodeRunner: Send {
     /// the real `drive()` loop** — the resume gate demo's stage boundary depends on
     /// it.
     fn durable_reference(&self) -> Option<String> {
+        None
+    }
+
+    /// The **optional durable-reference metadata** this node's succeeded attempt
+    /// recorded (T89), or [`None`] when the durable output supplied none (or the
+    /// node is non-durable). Read by the driver **after** a successful attempt,
+    /// alongside [`durable_reference`](NodeRunner::durable_reference), and stamped
+    /// onto that attempt's `attempt-outcome` record via
+    /// `dagr_artifact::event_stream::record_durable_reference_meta`, so a later
+    /// resume can verify the referent was not overwritten out-of-band.
+    ///
+    /// The default is [`None`] — every existing runner reports no metadata and its
+    /// stream is byte-identical. A durable runner overrides this to supply the
+    /// metadata its output type produced (the additive
+    /// [`DurableOutput::durable_reference_meta`](dagr_core::assembly::DurableOutput::durable_reference_meta)
+    /// contract).
+    fn durable_reference_meta(&self) -> Option<dagr_artifact::event_stream::DurableReferenceMeta> {
         None
     }
 }
@@ -1251,6 +1269,11 @@ struct AttemptDone {
     /// `attempt-outcome` record so a later resume can rehydrate it. `None` for every
     /// non-durable node — the stream is then byte-identical.
     durable_reference: Option<String>,
+    /// The optional durable-reference metadata the node's succeeded attempt
+    /// recorded (T89), or [`None`] when none was supplied. Stamped alongside
+    /// `durable_reference`; `None` for every non-durable node, so the stream is
+    /// byte-identical.
+    durable_reference_meta: Option<dagr_artifact::event_stream::DurableReferenceMeta>,
 }
 
 /// The reserved sentinel node name for a **cancellation wake** pushed through the
@@ -1746,6 +1769,13 @@ where
                         &mut record,
                         done.durable_reference.clone(),
                     );
+                    // Alongside the reference, stamp the OPTIONAL metadata (T89) the
+                    // durable output supplied — `None` for a non-durable node leaves
+                    // the field absent, so a non-durable run's record is unchanged.
+                    dagr_artifact::event_stream::record_durable_reference_meta(
+                        &mut record,
+                        done.durable_reference_meta.clone(),
+                    );
                 }
                 let _ = writer.attempt_outcome(record);
             }
@@ -1995,6 +2025,7 @@ fn reject_over_demand(
             state: TerminalState::Failed,
         }],
         durable_reference: None,
+        durable_reference_meta: None,
     });
 }
 
@@ -2044,6 +2075,7 @@ fn cancel_node(
             state: TerminalState::Cancelled,
         }],
         durable_reference: None,
+        durable_reference_meta: None,
     });
     *in_flight += 1;
 }
@@ -2163,6 +2195,7 @@ where
             state: TerminalState::Failed,
             events: Vec::new(),
             durable_reference: None,
+            durable_reference_meta: None,
         });
         return;
     };
@@ -2235,6 +2268,14 @@ where
         } else {
             None
         };
+        // Alongside the reference, a durable runner may report OPTIONAL metadata
+        // (T89: content hash / size / scheme / produced-at). `None` for every
+        // non-durable node (the default), keeping the stream byte-identical.
+        let durable_reference_meta = if state == TerminalState::Succeeded {
+            runner.durable_reference_meta()
+        } else {
+            None
+        };
         // Release the admission permit at the attempt's terminal state (its working
         // memory + thread cost returns to the pools) BEFORE reporting done, so the
         // loop sees freed capacity when it re-offers the pending waiters. An
@@ -2242,7 +2283,13 @@ where
         // a blocking/compute-timeout zombie keeps it until its closure returns. The
         // permit drops on whichever surface ran the attempt.
         drop(permit);
-        (name_owned, state, sink.drain(), durable_reference)
+        (
+            name_owned,
+            state,
+            sink.drain(),
+            durable_reference,
+            durable_reference_meta,
+        )
     };
     // Route by class. `on_done` sends the finished attempt back to the framework
     // loop over `tx`; it runs on the surface the attempt ran on, off the framework
@@ -2250,12 +2297,13 @@ where
     dispatcher.dispatch(
         class,
         attempt,
-        move |(node, state, events, durable_reference)| {
+        move |(node, state, events, durable_reference, durable_reference_meta)| {
             let _ = tx.send(AttemptDone {
                 node,
                 state,
                 events,
                 durable_reference,
+                durable_reference_meta,
             });
         },
     );
@@ -2469,6 +2517,7 @@ fn run_teardown_phase<S, C>(
             state,
             events: sink.drain(),
             durable_reference: None,
+            durable_reference_meta: None,
         };
         record_teardown_outcome(&done, deadline_hit, writer, terminal_states);
     }

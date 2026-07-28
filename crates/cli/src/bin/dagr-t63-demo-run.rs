@@ -387,7 +387,11 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
 }
 
 /// The always-present existence probe (the durable stage-boundary object is on disk).
-fn present_probe(_node: &str, _reference: &str) -> ReferenceExistence {
+fn present_probe(
+    _node: &str,
+    _reference: &str,
+    _expected_hash: Option<&str>,
+) -> ReferenceExistence {
     ReferenceExistence::Present
 }
 

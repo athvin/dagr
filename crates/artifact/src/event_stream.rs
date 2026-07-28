@@ -253,6 +253,13 @@ pub struct AttemptOutcomeRecord {
     /// The durable-output reference a durable node's succeeded attempt records,
     /// or that a resume copies forward.
     pub durable_reference: Option<serde_json::Value>,
+    /// The **optional** durable-reference metadata (`content_hash`, `size_bytes`,
+    /// `scheme`, `produced_at_offset_ns`) the producing durable output supplied
+    /// alongside its reference, when any. `None` — the field absent — for a
+    /// non-durable attempt, a durable output that supplied no metadata, or a
+    /// resume that copied forward a reference recorded before metadata existed.
+    /// Carried as an opaque JSON object (the four fields are each optional).
+    pub durable_reference_meta: Option<serde_json::Value>,
     /// The originating run identity a `satisfied-from-prior` attempt carries.
     pub satisfied_from_run: Option<String>,
     /// The node that decided an `upstream-skipped`/`upstream-failed` propagation.
@@ -298,6 +305,119 @@ impl AttemptOutcomeRecord {
 /// [`durable_reference`]: AttemptOutcomeRecord::durable_reference
 pub fn record_durable_reference(record: &mut AttemptOutcomeRecord, reference: Option<String>) {
     record.durable_reference = reference.map(serde_json::Value::String);
+}
+
+/// The **optional** durable-reference metadata a durable output may supply
+/// alongside its reference: a content hash, size, scheme, and produced-at offset.
+///
+/// This mirrors `dagr_core::assembly::DurableReferenceMeta` (the artifact crate is
+/// dependency-free of core, so the shape is declared here too and the driver maps
+/// one to the other). Every field is optional. `dagr` records the value verbatim
+/// as an opaque object on the attempt; only the `content_hash` is load-bearing —
+/// resume verifies it to refuse on an out-of-band mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DurableReferenceMeta {
+    /// The reference's content hash — the producing impl's opaque digest.
+    pub content_hash: Option<String>,
+    /// The referent's size in bytes.
+    pub size_bytes: Option<u64>,
+    /// The reference's scheme (`"s3"`, `"file"`, …).
+    pub scheme: Option<String>,
+    /// The produced-at monotonic offset (nanoseconds from run start).
+    pub produced_at_offset_ns: Option<u64>,
+}
+
+impl DurableReferenceMeta {
+    /// A fresh, empty metadata value — every field absent.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the content hash.
+    #[must_use]
+    pub fn content_hash(mut self, hash: impl Into<String>) -> Self {
+        self.content_hash = Some(hash.into());
+        self
+    }
+
+    /// Set the size in bytes.
+    #[must_use]
+    pub fn size_bytes(mut self, bytes: u64) -> Self {
+        self.size_bytes = Some(bytes);
+        self
+    }
+
+    /// Set the scheme.
+    #[must_use]
+    pub fn scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = Some(scheme.into());
+        self
+    }
+
+    /// Set the produced-at monotonic offset (nanoseconds).
+    #[must_use]
+    pub fn produced_at_offset_ns(mut self, offset_ns: u64) -> Self {
+        self.produced_at_offset_ns = Some(offset_ns);
+        self
+    }
+
+    /// Whether every field is absent.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.content_hash.is_none()
+            && self.size_bytes.is_none()
+            && self.scheme.is_none()
+            && self.produced_at_offset_ns.is_none()
+    }
+
+    /// Render this metadata to the canonical opaque JSON object recorded on the
+    /// attempt: only the fields that were supplied appear (so an all-absent value
+    /// yields an empty object, and each field stays additive).
+    #[must_use]
+    pub fn to_value(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        if let Some(h) = &self.content_hash {
+            o.insert("content_hash".into(), serde_json::Value::from(h.clone()));
+        }
+        if let Some(s) = self.size_bytes {
+            o.insert("size_bytes".into(), serde_json::Value::from(s));
+        }
+        if let Some(s) = &self.scheme {
+            o.insert("scheme".into(), serde_json::Value::from(s.clone()));
+        }
+        if let Some(o_ns) = self.produced_at_offset_ns {
+            o.insert(
+                "produced_at_offset_ns".into(),
+                serde_json::Value::from(o_ns),
+            );
+        }
+        serde_json::Value::Object(o)
+    }
+}
+
+/// Record the **optional** durable-reference metadata onto an attempt's outcome
+/// record — the metadata companion to [`record_durable_reference`].
+///
+/// The caller passes:
+///
+/// - `Some(meta)` when the durable output supplied metadata (a content hash,
+///   size, scheme, and/or produced-at offset), stamping the opaque metadata object
+///   onto the record's [`durable_reference_meta`] slot, and
+/// - `None` (or a non-durable / non-succeeding attempt) — leaving the slot
+///   **absent** (never `null`-stamped), so a run with no metadata declaration is
+///   byte-identical.
+///
+/// The metadata is a plain serialized object; it carries no live handle. It is
+/// additive: a fold that predates the field ignores it, and a stream without it
+/// folds unchanged.
+///
+/// [`durable_reference_meta`]: AttemptOutcomeRecord::durable_reference_meta
+pub fn record_durable_reference_meta(
+    record: &mut AttemptOutcomeRecord,
+    meta: Option<DurableReferenceMeta>,
+) {
+    record.durable_reference_meta = meta.map(|m| m.to_value());
 }
 
 /// The normative terminal states from the event vocabulary.
@@ -851,6 +971,7 @@ fn attempt_outcome_fields(r: &AttemptOutcomeRecord) -> Vec<WireField> {
         ("cost_declared", &r.cost_declared),
         ("cost_measured", &r.cost_measured),
         ("durable_reference", &r.durable_reference),
+        ("durable_reference_meta", &r.durable_reference_meta),
     ] {
         if let Some(val) = opt {
             fields.push((name.to_string(), val.clone()));

@@ -306,8 +306,9 @@ pub mod task;
 pub mod test_kit;
 
 pub use assembly::{
-    AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableWitness, EffectivePolicy,
-    FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning, FINGERPRINT_ALGORITHM_VERSION,
+    AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableReferenceMeta,
+    DurableWitness, EffectivePolicy, FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning,
+    FINGERPRINT_ALGORITHM_VERSION,
 };
 pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, OrderingEdge, OrderingHandle,
