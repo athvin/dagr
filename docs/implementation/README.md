@@ -141,7 +141,7 @@ A lightweight, **embedded, opt-in** run index so one many-DAG binary has a singl
 - [x] **099** · [T84 — event→row mapping + `dagr metastore sync` (reconcile)](099-T84-metastore-reconcile-sync.md) · M · feature — after T83, T42
 - [x] **100** · [T85 — multi-process write validation + concurrency hardening](100-T85-metastore-multiprocess-write-tests.md) · M · feature (tests) — after T84, T67
 - [x] **101** · [T86 — guaranteed live metastore tee sink](101-T86-metastore-live-tee-sink.md) · M · feature — after T84, T24, T55
-- [ ] **102** · [T87 — native access, many-dags metastore example, and cookbook](102-T87-metastore-example-and-docs.md) · M · feature (docs) — after T86, T81
+- [x] **102** · [T87 — native access, many-dags metastore example, and cookbook](102-T87-metastore-example-and-docs.md) · M · feature (docs) — after T86, T81
 - [ ] **103** · [T88 — M7 metastore acceptance gate](103-T88-metastore-acceptance-gate.md) · M · feature (gate) — after T85, T86, T87
 
 ## M8 — Run/data lineage (fast-follow)
