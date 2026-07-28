@@ -237,6 +237,17 @@ jobs:
       - name: metastore sync verb (T84, --features metastore)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-cli --features metastore --test metastore_sync
+      # M7 live tee: the guaranteed live metastore tee sink (T86). The
+      # dagr-metastore MetastoreSink tests build under a plain
+      # `cargo test --workspace` above (the crate is a normal member, so its
+      # cross-platform coverage — including macOS — comes for free), but the CLI
+      # driver-boundary test (byte-identical stream, the sink-failure exit on a
+      # metastore write fault, toggle default-off) lives behind the default-off
+      # `metastore` feature, so it needs the feature ON here. Run it on BOTH tiers
+      # (the ticket DoD requires ubuntu + macOS) since the live sink exercises a
+      # worker thread + tokio runtime whose behavior is platform-relevant.
+      - name: metastore live tee (T86, --features metastore)
+        run: cargo test -p dagr-cli --features metastore --test metastore_live_tee
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference

@@ -620,9 +620,12 @@ pub fn banner_suppressed_by_env() -> bool {
 ///
 /// The specific `dagr.pool.compute-threads` / `dagr.pool.blocking-threads` /
 /// `dagr.pool.memory` pins (in place of a generic `pool` entry), together with
-/// `teardown-deadline` and `dagr.headroom-fraction`, ensure every runtime knob
+/// `teardown-deadline`, `dagr.headroom-fraction`, and the M7 live-index toggle
+/// `dagr.metastore` (+ its `dagr.metastore-store` path), ensure every runtime knob
 /// that gains a `DAGR_*` env fallback has its own reserved flag a pipeline
-/// parameter can never shadow.
+/// parameter can never shadow. The `dagr.metastore*` flags are always reserved (so
+/// the namespace is identical across builds), even though their wiring is behind
+/// the default-off `metastore` cargo feature.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -637,6 +640,8 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "dagr.pool.blocking-threads",
         "dagr.pool.memory",
         "dagr.headroom-fraction",
+        "dagr.metastore",
+        "dagr.metastore-store",
         "data-interval",
         "force",
         "run",

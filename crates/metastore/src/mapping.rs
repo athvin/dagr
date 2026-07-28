@@ -113,11 +113,66 @@ pub async fn sync_run(
     artifact: &RunArtifact,
     events_path: Option<&str>,
 ) -> Result<bool, WriteError> {
+    upsert_run(store, artifact, events_path, RunState::Terminal).await
+}
+
+/// The **live tee** projection (T86): project a folded artifact **while the run is
+/// still executing**, overriding the `dag_run.state` to `running` until the run
+/// finishes. This is the single seam the guaranteed live [`crate::live_sink::MetastoreSink`]
+/// upserts through on each event, reusing the very same `build_statements`
+/// projection and T83 [`MetaStore::with_write_txn`] write discipline that
+/// [`sync_run`] uses — so a live run and a post-hoc `sync` of the same finished
+/// stream converge on **byte-identical rows** (live == reconcile).
+///
+/// `still_running` is `true` while the stream has not yet carried its
+/// `run-finished` record (the run is in flight, `dag_run.state='running'`,
+/// `interrupted` still reflects the folded artifact); it becomes `false` at the
+/// `run-finished` event, at which point this call produces exactly what
+/// [`sync_run`] would (the folded terminal outcome). Every write is the same
+/// idempotent UPSERT, so re-projecting the growing stream on each event never
+/// duplicates a row and always converges on the reconcile projection.
+///
+/// # Errors
+/// Returns a [`WriteError`] if the write transaction fails (a non-busy libsql
+/// error, or the bounded busy-retry budget is exhausted).
+pub async fn sync_run_live(
+    store: &MetaStore,
+    artifact: &RunArtifact,
+    events_path: Option<&str>,
+    still_running: bool,
+) -> Result<bool, WriteError> {
+    let state = if still_running {
+        RunState::Running
+    } else {
+        RunState::Terminal
+    };
+    upsert_run(store, artifact, events_path, state).await
+}
+
+/// The `dag_run.state` a projection stamps: the folded terminal
+/// [`overall_outcome`](RunArtifact::overall_outcome) (`sync` and a finished live
+/// run), or the in-flight `running` sentinel (a live run before `run-finished`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunState {
+    /// Stamp `dag_run.state='running'` (the run is still executing).
+    Running,
+    /// Stamp the folded [`overall_outcome`](RunArtifact::overall_outcome).
+    Terminal,
+}
+
+/// Shared upsert path for [`sync_run`] and [`sync_run_live`]: build the projection
+/// (with the resolved run state) and run it in one `BEGIN IMMEDIATE` write txn.
+async fn upsert_run(
+    store: &MetaStore,
+    artifact: &RunArtifact,
+    events_path: Option<&str>,
+    run_state: RunState,
+) -> Result<bool, WriteError> {
     let run_id = artifact.header_run_id().to_string();
     let already = run_exists(store, &run_id).await?;
 
     // Build every statement up front (pure projection), then run them in one txn.
-    let statements = build_statements(artifact, events_path);
+    let statements = build_statements(artifact, events_path, run_state);
     store
         .with_write_txn(move |conn| {
             let statements = statements.clone();
@@ -152,7 +207,11 @@ async fn run_exists(store: &MetaStore, run_id: &str) -> Result<bool, WriteError>
 /// Build the full ordered statement list for one run: the `dag`/`dag_version`
 /// parents, the `dag_run` row, one `node_attempt` per [`AttemptRecord`], and the
 /// latest-per-node `node_terminal`. Every statement is an idempotent UPSERT.
-fn build_statements(artifact: &RunArtifact, events_path: Option<&str>) -> Vec<String> {
+fn build_statements(
+    artifact: &RunArtifact,
+    events_path: Option<&str>,
+    run_state: RunState,
+) -> Vec<String> {
     let run_id = artifact.header_run_id().to_string();
     let pipeline = artifact.header_pipeline().to_string();
     // The DAG identity is its pipeline (stable) name; a distinct structural
@@ -188,7 +247,15 @@ fn build_statements(artifact: &RunArtifact, events_path: Option<&str>) -> Vec<St
     }
 
     // --- dag_run ----------------------------------------------------------
-    let state = artifact.overall_outcome();
+    // The run state is the folded terminal outcome for `sync` and a finished live
+    // run; a live run still in flight overrides it to the `running` sentinel (the
+    // sixth `dag_run.state` value the schema's CHECK admits). The rest of the row
+    // (interrupted, timing, attempts) is the identical projection either way, so a
+    // finished live run and a post-hoc `sync` converge on byte-identical rows.
+    let state = match run_state {
+        RunState::Running => "running",
+        RunState::Terminal => artifact.overall_outcome(),
+    };
     let interrupted = i32::from(artifact.is_interrupted());
     let resumed_from = artifact.header_resumed_from();
     let params_json = Value::Object(artifact.header_parameters().clone()).to_string();
