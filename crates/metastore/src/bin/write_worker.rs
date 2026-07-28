@@ -35,10 +35,19 @@
 //! - `--hold-ms <ms>` — optional: hold each `BEGIN IMMEDIATE` write lock this long
 //!   inside the txn (used by the wedger to create pathological contention the
 //!   retry cap cannot outlast).
+//! - `--hold-until <path>` — optional: instead of holding each write lock for a
+//!   *fixed* duration, hold it (inside the txn, after the INSERT) until this
+//!   observable release-marker file appears, then commit. This is the deterministic
+//!   contention rendezvous for the over-contention test: the harness holds the WAL
+//!   writer until the contending writer has *provably* exhausted its retry cap and
+//!   exited, then creates the marker to release the holder — so the wedge lasts
+//!   exactly as long as it must, never a fixed sleep racing the contender's
+//!   (unbounded, on a starved CI runner) scheduling latency. A generous bounded
+//!   safety cap still applies so a harness bug cannot hang a CI job forever.
 //! - `--acquired-marker <path>` — optional: the instant this worker's first write
 //!   transaction has acquired the WAL writer (its INSERT succeeded, before the
-//!   `--hold-ms` hold begins), create this observable marker file. The
-//!   over-contention harness waits on it to release the contending writer only
+//!   `--hold-ms`/`--hold-until` hold begins), create this observable marker file.
+//!   The over-contention harness waits on it to release the contending writer only
 //!   once the holder *provably* owns the writer, so the wedge is deterministic
 //!   regardless of macOS's slower process-spawn timing (no `-wal`-exists guess,
 //!   no sleep).
@@ -73,6 +82,7 @@ struct Args {
     barrier: Option<PathBuf>,
     max_attempts: Option<u32>,
     hold: Duration,
+    hold_until: Option<PathBuf>,
     acquired_marker: Option<PathBuf>,
 }
 
@@ -142,12 +152,16 @@ async fn run(args: Args) -> std::process::ExitCode {
         let run_id = format!("{}-run-{run_idx}", args.run_prefix);
         // The acquired-marker fires exactly once, on the FIRST run's dag_run write,
         // the instant this worker holds the writer (see `write_one_run`).
-        let acquired = if run_idx == 0 {
-            args.acquired_marker.as_deref()
+        // The acquired-marker and the `--hold-until` release-marker both apply to
+        // the FIRST run's dag_run write only — the single write the holder makes
+        // in the over-contention test — so the holder owns the writer across
+        // exactly the window the harness observes and releases.
+        let (acquired, hold_until) = if run_idx == 0 {
+            (args.acquired_marker.as_deref(), args.hold_until.as_deref())
         } else {
-            None
+            (None, None)
         };
-        if let Err(code) = write_one_run(&store, &args, &run_id, acquired).await {
+        if let Err(code) = write_one_run(&store, &args, &run_id, acquired, hold_until).await {
             return code;
         }
     }
@@ -164,16 +178,19 @@ async fn write_one_run(
     args: &Args,
     run_id: &str,
     acquired_marker: Option<&std::path::Path>,
+    hold_until: Option<&std::path::Path>,
 ) -> Result<(), std::process::ExitCode> {
     // The dag_run row (state='running', started at offset 0 — the mapping's
     // convention). One transaction.
     let rid = run_id.to_string();
     let hold = args.hold;
     let marker = acquired_marker.map(std::path::Path::to_path_buf);
+    let release = hold_until.map(std::path::Path::to_path_buf);
     let res = store
         .with_write_txn(move |c| {
             let rid = rid.clone();
             let marker = marker.clone();
+            let release = release.clone();
             Box::pin(async move {
                 c.execute(
                     &format!(
@@ -188,7 +205,15 @@ async fn write_one_run(
                 // harness releases the contending writer only once this txn owns the
                 // WAL writer — a deterministic rendezvous, not a `-wal`-exists guess.
                 announce_acquired(marker.as_deref());
-                hold_lock(hold).await;
+                // Hold the writer: either until an observable release marker appears
+                // (`--hold-until`, the deterministic over-contention rendezvous) or
+                // for a fixed duration (`--hold-ms`). `hold-until` wins when both are
+                // given.
+                if let Some(release) = release.as_deref() {
+                    hold_until_marker(release).await;
+                } else {
+                    hold_lock(hold).await;
+                }
                 Ok(())
             })
         })
@@ -240,6 +265,36 @@ async fn hold_lock(hold: Duration) {
         tokio::time::sleep(hold).await;
     }
 }
+
+/// Hold the write lock open (inside the transaction, before commit) until the
+/// observable `release` marker appears — the **deterministic** contention hold the
+/// over-contention harness uses. The harness creates the marker only after the
+/// contending writer has provably exhausted its retry cap and exited, so the WAL
+/// writer stays held for exactly the wedge window regardless of how long the
+/// contender took to get scheduled on a starved CI runner (no fixed sleep racing
+/// an unbounded scheduling latency). A generous bounded cap (`HOLD_UNTIL_CAP`)
+/// backstops a harness bug so a CI job cannot hang forever; hitting it is a
+/// harness fault, not a normal path.
+async fn hold_until_marker(release: &std::path::Path) {
+    let deadline = tokio::time::Instant::now() + HOLD_UNTIL_CAP;
+    while !release.exists() {
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!(
+                "write_worker: hold-until cap reached before the release marker `{}` \
+                 appeared (harness fault — releasing the writer)",
+                release.display()
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// The bounded safety cap on a `--hold-until` hold: generous enough that it never
+/// bounds a legitimate wedge (the contender exhausts in well under a second), but
+/// finite so a harness bug that never fires the release marker cannot wedge a CI
+/// job indefinitely.
+const HOLD_UNTIL_CAP: Duration = Duration::from_mins(1);
 
 /// Map a `with_write_txn` result to a worker exit decision: `Ok` continues; a
 /// busy-cap exhaustion is the *visible* wedge (`EXIT_BUSY_EXHAUSTED`); any other
@@ -307,6 +362,7 @@ fn parse_args() -> Result<Args, String> {
     let mut barrier: Option<PathBuf> = None;
     let mut max_attempts: Option<u32> = None;
     let mut hold_ms: u64 = 0;
+    let mut hold_until: Option<PathBuf> = None;
     let mut acquired_marker: Option<PathBuf> = None;
 
     let mut it = std::env::args().skip(1);
@@ -324,6 +380,7 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--hold-ms" => hold_ms = parse_u64(&it_next(&mut it, &flag)?, "--hold-ms")?,
+            "--hold-until" => hold_until = Some(PathBuf::from(it_next(&mut it, &flag)?)),
             "--acquired-marker" => acquired_marker = Some(PathBuf::from(it_next(&mut it, &flag)?)),
             other => return Err(format!("unknown flag `{other}`")),
         }
@@ -337,6 +394,7 @@ fn parse_args() -> Result<Args, String> {
         barrier,
         max_attempts,
         hold: Duration::from_millis(hold_ms),
+        hold_until,
         acquired_marker,
     })
 }
