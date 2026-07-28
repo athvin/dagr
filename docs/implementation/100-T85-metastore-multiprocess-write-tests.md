@@ -46,6 +46,16 @@ Prove and harden concurrent multi-process writes to one metastore file.
 ## Open questions
 None. (This ticket exists to answer the empirical `busy_timeout`-reliability question ADR 097 flagged; the answer is recorded in-PR and, if it forces a seam change, in T83's code + this ticket per §5.)
 
+## Hardening record (resolved)
+
+The multi-process harness surfaced two real failures against the merged T83 seam on the pinned `libsql =0.10.0-pre.4`, and forced two hardening changes to `crates/metastore/src/store.rs` (both in this ticket's Objective per §5; both recorded in-code):
+
+1. **Concurrent open of a fresh file races on `PRAGMA journal_mode=WAL`.** With N real processes opening the *same brand-new* store simultaneously, a losing process's WAL-mode switch (which briefly takes an exclusive lock to write the WAL header) returned `SqliteFailure(5, "database is locked")`, and `busy_timeout` alone did not reliably absorb it — so `MetaStore::open` could hard-fail under a genuine multi-process open race (never seen with in-process *threads*, which libSQL's in-process locking coordinates — exactly why T85 needs real processes, not T67-style threads). **Fix:** the open-path pragmas now run under the same bounded `SQLITE_BUSY` retry (`is_busy` classification + jittered backoff) as `with_write_txn`, via `open_pragma_with_retry`. `set_pragma` now also drops its `Rows` handle so the row-returning WAL pragma is fully finalized before the connection is reused.
+
+2. **A long `busy_timeout` made the retry cap unreachable (wedge not observable).** With `busy_timeout = 5 s`, a single `BEGIN IMMEDIATE` attempt blocked for seconds inside the kernel spin, so the app-level bounded retry never fired for real contention and a genuinely wedged writer could not surface a hard error within a bounded time. **Fix:** `busy_timeout` was lowered to **250 ms** so the *app-level* jittered/decorrelated retry (ADR 097 §3) is the primary contention absorber and the retry cap is reachable — the over-contention test now observes a `WriteError::BusyRetriesExhausted` (visible wedge, dedicated worker exit code), never a silent drop, while disjoint-row writers still lose nothing.
+
+Everything else in the T83 seam (the `BEGIN IMMEDIATE`-for-every-write discipline, the `DEFERRED`-upgrade footgun avoidance) was **verified correct** by the guard tests and left unchanged.
+
 ## Out of scope
 - The live tee sink itself — **T86** (this ticket exercises the store's write path directly, not via the driver).
 - Cross-**host** access / `sqld` / embedded replicas — out of scope per ADR 097 (same-host local FS only).

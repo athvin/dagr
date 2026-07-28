@@ -92,21 +92,33 @@ fn spawn_worker(
     for e in extra {
         cmd.arg(e);
     }
-    cmd.spawn().expect("write_worker launches as a real OS process")
+    cmd.spawn()
+        .expect("write_worker launches as a real OS process")
+}
+
+/// The readiness-marker path a worker with `prefix` writes beside `barrier`.
+fn ready_marker(barrier: &Path, prefix: &str) -> PathBuf {
+    let mut p = barrier.as_os_str().to_os_string();
+    p.push(format!(".ready.{prefix}"));
+    PathBuf::from(p)
+}
+
+/// Fire the single `<barrier>.go` file that releases every waiting worker at once.
+fn fire_go(barrier: &Path) {
+    let mut go = barrier.as_os_str().to_os_string();
+    go.push(".go");
+    std::fs::write(PathBuf::from(go), b"go").expect("write the go marker");
 }
 
 /// Block until every worker with one of `prefixes` has written its readiness
-/// marker beside `barrier`, then create the single `<barrier>.go` file to release
-/// them all at once — the observable rendezvous that forces a genuinely
-/// overlapping write window across processes.
+/// marker, then fire the go signal to release them all at once — the observable
+/// rendezvous that forces a genuinely overlapping write window across processes.
 fn release_when_all_ready(barrier: &Path, prefixes: &[String]) {
     let deadline = Instant::now() + Duration::from_mins(1);
     loop {
-        let all_ready = prefixes.iter().all(|prefix| {
-            let mut p = barrier.as_os_str().to_os_string();
-            p.push(format!(".ready.{prefix}"));
-            PathBuf::from(p).exists()
-        });
+        let all_ready = prefixes
+            .iter()
+            .all(|prefix| ready_marker(barrier, prefix).exists());
         if all_ready {
             break;
         }
@@ -116,9 +128,20 @@ fn release_when_all_ready(barrier: &Path, prefixes: &[String]) {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    let mut go = barrier.as_os_str().to_os_string();
-    go.push(".go");
-    std::fs::write(PathBuf::from(go), b"go").expect("write the go marker");
+    fire_go(barrier);
+}
+
+/// Block until the single worker `prefix` has written its readiness marker, WITHOUT
+/// firing the go signal (the caller fires it later, after arranging contention).
+fn release_when_all_ready_wait_only(barrier: &Path, prefix: &str) {
+    let deadline = Instant::now() + Duration::from_mins(1);
+    while !ready_marker(barrier, prefix).exists() {
+        assert!(
+            Instant::now() < deadline,
+            "worker `{prefix}` never reached the barrier (it failed to start)"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 /// Wait for a child and return its exit code (panicking if it was killed by a
@@ -231,16 +254,7 @@ fn n_processes_writing_disjoint_rows_lose_nothing() {
     let prefixes: Vec<String> = (0..n).map(|w| format!("w{w}")).collect();
     let children: Vec<Child> = prefixes
         .iter()
-        .map(|prefix| {
-            spawn_worker(
-                &store,
-                prefix,
-                runs_per,
-                attempts_per,
-                Some(&barrier),
-                &[],
-            )
-        })
+        .map(|prefix| spawn_worker(&store, prefix, runs_per, attempts_per, Some(&barrier), &[]))
         .collect();
 
     // Release all workers at once — genuine overlapping write windows.
@@ -366,36 +380,45 @@ fn heavy_overlap_retries_busy_and_lands_every_write() {
 #[test]
 fn over_contention_past_the_cap_surfaces_a_hard_visible_error() {
     let store = temp_store_path("wedge");
+    let barrier = barrier_path_for(&store);
 
-    // First, initialise the schema so the wedger's own open is not what races.
+    // First, initialise the schema so neither worker's OPEN is what races — the
+    // wedge we want to prove is a *write* contention past the retry cap, not an
+    // open contention (open is hardened to be robust; that is the separate (a)/(b)
+    // property).
     block_on(async {
         MetaStore::open(OpenMode::LocalFile(store.clone()))
             .await
             .expect("pre-create the schema");
     });
 
-    // The holder: writes ONE run but holds its write lock ~2s inside each txn,
-    // monopolising the single WAL writer. No barrier — it starts immediately.
-    let holder = spawn_worker(&store, "holder", 1, 0, None, &["--hold-ms", "2000"]);
-
-    // Give the holder a moment to acquire the write lock before the wedger tries.
-    // (This is not a correctness-timing assumption between the two writes — it only
-    // makes the wedge deterministic; if the holder has not yet locked, the wedger
-    // simply succeeds and the test would under-assert, so we poll for the holder's
-    // first row to confirm it is mid-write.)
-    wait_until_holder_is_writing(&store);
-
-    // The wedger: a tiny cap (2 attempts) + negligible backoff, so it cannot
-    // outlast a 2s hold and MUST exhaust its retry budget. It writes to a disjoint
-    // run, so any failure is contention, not a key conflict.
+    // The wedger opens FIRST (uncontended — schema present, holder not yet started →
+    // its open + migration no-op cannot race) and then waits at the barrier before
+    // its data write. A tiny retry cap (2 attempts) + negligible backoff, so once
+    // the holder owns the writer the wedger cannot outlast it and MUST exhaust its
+    // budget on the *write* (its open already completed uncontended). It writes a
+    // disjoint run, so any failure is pure contention, not a key conflict.
     let wedger = spawn_worker(
         &store,
         "wedger",
         1,
         0,
-        None,
-        &["--max-attempts", "2", "--hold-ms", "0"],
+        Some(&barrier),
+        &["--max-attempts", "2"],
     );
+
+    // Wait for the wedger to open and reach the barrier (so its open is safely done
+    // BEFORE the holder grabs the writer).
+    release_when_all_ready_wait_only(&barrier, "wedger");
+
+    // Now the holder grabs and holds the single WAL writer ~2s (one run, held
+    // inside the txn), monopolising it while the wedger tries to write. No barrier —
+    // it starts immediately, and its open is a no-op over the existing schema.
+    let holder = spawn_worker(&store, "holder", 1, 0, None, &["--hold-ms", "2000"]);
+    wait_until_holder_is_writing(&store);
+
+    // Release the wedger into its data write against the held writer.
+    fire_go(&barrier);
 
     let wedger_code = wait_code(wedger);
     assert_eq!(
@@ -435,36 +458,25 @@ fn over_contention_past_the_cap_surfaces_a_hard_visible_error() {
     cleanup(&store);
 }
 
-/// Poll until the holder process has committed its first write (its `dag_run` row
-/// appears), so the wedger races a genuinely-held lock rather than an empty file.
-/// Bounded so a holder that fails to start does not hang CI.
+/// Give the holder a moment to acquire the WAL writer before the wedger tries.
+/// The holder holds its lock *inside* an uncommitted transaction, so its row is
+/// not observable yet — instead we wait for its `-wal` sidecar to appear (proof
+/// the holder has begun writing) and add a short grace. This is a liveness nudge,
+/// not a correctness-ordering assumption between the two writes: the holder's 2 s
+/// hold dominates both this grace and the wedger's whole retry budget, so the
+/// wedge is deterministic regardless of the exact interleaving.
 fn wait_until_holder_is_writing(store: &Path) {
+    let mut wal = store.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = PathBuf::from(wal);
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let present = block_on(async {
-            match MetaStore::open(OpenMode::LocalFile(store.to_path_buf())).await {
-                Ok(meta) => {
-                    // The holder holds the lock INSIDE the txn, so the row is not
-                    // yet committed while it holds; instead we detect the holder has
-                    // *begun* by observing the WAL grew. Simpler: just give it a
-                    // short grace and rely on the 2s hold >> this poll window.
-                    let _ = meta;
-                    true
-                }
-                Err(_) => false,
-            }
-        });
-        if present {
-            // Short grace so the holder's BEGIN IMMEDIATE has certainly acquired the
-            // writer before the wedger tries. This is a liveness nudge, not a
-            // correctness-ordering assumption: the 2s hold dominates it.
-            std::thread::sleep(Duration::from_millis(150));
-            return;
-        }
+    while !wal.exists() {
         assert!(
             Instant::now() < deadline,
-            "the holder process never came up"
+            "the holder process never began writing (no -wal sidecar appeared)"
         );
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(5));
     }
+    // Short grace so the holder's BEGIN IMMEDIATE has certainly acquired the writer.
+    std::thread::sleep(Duration::from_millis(150));
 }

@@ -108,14 +108,14 @@ async fn run(args: Args) -> std::process::ExitCode {
             max_attempts,
             ..RetryPolicy::default()
         });
-    let store = match MetaStore::open_with_retry(OpenMode::LocalFile(args.store.clone()), retry).await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("write_worker[{}]: open failed: {e}", args.run_prefix);
-            return std::process::ExitCode::from(EXIT_ERROR);
-        }
-    };
+    let store =
+        match MetaStore::open_with_retry(OpenMode::LocalFile(args.store.clone()), retry).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("write_worker[{}]: open failed: {e}", args.run_prefix);
+                return std::process::ExitCode::from(EXIT_ERROR);
+            }
+        };
 
     // Rendezvous: announce readiness, then spin until the harness fires the go
     // signal, so every worker enters its write window at (near) the same instant.
@@ -209,10 +209,7 @@ async fn hold_lock(hold: Duration) {
 /// Map a `with_write_txn` result to a worker exit decision: `Ok` continues; a
 /// busy-cap exhaustion is the *visible* wedge (`EXIT_BUSY_EXHAUSTED`); any other
 /// error is a generic failure.
-fn classify(
-    res: Result<(), WriteError>,
-    prefix: &str,
-) -> Result<(), std::process::ExitCode> {
+fn classify(res: Result<(), WriteError>, prefix: &str) -> Result<(), std::process::ExitCode> {
     match res {
         Ok(()) => Ok(()),
         Err(WriteError::BusyRetriesExhausted { attempts }) => {
@@ -308,7 +305,8 @@ fn parse_args() -> Result<Args, String> {
 
 /// Pull the next argv token as a flag's value, erroring if it is absent.
 fn it_next(it: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    it.next().ok_or_else(|| format!("flag `{flag}` needs a value"))
+    it.next()
+        .ok_or_else(|| format!("flag `{flag}` needs a value"))
 }
 
 /// Parse a `u64` flag value with a flag-named error.

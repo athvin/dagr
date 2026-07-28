@@ -93,7 +93,9 @@ async fn deferred_upgrade_hits_instant_busy_that_busy_timeout_cannot_cure() {
 
     // A: acquire and HOLD the writer (BEGIN IMMEDIATE + insert, no commit yet).
     let a = raw_conn(&path, 250).await;
-    a.execute("BEGIN IMMEDIATE", ()).await.expect("A begins immediate");
+    a.execute("BEGIN IMMEDIATE", ())
+        .await
+        .expect("A begins immediate");
     a.execute(
         "INSERT INTO dag (dag_id, name, created_ms) VALUES ('a', 'holder', 0)",
         (),
@@ -105,9 +107,14 @@ async fn deferred_upgrade_hits_instant_busy_that_busy_timeout_cannot_cure() {
     // A holds the writer. B has a GENEROUS busy_timeout (2s) — if busy_timeout
     // could cure this, B would block up to 2s and eventually error or succeed.
     let b = raw_conn(&path, 2000).await;
-    b.execute("BEGIN DEFERRED", ()).await.expect("B begins deferred");
+    b.execute("BEGIN DEFERRED", ())
+        .await
+        .expect("B begins deferred");
     // A read first, so the txn is genuinely a read-then-upgrade (the footgun shape).
-    let mut rows = b.query("SELECT count(*) FROM dag", ()).await.expect("B reads");
+    let mut rows = b
+        .query("SELECT count(*) FROM dag", ())
+        .await
+        .expect("B reads");
     let _ = rows.next().await.expect("B read row");
 
     let started = std::time::Instant::now();
@@ -162,7 +169,9 @@ async fn with_write_txn_begins_immediate_and_does_not_hit_the_footgun() {
 
     // A holds the writer briefly, then commits on a background task, releasing it.
     let a = raw_conn(&path, 250).await;
-    a.execute("BEGIN IMMEDIATE", ()).await.expect("A begins immediate");
+    a.execute("BEGIN IMMEDIATE", ())
+        .await
+        .expect("A begins immediate");
     a.execute(
         "INSERT INTO dag (dag_id, name, created_ms) VALUES ('a', 'holder', 0)",
         (),
