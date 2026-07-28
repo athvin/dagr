@@ -77,6 +77,13 @@ pub const DAGR_POOL_MEMORY: &str = "DAGR_POOL_MEMORY";
 /// fraction; default `0.20`, validated `0.0..=1.0`).
 pub const DAGR_HEADROOM: &str = "DAGR_HEADROOM";
 
+/// Environment fallback for `--dagr.metastore` (the M7 live run-index tee toggle,
+/// T86). A truthy value turns the guaranteed live metastore tee sink on; the
+/// **default is off** (no `libsql` activity, no behavior change). Resolved by the
+/// standard `flag > env > default` precedence ([`resolve_metastore_toggle`]); the
+/// wiring itself is behind the default-off `metastore` cargo feature.
+pub const DAGR_METASTORE: &str = "DAGR_METASTORE";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -535,6 +542,90 @@ fn validate_headroom(source: &str, fraction: f64, raw: &str) -> Result<f64, EnvP
     }
 }
 
+// ===========================================================================
+// The metastore live-tee toggle — DAGR_METASTORE / --dagr.metastore
+// ===========================================================================
+
+/// A boolean runtime toggle parsed from its env/flag string via the standard
+/// truthy set. Wraps `bool` so it composes with the generic [`resolve`] helper
+/// (`resolve::<EnvBool>(…)`); read the inner value with
+/// [`into_inner`](EnvBool::into_inner).
+///
+/// Accepted (case-insensitive): `1`/`true`/`yes`/`on` → `true`;
+/// `0`/`false`/`no`/`off` → `false`. Any other token is a loud parse error (never
+/// silently treated as false), per the never-silent env contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvBool(pub bool);
+
+impl EnvBool {
+    /// The wrapped `bool`.
+    #[must_use]
+    pub fn into_inner(self) -> bool {
+        self.0
+    }
+}
+
+impl From<EnvBool> for bool {
+    fn from(value: EnvBool) -> Self {
+        value.0
+    }
+}
+
+impl FromStr for EnvBool {
+    type Err = BoolParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(EnvBool(true)),
+            "0" | "false" | "no" | "off" => Ok(EnvBool(false)),
+            _ => Err(BoolParseError {
+                input: s.to_string(),
+            }),
+        }
+    }
+}
+
+/// A string was not one of the accepted boolean tokens. Implements
+/// [`Display`](std::fmt::Display) so it flows through [`resolve`] into an
+/// [`EnvParseError`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoolParseError {
+    /// The offending input verbatim.
+    pub input: String,
+}
+
+impl std::fmt::Display for BoolParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` is not a boolean — expected one of `1`/`true`/`yes`/`on` or \
+             `0`/`false`/`no`/`off`",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for BoolParseError {}
+
+/// Resolve the **metastore live-tee toggle** by `flag > env > default` (default
+/// **off**): a present `--dagr.metastore` flag wins outright (the env is never
+/// read); with no flag, `DAGR_METASTORE` is read and parsed as a boolean; with
+/// neither, the toggle is off. A bad env value fails loudly (never silently
+/// treated as off).
+///
+/// This resolves the *toggle*; the store path is resolved separately (default
+/// under the run store), and the whole wiring is behind the default-off
+/// `metastore` cargo feature — so `--no-default-features` omits it entirely.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming `DAGR_METASTORE` when its value is not a
+/// recognized boolean token.
+pub fn resolve_metastore_toggle(flag: Option<bool>) -> Result<bool, EnvParseError> {
+    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_METASTORE, EnvBool(false))?;
+    Ok(resolved.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,5 +895,61 @@ mod tests {
         std::env::remove_var(DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
+    }
+
+    // --- The metastore live-tee toggle (T86) -----------------------------
+
+    #[test]
+    fn env_bool_parses_the_truthy_and_falsy_tokens() {
+        for t in ["1", "true", "TRUE", "yes", "on", " On "] {
+            assert!(t.parse::<EnvBool>().expect("truthy").into_inner(), "{t}");
+        }
+        for f in ["0", "false", "FALSE", "no", "off"] {
+            assert!(!f.parse::<EnvBool>().expect("falsy").into_inner(), "{f}");
+        }
+        assert!(
+            "maybe".parse::<EnvBool>().is_err(),
+            "garbage is a loud error"
+        );
+    }
+
+    #[test]
+    fn metastore_toggle_defaults_off() {
+        let _g = pool_env_lock();
+        std::env::remove_var(DAGR_METASTORE);
+        assert!(
+            !resolve_metastore_toggle(None).expect("default off"),
+            "the toggle defaults OFF (no flag, no env)"
+        );
+    }
+
+    #[test]
+    fn metastore_toggle_env_used_when_no_flag() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_METASTORE, "1");
+        let on = resolve_metastore_toggle(None).expect("env used");
+        std::env::remove_var(DAGR_METASTORE);
+        assert!(on, "with no flag, the env value turns the toggle on");
+    }
+
+    #[test]
+    fn metastore_toggle_flag_beats_env() {
+        let _g = pool_env_lock();
+        // Env says ON, flag says OFF — the flag must win (env never read on the
+        // flag path).
+        std::env::set_var(DAGR_METASTORE, "1");
+        let resolved = resolve_metastore_toggle(Some(false)).expect("flag wins");
+        std::env::remove_var(DAGR_METASTORE);
+        assert!(!resolved, "a present flag wins outright over the env var");
+    }
+
+    #[test]
+    fn metastore_toggle_bad_env_is_invalid_usage_naming_the_variable() {
+        let _g = pool_env_lock();
+        std::env::set_var(DAGR_METASTORE, "notabool");
+        let err = resolve_metastore_toggle(None).expect_err("a bad env value fails loudly");
+        std::env::remove_var(DAGR_METASTORE);
+        assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
+        assert!(err.to_string().contains(DAGR_METASTORE));
     }
 }

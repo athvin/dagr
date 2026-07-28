@@ -36,6 +36,13 @@ pub mod logging;
 /// `dagr-metastore`/`libsql` edge entirely — `dagr-core` never sees it.
 #[cfg(feature = "metastore")]
 pub mod metastore;
+/// The run-sink **tee** composing the on-disk `events.jsonl` sink with the
+/// guaranteed live [`dagr_metastore::MetastoreSink`] (M7, T86, ADR 097). Gated
+/// behind the default-off `metastore` feature so a default build (and
+/// `--no-default-features`) omits the tee wiring and the `dagr-metastore`/`libsql`
+/// edge entirely.
+#[cfg(feature = "metastore")]
+pub mod metastore_tee;
 pub mod prelude;
 pub mod registry;
 /// The `inventory`-backed DAG auto-discovery entrypoint (M6, ADR 092). Gated behind

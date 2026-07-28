@@ -12,8 +12,10 @@
 //! projection of it. That carve-out is decided in **ADR 097 (T82)**. T83 shipped
 //! the crate, schema, and write-safe connection seam; **T84** adds the
 //! event→row [`mapping`] and the `sync` reconcile walk ([`mapping::sync_run_store`])
-//! that folds every run under a run store and upserts it idempotently. The live
-//! tee writer (T86) is a separate ticket, and lineage columns are M8.
+//! that folds every run under a run store and upserts it idempotently. **T86** adds
+//! the guaranteed live tee sink ([`live_sink::MetastoreSink`]) that projects a run
+//! into the index **as it executes**, reusing that same mapping and write
+//! discipline; lineage columns are M8.
 //!
 //! # The concurrency recipe (ADR 097 §3)
 //!
@@ -35,8 +37,10 @@
 //! guarantee is untouched, and the CLI reaches this crate only behind a
 //! default-off `metastore` feature.
 
+pub mod live_sink;
 pub mod mapping;
 pub mod schema;
 pub mod store;
 
+pub use live_sink::MetastoreSink;
 pub use store::{MetaStore, OpenMode, WriteError};

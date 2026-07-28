@@ -170,7 +170,9 @@ fn cleanup(store: &Path) {
                 for entry in entries.flatten() {
                     if let Some(name) = entry.file_name().to_str() {
                         if name.starts_with(stem)
-                            && (name.contains(".barrier") || name.contains(".holder-acquired"))
+                            && (name.contains(".barrier")
+                                || name.contains(".holder-acquired")
+                                || name.contains(".holder-release"))
                         {
                             let _ = std::fs::remove_file(entry.path());
                         }
@@ -414,31 +416,57 @@ fn over_contention_past_the_cap_surfaces_a_hard_visible_error() {
     // BEFORE the holder grabs the writer).
     release_when_all_ready_wait_only(&barrier, "wedger");
 
-    // Now the holder grabs and holds the single WAL writer ~2s (one run, held
-    // inside the txn), monopolising it while the wedger tries to write. No barrier —
-    // it starts immediately, and its open is a no-op over the existing schema. It
+    // Now the holder grabs and holds the single WAL writer (one run, held inside
+    // the txn) monopolising it while the wedger tries to write. No barrier — it
+    // starts immediately, and its open is a no-op over the existing schema. It
     // writes an `--acquired-marker` the instant its BEGIN IMMEDIATE txn owns the
-    // writer (its INSERT landed, before the 2s hold), so we release the wedger on a
+    // writer (its INSERT landed, before the hold), so we release the wedger on a
     // deterministic *observable* signal — not on a `-wal`-exists guess or a sleep.
+    //
+    // The hold length is itself a **deterministic rendezvous**, not a fixed sleep:
+    // the holder holds `--hold-until <release>` and blocks (inside its txn) until
+    // the harness creates that marker, which it does only AFTER the wedger has
+    // provably exhausted its cap and exited. A prior fixed `--hold-ms 2000` raced
+    // the wedger's post-release scheduling latency: on a starved macOS CI runner
+    // the wedger could fail to get scheduled to run its two ~250ms BEGIN IMMEDIATE
+    // attempts until after the holder's 2s already elapsed and released the writer,
+    // so the wedger slipped its write in and exited 0 (the observed macOS flake).
+    // Holding until the wedger is *observably* done removes that race entirely
+    // while the assertions below are byte-for-byte unchanged.
     let acquired = holder_acquired_marker(&store);
+    let release = holder_release_marker(&store);
     let _ = std::fs::remove_file(&acquired);
+    let _ = std::fs::remove_file(&release);
     let acquired_arg = acquired
         .to_str()
         .expect("the acquired-marker temp path is valid UTF-8");
+    let release_arg = release
+        .to_str()
+        .expect("the release-marker temp path is valid UTF-8");
     let holder = spawn_worker(
         &store,
         "holder",
         1,
         0,
         None,
-        &["--hold-ms", "2000", "--acquired-marker", acquired_arg],
+        &[
+            "--hold-until",
+            release_arg,
+            "--acquired-marker",
+            acquired_arg,
+        ],
     );
     wait_until_holder_holds_the_writer(&acquired);
 
     // Release the wedger into its data write against the held writer.
     fire_go(&barrier);
 
+    // The wedger runs against the still-held writer and MUST exhaust its bounded
+    // retry cap — the holder does not release until we say so, so no scheduling
+    // latency can let the wedger outlast the hold.
     let wedger_code = wait_code(wedger);
+    // The wedger has provably exhausted (it exited); release the holder now.
+    std::fs::write(&release, b"release").expect("write the holder release marker");
     assert_eq!(
         wedger_code, 3,
         "the over-contended writer exhausts its bounded retry cap and exits with the \
@@ -485,16 +513,27 @@ fn holder_acquired_marker(store: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
+/// The observable marker the harness creates to *release* the holder's
+/// `--hold-until` hold — created only AFTER the wedger has provably exhausted its
+/// retry cap and exited, so the WAL writer is held for exactly the wedge window
+/// (deterministic, not a fixed sleep the wedger's scheduling latency could race).
+fn holder_release_marker(store: &Path) -> PathBuf {
+    let mut p = store.as_os_str().to_os_string();
+    p.push(".holder-release");
+    PathBuf::from(p)
+}
+
 /// Block until the holder *provably* holds the WAL writer, signalled by its
 /// `--acquired-marker` file (written inside its transaction, after `BEGIN
-/// IMMEDIATE` + the INSERT, before the 2 s hold). This is a **deterministic**
+/// IMMEDIATE` + the INSERT, before the hold). This is a **deterministic**
 /// rendezvous, not a timing guess: it does not fire the wedger until the holder
 /// genuinely owns the writer, so the wedge holds regardless of macOS's slower
 /// process-spawn timing (the prior `-wal`-exists heuristic could fire before the
 /// writer lock was taken — the file exists from the pre-created schema — letting
 /// a slowly-spawned holder lose the race and the wedger slip its write in). The
-/// holder's 2 s hold then dominates the wedger's entire retry budget, so the
-/// exhaustion is guaranteed.
+/// holder then holds the writer (via `--hold-until`) until the harness releases
+/// it *after* the wedger has exhausted and exited, so the exhaustion is guaranteed
+/// no matter how long the wedger takes to get scheduled.
 fn wait_until_holder_holds_the_writer(acquired: &Path) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !acquired.exists() {

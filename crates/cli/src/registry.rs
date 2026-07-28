@@ -72,7 +72,9 @@ use crate::run_flow::RunnableFlow;
 // so this path and the one-call `RunnableFlow::run_to_store` agree. The registry
 // deliberately keeps injecting the deterministic `TickClock` (not `SystemClock`), so
 // its streams stay byte-identical.
-use crate::run_store::{mint_run_id, FileSink, TickClock, DEFAULT_STORE_BASE};
+#[cfg(not(feature = "metastore"))]
+use crate::run_store::FileSink;
+use crate::run_store::{mint_run_id, TickClock, DEFAULT_STORE_BASE};
 
 /// The library-owned flag naming the run-store base for a `run <flow>` invocation
 /// (the reserved `--store`, [`reserved_flag_names`](crate::contract::reserved_flag_names)).
@@ -451,6 +453,33 @@ fn run_selected_flow<W: Write>(
         .join(name)
         .join(&run_id)
         .join(EVENTS_FILE_NAME);
+
+    // Build the run sink. With the default-off `metastore` feature enabled AND the
+    // `--dagr.metastore` / `DAGR_METASTORE` toggle on, the sink is a TEE of the
+    // on-disk `events.jsonl` and the guaranteed live `MetastoreSink` (T86); off (or
+    // feature-disabled) it is the plain `FileSink` — byte-for-byte the historical
+    // behavior, with NO `libsql` activity.
+    #[cfg(feature = "metastore")]
+    let sink = match crate::metastore_tee::build_run_sink(&stream, &base, argv) {
+        Ok(sink) => sink,
+        Err(err) => {
+            // There is nowhere to write an artifact if the on-disk store or the live
+            // index cannot be opened; the sink-failure code covers an unwritable
+            // target at open (a bad `--dagr.metastore` value is invalid usage).
+            let code = if err.kind() == std::io::ErrorKind::InvalidInput {
+                ExitCode::InvalidUsage
+            } else {
+                ExitCode::SinkFailure
+            };
+            let _ = writeln!(
+                out,
+                "dagr run {name}: cannot open the run store at {}: {err}",
+                stream.display()
+            );
+            return code;
+        }
+    };
+    #[cfg(not(feature = "metastore"))]
     let sink = match FileSink::create(&stream) {
         Ok(sink) => sink,
         Err(err) => {
