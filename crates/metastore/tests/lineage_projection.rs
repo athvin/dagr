@@ -234,10 +234,9 @@ fn emit_producer_consumer_shared<S: EventSink>(
 
 /// A run with produced/consumed lineage, when `sync`ed, yields `output_produced` /
 /// `input_consumed` rows and `node_attempt.durable_reference_meta` columns matching
-/// the folded `RunArtifact`'s `outputs[]`/`inputs[]`/`AttemptRecord`; re-sync is
-/// idempotent (no dupes).
+/// the folded `RunArtifact`'s `outputs[]`/`inputs[]`/`AttemptRecord`.
 #[tokio::test]
-async fn reconcile_projects_lineage_matching_the_fold_and_is_idempotent() {
+async fn reconcile_projects_lineage_matching_the_fold() {
     let dir = TempDir::new("reconcile");
     let base = dir.path();
     let bytes = write_run_shared_clock(base, "run-1", "s3://bucket/a", "sha256:aaaa");
@@ -245,127 +244,121 @@ async fn reconcile_projects_lineage_matching_the_fold_and_is_idempotent() {
     // The fold is the authority we compare against.
     let artifact = fold_stream(&bytes, &[]).expect("fold the fixture");
     assert_eq!(artifact.outputs().len(), 1, "one produced output folded");
+    let o = &artifact.outputs()[0];
 
     let store = open_store_at(&base.join("metastore.db")).await;
     let summary = sync_run_store(&store, base).await.expect("sync");
     assert_eq!(summary.synced, 1);
 
-    // output_produced: one row matching outputs[0].
-    let produced = scalar_i64(
-        &store,
-        "SELECT count(*) FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(produced, 1, "one output_produced row (matches outputs[])");
-    let uri = opt_string(
-        &store,
-        "SELECT uri FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(uri.as_deref(), Some(artifact.outputs()[0].uri()));
-    let hash = opt_string(
-        &store,
-        "SELECT content_hash FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(hash.as_deref(), artifact.outputs()[0].content_hash());
-    let size = scalar_i64(
-        &store,
-        "SELECT size_bytes FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(size, 11, "size_bytes carried by value");
-    let kind = opt_string(
-        &store,
-        "SELECT kind FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(kind.as_deref(), artifact.outputs()[0].kind());
-    let originating = opt_string(
-        &store,
-        "SELECT originating_run FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(originating.as_deref(), Some(artifact.outputs()[0].originating_run()));
-    let node = opt_string(
-        &store,
-        "SELECT node_id FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(node.as_deref(), Some("a"));
-
-    // input_consumed: one row for b's consumed input.
-    let consumed = scalar_i64(
-        &store,
-        "SELECT count(*) FROM input_consumed WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(consumed, 1, "one input_consumed row (b consumed a's output)");
-    let c_uri = opt_string(
-        &store,
-        "SELECT uri FROM input_consumed WHERE run_id='run-1' AND node_id='b'",
-    )
-    .await;
-    assert_eq!(c_uri.as_deref(), Some("s3://bucket/a"));
-    let c_hash = opt_string(
-        &store,
-        "SELECT content_hash FROM input_consumed WHERE run_id='run-1' AND node_id='b'",
-    )
-    .await;
-    assert_eq!(c_hash.as_deref(), Some("sha256:aaaa"));
-
-    // node_attempt.durable_reference_meta columns: from a's attempt.
-    let meta_hash = opt_string(
-        &store,
-        "SELECT content_hash FROM node_attempt WHERE run_id='run-1' AND node_id='a' AND try_number=1",
-    )
-    .await;
+    // output_produced: one row matching outputs[0] field-for-field.
+    let out = "FROM output_produced WHERE run_id='run-1'";
     assert_eq!(
-        meta_hash.as_deref(),
-        Some("sha256:aaaa"),
-        "node_attempt.content_hash from durable_reference_meta"
+        scalar_i64(&store, &q("count(*)", out)).await,
+        1,
+        "one output_produced row"
     );
-    let meta_size = scalar_i64(
-        &store,
-        "SELECT size_bytes FROM node_attempt WHERE run_id='run-1' AND node_id='a' AND try_number=1",
-    )
-    .await;
-    assert_eq!(meta_size, 11, "node_attempt.size_bytes from meta");
-    let meta_scheme = opt_string(
-        &store,
-        "SELECT scheme FROM node_attempt WHERE run_id='run-1' AND node_id='a' AND try_number=1",
-    )
-    .await;
-    assert_eq!(meta_scheme.as_deref(), Some("s3"));
-    let meta_offset = scalar_i64(
-        &store,
-        "SELECT produced_at_offset_ns FROM node_attempt WHERE run_id='run-1' AND node_id='a' AND try_number=1",
-    )
-    .await;
-    assert_eq!(meta_offset, 100, "node_attempt.produced_at_offset_ns from meta");
+    for (col, expected) in [
+        ("uri", Some(o.uri())),
+        ("content_hash", o.content_hash()),
+        ("kind", o.kind()),
+        ("originating_run", Some(o.originating_run())),
+        ("node_id", Some("a")),
+    ] {
+        assert_eq!(
+            opt_string(&store, &q(col, out)).await.as_deref(),
+            expected,
+            "output_produced.{col} carried by value"
+        );
+    }
+    assert_eq!(
+        scalar_i64(&store, &q("size_bytes", out)).await,
+        11,
+        "size_bytes by value"
+    );
 
-    // b's attempt has no durable_reference_meta ⇒ NULL columns.
-    let b_meta = opt_string(
-        &store,
-        "SELECT content_hash FROM node_attempt WHERE run_id='run-1' AND node_id='b' AND try_number=1",
-    )
-    .await;
-    assert_eq!(b_meta, None, "a non-producing attempt has NULL meta columns");
+    // input_consumed: one row for b's consumed input (uri + hash by value).
+    let inn = "FROM input_consumed WHERE run_id='run-1' AND node_id='b'";
+    assert_eq!(
+        scalar_i64(
+            &store,
+            "SELECT count(*) FROM input_consumed WHERE run_id='run-1'"
+        )
+        .await,
+        1,
+        "one input_consumed row (b consumed a's output)"
+    );
+    for (col, expected) in [("uri", "s3://bucket/a"), ("content_hash", "sha256:aaaa")] {
+        assert_eq!(
+            opt_string(&store, &q(col, inn)).await.as_deref(),
+            Some(expected),
+            "input_consumed.{col} by value"
+        );
+    }
 
-    // Re-sync: idempotent, no dupes.
+    // node_attempt.durable_reference_meta columns: from a's producing attempt.
+    let a_meta = "FROM node_attempt WHERE run_id='run-1' AND node_id='a' AND try_number=1";
+    assert_eq!(
+        opt_string(&store, &q("content_hash", a_meta))
+            .await
+            .as_deref(),
+        Some("sha256:aaaa")
+    );
+    assert_eq!(scalar_i64(&store, &q("size_bytes", a_meta)).await, 11);
+    assert_eq!(
+        opt_string(&store, &q("scheme", a_meta)).await.as_deref(),
+        Some("s3")
+    );
+    assert_eq!(
+        scalar_i64(&store, &q("produced_at_offset_ns", a_meta)).await,
+        100
+    );
+
+    // A non-producing attempt (b) reads NULL meta columns.
+    let b_meta = "FROM node_attempt WHERE run_id='run-1' AND node_id='b' AND try_number=1";
+    assert_eq!(
+        opt_string(&store, &q("content_hash", b_meta)).await,
+        None,
+        "a non-producing attempt has NULL meta columns"
+    );
+}
+
+/// `SELECT <col> <from_where>` — a tiny query builder that keeps the field-by-field
+/// lineage assertions compact.
+fn q(col: &str, from_where: &str) -> String {
+    format!("SELECT {col} {from_where}")
+}
+
+/// Re-syncing a run with lineage is idempotent: no duplicate `output_produced` /
+/// `input_consumed` / `asset` rows (the UPSERTs are keyed on the natural lineage
+/// identity, and the fold is deterministic).
+#[tokio::test]
+async fn reconcile_lineage_resync_is_idempotent_no_dupes() {
+    let dir = TempDir::new("reconcile-idem");
+    let base = dir.path();
+    write_run_shared_clock(base, "run-1", "s3://bucket/a", "sha256:aaaa");
+
+    let store = open_store_at(&base.join("metastore.db")).await;
+    sync_run_store(&store, base).await.expect("first sync");
+    let produced1 = scalar_i64(&store, "SELECT count(*) FROM output_produced").await;
+    let consumed1 = scalar_i64(&store, "SELECT count(*) FROM input_consumed").await;
+    let assets1 = scalar_i64(&store, "SELECT count(*) FROM asset").await;
+
     sync_run_store(&store, base).await.expect("re-sync");
-    let produced2 = scalar_i64(
-        &store,
-        "SELECT count(*) FROM output_produced WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(produced2, 1, "re-sync does not duplicate output_produced");
-    let consumed2 = scalar_i64(
-        &store,
-        "SELECT count(*) FROM input_consumed WHERE run_id='run-1'",
-    )
-    .await;
-    assert_eq!(consumed2, 1, "re-sync does not duplicate input_consumed");
+    assert_eq!(
+        scalar_i64(&store, "SELECT count(*) FROM output_produced").await,
+        produced1,
+        "re-sync does not duplicate output_produced"
+    );
+    assert_eq!(
+        scalar_i64(&store, "SELECT count(*) FROM input_consumed").await,
+        consumed1,
+        "re-sync does not duplicate input_consumed"
+    );
+    assert_eq!(
+        scalar_i64(&store, "SELECT count(*) FROM asset").await,
+        assets1,
+        "re-sync does not duplicate asset rows"
+    );
 }
 
 // === (b) PROJECTION via live tee ===========================================
@@ -397,7 +390,13 @@ async fn live_tee_projects_the_same_lineage_as_reconcile() {
             "pipe",
         )
         .with_wall_clock(|| "2026-07-27T00:00:00.000Z".to_string());
-        emit_producer_consumer_shared(&mut writer, &shared, "run-live", "s3://bucket/a", "sha256:aaaa");
+        emit_producer_consumer_shared(
+            &mut writer,
+            &shared,
+            "run-live",
+            "s3://bucket/a",
+            "sha256:aaaa",
+        );
         drop(writer);
     }
     let live_store = open_store_at(&live_db).await;
@@ -465,7 +464,10 @@ async fn two_runs_same_uri_join_one_asset_by_value_no_fk() {
         "SELECT count(*) FROM asset WHERE uri='s3://shared/dataset'",
     )
     .await;
-    assert_eq!(assets, 1, "one asset identity row for the shared uri (by value)");
+    assert_eq!(
+        assets, 1,
+        "one asset identity row for the shared uri (by value)"
+    );
 
     // The cross-run join answers "which runs produced dataset X" — BY VALUE on uri.
     let runs = scalar_i64(
@@ -482,7 +484,10 @@ async fn two_runs_same_uri_join_one_asset_by_value_no_fk() {
         "SELECT count(DISTINCT content_hash) FROM output_produced WHERE uri='s3://shared/dataset'",
     )
     .await;
-    assert_eq!(hashes, 2, "two distinct content hashes at the same uri (append-only)");
+    assert_eq!(
+        hashes, 2,
+        "two distinct content hashes at the same uri (append-only)"
+    );
 
     // NO FK: delete the asset row; output_produced is untouched (survives-GC).
     store
@@ -548,18 +553,23 @@ async fn m7_store_upgrades_in_place_adding_lineage_without_disturbing_rows() {
         assert_eq!(present, 1, "T91 forward migration added `{table}`");
     }
     // The new node_attempt lineage columns exist (an ALTER-added column reads).
-    for col in ["content_hash", "size_bytes", "scheme", "produced_at_offset_ns"] {
-        let _ = scalar_i64(
-            &upgraded,
-            &format!("SELECT count({col}) FROM node_attempt"),
-        )
-        .await;
+    for col in [
+        "content_hash",
+        "size_bytes",
+        "scheme",
+        "produced_at_offset_ns",
+    ] {
+        let _ = scalar_i64(&upgraded, &format!("SELECT count({col}) FROM node_attempt")).await;
     }
 
     // The existing rows are UNDISTURBED.
     let dag_name = opt_string(&upgraded, "SELECT name FROM dag WHERE dag_id='pipe'").await;
     assert_eq!(dag_name.as_deref(), Some("pipe"));
-    let run_state = opt_string(&upgraded, "SELECT state FROM dag_run WHERE run_id='old-run'").await;
+    let run_state = opt_string(
+        &upgraded,
+        "SELECT state FROM dag_run WHERE run_id='old-run'",
+    )
+    .await;
     assert_eq!(run_state.as_deref(), Some("succeeded"));
     let attempt_state = opt_string(
         &upgraded,
@@ -573,13 +583,22 @@ async fn m7_store_upgrades_in_place_adding_lineage_without_disturbing_rows() {
         "SELECT content_hash FROM node_attempt WHERE run_id='old-run' AND node_id='n'",
     )
     .await;
-    assert_eq!(old_hash, None, "the old row's added column is NULL, not disturbed");
+    assert_eq!(
+        old_hash, None,
+        "the old row's added column is NULL, not disturbed"
+    );
 
     // A store with no lineage data has EMPTY lineage tables and behaves as before.
     let empty_produced = scalar_i64(&upgraded, "SELECT count(*) FROM output_produced").await;
-    assert_eq!(empty_produced, 0, "no-lineage store has an empty output_produced");
+    assert_eq!(
+        empty_produced, 0,
+        "no-lineage store has an empty output_produced"
+    );
     let empty_consumed = scalar_i64(&upgraded, "SELECT count(*) FROM input_consumed").await;
-    assert_eq!(empty_consumed, 0, "no-lineage store has an empty input_consumed");
+    assert_eq!(
+        empty_consumed, 0,
+        "no-lineage store has an empty input_consumed"
+    );
     let empty_asset = scalar_i64(&upgraded, "SELECT count(*) FROM asset").await;
     assert_eq!(empty_asset, 0, "no-lineage store has an empty asset table");
 
@@ -589,13 +608,18 @@ async fn m7_store_upgrades_in_place_adding_lineage_without_disturbing_rows() {
     // sync_run against the same store file (folded off disk).
     let bytes = std::fs::read(base.join("pipe").join("run-new").join("events.jsonl")).unwrap();
     let artifact = fold_stream(&bytes, &[]).unwrap();
-    sync_run(&upgraded, &artifact, None).await.expect("sync new run");
+    sync_run(&upgraded, &artifact, None)
+        .await
+        .expect("sync new run");
     let new_produced = scalar_i64(
         &upgraded,
         "SELECT count(*) FROM output_produced WHERE run_id='run-new'",
     )
     .await;
-    assert_eq!(new_produced, 1, "a new run projects lineage into the upgraded store");
+    assert_eq!(
+        new_produced, 1,
+        "a new run projects lineage into the upgraded store"
+    );
 }
 
 /// A thin M7-shape store built from **raw** DDL — the exact T83 tables and
@@ -611,7 +635,10 @@ struct M7Store {
 
 impl M7Store {
     async fn seed(&self, statements: &[&str]) {
-        self.conn.execute("BEGIN IMMEDIATE", ()).await.expect("begin");
+        self.conn
+            .execute("BEGIN IMMEDIATE", ())
+            .await
+            .expect("begin");
         for stmt in statements {
             self.conn.execute(stmt, ()).await.expect("seed stmt");
         }
@@ -622,7 +649,9 @@ impl M7Store {
         let mut rows = self
             .conn
             .query(
-                &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"),
+                &format!(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                ),
                 (),
             )
             .await
@@ -663,8 +692,5 @@ async fn build_m7_store(db: &Path) -> M7Store {
     for stmt in m7_ddl {
         conn.execute(stmt, ()).await.expect("m7 ddl");
     }
-    M7Store {
-        conn,
-        _db: dbh,
-    }
+    M7Store { conn, _db: dbh }
 }

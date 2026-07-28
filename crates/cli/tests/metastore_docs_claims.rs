@@ -4,9 +4,15 @@
 //! T87 is a `feature (docs)` ticket: it adds **no capability**, and its claims must
 //! not exceed shipped behavior. ADR 097 fixed **native access only** — the query
 //! path is plain `sqlite3` against a byte-compatible libSQL file, and there is **no**
-//! Postgres wire protocol, **no** server/remote, and **no** lineage/asset tables
-//! (that is M8). These checks assert the cookbook + README teach the shipped shape
-//! and do not promise the unshipped one.
+//! Postgres wire protocol and **no** server/remote. These checks assert the cookbook
+//! + README teach the shipped shape and do not promise the unshipped one.
+//!
+//! **T91 update:** lineage projection now ships — the cookbook documents the
+//! `output_produced` / `input_consumed` / `asset` tables and the cross-run "which
+//! runs touched dataset X" query — so the forbidden-substring guard no longer bans
+//! the lineage/asset tables. What stays forbidden is the asset-**scheduler** surface
+//! dagr permanently rejects (data-triggered runs, asset queues/watchers/partitions)
+//! and any server/remote/pgwire promise.
 //!
 //! The *executable* proof — that the cookbook's query block runs against a real
 //! populated store — lives in the feature-gated
@@ -41,6 +47,13 @@ fn cookbook_metastore_section() -> String {
     rest[..end].to_string()
 }
 
+/// Collapse all runs of ASCII whitespace (incl. the Markdown line-wraps that break a
+/// phrase like "no foreign key" across two source lines) to single spaces, so a
+/// prose-claim scan matches on meaning, not on where the author happened to wrap.
+fn normalize_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 // ===========================================================================
 // The cookbook teaches the SHIPPED shape
 // ===========================================================================
@@ -69,13 +82,46 @@ fn cookbook_teaches_the_native_query_path() {
         s.contains("many_dags"),
         "the section points at the compiled `many_dags` example that backs it"
     );
-    // The tables it actually queries are the shipped M7 tables.
-    for table in ["dag", "dag_run", "node_attempt", "node_terminal"] {
+    // The tables it actually queries are the shipped M7 tables plus the M8 (T91)
+    // lineage tables.
+    for table in [
+        "dag",
+        "dag_run",
+        "node_attempt",
+        "node_terminal",
+        "output_produced",
+        "input_consumed",
+        "asset",
+    ] {
         assert!(
             s.contains(table),
             "the section queries the shipped `{table}` table"
         );
     }
+}
+
+/// The lineage section teaches the shipped T91 shape: the by-value / no-FK
+/// discipline, the cross-run "which runs produced/consumed dataset X" query, and the
+/// hard boundary that dagr is **not** an asset scheduler.
+#[test]
+fn cookbook_teaches_the_lineage_projection_and_its_boundary() {
+    let lower = normalize_ws(&cookbook_metastore_section()).to_lowercase();
+    assert!(
+        lower.contains("lineage"),
+        "the section documents the lineage projection (T91)"
+    );
+    assert!(
+        lower.contains("by value") || lower.contains("by its `uri` value"),
+        "the section states lineage references a dataset BY VALUE"
+    );
+    assert!(
+        lower.contains("no foreign key") || lower.contains("no fk"),
+        "the section states there is no hard foreign key to the asset row (survives-GC)"
+    );
+    assert!(
+        lower.contains("not an asset scheduler"),
+        "the section restates dagr is NOT an asset scheduler (permanent non-goal)"
+    );
 }
 
 /// The section explicitly states the two shipped constraints ADR 097 fixed:
@@ -136,25 +182,21 @@ fn reference_documents_the_verbs_and_the_live_plus_reconcile_model() {
 // The docs do NOT exceed shipped behavior (no server/remote/pgwire/lineage)
 // ===========================================================================
 
-/// A claims check over the metastore docs: **nothing** references unshipped behavior.
-/// No Postgres wire protocol, no server/remote/`sqld` setup, and no lineage/asset
-/// tables (all M8 or permanently rejected). A doc that starts promising any of these
-/// reds this test.
+/// A claims check over the metastore docs: **nothing** references unshipped or
+/// permanently-rejected behavior. No Postgres wire protocol, no server/remote/`sqld`
+/// setup, and — the permanent non-goal T91 restated — no asset-**scheduler** surface
+/// (data-triggered runs, asset queues/watchers/partitions). A doc that starts
+/// promising any of these reds this test.
 #[test]
 fn the_docs_claim_nothing_unshipped() {
     // The metastore text lives in these two docs; scan both.
     let cookbook = cookbook_metastore_section();
     let readme = read_doc("README.md");
 
-    // Forbidden substrings, each a thing dagr deliberately does NOT ship in M7.
-    // (Case-insensitive; matched against a lowercased haystack.)
-    let forbidden: &[(&str, &str)] = &[
-        ("pgwire", "no Postgres wire protocol (ADR 097)"),
-        // Lineage / asset tables are M8 (T89–T91), not this ticket.
-        ("lineage table", "lineage tables are M8, not shipped"),
-        ("asset table", "asset tables are M8, not shipped"),
-        ("produced_asset", "asset tables are M8, not shipped"),
-    ];
+    // Hard-forbidden substrings, each a thing dagr deliberately does NOT ship.
+    // (Case-insensitive; matched against a lowercased haystack.) The lineage/asset
+    // *tables* now ship (T91), so they are no longer forbidden.
+    let forbidden: &[(&str, &str)] = &[("pgwire", "no Postgres wire protocol (ADR 097)")];
 
     for haystack in [&cookbook, &readme] {
         let lower = haystack.to_lowercase();
@@ -169,12 +211,47 @@ fn the_docs_claim_nothing_unshipped() {
     // The cookbook section, specifically, must not pitch a server/BI-tool path: it
     // is embedded local access only. We allow the words to appear in a NEGATED form
     // ("no server", "not a server"), so assert on the negated phrasing being present
-    // rather than the bare word being absent.
-    let cs = cookbook.to_lowercase();
+    // rather than the bare word being absent. Whitespace is normalized first so a
+    // Markdown line-wrap never splits a "no <term>" phrase across two source lines.
+    let cs = normalize_ws(&cookbook).to_lowercase();
     if cs.contains("server") {
         assert!(
             cs.contains("no server") || cs.contains("not a server") || cs.contains("without a server"),
             "if the cookbook mentions a server it must be to say there is none (embedded local access only)"
         );
+    }
+
+    // The asset-**scheduler** cluster is a permanent non-goal (T91): the cookbook may
+    // NAME it only to reject it. Each term, if present, must appear in the negated /
+    // "not / no" form, never as a promised capability.
+    for (term, negated_forms) in [
+        (
+            "asset scheduler",
+            [
+                "not an asset scheduler",
+                "no asset scheduler",
+                "is not an asset scheduler",
+            ],
+        ),
+        (
+            "data-triggered",
+            [
+                "no data-triggered",
+                "not data-triggered",
+                "no data-triggered runs",
+            ],
+        ),
+        (
+            "asset queue",
+            ["no asset queue", "not asset queue", "no asset queues"],
+        ),
+    ] {
+        if cs.contains(term) {
+            assert!(
+                negated_forms.iter().any(|neg| cs.contains(neg)),
+                "if the cookbook mentions `{term}` it must be to REJECT it \
+                 (dagr is not an asset scheduler — permanent non-goal)"
+            );
+        }
     }
 }

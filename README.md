@@ -256,7 +256,12 @@ stream, so they produce the same rows for a given run:
 
 Query it with the cookbook's [worked examples](docs/cookbook.md#querying-run-state-across-dags)
 (runs per DAG by state, slowest nodes, latest terminal state per node) — plain
-`sqlite3` against the file. Lineage/asset queries are future work, not shipped here.
+`sqlite3` against the file. Cross-run **data lineage** is projected too: the
+`output_produced` / `input_consumed` / `asset` tables answer "which runs produced or
+consumed dataset X", referencing a dataset **by its `uri` value** with no hard foreign
+key (a lineage row survives GC of the referent). This is a local, non-coordinating
+provenance index — dagr is **not** an asset scheduler (no data-triggered runs, no
+asset queues/watchers/partitions).
 
 ## When not to use this
 

@@ -672,6 +672,50 @@ ORDER BY d.name, t.node_id;
 These are read-only `SELECT`s against a file, from any process that can open it — no
 dagr binary required, and nothing the engine coordinates on.
 
+**3. Cross-run data lineage — "which runs touched dataset X".** When a run produces
+or consumes a durable output, dagr projects that provenance into three M8 lineage
+tables (T91): `output_produced` (one append-only row per produced output — `run_id`,
+`node_id`, `attempt`, `uri`, `content_hash`, `size_bytes`, `kind`,
+`produced_at_offset_ns`, `originating_run`), `input_consumed` (one row per consumed
+durable input — `run_id`, `node_id`, `attempt`, `uri`, `content_hash`), and the
+optional `asset` identity endpoint (`uri` primary key, `extra` JSON). The per-attempt
+`node_attempt` row also carries the durable-reference metadata columns
+(`content_hash`, `size_bytes`, `scheme`, `produced_at_offset_ns`).
+
+The lineage rows reference a dataset **by its `uri` value** — there is **no foreign
+key** to the `asset` row, so a lineage row survives garbage-collection (or deletion)
+of the `asset` endpoint; the `asset` table is a convenience join target, populated on
+first sight of a `uri`, not load-bearing. Two runs producing at the same `uri` with
+different content hashes are two distinct append-only rows that both join to the one
+`asset` row by value. This is a **local, non-coordinating index of per-run
+provenance**: dagr is not an asset scheduler. There are no data-triggered runs, no
+asset queues, no watchers, and no partitions — the whole asset-scheduler cluster is a
+permanent non-goal (arch.md permanent non-goals).
+
+```sql
+-- Which runs PRODUCED a given dataset (by uri), newest offset first.
+SELECT run_id, node_id, attempt, content_hash, size_bytes
+FROM output_produced
+WHERE uri = 's3://bucket/dataset'
+ORDER BY produced_at_offset_ns DESC;
+
+-- Which runs CONSUMED it — the downstream side of the same dataset.
+SELECT run_id, node_id, attempt, content_hash
+FROM input_consumed
+WHERE uri = 's3://bucket/dataset';
+
+-- The full producer→consumer picture for every dataset, joined to the asset
+-- identity row BY VALUE (uri), with per-dataset produce/consume counts.
+SELECT a.uri,
+       count(DISTINCT p.run_id) AS produced_by_runs,
+       count(DISTINCT c.run_id) AS consumed_by_runs
+FROM asset a
+LEFT JOIN output_produced p ON p.uri = a.uri
+LEFT JOIN input_consumed  c ON c.uri = a.uri
+GROUP BY a.uri
+ORDER BY a.uri;
+```
+
 **Live now, backfill later — the two write paths.** The toggle above is the
 **guaranteed live** tee: a run writes its index rows *as it executes*, and a metastore
 write is as durable as an event-stream write — a failed index write surfaces as the
@@ -686,6 +730,11 @@ because both are the same guaranteed projection of the same event stream.
 > compiled, run reference (it builds and runs with **and** without `--features
 > metastore`). `crates/cli/tests/metastore_example_and_docs.rs` (behind the feature)
 > runs `alpha`/`beta`/`gamma` into one store and **executes the `sqlite3` query block
-> above verbatim** against it; `crates/cli/tests/metastore_docs_claims.rs` (always
+> above verbatim** against it (the lineage queries run too — they return no rows for a
+> run that produced none); `crates/cli/tests/metastore_docs_claims.rs` (always
 > compiled) guards that this section stays truthful — native-access-only, no server,
-> no lineage. Both run on `ubuntu-latest` and `macos-latest`.
+> and lineage projected as a by-value / no-FK index, never an asset scheduler. The
+> lineage projection itself is proven in
+> `crates/metastore/tests/lineage_projection.rs` (T91: reconcile + live tee, the
+> no-FK cross-run join, and the M7→T91 forward-migration/additivity path). Both run
+> on `ubuntu-latest` and `macos-latest`.

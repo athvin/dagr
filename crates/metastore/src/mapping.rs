@@ -36,7 +36,7 @@
 use std::path::{Path, PathBuf};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
-use dagr_artifact::fold::{fold_stream, AttemptRecord, RunArtifact};
+use dagr_artifact::fold::{fold_stream, AttemptRecord, ProducedOutput, RunArtifact};
 use serde_json::Value;
 
 use crate::store::WriteError;
@@ -304,7 +304,94 @@ fn build_statements(
         out.push(stmt);
     }
 
+    // --- Lineage projection (T91): produced outputs, consumed inputs, asset ---
+    // Append-only, FK-free produced-output lineage from the folded `outputs[]`, and
+    // the consumed durable `inputs[]` an attempt read. The optional `asset` identity
+    // row is populated (by VALUE on the `uri`) on first sight of every produced /
+    // consumed uri — never a hard FK, so an absent/deleted asset row never orphans
+    // lineage. Every statement is an idempotent UPSERT (keyed by the row's natural
+    // lineage identity), so re-projecting a growing live stream, or re-syncing a
+    // finished one, never duplicates a lineage row (live == reconcile).
+    for o in artifact.outputs() {
+        out.push(output_produced_upsert(&run_id, o));
+        out.push(asset_upsert(o.uri()));
+    }
+    for a in artifact.attempts() {
+        for input in a.inputs() {
+            out.push(input_consumed_upsert(
+                &run_id,
+                a.node(),
+                a.attempt_number(),
+                input.uri(),
+                input.content_hash(),
+            ));
+            out.push(asset_upsert(input.uri()));
+        }
+    }
+
     out
+}
+
+/// The UPSERT for one produced-output lineage row. Append-only and FK-free: the
+/// `uri`/hash are carried by value with no foreign key to the `asset` table. The
+/// conflict target is the row's natural lineage identity
+/// `(run_id, node_id, attempt, uri, content_hash)`, so re-projecting the same run
+/// (live or a re-sync) never duplicates it.
+fn output_produced_upsert(run_id: &str, o: &ProducedOutput) -> String {
+    format!(
+        "INSERT INTO output_produced \
+         (run_id, node_id, attempt, uri, content_hash, size_bytes, kind, produced_at_offset_ns, \
+          originating_run) \
+         VALUES ('{run_id}', '{node}', {attempt}, '{uri}', {content_hash}, {size_bytes}, {kind}, \
+          {produced_at}, {originating}) \
+         ON CONFLICT(run_id, node_id, attempt, uri, content_hash) DO UPDATE SET \
+          size_bytes=excluded.size_bytes, kind=excluded.kind, \
+          produced_at_offset_ns=excluded.produced_at_offset_ns, \
+          originating_run=excluded.originating_run",
+        run_id = sql_quote(run_id),
+        node = sql_quote(o.node()),
+        attempt = o.attempt_number(),
+        uri = sql_quote(o.uri()),
+        content_hash = sql_opt(o.content_hash()),
+        size_bytes = sql_u64(o.size_bytes()),
+        kind = sql_opt(o.kind()),
+        produced_at = o.produced_at_offset_ns(),
+        originating = sql_opt(Some(o.originating_run())),
+    )
+}
+
+/// The UPSERT for one consumed durable-input lineage row. FK-free: the `uri`/hash
+/// are carried by value. The conflict target is the natural lineage identity
+/// `(run_id, node_id, attempt, uri, content_hash)`.
+fn input_consumed_upsert(
+    run_id: &str,
+    node: &str,
+    attempt: u32,
+    uri: &str,
+    content_hash: Option<&str>,
+) -> String {
+    format!(
+        "INSERT INTO input_consumed (run_id, node_id, attempt, uri, content_hash) \
+         VALUES ('{run_id}', '{node}', {attempt}, '{uri}', {content_hash}) \
+         ON CONFLICT(run_id, node_id, attempt, uri, content_hash) DO NOTHING",
+        run_id = sql_quote(run_id),
+        node = sql_quote(node),
+        attempt = attempt,
+        uri = sql_quote(uri),
+        content_hash = sql_opt(content_hash),
+    )
+}
+
+/// The UPSERT that populates the OPTIONAL `asset` identity row on first sight of a
+/// `uri`. Referenced BY VALUE only (the `uri` string) — never a hard FK — so an
+/// absent/deleted `asset` row never orphans lineage. Idempotent: a repeat sighting
+/// of the same uri is a no-op (`DO NOTHING`), preserving any `extra` written later.
+fn asset_upsert(uri: &str) -> String {
+    format!(
+        "INSERT INTO asset (uri, extra) VALUES ('{uri}', NULL) \
+         ON CONFLICT(uri) DO NOTHING",
+        uri = sql_quote(uri),
+    )
 }
 
 /// The UPSERT for one attempt row.
@@ -314,21 +401,33 @@ fn attempt_upsert(run_id: &str, a: &AttemptRecord) -> String {
         .to_string();
     let metrics = a.metrics().to_string();
     let total_ms = ns_to_ms(a.total_elapsed_ns());
+    // The OPTIONAL durable-reference metadata (T89/T91), projected as first-class
+    // node_attempt columns for querying. Absent fields (a non-producing attempt, or
+    // a producing output that supplied no metadata) store NULL.
+    let meta = a.durable_reference_meta();
+    let content_hash = meta_str(meta, "content_hash");
+    let scheme = meta_str(meta, "scheme");
+    let size_bytes = meta_u64(meta, "size_bytes");
+    let produced_at = meta_u64(meta, "produced_at_offset_ns");
     format!(
         "INSERT INTO node_attempt \
          (run_id, node_id, try_number, state, started_ms, finished_ms, message, metrics_json, \
           worker, phase_durations_json, error_json, cost_declared_json, cost_measured_json, \
-          durable_reference, satisfied_from_run, originating_node) \
+          durable_reference, satisfied_from_run, originating_node, \
+          content_hash, size_bytes, scheme, produced_at_offset_ns) \
          VALUES ('{run_id}', '{node}', {try_number}, '{state}', NULL, {finished_ms}, {message}, '{metrics}', \
           '{worker}', '{phases}', {error}, {cost_declared}, {cost_measured}, \
-          {durable}, {satisfied}, {originating}) \
+          {durable}, {satisfied}, {originating}, \
+          {content_hash}, {size_bytes}, {scheme}, {produced_at}) \
          ON CONFLICT(run_id, node_id, try_number) DO UPDATE SET \
           state=excluded.state, finished_ms=excluded.finished_ms, message=excluded.message, \
           metrics_json=excluded.metrics_json, worker=excluded.worker, \
           phase_durations_json=excluded.phase_durations_json, error_json=excluded.error_json, \
           cost_declared_json=excluded.cost_declared_json, cost_measured_json=excluded.cost_measured_json, \
           durable_reference=excluded.durable_reference, satisfied_from_run=excluded.satisfied_from_run, \
-          originating_node=excluded.originating_node",
+          originating_node=excluded.originating_node, \
+          content_hash=excluded.content_hash, size_bytes=excluded.size_bytes, \
+          scheme=excluded.scheme, produced_at_offset_ns=excluded.produced_at_offset_ns",
         run_id = sql_quote(run_id),
         node = sql_quote(a.node()),
         try_number = a.attempt_number(),
@@ -344,7 +443,28 @@ fn attempt_upsert(run_id: &str, a: &AttemptRecord) -> String {
         durable = sql_opt(json_text(a.durable_reference()).as_deref()),
         satisfied = sql_opt(a.satisfied_from_run()),
         originating = sql_opt(a.originating_node()),
+        content_hash = sql_opt(content_hash.as_deref()),
+        size_bytes = sql_u64(size_bytes),
+        scheme = sql_opt(scheme.as_deref()),
+        produced_at = sql_u64(produced_at),
     )
+}
+
+/// Read a string field out of the optional `durable_reference_meta` JSON object.
+fn meta_str(meta: Option<&Value>, key: &str) -> Option<String> {
+    meta.and_then(|m| m.get(key))
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// Read a `u64` field out of the optional `durable_reference_meta` JSON object.
+fn meta_u64(meta: Option<&Value>, key: &str) -> Option<u64> {
+    meta.and_then(|m| m.get(key)).and_then(Value::as_u64)
+}
+
+/// Render an optional `u64` as a SQL integer literal or `NULL`.
+fn sql_u64(v: Option<u64>) -> String {
+    v.map_or_else(|| "NULL".to_string(), |n| n.to_string())
 }
 
 /// The `node_terminal` upserts — one per node, carrying that node's **latest**
