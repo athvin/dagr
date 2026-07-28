@@ -99,7 +99,7 @@ fn a_real_resumed_artifact_validates_against_the_unmodified_run_schema() {
         interval_override: None,
     };
     let bytes = serde_json::to_vec(&prior).unwrap();
-    let artifact = match resume_verb(&pipeline, &bytes, &options, |_n, _r| {
+    let artifact = match resume_verb(&pipeline, &bytes, &options, |_n, _r, _h| {
         ReferenceExistence::Present
     }) {
         ResumeOutcome::Resumed { artifact, .. } => artifact,

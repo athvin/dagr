@@ -1049,7 +1049,7 @@ pub fn resume_verb<P>(
     probe: P,
 ) -> ResumeOutcome
 where
-    P: Fn(&str, &str) -> ReferenceExistence,
+    P: Fn(&str, &str, Option<&str>) -> ReferenceExistence,
 {
     // (1) A run whose store is gone is not resumable — refuse before any planning.
     if !options.store_present {
@@ -1252,6 +1252,16 @@ fn build_prior_run(
             .get("durable_reference")
             .filter(|v| !v.is_null())
             .map(reference_to_string);
+        // The recorded durable-reference content hash (T89), when the producing
+        // durable output supplied one via `durable_reference_meta.content_hash`.
+        // Carried to the resume plan so a mutated referent refuses; absent for a
+        // pre-T89 artifact or an impl that supplied no metadata, in which case
+        // resume behaves exactly as before.
+        let durable_reference_content_hash = a
+            .get("durable_reference_meta")
+            .and_then(|m| m.get("content_hash"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         // A node's originating run: the run it was satisfied-from in the prior run
         // (carried across generations), else the prior run itself.
         let originating_run = a
@@ -1264,6 +1274,7 @@ fn build_prior_run(
             PriorNode {
                 terminal,
                 durable_reference,
+                durable_reference_content_hash,
                 originating_run,
             },
         );
@@ -1400,6 +1411,16 @@ fn build_resumed_artifact(
         if let Some(prior_node) = prior.nodes.get(node) {
             if let Some(reference) = &prior_node.durable_reference {
                 record.insert("durable_reference".into(), serde_json::json!(reference));
+            }
+            // Copy the recorded content hash forward too (T89), as
+            // `durable_reference_meta.content_hash`, so a NEXT-generation resume can
+            // still verify the referent was not mutated — the metadata stays
+            // self-contained across a chain of resumes. Absent when none was recorded.
+            if let Some(hash) = &prior_node.durable_reference_content_hash {
+                record.insert(
+                    "durable_reference_meta".into(),
+                    serde_json::json!({ "content_hash": hash }),
+                );
             }
         }
         attempts.push(serde_json::Value::Object(record));

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/athvin/dagr/schemas/run/v1.schema.json",
   "title": "dagr.run@1",
-  "description": "The C22 run artifact: the outcome of one execution, joinable to the structure, derived from the event stream. A single canonical JSON document (T4 §2) with a header (run identity, pipeline identity, both fingerprint hashes, invocation parameters + data interval, allowlisted captured environment, resume lineage, overall outcome), one record PER ATTEMPT, and a summary. Accommodates the assembly-failed / bootstrap-failed variants (no fingerprint, non-empty error list, zero attempts) and the single-node replay variant (`not-requested` node marking). Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate.",
+  "description": "The C22 run artifact: the outcome of one execution, joinable to the structure, derived from the event stream. A single canonical JSON document (T4 §2) with a header (run identity, pipeline identity, both fingerprint hashes, invocation parameters + data interval, allowlisted captured environment, resume lineage, overall outcome), one record PER ATTEMPT, and a summary. Accommodates the assembly-failed / bootstrap-failed variants (no fingerprint, non-empty error list, zero attempts) and the single-node replay variant (`not-requested` node marking). Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate. MINOR REVISIONS (additive, same major @1, same file — old documents keep validating): @1.1 (T89, ticket 104) adds the optional attempt field `durable_reference_meta`.",
   "type": "object",
   "required": ["header", "attempts"],
   "properties": {
@@ -186,6 +186,16 @@
         "durable_reference": {
           "description": "The durable-output reference (T0.8), present only on a durable node's succeeded attempt or copied forward on resume. OPAQUE to the schema — whatever the task's Reference type serializes to.",
           "type": ["object", "string", "null"]
+        },
+        "durable_reference_meta": {
+          "description": "OPTIONAL durable-reference metadata (T89, dagr.run@1.1, minor+additive): the content hash, size, scheme, and produced-at offset a durable output MAY supply alongside its reference. Present only when the producing DurableOutput impl supplied it; absent otherwise, and absent on every pre-T89 artifact. The content_hash is the impl's OPAQUE digest — dagr computes nothing and only carries it (resume verifies it to refuse on an out-of-band mutation, C27). Additive and open-world: every sub-field is optional and no object is closed, so both a document carrying this and one without it validate.",
+          "type": ["object", "null"],
+          "properties": {
+            "content_hash": { "type": "string", "minLength": 1 },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "scheme": { "type": "string", "minLength": 1 },
+            "produced_at_offset_ns": { "type": "integer", "minimum": 0 }
+          }
         },
         "satisfied_from_run": {
           "description": "The ORIGINATING run identity a satisfied-from-prior attempt carries (C22/C27). Required when status is satisfied-from-prior (enforced below).",

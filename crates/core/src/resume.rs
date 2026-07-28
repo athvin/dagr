@@ -91,6 +91,15 @@ pub struct PriorNode {
     /// `None` for a non-durable node — an in-memory value that cannot be
     /// rehydrated.
     pub durable_reference: Option<String>,
+    /// The **content hash** recorded alongside the durable reference, if the
+    /// producing [`DurableOutput`](crate::assembly::DurableOutput) impl supplied
+    /// one. `None` when no hash was recorded — then resume behaves exactly as
+    /// before (existence alone gates rehydration). When present, resume hands it to
+    /// the existence probe so a referent that still exists but was overwritten
+    /// out-of-band refuses the plan ([`ResumeRefusal::MutatedReference`]) instead
+    /// of rehydrating stale bytes. dagr never computes or interprets the hash — it
+    /// is the impl's opaque digest, carried through the artifact.
+    pub durable_reference_content_hash: Option<String>,
     /// The run identity this node's success **originated** in. For a node that
     /// ran in the prior run this is the prior run's own id; for a node
     /// the prior run itself carried `satisfied-from-prior`, it is the earlier
@@ -119,19 +128,41 @@ pub struct PriorRun {
 }
 
 /// The outcome of a cheap **existence probe** of a durable reference: is the
-/// prior durable output still there?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// prior durable output still there, and — when a content hash was recorded — is
+/// it unchanged?
+///
+/// The probe is given `(node, reference, expected_content_hash)`. The
+/// `expected_content_hash` is `Some` only when the prior run recorded one
+/// ([`PriorNode::durable_reference_content_hash`]); a probe that can verify it
+/// returns [`Changed`](Self::Changed) (carrying the referent's **actual** current
+/// hash) when it no longer matches, so resume refuses up front rather than
+/// rehydrating stale bytes. A probe that does not (or cannot) hash simply never
+/// returns `Changed` — behavior is then exactly the pre-hash contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReferenceExistence {
-    /// The referent is present — the value can be rehydrated.
+    /// The referent is present (and, if a hash was recorded and verified, intact) —
+    /// the value can be rehydrated.
     Present,
     /// The referent is **gone** (a deleted object). A demanded durable reference
     /// that probes absent is a **dangling** reference: it fails the resume *plan*
     /// up front ([`ResumeRefusal::DanglingReference`]), not the eleventh executing
     /// node.
     Absent,
+    /// The referent is present but its **content hash no longer matches** the one
+    /// recorded in the prior run — it was overwritten out-of-band. A demanded
+    /// reference that probes changed fails the resume *plan* up front
+    /// ([`ResumeRefusal::MutatedReference`]), naming the node and both hashes,
+    /// rather than rehydrating stale bytes. Carries the referent's **actual**
+    /// current hash the probe measured. Only ever returned when the prior run
+    /// recorded a content hash for the reference.
+    Changed {
+        /// The referent's actual current content hash (the impl's opaque digest),
+        /// which no longer matches the recorded one.
+        actual: String,
+    },
     /// The probe could not determine presence (a transient store error). The plan
-    /// proceeds — only a definite `Absent` fails it — leaving a genuine dangling
-    /// reference to surface at rehydration if it truly is gone.
+    /// proceeds — only a definite `Absent`/`Changed` fails it — leaving a genuine
+    /// dangling reference to surface at rehydration if it truly is gone.
     CannotDetermine,
 }
 
@@ -193,6 +224,22 @@ pub enum ResumeRefusal {
         /// The dangling reference (the offending reference, named).
         reference: String,
     },
+    /// A candidate durable node's referent still **exists** but its content hash no
+    /// longer matches the one recorded in the prior run — it was overwritten
+    /// out-of-band. It fails the resume *plan* up front (before any node executes),
+    /// naming the node, the reference, and both the expected and actual hashes, so
+    /// resume never rehydrates stale bytes — parity with
+    /// [`DanglingReference`](Self::DanglingReference), applied to data content.
+    MutatedReference {
+        /// The node whose durable reference was mutated.
+        node: String,
+        /// The reference whose referent changed (the offending reference, named).
+        reference: String,
+        /// The content hash recorded in the prior run.
+        expected_hash: String,
+        /// The referent's actual current content hash (the mismatch).
+        actual_hash: String,
+    },
 }
 
 impl std::fmt::Display for ResumeRefusal {
@@ -221,6 +268,18 @@ impl std::fmt::Display for ResumeRefusal {
                 "resume refused: node `{node}`'s durable output is gone — its recorded reference \
                  `{reference}` no longer exists in storage (a dangling reference). The resume plan \
                  fails before any node executes.",
+            ),
+            ResumeRefusal::MutatedReference {
+                node,
+                reference,
+                expected_hash,
+                actual_hash,
+            } => write!(
+                f,
+                "resume refused: node `{node}`'s durable output was overwritten out-of-band — its \
+                 recorded reference `{reference}` still exists but its content hash changed \
+                 (recorded `{expected_hash}`, now `{actual_hash}`). Resuming would rehydrate stale \
+                 bytes, so the plan fails before any node executes.",
             ),
         }
     }
@@ -301,18 +360,23 @@ impl ResumePlan {
 /// demand upward — existence-probing every **demanded** durable reference (a
 /// definite absence is a [`ResumeRefusal::DanglingReference`]).
 ///
-/// `probe` is the cheap existence probe: given a `(node, reference)` it reports
-/// whether the durable referent is [present, absent, or cannot-determine](ReferenceExistence).
-/// It is called **only** for a durable producer whose value a re-running consumer
-/// demands — an undemanded durable success is never probed (its value is never
-/// rehydrated), so a dangling reference on an undemanded node does not fail the
-/// plan.
+/// `probe` is the cheap existence probe: given a `(node, reference,
+/// expected_content_hash)` it reports whether the durable referent is
+/// [present, absent, changed, or cannot-determine](ReferenceExistence). The
+/// `expected_content_hash` is `Some` only when the prior run recorded a content
+/// hash for the reference ([`PriorNode::durable_reference_content_hash`]); a probe
+/// that verifies it returns [`Changed`](ReferenceExistence::Changed) on a
+/// mismatch. It is called **only** for a durable producer whose value a re-running
+/// consumer demands — an undemanded durable success is never probed (its value is
+/// never rehydrated), so a dangling or mutated reference on an undemanded node
+/// does not fail the plan.
 ///
 /// # Errors
 ///
 /// Returns a [`ResumeRefusal`] when the gate rejects the prior run (structural /
 /// algorithm-version / tool-version mismatch) or a demanded durable reference is
-/// dangling.
+/// dangling ([`DanglingReference`](ResumeRefusal::DanglingReference)) or mutated
+/// ([`MutatedReference`](ResumeRefusal::MutatedReference)).
 pub fn plan_resume<P>(
     pipeline: &Pipeline,
     prior: &PriorRun,
@@ -320,7 +384,7 @@ pub fn plan_resume<P>(
     probe: P,
 ) -> Result<ResumePlan, ResumeRefusal>
 where
-    P: Fn(&str, &str) -> ReferenceExistence,
+    P: Fn(&str, &str, Option<&str>) -> ReferenceExistence,
 {
     let fingerprint = pipeline.fingerprint();
 
@@ -440,7 +504,9 @@ fn compute_seed(pipeline: &Pipeline, prior: &PriorRun, graph: &Graph) -> BTreeSe
 ///
 /// # Errors
 /// A demanded durable reference that probes [`Absent`](ReferenceExistence::Absent)
-/// is a dangling reference and fails the plan up front.
+/// is a dangling reference and fails the plan up front; one that probes
+/// [`Changed`](ReferenceExistence::Changed) — a recorded content hash that no
+/// longer matches — is a mutated reference and likewise fails the plan up front.
 fn resolve_demand<P>(
     prior: &PriorRun,
     graph: &Graph,
@@ -448,7 +514,7 @@ fn resolve_demand<P>(
     probe: &P,
 ) -> Result<(BTreeSet<String>, BTreeMap<String, String>), ResumeRefusal>
 where
-    P: Fn(&str, &str) -> ReferenceExistence,
+    P: Fn(&str, &str, Option<&str>) -> ReferenceExistence,
 {
     let mut must_run = seed.clone();
     let mut rehydrate: BTreeMap<String, String> = BTreeMap::new();
@@ -474,21 +540,44 @@ where
                 }
                 // A non-succeeded producer is already in the seed, so reaching here
                 // means the producer succeeded before — carry it forward.
-                let durable_ref = prior
+                let prior_success = prior
                     .nodes
                     .get(&producer)
-                    .filter(|p| p.terminal == TerminalState::Succeeded)
+                    .filter(|p| p.terminal == TerminalState::Succeeded);
+                let is_durable = graph.is_durable.get(&producer).copied().unwrap_or(false);
+                let durable_ref = prior_success
                     .and_then(|p| p.durable_reference.clone())
-                    .filter(|_| graph.is_durable.get(&producer).copied().unwrap_or(false));
+                    .filter(|_| is_durable);
+                // The recorded content hash (only for a durable success that
+                // carried one) travels to the probe so a mutated referent refuses.
+                let expected_hash = prior_success
+                    .filter(|_| is_durable)
+                    .and_then(|p| p.durable_reference_content_hash.clone());
 
                 if let Some(reference) = durable_ref {
-                    // A demanded durable producer: existence-probe it; a definite
-                    // absence fails the plan up front (dangling).
-                    if probe(&producer, &reference) == ReferenceExistence::Absent {
-                        return Err(ResumeRefusal::DanglingReference {
-                            node: producer,
-                            reference,
-                        });
+                    // A demanded durable producer: existence-probe it (handing it the
+                    // recorded content hash, when any). A definite absence fails the
+                    // plan up front (dangling); a definite content mismatch fails it
+                    // (mutated). Present / cannot-determine proceed.
+                    match probe(&producer, &reference, expected_hash.as_deref()) {
+                        ReferenceExistence::Absent => {
+                            return Err(ResumeRefusal::DanglingReference {
+                                node: producer,
+                                reference,
+                            });
+                        }
+                        ReferenceExistence::Changed { actual } => {
+                            return Err(ResumeRefusal::MutatedReference {
+                                node: producer,
+                                reference,
+                                // A `Changed` verdict is only returned when a hash was
+                                // recorded, so `expected_hash` is `Some` here; fall
+                                // back defensively rather than unwrap.
+                                expected_hash: expected_hash.unwrap_or_default(),
+                                actual_hash: actual,
+                            });
+                        }
+                        ReferenceExistence::Present | ReferenceExistence::CannotDetermine => {}
                     }
                     rehydrate.insert(producer, reference);
                 } else {

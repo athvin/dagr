@@ -414,13 +414,15 @@ fn a_matching_content_hash_rehydrates() {
             ("consume", TerminalState::Failed, None, None),
         ],
     );
-    // The probe verifies the hash and finds it intact.
+    // The probe is handed the recorded hash, verifies it, and finds it intact — so
+    // it reports `Present` and rehydration proceeds.
     let probe = |_node: &str, _reference: &str, expected: Option<&str>| {
-        if expected == Some("sha256:original") {
-            ReferenceExistence::Present
-        } else {
-            ReferenceExistence::Present
-        }
+        assert_eq!(
+            expected,
+            Some("sha256:original"),
+            "the recorded content hash reaches the probe for verification"
+        );
+        ReferenceExistence::Present
     };
     let plan = plan_resume(&pipeline, &prior, "dagr@1", probe)
         .expect("a matching content hash rehydrates, never refuses");

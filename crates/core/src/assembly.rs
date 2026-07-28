@@ -184,6 +184,134 @@ pub trait DurableOutput {
     fn rehydrate(reference: &str) -> Result<Self, RehydrateError>
     where
         Self: Sized;
+
+    /// **Optionally** supply metadata about the durable reference —
+    /// [`DurableReferenceMeta`] `{ content_hash, size_bytes, scheme,
+    /// produced_at_offset_ns }` — alongside the opaque reference itself.
+    ///
+    /// The default is [`None`]: an impl that supplies no metadata is unchanged,
+    /// the recorded attempt carries no metadata field, and the run is
+    /// byte-identical to a pre-metadata run. The reference itself stays the task's
+    /// opaque string (whatever [`serialize_reference`](DurableOutput::serialize_reference)
+    /// produced); the metadata is a separate, additive enrichment.
+    ///
+    /// # What each field is for
+    ///
+    /// - **`content_hash`** — the impl's own opaque digest of the referent's
+    ///   bytes. dagr never computes it (that would force a hashing dependency on
+    ///   core and on every impl) and never interprets it; it only carries it and,
+    ///   at resume, hands it to the existence probe so a referent that still exists
+    ///   but was **overwritten out-of-band** refuses the plan up front (a fingerprint
+    ///   mismatch) instead of rehydrating stale bytes — the same discipline the
+    ///   graph fingerprint gives structure, applied to data.
+    /// - **`size_bytes`** / **`scheme`** / **`produced_at_offset_ns`** — descriptive
+    ///   only in v1: recorded on the attempt for change-detection and later
+    ///   lineage, never load-bearing for the resume gate.
+    ///
+    /// Every field is itself optional, so an impl may supply a content hash alone,
+    /// or size alone, and leave the rest absent.
+    fn durable_reference_meta(&self) -> Option<DurableReferenceMeta> {
+        None
+    }
+}
+
+/// Optional, additive metadata a [`DurableOutput`] impl may supply about its
+/// durable reference: a content hash, size, scheme, and produced-at offset.
+///
+/// Every field is optional. The value is **opaque per-field data the impl chose**
+/// — dagr records it verbatim and, for the `content_hash`, uses it only to harden
+/// resume (see [`DurableOutput::durable_reference_meta`]). `dagr-core` computes no
+/// hash and pulls no hashing dependency; an impl that wants a content hash
+/// computes it however it likes and passes the resulting string here.
+///
+/// The **fluent setters** ([`content_hash`](Self::content_hash),
+/// [`size_bytes`](Self::size_bytes), [`scheme`](Self::scheme),
+/// [`produced_at_offset_ns`](Self::produced_at_offset_ns)) build the value; the
+/// distinctly-named **read accessors** ([`get_content_hash`](Self::get_content_hash),
+/// [`get_size_bytes`](Self::get_size_bytes), [`get_scheme`](Self::get_scheme),
+/// [`get_produced_at_offset_ns`](Self::get_produced_at_offset_ns)) read it back —
+/// the same builder/getter split [`NodePolicy`] uses.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DurableReferenceMeta {
+    content_hash: Option<String>,
+    size_bytes: Option<u64>,
+    scheme: Option<String>,
+    produced_at_offset_ns: Option<u64>,
+}
+
+impl DurableReferenceMeta {
+    /// A fresh, empty metadata value — every field absent.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the reference's **content hash** — the impl's own opaque digest of the
+    /// referent's bytes (dagr computes and interprets nothing). This is the one
+    /// field resume verifies: a recorded hash that no longer matches the referent's
+    /// current hash refuses the resume plan.
+    #[must_use]
+    pub fn content_hash(mut self, hash: impl Into<String>) -> Self {
+        self.content_hash = Some(hash.into());
+        self
+    }
+
+    /// Set the referent's **size in bytes** (descriptive; not load-bearing for the
+    /// resume gate in v1).
+    #[must_use]
+    pub fn size_bytes(mut self, bytes: u64) -> Self {
+        self.size_bytes = Some(bytes);
+        self
+    }
+
+    /// Set the reference's **scheme** — a short tag for where the value lives
+    /// (`"s3"`, `"file"`, …), the impl's choice (descriptive only).
+    #[must_use]
+    pub fn scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = Some(scheme.into());
+        self
+    }
+
+    /// Set the **produced-at monotonic offset** (nanoseconds from run start) the
+    /// reference was written at (descriptive only).
+    #[must_use]
+    pub fn produced_at_offset_ns(mut self, offset_ns: u64) -> Self {
+        self.produced_at_offset_ns = Some(offset_ns);
+        self
+    }
+
+    /// The recorded content hash, if any — the impl's opaque digest resume verifies.
+    #[must_use]
+    pub fn get_content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
+    }
+
+    /// The recorded size in bytes, if any.
+    #[must_use]
+    pub fn get_size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    /// The recorded scheme, if any.
+    #[must_use]
+    pub fn get_scheme(&self) -> Option<&str> {
+        self.scheme.as_deref()
+    }
+
+    /// The recorded produced-at monotonic offset (nanoseconds), if any.
+    #[must_use]
+    pub fn get_produced_at_offset_ns(&self) -> Option<u64> {
+        self.produced_at_offset_ns
+    }
+
+    /// Whether every field is absent (nothing was supplied).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.content_hash.is_none()
+            && self.size_bytes.is_none()
+            && self.scheme.is_none()
+            && self.produced_at_offset_ns.is_none()
+    }
 }
 
 /// The **durable-contract witness** a node carries: whether its

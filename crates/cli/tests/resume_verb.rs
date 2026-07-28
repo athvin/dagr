@@ -114,7 +114,7 @@ fn prior_artifact(
     })
 }
 
-fn present(_n: &str, _r: &str) -> ReferenceExistence {
+fn present(_n: &str, _r: &str, _expected_hash: Option<&str>) -> ReferenceExistence {
     ReferenceExistence::Present
 }
 

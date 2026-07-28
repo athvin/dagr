@@ -169,6 +169,7 @@ pub struct AttemptRecord {
     cost_declared: Option<Value>,
     cost_measured: Option<Value>,
     durable_reference: Option<Value>,
+    durable_reference_meta: Option<Value>,
     satisfied_from_run: Option<String>,
     originating_node: Option<String>,
 }
@@ -239,6 +240,14 @@ impl AttemptRecord {
     pub fn durable_reference(&self) -> Option<&Value> {
         self.durable_reference.as_ref()
     }
+    /// The **optional** durable-reference metadata (`content_hash`, `size_bytes`,
+    /// `scheme`, `produced_at_offset_ns`) an attempt recorded alongside its
+    /// reference, present only when the stream carried it (an additive field — a
+    /// stream without it folds with this absent).
+    #[must_use]
+    pub fn durable_reference_meta(&self) -> Option<&Value> {
+        self.durable_reference_meta.as_ref()
+    }
     /// The originating run identity a `satisfied-from-prior` record carries.
     #[must_use]
     pub fn satisfied_from_run(&self) -> Option<&str> {
@@ -279,6 +288,9 @@ impl AttemptRecord {
         );
         if let Some(dref) = &self.durable_reference {
             o.insert("durable_reference".into(), dref.clone());
+        }
+        if let Some(meta) = &self.durable_reference_meta {
+            o.insert("durable_reference_meta".into(), meta.clone());
         }
         if let Some(run) = &self.satisfied_from_run {
             o.insert("satisfied_from_run".into(), Value::from(run.clone()));
@@ -771,6 +783,7 @@ fn assemble_attempts(records: &[Value], graph_nodes: &[String]) -> Vec<AttemptRe
                 cost_declared: None,
                 cost_measured: None,
                 durable_reference: None,
+                durable_reference_meta: None,
                 satisfied_from_run: None,
                 originating_node: None,
             });
@@ -878,6 +891,10 @@ fn build_attempt_record(
             .get("durable_reference")
             .filter(|v| !v.is_null())
             .cloned(),
+        durable_reference_meta: rec
+            .get("durable_reference_meta")
+            .filter(|v| !v.is_null())
+            .cloned(),
         satisfied_from_run: rec
             .get("satisfied_from_run")
             .and_then(Value::as_str)
@@ -913,6 +930,10 @@ fn synthesize_never_ran(node: &str, terminal: &Value) -> AttemptRecord {
         cost_measured: None,
         durable_reference: terminal
             .get("durable_reference")
+            .filter(|v| !v.is_null())
+            .cloned(),
+        durable_reference_meta: terminal
+            .get("durable_reference_meta")
             .filter(|v| !v.is_null())
             .cloned(),
         satisfied_from_run: terminal
