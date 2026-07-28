@@ -150,7 +150,7 @@ Additive **data-lineage** enrichment over the M7 metastore, sequenced after it (
 
 - [x] **104** · [T89 — durable-reference metadata + resume mutation-detection](104-T89-durable-reference-metadata.md) · M · feature — after T88, T57, T42, T58
 - [x] **105** · [T90 — produced/consumed lineage events](105-T90-produced-consumed-lineage.md) · M · feature — after T89, T50
-- [ ] **106** · [T91 — lineage projection into the metastore (+ optional asset identity)](106-T91-lineage-metastore-projection.md) · M · feature — after T90, T84, T86
+- [x] **106** · [T91 — lineage projection into the metastore (+ optional asset identity)](106-T91-lineage-metastore-projection.md) · M · feature — after T90, T84, T86
 
 ---
 
