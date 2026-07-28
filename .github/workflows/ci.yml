@@ -230,6 +230,13 @@ jobs:
       - name: metastore init verb (T83, --features metastore)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-cli --features metastore --test metastore_init
+      # M7 reconcile: the event→row mapping + `dagr metastore sync` (T84). The
+      # mapping crate tests build under a plain `cargo test --workspace` above
+      # (dagr-metastore is a normal member), but the CLI `sync` verb is behind the
+      # default-off feature, so its subprocess test needs the feature ON here.
+      - name: metastore sync verb (T84, --features metastore)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p dagr-cli --features metastore --test metastore_sync
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference

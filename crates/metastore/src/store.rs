@@ -237,6 +237,12 @@ impl MetaStore {
     /// `CREATE … IF NOT EXISTS`, so this is a no-op on an already-initialized store.
     /// Runs under [`MetaStore::with_write_txn`] so the whole migration set commits
     /// atomically under `BEGIN IMMEDIATE` + the bounded busy retry.
+    ///
+    /// After the `CREATE`s, the additive T84 columns
+    /// ([`crate::schema::ADDITIVE_COLUMNS`]) are applied `ALTER TABLE … ADD COLUMN`
+    /// **only when absent** (`SQLite` has no `ADD COLUMN IF NOT EXISTS`), so a
+    /// pre-existing T83 store converges on the widened shape idempotently and
+    /// additively.
     async fn apply_migrations(&self) -> Result<(), OpenError> {
         let statements = crate::schema::migrations();
         self.with_write_txn(move |conn| {
@@ -249,17 +255,64 @@ impl MetaStore {
             })
         })
         .await
-        .map_err(|e| match e {
-            WriteError::Libsql(err) => OpenError::Libsql(err),
-            // A migration that stays busy past the cap is a real open failure; map
-            // it to a libsql error carrying the busy code so callers see one type.
-            WriteError::BusyRetriesExhausted { attempts } => {
-                OpenError::Libsql(libsql::Error::SqliteFailure(
-                    SQLITE_BUSY,
-                    format!("migrations still SQLITE_BUSY after {attempts} attempts"),
-                ))
+        .map_err(map_migration_error)?;
+
+        // Idempotent additive columns for a store first created under T83. On a
+        // fresh store the widened `CREATE TABLE` already has them, so every
+        // existence check finds the column present and no `ALTER` is issued.
+        self.apply_additive_columns()
+            .await
+            .map_err(map_migration_error)
+    }
+
+    /// Add each of [`crate::schema::ADDITIVE_COLUMNS`] that is not already present,
+    /// under one write transaction. Column presence is probed via
+    /// `PRAGMA table_info`; a present column is skipped, so the whole step is a
+    /// no-op on a store that already carries the T84 shape.
+    async fn apply_additive_columns(&self) -> Result<(), WriteError> {
+        // Compute the missing columns first (reads outside the write txn), then
+        // ALTER just those inside one BEGIN IMMEDIATE.
+        let mut missing: Vec<(&'static str, &'static str, &'static str)> = Vec::new();
+        for &(table, column, decl) in crate::schema::ADDITIVE_COLUMNS {
+            if !self.column_exists(table, column).await.unwrap_or(true) {
+                missing.push((table, column, decl));
             }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        self.with_write_txn(move |conn| {
+            let missing = missing.clone();
+            Box::pin(async move {
+                for (table, column, decl) in &missing {
+                    conn.execute(
+                        &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+                        (),
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
         })
+        .await
+    }
+
+    /// Whether `column` already exists on `table` (`PRAGMA table_info` names every
+    /// column in its `name` field).
+    async fn column_exists(&self, table: &str, column: &str) -> Result<bool, libsql::Error> {
+        let mut rows = self
+            .conn
+            .query(&format!("PRAGMA table_info({table})"), ())
+            .await?;
+        while let Some(row) = rows.next().await? {
+            // table_info columns: (cid, name, type, notnull, dflt_value, pk).
+            if let Ok(name) = row.get_str(1) {
+                if name == column {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Run `f`'s statements inside a single write transaction opened with
@@ -362,6 +415,21 @@ impl MetaStore {
     #[must_use]
     pub fn connection(&self) -> &libsql::Connection {
         &self.conn
+    }
+}
+
+/// Map a [`WriteError`] from a migration/DDL step onto an [`OpenError`], so
+/// callers of `open` see one error type. A busy-past-the-cap DDL is a real open
+/// failure, mapped to a libsql busy error.
+fn map_migration_error(e: WriteError) -> OpenError {
+    match e {
+        WriteError::Libsql(err) => OpenError::Libsql(err),
+        WriteError::BusyRetriesExhausted { attempts } => {
+            OpenError::Libsql(libsql::Error::SqliteFailure(
+                SQLITE_BUSY,
+                format!("DDL still SQLITE_BUSY after {attempts} attempts"),
+            ))
+        }
     }
 }
 
