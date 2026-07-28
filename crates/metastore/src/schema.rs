@@ -70,7 +70,7 @@ pub fn migrations() -> Vec<String> {
     let node_state_check = state_check("state", &NODE_TERMINAL_STATES);
     let run_state_check = state_check("state", &RUN_STATES);
 
-    vec![
+    let mut m = vec![
         // --- dag: one row per logical DAG (identity by stable name) -----------
         "CREATE TABLE IF NOT EXISTS dag (
             dag_id       TEXT PRIMARY KEY,
@@ -121,6 +121,11 @@ pub fn migrations() -> Vec<String> {
         // durations, error/cost JSON, durable reference, resume/propagation
         // lineage) are carried too — see [`ADDITIVE_COLUMNS`] for the pre-existing-
         // store convergence path.
+        // The T91-added durable_reference_meta columns (content_hash / size_bytes /
+        // scheme / produced_at_offset_ns) are ALSO applied idempotently to a
+        // pre-existing T83/M7 store via [`ADDITIVE_COLUMNS`], so both shapes
+        // converge (additive-only). They project the OPTIONAL per-attempt
+        // durable-reference metadata (T89) as first-class columns for querying.
         format!(
             "CREATE TABLE IF NOT EXISTS node_attempt (
             run_id             TEXT NOT NULL,
@@ -139,6 +144,10 @@ pub fn migrations() -> Vec<String> {
             durable_reference  TEXT,
             satisfied_from_run TEXT,
             originating_node   TEXT,
+            content_hash       TEXT,
+            size_bytes         INTEGER,
+            scheme             TEXT,
+            produced_at_offset_ns INTEGER,
             UNIQUE (run_id, node_id, try_number)
         )"
         ),
@@ -162,6 +171,82 @@ pub fn migrations() -> Vec<String> {
         "CREATE INDEX IF NOT EXISTS idx_node_attempt_state ON node_attempt (state)".to_string(),
         "CREATE INDEX IF NOT EXISTS idx_node_terminal_run_id ON node_terminal (run_id)".to_string(),
         "CREATE INDEX IF NOT EXISTS idx_node_terminal_state ON node_terminal (state)".to_string(),
+    ];
+    // The T91 lineage tables + their cross-run indexes are appended as forward,
+    // additive migrations (kept in their own function so `migrations` stays within
+    // the pedantic line budget and the M8 addition is auditable in one place).
+    m.extend(lineage_migrations());
+    m
+}
+
+/// The M8 lineage migrations (T91): the append-only `output_produced` /
+/// `input_consumed` tables, the optional by-value `asset` identity endpoint, and
+/// the cross-run `uri` / `content_hash` / `run_id` indexes. All idempotent
+/// (`CREATE … IF NOT EXISTS`), so a pre-T91 (M7) store gains them in place and a
+/// re-open is a no-op. NONE of the lineage tables carries a foreign key to `asset`:
+/// the `uri` join is **by value**, so a lineage row outlives garbage-collection (or
+/// deletion) of the referent — the append-only, survives-GC discipline ADR 097's
+/// lineage note fixes.
+fn lineage_migrations() -> Vec<String> {
+    vec![
+        // --- output_produced: append-only produced-output lineage -------------
+        // One row per `output-produced` fold entry (arch.md C22 / T90 outputs[]).
+        // Every field is carried BY VALUE; there is deliberately NO foreign key to
+        // `asset`. `originating_run` is this run on a fresh produce, or the prior
+        // run when a resume copied the output forward (satisfied-from-prior).
+        "CREATE TABLE IF NOT EXISTS output_produced (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id                TEXT NOT NULL,
+            node_id               TEXT NOT NULL,
+            attempt               INTEGER NOT NULL,
+            uri                   TEXT NOT NULL,
+            content_hash          TEXT,
+            size_bytes            INTEGER,
+            kind                  TEXT,
+            produced_at_offset_ns INTEGER,
+            originating_run       TEXT,
+            UNIQUE (run_id, node_id, attempt, uri, content_hash)
+        )"
+        .to_string(),
+        // --- input_consumed: consumed durable inputs -------------------------
+        // One row per consumed durable input an attempt read (T90 inputs[]). The
+        // `uri` references a dataset BY VALUE, with NO foreign key to `asset`.
+        "CREATE TABLE IF NOT EXISTS input_consumed (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id       TEXT NOT NULL,
+            node_id      TEXT NOT NULL,
+            attempt      INTEGER NOT NULL,
+            uri          TEXT NOT NULL,
+            content_hash TEXT,
+            UNIQUE (run_id, node_id, attempt, uri, content_hash)
+        )"
+        .to_string(),
+        // --- asset: the OPTIONAL identity endpoint ---------------------------
+        // A single joinable row per distinct `uri`, populated on first sight of a
+        // uri in `output_produced`/`input_consumed`. Referenced BY VALUE (the `uri`
+        // string) — NEVER a hard FK — so deleting an `asset` row never orphans
+        // lineage. Identity-only: `extra` is a free JSON blob for future additive
+        // fields; the produced/consumed rows already answer "what did this run
+        // produce/consume", so this table is a convenience join target.
+        "CREATE TABLE IF NOT EXISTS asset (
+            uri   TEXT PRIMARY KEY,
+            extra TEXT
+        )"
+        .to_string(),
+        // --- Lineage cross-run indexes: uri / content_hash / run_id ----------
+        // Support the "which runs produced/consumed dataset X" cross-run queries
+        // (arch.md C22): join by `uri` (or `content_hash` for an exact content
+        // match), filter by `run_id`.
+        "CREATE INDEX IF NOT EXISTS idx_output_produced_uri ON output_produced (uri)".to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_output_produced_content_hash ON output_produced (content_hash)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_output_produced_run_id ON output_produced (run_id)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_input_consumed_uri ON input_consumed (uri)".to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_input_consumed_content_hash ON input_consumed (content_hash)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_input_consumed_run_id ON input_consumed (run_id)"
+            .to_string(),
     ]
 }
 
@@ -174,6 +259,14 @@ pub const TABLES: [&str; 5] = [
     "node_attempt",
     "node_terminal",
 ];
+
+/// The three M8 lineage table names T91 adds (append-only produced-output lineage,
+/// consumed durable inputs, and the optional by-value asset identity endpoint).
+/// Public so a test can assert every one exists via `sqlite_master`. These are
+/// forward, additive migrations (`CREATE TABLE IF NOT EXISTS`): a pre-T91 (M7)
+/// store gains them in place on the next open, and a store with no lineage data has
+/// them empty.
+pub const LINEAGE_TABLES: [&str; 3] = ["output_produced", "input_consumed", "asset"];
 
 /// Additive `(table, column, type-affinity)` columns the T84 mapping projects
 /// into that the T83 `CREATE TABLE` shapes did not name. Applied idempotently by
@@ -201,4 +294,12 @@ pub const ADDITIVE_COLUMNS: &[(&str, &str, &str)] = &[
     ("node_attempt", "durable_reference", "TEXT"),
     ("node_attempt", "satisfied_from_run", "TEXT"),
     ("node_attempt", "originating_node", "TEXT"),
+    // node_attempt — the T91 durable_reference_meta projection columns. The
+    // lineage TABLES are additive via `CREATE TABLE IF NOT EXISTS`; only these new
+    // COLUMNS on an existing `node_attempt` need an `ALTER … ADD COLUMN` on a
+    // pre-T91 store (which reads them as NULL on old rows — additive-only).
+    ("node_attempt", "content_hash", "TEXT"),
+    ("node_attempt", "size_bytes", "INTEGER"),
+    ("node_attempt", "scheme", "TEXT"),
+    ("node_attempt", "produced_at_offset_ns", "INTEGER"),
 ];
