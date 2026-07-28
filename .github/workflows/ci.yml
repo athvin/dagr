@@ -261,6 +261,32 @@ jobs:
         env:
           DAGR_REQUIRE_SQLITE3: "1"
         run: cargo test -p dagr-cli --features metastore --test metastore_example_and_docs
+      # M7 ACCEPTANCE GATE (T88). The terminal M7 gate: it drives the milestone's
+      # done-when end to end from a MANY-DAGS binary and asserts M7's invariants in
+      # one place, composing merged T83–T87 behavior only (a gate adds no
+      # capability). The runtime half — (a) `metastore init` -> several DAGs run
+      # LIVE as separate processes against one store -> `sync <base>` -> a native
+      # `sqlite3` cross-run aggregate; (b) a metastore write fault surfaces as the
+      # sink-failure exit; (c) live == reconcile parity — lives behind the
+      # default-off `metastore` feature, so it needs the feature ON here, and it
+      # shells out to `sqlite3` (DAGR_REQUIRE_SQLITE3=1 makes an absent one a HARD
+      # failure). Run on BOTH tiers (the DoD requires ubuntu + macOS): it exercises
+      # the multi-process live-write path whose behaviour is platform-relevant
+      # (POSIX byte-range locks / process spawn timing differ on macOS).
+      - name: metastore acceptance gate — e2e + guarantee + parity (T88, --features metastore)
+        env:
+          DAGR_REQUIRE_SQLITE3: "1"
+        run: cargo test -p dagr-cli --features metastore --test metastore_acceptance_gate
+      # The STRUCTURAL half of the T88 gate (boundary invariants d): crate-graph +
+      # M6->M7-diff facts a unit test cannot reach. Default `cargo build --all` /
+      # `cargo build -p dagr-cli --no-default-features` pull no libsql/dagr-metastore
+      # through the cli; `--no-default-features` leaves dagr-core's runtime dep set
+      # empty; dagr-metastore has no path to dagr-core; and the M6->M7 diff adds no
+      # scheduler/server/pgwire surface. Composes the T83 feature-gating script.
+      # Crate-graph facts are platform-independent, so Linux tier-1 is enough.
+      - name: metastore acceptance boundary — crate graph + no new surface (T88)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-metastore-acceptance-boundary.sh
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference
