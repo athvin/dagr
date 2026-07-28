@@ -248,6 +248,19 @@ jobs:
       # worker thread + tokio runtime whose behavior is platform-relevant.
       - name: metastore live tee (T86, --features metastore)
         run: cargo test -p dagr-cli --features metastore --test metastore_live_tee
+      # M7 many-dags example + cookbook (T87). The docs-truthfulness guards
+      # (tests/metastore_docs_claims.rs) run in the plain `cargo test --workspace`
+      # above (no libsql, always compiled). This step is the FEATURE-gated proof:
+      # running several of the example's DAGs into one store populates a queryable
+      # metastore.db, and the cookbook's copy-paste `sqlite3` query block is executed
+      # verbatim against it. It shells out to `sqlite3` (preinstalled on both runner
+      # images), so DAGR_REQUIRE_SQLITE3=1 turns an absent `sqlite3` into a HARD
+      # failure here (a dev machine without it skips). Run on BOTH tiers — the DoD
+      # requires ubuntu + macOS, and it exercises the live tee across processes.
+      - name: metastore example + cookbook query block (T87, --features metastore)
+        env:
+          DAGR_REQUIRE_SQLITE3: "1"
+        run: cargo test -p dagr-cli --features metastore --test metastore_example_and_docs
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference

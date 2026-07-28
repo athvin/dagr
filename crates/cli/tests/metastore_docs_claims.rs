@@ -33,11 +33,11 @@ fn read_doc(rel: &str) -> String {
 fn cookbook_metastore_section() -> String {
     let md = read_doc("docs/cookbook.md");
     let heading = "## Querying run state across DAGs";
-    let start = md.find(heading).unwrap_or_else(|| {
-        panic!("the cookbook has a '{heading}' section")
-    });
+    let start = md
+        .find(heading)
+        .unwrap_or_else(|| panic!("the cookbook has a '{heading}' section"));
     let rest = &md[start..];
-    let end = rest[3..].find("\n## ").map(|i| i + 3).unwrap_or(rest.len());
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |i| i + 3);
     rest[..end].to_string()
 }
 
@@ -92,7 +92,9 @@ fn cookbook_states_native_only_and_same_host() {
         "the section states there is no Postgres wire protocol"
     );
     assert!(
-        s.contains("same-host") || (s.contains("same host") ) || s.contains("local filesystem")
+        s.contains("same-host")
+            || (s.contains("same host"))
+            || s.contains("local filesystem")
             || s.contains("local fs"),
         "the section states the same-host local-filesystem constraint"
     );

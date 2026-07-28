@@ -209,6 +209,55 @@ Prefer to wire the flows by hand? The explicit `FlowRegistry` stays a first-clas
 fallback — see the [flow-registry guide](docs/flow-registry.md) and
 [`crates/cli/examples/multi_flow.rs`](crates/cli/examples/multi_flow.rs).
 
+## The run index (metastore)
+
+Hosting many DAGs in one binary gives you **one place to query their state across
+runs**. That place is the **run index** (the "metastore", ADR 097): an opt-in,
+embedded, non-coordinating projection of the event streams runs already write, into a
+queryable `libSQL` file. It is **off by default** (a default-off `metastore` cargo
+feature — a build that never asks for it never pulls `libsql`), and it coordinates
+nothing: the event stream stays the source of truth, and the index is a *guaranteed
+projection* of it.
+
+**Native access only, same host.** The index file is **byte-compatible with stock
+`SQLite`**, so you query it with plain `sqlite3 metastore.db "SELECT …"` (or `turso db
+shell` / the `libsql` CLI) — **zero new tools**. There is **no** Postgres wire
+protocol, **no** server, and **no** remote access: the file is read embedded, on the
+same host's local filesystem as the runs it indexes.
+
+Two write paths put rows into the index; both are the same projection of the same
+stream, so they produce the same rows for a given run:
+
+- **Guaranteed live.** Turn the tee on and every `run` *also* writes its rows as it
+  executes. Use the reserved `--dagr.metastore` flag, or set `DAGR_METASTORE=1` in the
+  environment once (`flag > env > default`); point it with `--dagr.metastore-store
+  <path>` (default `<store>/metastore.db`). A metastore write is as durable as an
+  event-stream write — a failed index write surfaces as the sink-failure exit code,
+  never silently swallowed (it is **guaranteed**, not best-effort).
+
+  ```sh
+  # Build with the feature, then run with the live tee on.
+  cargo run --features metastore --example many_dags -- \
+      run alpha --store ./runs --dagr.metastore
+  ```
+
+- **Reconcile (backfill).** For runs that finished *before* the tee was on (or ran on
+  another binary), fold their finished streams into the index after the fact:
+
+  ```sh
+  dagr metastore init [--store <path>]                       # create/open + migrate (idempotent)
+  dagr metastore sync [--store <path>] [--follow] <run-store-base>
+  ```
+
+  `sync` walks the run store (`<base>/<pipeline>/<run-id>/events.jsonl`), folds each
+  finished stream, and UPSERTs it idempotently; a run with no readable stream is
+  reported and skipped, never aborting the batch. `--follow` re-runs the pass on an
+  interval, consolidating newly-finalized runs incrementally until interrupted.
+
+Query it with the cookbook's [worked examples](docs/cookbook.md#querying-run-state-across-dags)
+(runs per DAG by state, slowest nodes, latest terminal state per node) — plain
+`sqlite3` against the file. Lineage/asset queries are future work, not shipped here.
+
 ## When not to use this
 
 A three-node script that runs one thing after another does not need a framework.

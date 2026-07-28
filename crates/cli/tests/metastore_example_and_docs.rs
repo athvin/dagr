@@ -10,7 +10,7 @@
 //!
 //! These scenarios need the live tee, so the whole file is `#![cfg(feature =
 //! "metastore")]`; CI runs it with `--features metastore` on both `ubuntu-latest`
-//! and `macos-latest` (the ticket DoD). The docs-**truthfulness** guards that must
+//! and `macos-latest` (the ticket `DoD`). The docs-**truthfulness** guards that must
 //! red a plain `cargo test --workspace` (no `libsql`) live in the always-compiled
 //! sibling [`metastore_docs_claims.rs`](metastore_docs_claims.rs).
 //!
@@ -79,24 +79,24 @@ fn run_example(args: &[&str]) -> (i32, String) {
 /// render-reference-tools skip-if-absent convention. `DAGR_REQUIRE_SQLITE3=1` turns
 /// an absent `sqlite3` into a hard failure (set in CI).
 fn sqlite3_available() -> bool {
-    if Command::new("sqlite3")
+    let present = Command::new("sqlite3")
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+        .is_ok_and(|o| o.status.success());
+    if present {
         return true;
     }
-    if std::env::var_os("DAGR_REQUIRE_SQLITE3").is_some() {
-        panic!("sqlite3 is required (DAGR_REQUIRE_SQLITE3=1) but is not on PATH");
-    }
+    assert!(
+        std::env::var_os("DAGR_REQUIRE_SQLITE3").is_none(),
+        "sqlite3 is required (DAGR_REQUIRE_SQLITE3=1) but is not on PATH"
+    );
     eprintln!("skipping: `sqlite3` not found on PATH (set DAGR_REQUIRE_SQLITE3=1 to require it)");
     false
 }
 
 /// Run one `sqlite3 <db> "<sql>"` and return trimmed stdout. Uses **plain
 /// `sqlite3`** — the whole point of the native-access story: the libSQL file is
-/// byte-compatible with stock SQLite, so no dagr tool is needed to read it.
+/// byte-compatible with stock `SQLite`, so no dagr tool is needed to read it.
 fn sqlite3(db: &Path, sql: &str) -> String {
     let out = Command::new("sqlite3")
         .arg(db)
@@ -238,11 +238,7 @@ fn the_default_build_runs_unchanged_and_creates_no_index() {
     );
     // The run still wrote its event stream (the resume source of truth is unchanged).
     let ran = std::fs::read_dir(runs.join("alpha"))
-        .map(|d| {
-            d.flatten()
-                .any(|e| e.path().join("events.jsonl").exists())
-        })
-        .unwrap_or(false);
+        .is_ok_and(|d| d.flatten().any(|e| e.path().join("events.jsonl").exists()));
     assert!(ran, "the default build still wrote alpha's event stream");
     // No index: a default build has no libsql edge, so no metastore.db is created.
     assert!(
@@ -295,7 +291,7 @@ fn extract_cookbook_sqlite_queries(md: &str) -> Vec<String> {
         .expect("the cookbook has the 'Querying run state across DAGs' section");
     let rest = &md[start..];
     // The section ends at the next H2 (or EOF).
-    let end = rest[3..].find("\n## ").map(|i| i + 3).unwrap_or(rest.len());
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |i| i + 3);
     let section = &rest[..end];
 
     let mut queries = Vec::new();

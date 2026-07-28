@@ -41,6 +41,29 @@
 //! implement [`StableName`](dagr_core::stable_name::StableName)). The type-erased
 //! [`FlowBuilder::source_erased`] / [`FlowBuilder::node_erased`] still run fine, but a
 //! DAG built with them is not graph-emittable.
+//!
+//! # Querying run state across DAGs (the `metastore` feature — T87)
+//!
+//! Built with the default-off `metastore` feature and run with the live-tee toggle
+//! on, this same example populates **one queryable run index** across all of its
+//! DAGs — the "many DAGs, one place to query their state" story (arch.md "What it is
+//! not", ADR 097). The example code is **unchanged**: the tee is wired generically by
+//! the run engine behind the toggle, so turning it on adds no author work.
+//!
+//! ```text
+//! # each `run` also writes its rows into ./runs/metastore.db as it executes
+//! cargo run --features metastore --example many_dags -- run alpha --store ./runs --dagr.metastore
+//! cargo run --features metastore --example many_dags -- run beta  --store ./runs --dagr.metastore
+//! cargo run --features metastore --example many_dags -- run gamma --store ./runs --dagr.metastore
+//!
+//! # then query with plain sqlite3 (the libSQL file is byte-compatible with SQLite):
+//! sqlite3 ./runs/metastore.db "SELECT name FROM dag ORDER BY name"   # alpha, beta, gamma
+//! ```
+//!
+//! Without the feature (the default build) the example builds and runs **exactly** as
+//! above with no `libsql` and no index — the feature is purely additive. The cookbook
+//! section *Querying run state across DAGs* carries the worked queries; native access
+//! only (no Postgres wire), same-host local FS.
 
 use dagr_cli::prelude::*;
 
