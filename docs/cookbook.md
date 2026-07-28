@@ -77,6 +77,7 @@ state classes, and the closed trigger-rule set — lives in
 7. [Two same-typed resources via newtypes](#two-same-typed-resources-via-newtypes)
 8. [Common `#[task]` mistakes](#common-task-mistakes)
 9. [Declaring DAGs with `#[dag]` and running them with one line](#declaring-dags-with-dag-and-running-them-with-one-line)
+10. [Querying run state across DAGs](#querying-run-state-across-dags)
 
 ---
 
@@ -594,3 +595,97 @@ This is the seam every renderer and the `fold` verb read.
 two revisions: an intended change shows as a reviewable structural diff, and an
 *accidental* rewiring shows up as a diff nobody meant to make — a pure-assembly check
 that needs no run store, network, or database.
+
+## Querying run state across DAGs
+
+**The pattern:** one binary hosts many DAGs ([Many DAGs in one
+binary](#declaring-dags-with-dag-and-running-them-with-one-line)), and you want a
+**single place to query their state across runs** — "how many runs of each DAG
+succeeded?", "which nodes take longest?", "what did each node end as most recently?".
+dagr's answer is the **local run index** (the "metastore", ADR 097): an opt-in,
+embedded, non-coordinating projection of the event streams the runs already write. It
+is off by default; you turn it on with a toggle, and every `run` then *also* writes
+its rows into one index file. This is a query convenience over the run store — the
+event stream stays the source of truth (arch.md "What it is not") — and it is a
+**default-off cargo feature**, so a build that never asks for it never pulls `libsql`.
+
+**Native access only, same host.** ADR 097 fixed the access model: the index is a
+`libSQL` file that is **byte-compatible with stock `SQLite`**, so the lowest-friction
+query path needs *zero new tools* — plain `sqlite3 metastore.db "SELECT …"`. There is
+no Postgres wire protocol, no server, and no remote/network access: the
+file lives on the **same host's local filesystem** as the runs it indexes, and you
+query it embedded. (`turso db shell <file>` and the `libsql` CLI open the same file
+and are drop-in equivalents to `sqlite3` if you prefer them.)
+
+**1. Turn the index on and run a few DAGs.** Build the binary with the default-off
+`metastore` feature, then set the toggle (`flag > env > default`, arch.md C26) — a
+`--dagr.metastore` flag, or `DAGR_METASTORE=1` in the environment once. Each `run`
+writes into one `metastore.db` under the store base (override with
+`--dagr.metastore-store <path>`):
+
+```sh
+# Build the many-dags example with the run index compiled in (default-off feature).
+cargo run --features metastore --example many_dags -- \
+    run alpha --store ./runs --dagr.metastore
+cargo run --features metastore --example many_dags -- \
+    run beta  --store ./runs --dagr.metastore   # or: DAGR_METASTORE=1 … run beta
+cargo run --features metastore --example many_dags -- \
+    run gamma --store ./runs --dagr.metastore
+```
+
+Three separate processes, one shared `./runs/metastore.db`. Each `run <dag>` is its
+own independent run with its own identity — the index does **not** coordinate them; it
+just records what each wrote.
+
+**2. Query it with plain `sqlite3`.** The five M7 tables are `dag` (one row per DAG,
+by stable name), `dag_version` (a DAG's structural fingerprint over time), `dag_run`
+(one row per run), `node_attempt` (one row per attempt — retries included), and
+`node_terminal` (the single terminal state per node per run). The `state` columns hold
+dagr's canonical vocabulary spellings (the nine terminal node states; the six run
+states). Some worked queries:
+
+```sql
+-- Runs per DAG, grouped by outcome state (the cross-run overview).
+SELECT d.name AS dag, r.state, count(*) AS runs
+FROM dag_run r JOIN dag d ON d.dag_id = r.dag_id
+GROUP BY d.name, r.state
+ORDER BY d.name, r.state;
+
+-- Slowest nodes by executing-phase milliseconds, read from the per-attempt
+-- phase-duration breakdown via SQLite's built-in JSON1 (json_extract).
+SELECT node_id,
+       max(json_extract(phase_durations_json, '$.executing')) AS exec_ms
+FROM node_attempt
+WHERE phase_durations_json IS NOT NULL
+GROUP BY node_id
+ORDER BY exec_ms DESC
+LIMIT 5;
+
+-- The latest terminal state of every node, across all runs, joined back to its DAG.
+SELECT d.name AS dag, t.node_id, t.state
+FROM node_terminal t
+JOIN dag_run r ON r.run_id = t.run_id
+JOIN dag d ON d.dag_id = r.dag_id
+ORDER BY d.name, t.node_id;
+```
+
+These are read-only `SELECT`s against a file, from any process that can open it — no
+dagr binary required, and nothing the engine coordinates on.
+
+**Live now, backfill later — the two write paths.** The toggle above is the
+**guaranteed live** tee: a run writes its index rows *as it executes*, and a metastore
+write is as durable as an event-stream write — a failed index write surfaces as the
+distinct sink-failure exit code, never silently swallowed. For runs that finished
+*before* you turned the index on (or ran on another binary), **reconcile** them with
+`dagr metastore init` / `dagr metastore sync` — the [reference](../README.md#the-run-index-metastore)
+documents both verbs. Live and reconcile produce the **same rows** for the same run,
+because both are the same guaranteed projection of the same event stream.
+
+> **Backing example + tests:**
+> [`crates/cli/examples/many_dags.rs`](../crates/cli/examples/many_dags.rs) is the
+> compiled, run reference (it builds and runs with **and** without `--features
+> metastore`). `crates/cli/tests/metastore_example_and_docs.rs` (behind the feature)
+> runs `alpha`/`beta`/`gamma` into one store and **executes the `sqlite3` query block
+> above verbatim** against it; `crates/cli/tests/metastore_docs_claims.rs` (always
+> compiled) guards that this section stays truthful — native-access-only, no server,
+> no lineage. Both run on `ubuntu-latest` and `macos-latest`.
