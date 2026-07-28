@@ -130,9 +130,17 @@ impl Default for RetryPolicy {
     }
 }
 
-/// The busy-timeout applied on open (ADR 097 §3). Chosen conservatively; the
-/// app-level bounded retry sits on top of it.
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// The busy-timeout applied on open (ADR 097 §3). The **app-level bounded retry**
+/// ([`RetryPolicy`], with decorrelated jittered backoff) is the primary
+/// contention absorber, not this blind kernel spin — so the timeout is kept
+/// **short**. T85 (multi-process validation) hardened this down from 5 s: a long
+/// `busy_timeout` makes a single `BEGIN IMMEDIATE` attempt block for seconds,
+/// which (a) delays the app-level retry that *decorrelates* a fan-out of
+/// simultaneous writers and (b) makes the retry cap unreachable — so a genuinely
+/// wedged writer could not surface a hard error within a bounded time. A short
+/// timeout lets libSQL clear brief lock windows cheaply while the jittered
+/// app-level retry handles real contention and enforces the visible-wedge cap.
+const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The `SQLite` primary result codes that mean "retry later": `SQLITE_BUSY` (5)
 /// and `SQLITE_LOCKED` (6). libSQL surfaces them as
@@ -219,10 +227,22 @@ impl MetaStore {
         // ADR 097 §3 pragmas, in order. `busy_timeout` is a per-connection setting
         // that the app-level bounded retry (with_write_txn) sits on top of.
         conn.busy_timeout(BUSY_TIMEOUT)?;
+
+        // The **open-path** pragmas run under the SAME bounded busy-retry as writes.
+        // T85 (multi-process validation) surfaced why: when many processes open the
+        // SAME fresh file simultaneously, `PRAGMA journal_mode=WAL` takes a brief
+        // exclusive lock to write the WAL header, and a losing process gets
+        // `SQLITE_BUSY` (code 5, "database is locked") that `busy_timeout` alone did
+        // not reliably absorb — so a plain open could hard-fail under a real
+        // multi-process open race. Wrapping these steps in the bounded retry (the
+        // same `is_busy` classification + jittered backoff the write path uses)
+        // makes concurrent open process-safe, which is exactly the ADR 097 guarantee
+        // this crate exists to keep.
+        //
         // WAL: many readers, one writer at a time; multi-process on one file.
-        set_pragma(&conn, "PRAGMA journal_mode=WAL").await?;
+        open_pragma_with_retry(&conn, "PRAGMA journal_mode=WAL", true, retry).await?;
         // synchronous=NORMAL is the WAL-recommended durability/throughput point.
-        conn.execute("PRAGMA synchronous=NORMAL", ()).await?;
+        open_pragma_with_retry(&conn, "PRAGMA synchronous=NORMAL", false, retry).await?;
 
         let store = MetaStore {
             conn,
@@ -387,27 +407,7 @@ impl MetaStore {
 
     /// Sleep an exponential backoff for `attempt` (1-based), capped and jittered.
     async fn backoff(&self, attempt: u32) {
-        // Millis are small; `Duration::as_millis` is `u128` but a base/max backoff
-        // this side of a few seconds fits `u64` with room to spare.
-        let base = u64::try_from(self.retry.base_backoff.as_millis()).unwrap_or(u64::MAX);
-        let max = u64::try_from(self.retry.max_backoff.as_millis()).unwrap_or(u64::MAX);
-        // Exponential: base * 2^(attempt-1), saturating, capped at max_backoff.
-        let shift = (attempt - 1).min(20);
-        let raw = base.saturating_mul(1u64 << shift);
-        let capped = raw.min(max);
-        // Full jitter over [0, capped]: decorrelate a fan-out of simultaneous
-        // retries so they do not resynchronize (same posture as C14 backoff).
-        // Integer arithmetic throughout: jittered = capped * numer / DENOM.
-        let seed = u64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos()),
-        )
-        .unwrap_or(0)
-        .wrapping_add(u64::from(attempt));
-        let numer = jitter_numer(seed);
-        let jittered = capped.saturating_mul(numer) / JITTER_DENOM;
-        tokio::time::sleep(Duration::from_millis(jittered)).await;
+        backoff_for(self.retry, attempt).await;
     }
 
     /// The underlying connection, for read queries (the reader/writer tickets
@@ -435,10 +435,77 @@ fn map_migration_error(e: WriteError) -> OpenError {
 
 /// Set a pragma that returns a result row (e.g. `PRAGMA journal_mode=WAL` echoes
 /// the new mode). libSQL's `execute` rejects statements that return rows, so a
-/// row-returning pragma must go through `query`.
+/// row-returning pragma must go through `query`. The single echoed row is drained
+/// and the `Rows` handle is dropped so the statement is fully finalized before the
+/// connection is used again (an un-finalized statement can otherwise wedge a later
+/// `COMMIT`).
 async fn set_pragma(conn: &libsql::Connection, sql: &str) -> Result<(), libsql::Error> {
     let mut rows = conn.query(sql, ()).await?;
     // Drain the single echoed row (if any) so the statement completes.
     let _ = rows.next().await?;
+    drop(rows);
     Ok(())
+}
+
+/// Run an open-path pragma under the bounded `SQLITE_BUSY` retry (the same
+/// classification + jittered backoff [`MetaStore::with_write_txn`] uses), so a
+/// concurrent multi-process open of a fresh file — where `PRAGMA journal_mode=WAL`
+/// briefly locks the file to write the WAL header — does not hard-fail the loser.
+/// `returns_row` selects the `query`+drain path for a row-returning pragma
+/// (`journal_mode`) versus `execute` for a silent one (`synchronous`). Past the
+/// cap the busy is surfaced as a [`libsql::Error`] so `open` reports a real
+/// failure rather than looping forever.
+async fn open_pragma_with_retry(
+    conn: &libsql::Connection,
+    sql: &str,
+    returns_row: bool,
+    retry: RetryPolicy,
+) -> Result<(), libsql::Error> {
+    let max_attempts = retry.max_attempts.max(1);
+    for attempt in 1..=max_attempts {
+        let result = if returns_row {
+            set_pragma(conn, sql).await
+        } else {
+            conn.execute(sql, ()).await.map(|_| ())
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(err) if is_busy(&err) => {
+                if attempt == max_attempts {
+                    return Err(err);
+                }
+                backoff_for(retry, attempt).await;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    // Unreachable: the loop returns on the final attempt.
+    Ok(())
+}
+
+/// Sleep an exponential backoff for `attempt` (1-based) under `retry`, capped and
+/// jittered. Shared by the write-txn retry and the open-path pragma retry so both
+/// use the identical decorrelated schedule.
+async fn backoff_for(retry: RetryPolicy, attempt: u32) {
+    // Millis are small; `Duration::as_millis` is `u128` but a base/max backoff
+    // this side of a few seconds fits `u64` with room to spare.
+    let base = u64::try_from(retry.base_backoff.as_millis()).unwrap_or(u64::MAX);
+    let max = u64::try_from(retry.max_backoff.as_millis()).unwrap_or(u64::MAX);
+    // Exponential: base * 2^(attempt-1), saturating, capped at max_backoff.
+    let shift = (attempt - 1).min(20);
+    let raw = base.saturating_mul(1u64 << shift);
+    let capped = raw.min(max);
+    // Full jitter over [0, capped]: decorrelate a fan-out of simultaneous retries
+    // so they do not resynchronize (same posture as C14 backoff). Integer
+    // arithmetic throughout: jittered = capped * numer / DENOM.
+    let seed = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    )
+    .unwrap_or(0)
+    .wrapping_add(u64::from(attempt));
+    let numer = jitter_numer(seed);
+    let jittered = capped.saturating_mul(numer) / JITTER_DENOM;
+    tokio::time::sleep(Duration::from_millis(jittered)).await;
 }
