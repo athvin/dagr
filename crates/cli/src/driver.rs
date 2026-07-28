@@ -74,8 +74,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunOutcome,
-    RunStartedHeader, TerminalState as WireTerminalState, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, ConsumedInput, Event, EventSink, EventStreamWriter, MonotonicClock,
+    OutputProducedRecord, RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
+    FINGERPRINT_ALGORITHM_VERSION,
 };
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
 use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
@@ -1429,6 +1430,11 @@ where
         // next waiter. Under the default unconstrained pools this stays empty and
         // every ready node is admitted at once.
         let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        // T90 produced-output lineage: each durable node's succeeded reference, keyed
+        // by node name, recorded when the node produces it and consulted to populate a
+        // downstream consumer's `inputs[]` (its data-edge producers' references). A
+        // non-durable run leaves this empty, so its stream is byte-identical.
+        let mut produced_refs: BTreeMap<String, ConsumedInput> = BTreeMap::new();
         // Whether stop-on-first-failure has been triggered — set the first time a
         // failure-like terminal is observed under stop mode. Once set, no further
         // default-rule non-teardown node is admitted; a firing consume-nothing
@@ -1570,11 +1576,15 @@ where
                 .expect("live set not poisoned")
                 .remove(&done.node);
             // Write the attempt's buffered records, classify its (possibly
-            // cancellation-reclassified) terminal, and record it exactly once.
+            // cancellation-reclassified) terminal, and record it exactly once. Threads
+            // the pipeline (to resolve a consumer's data-edge producers) and the
+            // produced-reference map (T90 produced/consumed lineage).
             let recorded_state = record_attempt_outcome(
                 &done,
                 draining,
                 writer,
+                pipeline,
+                &mut produced_refs,
                 &mut terminal_states,
                 &mut zombie_candidates,
             );
@@ -1725,6 +1735,8 @@ fn record_attempt_outcome<S, C>(
     done: &AttemptDone,
     draining: bool,
     writer: &mut EventStreamWriter<S, C>,
+    pipeline: &Pipeline,
+    produced_refs: &mut BTreeMap<String, ConsumedInput>,
     terminal_states: &mut BTreeMap<String, TerminalState>,
     zombie_candidates: &mut Vec<(String, u32)>,
 ) -> TerminalState
@@ -1738,6 +1750,10 @@ where
     } else {
         done.state
     };
+    // T90 consumed lineage: the durable inputs this node read, resolved from its
+    // static data-edge producers' recorded references (a fresh run). A node with no
+    // durable upstream reads nothing, so its record is byte-identical.
+    let consumed = consumed_inputs_for(pipeline, &done.node, produced_refs);
     // Drain the buffered per-transition events, and — alongside each attempt's
     // CLOSING outcome event — emit the single rich `attempt-outcome` record for
     // that attempt (every attempt produces exactly one attempt-outcome record
@@ -1776,8 +1792,46 @@ where
                         &mut record,
                         done.durable_reference_meta.clone(),
                     );
+                    // T90 consumed lineage: record the durable inputs this succeeded
+                    // attempt read (its data-edge producers' references). Empty ⇒ the
+                    // field stays absent, so a non-consuming record is unchanged.
+                    dagr_artifact::event_stream::record_consumed_inputs(
+                        &mut record,
+                        consumed.clone(),
+                    );
                 }
                 let _ = writer.attempt_outcome(record);
+                // T90 produced lineage: alongside a durable node's SUCCEEDED
+                // attempt-outcome, emit the explicit output-produced event and record
+                // the reference for downstream consumers. Attributed to THIS run
+                // (a fresh produce, not a resume carry-forward). A non-durable success
+                // reports no reference, so nothing is emitted and the stream is
+                // byte-identical.
+                if matches!(ev, AttemptEvent::AttemptSucceeded { .. }) {
+                    if let Some(uri) = &done.durable_reference {
+                        let meta = done.durable_reference_meta.clone().unwrap_or_default();
+                        produced_refs.insert(
+                            done.node.clone(),
+                            ConsumedInput {
+                                uri: uri.clone(),
+                                content_hash: meta.content_hash.clone(),
+                            },
+                        );
+                        let _ = writer.output_produced(OutputProducedRecord {
+                            node: done.node.clone(),
+                            attempt: last_attempt,
+                            uri: uri.clone(),
+                            content_hash: meta.content_hash.clone(),
+                            size_bytes: meta.size_bytes,
+                            kind: meta.scheme.clone(),
+                            // The produced-at offset the T89 metadata supplied; 0 when
+                            // none (the record envelope's own `offset_ns` still stamps
+                            // the real produce time, and the fold reads that too).
+                            produced_at_offset_ns: meta.produced_at_offset_ns.unwrap_or(0),
+                            originating_run: writer.run_id().to_string(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -2375,6 +2429,32 @@ fn apply_decisions<S, C>(
 /// pipeline.
 fn node_name(pipeline: &Pipeline, id: NodeId) -> Option<String> {
     pipeline.node(id).map(|n| n.name().to_string())
+}
+
+/// The **consumed durable inputs** (T90) a node read on a fresh run: for each of
+/// its static **data-edge** producers that recorded a durable reference (present
+/// in `produced_refs`), one `{ uri, content_hash }` in the node's declared input
+/// order. A node with no data edge — or whose producers are all non-durable —
+/// reads no durable reference and yields an empty list, so its record is
+/// byte-identical. Data already computed at build time (C3/C11), so this is
+/// near-free; ordering edges (C4) carry no value and are excluded.
+fn consumed_inputs_for(
+    pipeline: &Pipeline,
+    node: &str,
+    produced_refs: &BTreeMap<String, ConsumedInput>,
+) -> Vec<ConsumedInput> {
+    let Some(pnode) = pipeline.node(NodeId::from_name(node)) else {
+        return Vec::new();
+    };
+    let mut inputs = Vec::new();
+    for edge in pnode.data_edges() {
+        if let Some(producer) = node_name(pipeline, edge.upstream()) {
+            if let Some(reference) = produced_refs.get(&producer) {
+                inputs.push(reference.clone());
+            }
+        }
+    }
+    inputs
 }
 
 /// Split a run's runners into (**main**, **teardown**) sets by the teardown

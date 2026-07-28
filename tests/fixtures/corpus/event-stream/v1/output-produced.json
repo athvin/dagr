@@ -1,0 +1,16 @@
+{
+  "attempt": 1,
+  "content_hash": "sha256:abc123",
+  "kind": "output-produced",
+  "node": "snapshot",
+  "offset_ns": 200,
+  "originating_run": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+  "output_kind": "s3",
+  "produced_at_offset_ns": 200,
+  "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+  "schema_version": "dagr.event-stream@1",
+  "seq": 3,
+  "size_bytes": 4096,
+  "uri": "s3://bucket/snapshot",
+  "wall": "2026-07-23T00:00:00.000Z"
+}

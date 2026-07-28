@@ -1395,6 +1395,10 @@ fn build_resumed_artifact(
     // the must-run set are re-executed by the driver (the scratch carry-forward
     // hand-off) and record their own attempts there — not here.
     let mut attempts: Vec<serde_json::Value> = Vec::new();
+    // T90 produced-output lineage: a carried-forward durable output appears in the
+    // resumed run's append-only `outputs[]` attributed to its ORIGINATING run
+    // (satisfied-from-prior), NOT re-produced. FK-free (uri/hash by value).
+    let mut outputs: Vec<serde_json::Value> = Vec::new();
     for (node, origin) in plan.satisfied_from_prior() {
         let mut record = serde_json::Map::new();
         record.insert("node".into(), serde_json::json!(node));
@@ -1411,6 +1415,18 @@ fn build_resumed_artifact(
         if let Some(prior_node) = prior.nodes.get(node) {
             if let Some(reference) = &prior_node.durable_reference {
                 record.insert("durable_reference".into(), serde_json::json!(reference));
+                // The carried-forward durable output's lineage entry, attributed to
+                // its originating run (not this resumed run — it is not re-produced).
+                let mut produced = serde_json::Map::new();
+                produced.insert("node".into(), serde_json::json!(node));
+                produced.insert("attempt".into(), serde_json::json!(1));
+                produced.insert("uri".into(), serde_json::json!(reference));
+                if let Some(hash) = &prior_node.durable_reference_content_hash {
+                    produced.insert("content_hash".into(), serde_json::json!(hash));
+                }
+                produced.insert("produced_at_offset_ns".into(), serde_json::json!(0));
+                produced.insert("originating_run".into(), serde_json::json!(origin));
+                outputs.push(serde_json::Value::Object(produced));
             }
             // Copy the recorded content hash forward too (T89), as
             // `durable_reference_meta.content_hash`, so a NEXT-generation resume can
@@ -1430,6 +1446,7 @@ fn build_resumed_artifact(
     serde_json::json!({
         "header": serde_json::Value::Object(header),
         "attempts": attempts,
+        "outputs": outputs,
         "summary": serde_json::Value::Null,
     })
 }

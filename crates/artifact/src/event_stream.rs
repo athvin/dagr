@@ -147,7 +147,8 @@ pub const FINGERPRINT_ALGORITHM_VERSION: u32 = 1;
 /// One event kind per state transition in the closed event vocabulary.
 ///
 /// The set is closed: run started, node became ready, node admitted, attempt
-/// started, attempt succeeded, attempt failed, node reached terminal state,
+/// started, attempt succeeded, attempt failed, the rich attempt-outcome, a
+/// durable output produced (T90 lineage), node reached terminal state,
 /// zombie-at-exit, run finished. Terminal records carry the normative
 /// terminal state from the vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +194,16 @@ pub enum Event {
     /// durable-output reference — so the fold reconstructs the run artifact from
     /// the stream alone.
     AttemptOutcome(AttemptOutcomeRecord),
+    /// A durable output was **produced** (or copied forward on resume): the
+    /// explicit, append-only lineage record dagr emits alongside a durable node's
+    /// succeeded `attempt-outcome`. It carries the produced output's identity by
+    /// value (`uri`, and the reused T89 `content_hash`/`size_bytes`/`kind`), the
+    /// producing `(node, attempt)`, the produced-at offset, and the
+    /// **originating run** — this run on a fresh produce, or the *prior* run when a
+    /// resume copies a carried-forward output (satisfied-from-prior). It carries
+    /// **no foreign key** to any asset-identity row, so the lineage outlives
+    /// garbage-collection of the referent (the metastore projection is T91).
+    OutputProduced(OutputProducedRecord),
     /// The node reached a terminal state from the event vocabulary.
     NodeTerminal {
         /// The node's author-declared identity name.
@@ -264,6 +275,13 @@ pub struct AttemptOutcomeRecord {
     pub satisfied_from_run: Option<String>,
     /// The node that decided an `upstream-skipped`/`upstream-failed` propagation.
     pub originating_node: Option<String>,
+    /// The **consumed durable inputs** (T90) this attempt actually read:
+    /// `{ uri, content_hash }` for each durable reference it consumed, in input
+    /// order. Empty (the field absent) for a node that read no durable reference,
+    /// so a non-consuming run's record is byte-identical. Populated from the resume
+    /// rehydrate map (on resume) and the resolved static data-edge producers (on a
+    /// fresh run).
+    pub inputs: Vec<ConsumedInput>,
 }
 
 impl AttemptOutcomeRecord {
@@ -280,6 +298,113 @@ impl AttemptOutcomeRecord {
             ..Self::default()
         }
     }
+}
+
+/// One **consumed durable input** (T90) a consuming attempt read: the referent's
+/// `uri` (by value) and its optional `content_hash`. Its identity is expected to
+/// match the producing [`OutputProducedRecord`] (same `uri`/`content_hash`); dagr
+/// records what the attempt read, verbatim, and carries no foreign key to any
+/// asset-identity row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedInput {
+    /// The durable reference's `uri` — carried by value.
+    pub uri: String,
+    /// The referent's content hash (the producer's opaque digest), when known.
+    pub content_hash: Option<String>,
+}
+
+impl ConsumedInput {
+    /// Render this consumed input to its canonical JSON object: `uri` always,
+    /// `content_hash` only when present (additive; a hash-less input stays minimal).
+    fn to_value(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        o.insert("uri".into(), serde_json::Value::from(self.uri.clone()));
+        if let Some(h) = &self.content_hash {
+            o.insert("content_hash".into(), serde_json::Value::from(h.clone()));
+        }
+        serde_json::Value::Object(o)
+    }
+}
+
+/// The payload of an **`output-produced`** lineage event (T90): the explicit,
+/// append-only record that a durable output was produced (or copied forward on
+/// resume). Every field is carried **by value** — there is **no foreign key** to
+/// any asset-identity row, so the lineage outlives garbage-collection of the
+/// referent (the Airflow `asset_event` discipline; the metastore projection is
+/// T91). The `uri`/`content_hash`/`size_bytes`/`kind` are **reused** from the
+/// producing durable output's T89 reference + metadata (dagr recomputes nothing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputProducedRecord {
+    /// The producing node's author-declared identity name.
+    pub node: String,
+    /// The 1-based attempt number that produced the output.
+    pub attempt: u32,
+    /// The produced output's reference `uri`, carried **by value** — reused from
+    /// the durable reference (a storage key, URL, or path the output serialized).
+    pub uri: String,
+    /// The referent's content hash, reused from the T89 metadata, when supplied.
+    pub content_hash: Option<String>,
+    /// The referent's size in bytes, reused from the T89 metadata, when supplied.
+    pub size_bytes: Option<u64>,
+    /// The reference's scheme/kind (`"s3"`, `"file"`, …), reused from the T89
+    /// metadata's `scheme`, when supplied. **Wire key: `output_kind`** — the record
+    /// envelope already owns `kind` (the event discriminator), so this payload
+    /// field is spread under `output_kind` to avoid overwriting it.
+    pub kind: Option<String>,
+    /// The produced-at monotonic offset (nanoseconds from run start).
+    pub produced_at_offset_ns: u64,
+    /// The **originating run** identity: this run on a fresh produce, or the
+    /// *prior* run when a resume copies the output forward (satisfied-from-prior).
+    pub originating_run: String,
+}
+
+impl OutputProducedRecord {
+    /// The top-level wire fields spread beside the shared header (`uri`, the
+    /// producing `(node, attempt)`, the produced-at offset, and the originating
+    /// run always; the reused metadata `content_hash`/`size_bytes`/`kind` only when
+    /// present — additive, so a metadata-less output stays minimal).
+    fn to_fields(&self) -> Vec<WireField> {
+        let mut fields: Vec<WireField> = vec![
+            ("node".to_string(), self.node.clone().into()),
+            ("attempt".to_string(), self.attempt.into()),
+            ("uri".to_string(), self.uri.clone().into()),
+            (
+                "produced_at_offset_ns".to_string(),
+                self.produced_at_offset_ns.into(),
+            ),
+            (
+                "originating_run".to_string(),
+                self.originating_run.clone().into(),
+            ),
+        ];
+        if let Some(h) = &self.content_hash {
+            fields.push(("content_hash".to_string(), h.clone().into()));
+        }
+        if let Some(s) = self.size_bytes {
+            fields.push(("size_bytes".to_string(), s.into()));
+        }
+        if let Some(k) = &self.kind {
+            // The output's kind/scheme is spread under `output_kind`, NOT `kind`:
+            // `kind` is the envelope's event discriminator and a payload field of
+            // the same name would overwrite it. (This is the sole vocabulary field
+            // that would collide with a header key.)
+            fields.push(("output_kind".to_string(), k.clone().into()));
+        }
+        fields
+    }
+}
+
+/// Record the **consumed durable inputs** (T90) an attempt read onto its outcome
+/// record — the consumed-side companion to [`record_durable_reference`].
+///
+/// The caller passes the `{ uri, content_hash }` list the attempt actually read
+/// (from the resume rehydrate map on resume, or the resolved static data-edge
+/// producers on a fresh run). An **empty** list leaves the field **absent** (never
+/// `null`/`[]`-stamped), so a node that consumed no durable reference is
+/// byte-identical. It is additive: a fold that predates the field ignores it, and
+/// a stream without it folds unchanged.
+pub fn record_consumed_inputs(record: &mut AttemptOutcomeRecord, inputs: Vec<ConsumedInput>) {
+    record.inputs = inputs;
 }
 
 /// Record a durable node's **serialized reference** onto its succeeded attempt's
@@ -690,6 +815,19 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
         self.emit(&Event::AttemptOutcome(record))
     }
 
+    /// Emit an `output-produced` lineage record (T90) — the explicit, append-only
+    /// record that a durable output was produced (or copied forward on resume).
+    /// Emitted **alongside** a durable node's succeeded `attempt-outcome` (or, on
+    /// resume, alongside its satisfied-from-prior outcome attributing the output to
+    /// its prior originating run). The fold folds these into the run artifact's
+    /// append-only `outputs[]`.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn output_produced(&mut self, record: OutputProducedRecord) -> Result<(), SinkFault> {
+        self.emit(&Event::OutputProduced(record))
+    }
+
     /// Emit a `node-terminal` record carrying the normative terminal state.
     ///
     /// # Errors
@@ -764,6 +902,14 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.next_seq
+    }
+
+    /// This run's identity, as stamped on every record — the value the driver
+    /// attributes a fresh `output-produced` event's `originating_run` to (a resume
+    /// carry-forward attributes the *prior* run instead).
+    #[must_use]
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// Build the canonical envelope, append-and-record it, then advance the
@@ -870,6 +1016,7 @@ fn event_wire(event: &Event, run_id: &str) -> (&'static str, Vec<WireField>) {
             ],
         ),
         Event::AttemptOutcome(record) => ("attempt-outcome", attempt_outcome_fields(record)),
+        Event::OutputProduced(record) => ("output-produced", record.to_fields()),
         Event::NodeTerminal { node, state } => (
             "node-terminal",
             vec![
@@ -976,6 +1123,15 @@ fn attempt_outcome_fields(r: &AttemptOutcomeRecord) -> Vec<WireField> {
         if let Some(val) = opt {
             fields.push((name.to_string(), val.clone()));
         }
+    }
+    // Consumed durable inputs (T90) — emitted only when the attempt read at least
+    // one, so a non-consuming attempt's record is byte-identical (the fold defaults
+    // the field to empty).
+    if !r.inputs.is_empty() {
+        fields.push((
+            "inputs".to_string(),
+            serde_json::Value::Array(r.inputs.iter().map(ConsumedInput::to_value).collect()),
+        ));
     }
     fields
 }

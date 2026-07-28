@@ -172,6 +172,7 @@ pub struct AttemptRecord {
     durable_reference_meta: Option<Value>,
     satisfied_from_run: Option<String>,
     originating_node: Option<String>,
+    inputs: Vec<Value>,
 }
 
 impl AttemptRecord {
@@ -259,6 +260,19 @@ impl AttemptRecord {
     pub fn originating_node(&self) -> Option<&str> {
         self.originating_node.as_deref()
     }
+    /// The **consumed durable inputs** (T90) this attempt read — each a
+    /// [`ConsumedInputRef`] carrying the referent's `uri` (by value) and optional
+    /// `content_hash`. Empty for a node that read no durable reference (an additive
+    /// field — a stream without it folds with this empty). Populated from the
+    /// resume rehydrate map (on resume) and the resolved static data-edge producers
+    /// (on a fresh run).
+    #[must_use]
+    pub fn inputs(&self) -> Vec<ConsumedInputRef<'_>> {
+        self.inputs
+            .iter()
+            .map(|v| ConsumedInputRef { value: v })
+            .collect()
+    }
 
     fn to_value(&self) -> Value {
         let mut o = serde_json::Map::new();
@@ -298,7 +312,36 @@ impl AttemptRecord {
         if let Some(node) = &self.originating_node {
             o.insert("originating_node".into(), Value::from(node.clone()));
         }
+        // Consumed durable inputs (T90) — only when the attempt read at least one,
+        // so a non-consuming attempt's record stays byte-identical.
+        if !self.inputs.is_empty() {
+            o.insert("inputs".into(), Value::Array(self.inputs.clone()));
+        }
         Value::Object(o)
+    }
+}
+
+/// A borrowed view of one **consumed durable input** (T90) on a folded
+/// [`AttemptRecord`]: the referent's `uri` (by value) and its optional
+/// `content_hash`. It carries no foreign key to any asset-identity row.
+#[derive(Debug, Clone, Copy)]
+pub struct ConsumedInputRef<'a> {
+    value: &'a Value,
+}
+
+impl ConsumedInputRef<'_> {
+    /// The consumed reference's `uri`, carried by value.
+    #[must_use]
+    pub fn uri(&self) -> &str {
+        self.value
+            .get("uri")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    }
+    /// The referent's content hash, when the stream recorded one.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<&str> {
+        self.value.get("content_hash").and_then(Value::as_str)
     }
 }
 
@@ -368,6 +411,94 @@ pub struct RunArtifact {
     errors: Vec<String>,
     attempts: Vec<AttemptRecord>,
     summary: Option<RunSummary>,
+    outputs: Vec<ProducedOutput>,
+}
+
+/// One **produced durable output** (T90) on a folded run artifact: an explicit,
+/// append-only lineage record that a durable output was produced (or copied
+/// forward on resume). Every field is carried **by value**; there is **no foreign
+/// key** to any asset-identity row, so the lineage outlives garbage-collection of
+/// the referent (the metastore projection is T91). Folded from the stream's
+/// `output-produced` events, in stream (`seq`) order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducedOutput {
+    node: String,
+    attempt: u32,
+    uri: String,
+    content_hash: Option<String>,
+    size_bytes: Option<u64>,
+    kind: Option<String>,
+    produced_at_offset_ns: u64,
+    originating_run: String,
+}
+
+impl ProducedOutput {
+    /// The producing node's author-declared identity.
+    #[must_use]
+    pub fn node(&self) -> &str {
+        &self.node
+    }
+    /// The 1-based attempt number that produced the output.
+    #[must_use]
+    pub fn attempt_number(&self) -> u32 {
+        self.attempt
+    }
+    /// The produced output's reference `uri`, carried by value.
+    #[must_use]
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+    /// The referent's content hash, when the producing output supplied one.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
+    }
+    /// The referent's size in bytes, when supplied.
+    #[must_use]
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+    /// The reference's scheme/kind, when supplied.
+    #[must_use]
+    pub fn kind(&self) -> Option<&str> {
+        self.kind.as_deref()
+    }
+    /// The produced-at monotonic offset (nanoseconds from run start).
+    #[must_use]
+    pub fn produced_at_offset_ns(&self) -> u64 {
+        self.produced_at_offset_ns
+    }
+    /// The **originating run** identity: this run on a fresh produce, or the prior
+    /// run when a resume copied the output forward (satisfied-from-prior).
+    #[must_use]
+    pub fn originating_run(&self) -> &str {
+        &self.originating_run
+    }
+
+    fn to_value(&self) -> Value {
+        let mut o = serde_json::Map::new();
+        o.insert("node".into(), Value::from(self.node.clone()));
+        o.insert("attempt".into(), Value::from(self.attempt));
+        o.insert("uri".into(), Value::from(self.uri.clone()));
+        if let Some(h) = &self.content_hash {
+            o.insert("content_hash".into(), Value::from(h.clone()));
+        }
+        if let Some(s) = self.size_bytes {
+            o.insert("size_bytes".into(), Value::from(s));
+        }
+        if let Some(k) = &self.kind {
+            o.insert("kind".into(), Value::from(k.clone()));
+        }
+        o.insert(
+            "produced_at_offset_ns".into(),
+            Value::from(self.produced_at_offset_ns),
+        );
+        o.insert(
+            "originating_run".into(),
+            Value::from(self.originating_run.clone()),
+        );
+        Value::Object(o)
+    }
 }
 
 impl RunArtifact {
@@ -375,6 +506,16 @@ impl RunArtifact {
     #[must_use]
     pub fn attempts(&self) -> &[AttemptRecord] {
         &self.attempts
+    }
+    /// The **produced durable outputs** (T90) — the append-only lineage record of
+    /// what this run produced (and, on resume, carried forward), one per
+    /// `output-produced` event in stream (`seq`) order. Immutable and **FK-free**:
+    /// each entry carries its `uri`/hash by value with no foreign key to any
+    /// asset-identity row. Empty for a run that produced no durable output, and for
+    /// any pre-T90 stream (the fold tolerates their absence).
+    #[must_use]
+    pub fn outputs(&self) -> &[ProducedOutput] {
+        &self.outputs
     }
     /// The overall run outcome (`succeeded`/`failed`/`cancelled`/
     /// `assembly-failed`/`bootstrap-failed`). A crash-truncated run with no
@@ -552,6 +693,14 @@ impl RunArtifact {
             "attempts".into(),
             Value::Array(self.attempts.iter().map(AttemptRecord::to_value).collect()),
         );
+        // Append-only, FK-free produced-output lineage (T90). Always present (an
+        // empty array when the run produced none / a pre-T90 stream carried none),
+        // so a consumer can rely on the field; additive and schema-valid because the
+        // run schema is open-world at every level.
+        o.insert(
+            "outputs".into(),
+            Value::Array(self.outputs.iter().map(ProducedOutput::to_value).collect()),
+        );
         o.insert(
             "summary".into(),
             self.summary
@@ -658,12 +807,15 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
         "assembly-failed" | "bootstrap-failed"
     );
 
-    let (attempts, summary) = if pre_execution {
-        (Vec::new(), None)
+    let (attempts, summary, outputs) = if pre_execution {
+        (Vec::new(), None, Vec::new())
     } else {
         let attempts = assemble_attempts(&records, graph_nodes);
         let summary = Some(assemble_summary(&records, &attempts));
-        (attempts, summary)
+        // Append-only produced-output lineage (T90): fold every output-produced
+        // record, in stream order. A pre-T90 stream carries none ⇒ empty.
+        let outputs = assemble_outputs(&records);
+        (attempts, summary, outputs)
     };
 
     Ok(RunArtifact {
@@ -674,7 +826,55 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
         errors,
         attempts,
         summary,
+        outputs,
     })
+}
+
+/// Fold every `output-produced` record into the append-only, FK-free `outputs[]`,
+/// in stream (`seq`) order. A pre-T90 stream (no such records) yields an empty
+/// list — the fold tolerates their absence.
+fn assemble_outputs(records: &[Value]) -> Vec<ProducedOutput> {
+    records
+        .iter()
+        .filter(|r| kind_of(r) == Some("output-produced"))
+        .map(|r| ProducedOutput {
+            node: r
+                .get("node")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            attempt: r
+                .get("attempt")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(1),
+            uri: r
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            content_hash: r
+                .get("content_hash")
+                .and_then(Value::as_str)
+                .map(String::from),
+            size_bytes: r.get("size_bytes").and_then(Value::as_u64),
+            // The output's kind/scheme travels under `output_kind` on the wire
+            // (the envelope's `kind` is the event discriminator, see the writer).
+            kind: r
+                .get("output_kind")
+                .and_then(Value::as_str)
+                .map(String::from),
+            produced_at_offset_ns: r
+                .get("produced_at_offset_ns")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| offset_of(r)),
+            originating_run: r
+                .get("originating_run")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+        .collect()
 }
 
 /// The `kind` discriminator of a published-wire-form record.
@@ -786,6 +986,7 @@ fn assemble_attempts(records: &[Value], graph_nodes: &[String]) -> Vec<AttemptRe
                 durable_reference_meta: None,
                 satisfied_from_run: None,
                 originating_node: None,
+                inputs: Vec::new(),
             });
         }
     }
@@ -903,7 +1104,18 @@ fn build_attempt_record(
             .get("originating_node")
             .and_then(Value::as_str)
             .map(String::from),
+        inputs: consumed_inputs_of(rec),
     }
+}
+
+/// The consumed durable inputs (T90) an `attempt-outcome` record carried, as the
+/// verbatim `{ uri, content_hash }` value objects. Empty (defaulted) when the
+/// record carried no `inputs` array — the fold tolerates a pre-T90 stream.
+fn consumed_inputs_of(rec: &Value) -> Vec<Value> {
+    rec.get("inputs")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter(|v| v.is_object()).cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Synthesize a zero-elapsed attempt record for a never-ran node whose only
@@ -944,6 +1156,7 @@ fn synthesize_never_ran(node: &str, terminal: &Value) -> AttemptRecord {
             .get("originating_node")
             .and_then(Value::as_str)
             .map(String::from),
+        inputs: Vec::new(),
     }
 }
 
