@@ -217,7 +217,11 @@ fn two_durable_nodes_emit_two_output_produced_events_folded_into_outputs() {
     // The fold yields a matching, append-only outputs[] (stream order).
     let art = fold_stream(&sink.bytes(), &["a".to_string(), "b".to_string()]).expect("fold");
     let outputs = art.outputs();
-    assert_eq!(outputs.len(), 2, "outputs[] has one entry per produced event");
+    assert_eq!(
+        outputs.len(),
+        2,
+        "outputs[] has one entry per produced event"
+    );
     assert_eq!(outputs[0].node(), "a");
     assert_eq!(outputs[0].uri(), "s3://bucket/a");
     assert_eq!(outputs[0].content_hash(), Some("sha256:aaaa"));
@@ -332,7 +336,11 @@ fn a_consuming_node_records_the_inputs_it_read_matching_the_producing_output() {
     record_durable_reference(&mut p, Some("s3://bucket/p".to_string()));
     record_durable_reference_meta(
         &mut p,
-        Some(DurableReferenceMeta::new().content_hash("sha256:pppp").size_bytes(9)),
+        Some(
+            DurableReferenceMeta::new()
+                .content_hash("sha256:pppp")
+                .size_bytes(9),
+        ),
     );
     w.attempt_outcome(p).expect("outcome p");
     w.output_produced(OutputProducedRecord {
@@ -381,7 +389,11 @@ fn a_consuming_node_records_the_inputs_it_read_matching_the_producing_output() {
     assert_eq!(inputs[0].content_hash(), Some("sha256:pppp"));
 
     // The consumed input's identity matches the producing output's identity.
-    let produced = art.outputs().iter().find(|o| o.node() == "p").expect("p output");
+    let produced = art
+        .outputs()
+        .iter()
+        .find(|o| o.node() == "p")
+        .expect("p output");
     assert_eq!(
         inputs[0].uri(),
         produced.uri(),
@@ -394,9 +406,9 @@ fn a_consuming_node_records_the_inputs_it_read_matching_the_producing_output() {
     );
 
     // A node that read no durable input carries no inputs (absent, not empty-null).
-    let producer = art.attempts().iter().find(|a| a.node() == "p").unwrap();
+    let source_attempt = art.attempts().iter().find(|a| a.node() == "p").unwrap();
     assert!(
-        producer.inputs().is_empty(),
+        source_attempt.inputs().is_empty(),
         "a node that consumed no durable reference records no inputs"
     );
 }
@@ -459,7 +471,10 @@ fn an_old_stream_without_output_produced_events_still_folds_with_empty_outputs()
     );
     // The consumer inputs default absent too.
     let snap = art.attempts().iter().find(|a| a.node() == "snap").unwrap();
-    assert!(snap.inputs().is_empty(), "no consumed inputs on the old stream");
+    assert!(
+        snap.inputs().is_empty(),
+        "no consumed inputs on the old stream"
+    );
 }
 
 #[test]
@@ -532,8 +547,10 @@ fn output_produced_event_carries_its_wire_kind_and_fields() {
     assert_eq!(produced[0]["uri"], json!("file:///out"));
     assert_eq!(produced[0]["produced_at_offset_ns"], json!(100));
     assert_eq!(produced[0]["originating_run"], json!(RUN_ID));
-    // Absent optionals are omitted (open-world; the fold defaults them).
+    // Absent optionals are omitted (open-world; the fold defaults them). The
+    // output kind/scheme travels under `output_kind` (not `kind`, the discriminator).
+    assert_eq!(produced[0]["kind"], json!("output-produced"));
     assert!(produced[0].get("content_hash").is_none());
     assert!(produced[0].get("size_bytes").is_none());
-    assert!(produced[0].get("kind").is_none());
+    assert!(produced[0].get("output_kind").is_none());
 }

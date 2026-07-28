@@ -1,0 +1,62 @@
+{
+  "header": {
+    "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+    "pipeline": "example-pipeline",
+    "fingerprint_structural": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+    "fingerprint_policy": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+    "fingerprint_algorithm_version": 1,
+    "parameters": {},
+    "data_interval": null,
+    "captured_environment": {},
+    "resume_lineage": null,
+    "overall_outcome": "succeeded"
+  },
+  "attempts": [
+    {
+      "node": "producer",
+      "attempt": 1,
+      "status": "succeeded",
+      "phase_durations_ns": { "executing": 100, "ready-wait": 0, "permit-wait": 0, "backoff": 0 },
+      "worker": "compute#1",
+      "metrics": {},
+      "durable_reference": "s3://bucket/producer",
+      "durable_reference_meta": {
+        "content_hash": "sha256:pppp",
+        "size_bytes": 4096,
+        "scheme": "s3",
+        "produced_at_offset_ns": 100
+      }
+    },
+    {
+      "node": "consumer",
+      "attempt": 1,
+      "status": "succeeded",
+      "phase_durations_ns": { "executing": 100, "ready-wait": 0, "permit-wait": 0, "backoff": 0 },
+      "worker": "compute#2",
+      "metrics": {},
+      "inputs": [
+        { "uri": "s3://bucket/producer", "content_hash": "sha256:pppp" }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "node": "producer",
+      "attempt": 1,
+      "uri": "s3://bucket/producer",
+      "content_hash": "sha256:pppp",
+      "size_bytes": 4096,
+      "kind": "s3",
+      "produced_at_offset_ns": 100,
+      "originating_run": "018f4a1e-6c2a-7b3d-9e10-0123456789ab"
+    }
+  ],
+  "summary": {
+    "total_elapsed_ns": 400,
+    "critical_path_ns": 200,
+    "peak_slot_residency": 0,
+    "retained_values": [],
+    "abandoned_pinned_time_ns": 0,
+    "abandoned_pinned_capacity": 0
+  }
+}

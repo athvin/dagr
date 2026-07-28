@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/athvin/dagr/schemas/run/v1.schema.json",
   "title": "dagr.run@1",
-  "description": "The C22 run artifact: the outcome of one execution, joinable to the structure, derived from the event stream. A single canonical JSON document (T4 §2) with a header (run identity, pipeline identity, both fingerprint hashes, invocation parameters + data interval, allowlisted captured environment, resume lineage, overall outcome), one record PER ATTEMPT, and a summary. Accommodates the assembly-failed / bootstrap-failed variants (no fingerprint, non-empty error list, zero attempts) and the single-node replay variant (`not-requested` node marking). Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate. MINOR REVISIONS (additive, same major @1, same file — old documents keep validating): @1.1 (T89, ticket 104) adds the optional attempt field `durable_reference_meta`.",
+  "description": "The C22 run artifact: the outcome of one execution, joinable to the structure, derived from the event stream. A single canonical JSON document (T4 §2) with a header (run identity, pipeline identity, both fingerprint hashes, invocation parameters + data interval, allowlisted captured environment, resume lineage, overall outcome), one record PER ATTEMPT, and a summary. Accommodates the assembly-failed / bootstrap-failed variants (no fingerprint, non-empty error list, zero attempts) and the single-node replay variant (`not-requested` node marking). Published by T39 (ticket 050). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate. MINOR REVISIONS (additive, same major @1, same file — old documents keep validating): @1.1 (T89, ticket 104) adds the optional attempt field `durable_reference_meta`. @1.2 (T90, ticket 105) adds the top-level append-only `outputs` array (produced-output lineage, FK-free) and the optional per-attempt consumed `inputs` array.",
   "type": "object",
   "required": ["header", "attempts"],
   "properties": {
@@ -15,6 +15,11 @@
     "summary": {
       "description": "Run summary (C22). Null for the pre-execution failure variants (zero attempts).",
       "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/summary" }]
+    },
+    "outputs": {
+      "description": "APPEND-ONLY produced-output lineage (T90, dagr.run@1.2, minor+additive): one entry per durable output produced (or copied forward on resume), in stream order. Each entry is carried BY VALUE — there is NO foreign key to any asset-identity row (the metastore projection is T91). `originating_run` is this run on a fresh produce, or the PRIOR run on a satisfied-from-prior carry-forward. Optional and open-world: a pre-T90 artifact omits it; an empty array is a run that produced no durable output.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/produced_output" }
     },
     "variant": {
       "description": "Optional artifact variant marker. `single-node-replay` marks a C26 single-node replay artifact whose out-of-request nodes carry the `not-requested` marking.",
@@ -201,6 +206,18 @@
           "description": "The ORIGINATING run identity a satisfied-from-prior attempt carries (C22/C27). Required when status is satisfied-from-prior (enforced below).",
           "type": "string",
           "minLength": 1
+        },
+        "inputs": {
+          "description": "OPTIONAL consumed durable inputs (T90, dagr.run@1.2, minor+additive): the `{ uri, content_hash }` durable references this attempt actually READ, populated from the resume rehydrate map (on resume) and the resolved static data-edge producers (on a fresh run). Each entry is carried BY VALUE with NO foreign key to any asset row. Present only when the attempt read at least one durable reference; absent otherwise, and absent on every pre-T90 artifact. Additive and open-world.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["uri"],
+            "properties": {
+              "uri": { "type": "string", "minLength": 1 },
+              "content_hash": { "type": "string", "minLength": 1 }
+            }
+          }
         }
       },
       "allOf": [
@@ -215,6 +232,21 @@
           }
         }
       ]
+    },
+    "produced_output": {
+      "type": "object",
+      "description": "One produced-output lineage entry (T90): the producing node/attempt, the produced reference `uri` (by value), the reused T89 `content_hash`/`size_bytes`/`kind`, the produced-at offset, and the originating run. NO foreign key to any asset-identity row.",
+      "required": ["node", "attempt", "uri", "produced_at_offset_ns", "originating_run"],
+      "properties": {
+        "node": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "uri": { "type": "string", "minLength": 1 },
+        "content_hash": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "kind": { "type": "string", "minLength": 1 },
+        "produced_at_offset_ns": { "type": "integer", "minimum": 0 },
+        "originating_run": { "type": "string", "minLength": 1 }
+      }
     },
     "summary": {
       "type": "object",
