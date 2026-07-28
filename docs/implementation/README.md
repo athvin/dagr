@@ -149,7 +149,7 @@ A lightweight, **embedded, opt-in** run index so one many-DAG binary has a singl
 Additive **data-lineage** enrichment over the M7 metastore, sequenced after it (metastore-first was an explicit operator choice). The Airflow `models/` review found dagr already models run/attempt state richly; the one gap is *what each run produced and consumed*. M8 enriches the durable-output contract with reference metadata (content hash/size), promotes production and consumption to first-class append-only lineage records in the event stream + fold, then projects them into the metastore — reusing the T84 reconcile and T86 live paths. Everything is event-stream-first and schema-versioned-additive; `dagr-core` stays runtime-dependency-free. Work in order: reference metadata + resume mutation-detection (T89), produced/consumed lineage events (T90), lineage projection into the metastore (T91).
 
 - [x] **104** · [T89 — durable-reference metadata + resume mutation-detection](104-T89-durable-reference-metadata.md) · M · feature — after T88, T57, T42, T58
-- [ ] **105** · [T90 — produced/consumed lineage events](105-T90-produced-consumed-lineage.md) · M · feature — after T89, T50
+- [x] **105** · [T90 — produced/consumed lineage events](105-T90-produced-consumed-lineage.md) · M · feature — after T89, T50
 - [ ] **106** · [T91 — lineage projection into the metastore (+ optional asset identity)](106-T91-lineage-metastore-projection.md) · M · feature — after T90, T84, T86
 
 ---
