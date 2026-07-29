@@ -557,13 +557,25 @@ fn on_dealloc(size: usize) {
 // allocator cannot be expressed in safe Rust — so this one
 // impl block carries a scoped, justified `allow`, the only `unsafe` in the
 // module.
+//
+// Each method below wraps its ONE forwarding call in its own `unsafe { }` block
+// with its own `// SAFETY:` note, rather than leaning on the enclosing `unsafe
+// fn`. That is the edition-2024 posture (`unsafe_op_in_unsafe_fn` is
+// deny-by-default): the accounting statements around each call are plainly safe
+// code, and the reader can see exactly which line carries the obligation.
 #[allow(
     unsafe_code,
     reason = "GlobalAlloc is an inherently-unsafe trait; the attributing allocator must implement it — it only forwards to System and updates atomics/thread-local"
 )]
 unsafe impl GlobalAlloc for AttributingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = System.alloc(layout);
+        // SAFETY: forwarding `alloc` with the caller's `layout` untouched. The
+        // caller of an `unsafe fn alloc` already owes `System` that `layout` has
+        // non-zero size and a valid alignment; passing it straight through
+        // neither weakens nor re-interprets that obligation. `on_alloc` runs only
+        // after the returned pointer is checked non-null, and touches nothing but
+        // a thread-local `Cell` and atomics.
+        let ptr = unsafe { System.alloc(layout) };
         if !ptr.is_null() {
             on_alloc(layout.size());
         }
@@ -571,12 +583,21 @@ unsafe impl GlobalAlloc for AttributingAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        System.dealloc(ptr, layout);
+        // SAFETY: forwarding `dealloc` with the caller's `ptr` and `layout`
+        // untouched. `ptr` is, by this function's own contract, a block currently
+        // allocated by *this* allocator with exactly `layout` — and because every
+        // allocating arm forwards to `System` unchanged, "allocated by this
+        // allocator" and "allocated by `System`" are the same set of blocks, which
+        // is precisely what `System.dealloc` requires.
+        unsafe { System.dealloc(ptr, layout) };
         on_dealloc(layout.size());
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let ptr = System.alloc_zeroed(layout);
+        // SAFETY: forwarding `alloc_zeroed` with the caller's `layout` untouched;
+        // the caller's `layout` obligation carries through unchanged, exactly as
+        // in `alloc` above.
+        let ptr = unsafe { System.alloc_zeroed(layout) };
         if !ptr.is_null() {
             on_alloc(layout.size());
         }
@@ -584,7 +605,13 @@ unsafe impl GlobalAlloc for AttributingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_ptr = System.realloc(ptr, layout, new_size);
+        // SAFETY: forwarding `realloc` with the caller's `ptr`, `layout`, and
+        // `new_size` untouched. The caller owes that `ptr` came from this
+        // allocator with `layout` (the same block set as `System`, per `dealloc`
+        // above) and that `new_size` is non-zero and does not overflow when
+        // rounded up to `layout.align()`. The accounting below only *reads*
+        // `layout.size()` and `new_size`; it never dereferences either pointer.
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
         if !new_ptr.is_null() {
             // realloc changes the live figure by the delta between old and new.
             let old = layout.size();

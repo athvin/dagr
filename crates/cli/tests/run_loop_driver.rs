@@ -19,13 +19,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt, run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // A capturing, in-memory run-store sink + monotonic clock (injection seam)
@@ -648,10 +648,32 @@ fn assembly_failure_still_records() {
 /// allowlist the allowlisted value appears in the header and the secret does not;
 /// with an empty allowlist no environment value appears.
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "std::env::set_var/remove_var are unsafe fns in edition 2024; the \
+              driver reads the allowlisted names out of the REAL process \
+              environment, so proving the capture-and-redact behaviour requires \
+              setting them — this is the only test in the suite that does"
+)]
 fn allowlisted_env_captured_others_not() {
-    // SAFETY: single-threaded test setup before the driver runs.
-    std::env::set_var("DAGR_TEST_ALLOWED", "visible-value");
-    std::env::set_var("DAGR_TEST_SECRET", "super-secret");
+    // The only env-mutating test in this file, and the only one that passes a
+    // non-empty allowlist (so the only one whose `drive` call reads the
+    // environment at all). It holds a process-global lock for its whole
+    // set → drive → remove window, so the mutation cannot overlap a read.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    // SAFETY: mutating the process environment races a concurrent `getenv` (the
+    // update can reallocate `environ` under a reader). `_guard` is held across the
+    // whole window below, the two `DAGR_TEST_*` names are unique to this test, and
+    // every other `drive` call in this file passes an EMPTY allowlist, so no other
+    // test here reads the environment at all.
+    unsafe {
+        std::env::set_var("DAGR_TEST_ALLOWED", "visible-value");
+        std::env::set_var("DAGR_TEST_SECRET", "super-secret");
+    }
 
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
@@ -705,8 +727,12 @@ fn allowlisted_env_captured_others_not() {
         "empty allowlist captures nothing"
     );
 
-    std::env::remove_var("DAGR_TEST_ALLOWED");
-    std::env::remove_var("DAGR_TEST_SECRET");
+    // SAFETY: the closing half of the same guarded window opened above — `_guard`
+    // is still held, so these removals cannot overlap a read either.
+    unsafe {
+        std::env::remove_var("DAGR_TEST_ALLOWED");
+        std::env::remove_var("DAGR_TEST_SECRET");
+    }
 }
 
 /// The run-started header carries the fields known at start: identity, pipeline

@@ -19,15 +19,15 @@
 
 use dagr_artifact::event_stream::read_records;
 use dagr_cli::driver::{RunConfig, ShutdownExit};
-use dagr_cli::metastore_tee::{build_run_sink, stream_path, RunSink};
+use dagr_cli::metastore_tee::{RunSink, build_run_sink, stream_path};
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::run_store::TickClock;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
-use dagr_metastore::store::OpenMode;
 use dagr_metastore::MetaStore;
+use dagr_metastore::store::OpenMode;
 
 // === Fixtures ==============================================================
 
@@ -220,8 +220,8 @@ fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_o
 /// sink's store pinned to a one-attempt retry cap so the contention is a hard fault.
 #[test]
 fn a_metastore_write_failure_surfaces_as_the_sink_failure_exit() {
-    use dagr_metastore::store::RetryPolicy;
     use dagr_metastore::MetastoreSink;
+    use dagr_metastore::store::RetryPolicy;
 
     let base = temp_base("fault");
     let base_str = base.to_string_lossy().to_string();
@@ -285,18 +285,37 @@ fn a_metastore_write_failure_surfaces_as_the_sink_failure_exit() {
 /// With no `--dagr.metastore` flag and no `DAGR_METASTORE` env, `build_run_sink`
 /// returns a plain `FileSink` and opens no store — no `libsql` activity.
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "std::env::remove_var/set_var are unsafe fns in edition 2024; the \
+              toggle resolver reads the REAL DAGR_METASTORE name, so asserting the \
+              default-off path requires guaranteeing it unset"
+)]
 fn default_off_builds_a_plain_file_sink_and_opens_no_store() {
+    // Ensure DAGR_METASTORE is not set for this assertion (unique-name isolation is
+    // not possible here — the resolver reads the real name — so remove it). A
+    // process-global lock covers the whole unset → build → restore window so the
+    // mutation cannot overlap another test's read of the same name.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     let base = temp_base("default");
     let base_str = base.to_string_lossy().to_string();
     let stream = stream_path(&base_str, "pipe", "run-default");
 
-    // Ensure DAGR_METASTORE is not set for this assertion (unique-name isolation is
-    // not possible here — the resolver reads the real name — so remove it).
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let prior = std::env::var_os("DAGR_METASTORE");
-    std::env::remove_var("DAGR_METASTORE");
+    // SAFETY: mutating the process environment races a concurrent `getenv` (the
+    // update can reallocate `environ` under a reader). `_guard` is held across the
+    // whole window, and this is the only test in the suite that touches the
+    // variable; the prior value is restored so the process is left as it was found.
+    unsafe { std::env::remove_var("DAGR_METASTORE") };
     let sink = build_run_sink(&stream, &base_str, &[]).expect("default sink builds");
     if let Some(v) = prior {
-        std::env::set_var("DAGR_METASTORE", v);
+        // SAFETY: still inside the same `_guard` window as the removal above.
+        unsafe { std::env::set_var("DAGR_METASTORE", v) };
     }
 
     assert!(

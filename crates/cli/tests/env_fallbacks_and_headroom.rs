@@ -19,8 +19,11 @@
 //! names them literally), so every env-mutating test takes a shared process-global
 //! [`ENV_LOCK`] and sets/removes the variable **inside** the guard — the
 //! process-global hardening: no two tests ever race over the same OS-global variable, even under
-//! cargo's default parallel runner. Edition 2021, so `set_var`/`remove_var` are
-//! safe.
+//! cargo's default parallel runner. Under edition 2024 `set_var`/`remove_var` are
+//! `unsafe fn`s (the update can reallocate `environ` under a concurrent `getenv`),
+//! which is exactly the hazard that lock already closes; the two helpers below are
+//! the only places this suite mutates the environment, and each carries its own
+//! `// SAFETY:` note.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,22 +32,22 @@ use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::config::{
-    resolve_headroom, resolve_pool_pins, EnvParseErrorKind, PoolPinFlags, DAGR_FAILURE_MODE,
-    DAGR_GRACE, DAGR_HEADROOM, DAGR_POOL_BLOCKING_THREADS, DAGR_POOL_COMPUTE_THREADS,
-    DAGR_POOL_MEMORY, DAGR_TEARDOWN_DEADLINE,
+    DAGR_FAILURE_MODE, DAGR_GRACE, DAGR_HEADROOM, DAGR_POOL_BLOCKING_THREADS,
+    DAGR_POOL_COMPUTE_THREADS, DAGR_POOL_MEMORY, DAGR_TEARDOWN_DEADLINE, EnvParseErrorKind,
+    PoolPinFlags, resolve_headroom, resolve_pool_pins,
 };
 use dagr_cli::contract::ExitCode;
 use dagr_cli::driver::{
-    drive, NodeRunner, RunConfig, RunPlan, DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE,
+    DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE, NodeRunner, RunConfig, RunPlan, drive,
 };
+use dagr_core::TaskError;
 use dagr_core::admission::PoolCapacities;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::limits::ContainerLimitProbe;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// The process-global lock every env-mutating test takes, so setting the real
 /// `DAGR_*` names never races across parallel tests.
@@ -57,22 +60,39 @@ fn env_lock() -> MutexGuard<'static, ()> {
 
 /// Set `key` to `value`, run `body`, then remove `key` — all under the env lock so
 /// no other test observes the variable.
+#[allow(
+    unsafe_code,
+    reason = "std::env::set_var/remove_var are unsafe fns in edition 2024; the \
+              resolvers under test read the REAL process environment by name, so a \
+              test cannot avoid mutating it — with_env/with_clean_env are the only \
+              two places this suite does, and both hold the env lock"
+)]
 fn with_env<T>(pairs: &[(&str, &str)], body: impl FnOnce() -> T) -> T {
     let _guard = env_lock();
     for (k, _) in pairs {
-        std::env::remove_var(k);
+        // SAFETY: mutating the environment races a concurrent `getenv`; `_guard`
+        // holds this suite's process-global env lock for the whole
+        // remove → set → read → remove window, so no other env-touching test here
+        // can be reading while the array is updated.
+        unsafe { std::env::remove_var(k) };
     }
     for (k, v) in pairs {
-        std::env::set_var(k, v);
+        // SAFETY: as above — still inside the `_guard` window.
+        unsafe { std::env::set_var(k, v) };
     }
     let out = body();
     for (k, _) in pairs {
-        std::env::remove_var(k);
+        // SAFETY: as above — still inside the `_guard` window.
+        unsafe { std::env::remove_var(k) };
     }
     out
 }
 
 /// Run `body` with every `DAGR_*` name this suite touches guaranteed **unset**.
+#[allow(
+    unsafe_code,
+    reason = "std::env::remove_var is an unsafe fn in edition 2024; see with_env"
+)]
 fn with_clean_env<T>(body: impl FnOnce() -> T) -> T {
     let _guard = env_lock();
     for k in [
@@ -84,7 +104,9 @@ fn with_clean_env<T>(body: impl FnOnce() -> T) -> T {
         DAGR_POOL_MEMORY,
         DAGR_HEADROOM,
     ] {
-        std::env::remove_var(k);
+        // SAFETY: `_guard` holds the suite's process-global env lock across the
+        // whole unset → read window, as in `with_env` above.
+        unsafe { std::env::remove_var(k) };
     }
     body()
 }

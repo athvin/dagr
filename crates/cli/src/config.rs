@@ -630,29 +630,91 @@ pub fn resolve_metastore_toggle(flag: Option<bool>) -> Result<bool, EnvParseErro
 mod tests {
     use super::*;
 
-    // Every env-touching test uses a UNIQUE variable name (never a real `DAGR_*`
-    // name), set and removed within the test, so tests never race over a shared
-    // process-global variable even under cargo's default parallel runner (hermetic,
-    // no shared mutable OS state). Edition 2021, so `set_var`/`remove_var` are safe.
+    // # Env hermeticity, and why mutating it needs `unsafe`
+    //
+    // Most env-touching tests below use a UNIQUE variable name (never a real
+    // `DAGR_*` name), set and removed within the test, so no two tests contend
+    // logically over the same variable under cargo's parallel runner. The pool /
+    // headroom / metastore resolvers hardcode the REAL names, so those tests
+    // cannot use a unique key.
+    //
+    // Neither of those addresses what `std::env::set_var` is actually unsafe about
+    // in edition 2024, which is not *logical* interference between tests but a data
+    // race: mutating the process environment can reallocate the `environ` array
+    // under a concurrent `getenv` in another thread, whatever variable that thread
+    // is reading. So every mutation goes through [`set_env`] / [`unset_env`], which
+    // take the module's [`env_lock`] guard **by reference** — the compiler will not
+    // let a mutation happen without the lock held — and each test holds that guard
+    // across its whole set → read → remove window, so no reader in this module can
+    // observe a half-updated environment.
+    //
+    // The residual, stated rather than hidden: another module's test in the same
+    // `dagr-cli` test binary that *reads* the environment (`OutputMode::from_env`,
+    // the driver's allowlist lookup) does not take this lock, so a mutation here
+    // can in principle race it. That is accepted for test-only code; nothing in
+    // the shipped binary mutates the environment at all.
+
+    /// The guard type [`set_env`] / [`unset_env`] demand, so "the lock is held"
+    /// is a type-checked precondition rather than a comment.
+    type EnvGuard = std::sync::MutexGuard<'static, ()>;
+
+    /// The single process-global lock every env-mutating test in this module holds
+    /// across its set → read → remove window.
+    fn env_lock() -> EnvGuard {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Set `key` to `value` while the caller holds the env lock.
+    #[allow(
+        unsafe_code,
+        reason = "std::env::set_var is an unsafe fn in edition 2024; the resolver \
+                  under test reads the real process environment, so a test cannot \
+                  avoid mutating it — this wrapper confines the unsafety to one place"
+    )]
+    fn set_env(_locked: &EnvGuard, key: &str, value: &str) {
+        // SAFETY: `set_var` is unsafe because the update can reallocate `environ`
+        // under a concurrent `getenv`. `_locked` proves the caller holds the
+        // module's process-global env lock, and every env *read* in this module
+        // happens inside that same guarded window, so no reader here can see a
+        // half-updated environment. This is test-only code; the shipped binary
+        // never mutates the environment.
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    /// Remove `key` while the caller holds the env lock.
+    #[allow(
+        unsafe_code,
+        reason = "std::env::remove_var is an unsafe fn in edition 2024; see set_env"
+    )]
+    fn unset_env(_locked: &EnvGuard, key: &str) {
+        // SAFETY: identical to `set_env` above — `_locked` proves the env lock is
+        // held, and every read in this module is inside the same guarded window.
+        unsafe { std::env::remove_var(key) };
+    }
 
     // --- Precedence -------------------------------------------------------
 
     #[test]
     fn flag_present_wins_and_env_is_never_read() {
+        let g = env_lock();
         let key = "DAGR_TEST_FLAG_WINS";
-        std::env::set_var(key, "999");
+        set_env(&g, key, "999");
         // Flag present → the env value (999) must be ignored entirely.
         let got = resolve::<u32>(Some(7), key, 0).expect("flag path never errors");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(got, 7, "a present flag must win outright over the env var");
     }
 
     #[test]
     fn no_flag_uses_parsed_env_value() {
+        let g = env_lock();
         let key = "DAGR_TEST_ENV_USED";
-        std::env::set_var(key, "42");
+        set_env(&g, key, "42");
         let got = resolve::<u32>(None, key, 0).expect("a valid env value parses");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(
             got, 42,
             "with no flag, the env value is parsed and returned"
@@ -661,8 +723,9 @@ mod tests {
 
     #[test]
     fn neither_flag_nor_env_returns_default() {
+        let g = env_lock();
         let key = "DAGR_TEST_DEFAULT_UNSET";
-        std::env::remove_var(key); // ensure unset
+        unset_env(&g, key); // ensure unset
         let got = resolve::<u32>(None, key, 13).expect("the default path never errors");
         assert_eq!(
             got, 13,
@@ -672,10 +735,11 @@ mod tests {
 
     #[test]
     fn empty_env_is_treated_as_unset() {
+        let g = env_lock();
         let key = "DAGR_TEST_EMPTY_ENV";
-        std::env::set_var(key, "");
+        set_env(&g, key, "");
         let got = resolve::<u32>(None, key, 5).expect("an empty env var is not-supplied");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(got, 5, "an empty env var behaves as unset → default");
     }
 
@@ -683,10 +747,11 @@ mod tests {
 
     #[test]
     fn unparseable_env_value_is_invalid_usage_and_names_the_variable() {
+        let g = env_lock();
         let key = "DAGR_TEST_BAD_PARSE";
-        std::env::set_var(key, "not-a-number");
+        set_env(&g, key, "not-a-number");
         let err = resolve::<u32>(None, key, 0).expect_err("a bad env value must error");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(
             err.to_string().contains(key),
@@ -735,21 +800,23 @@ mod tests {
 
     #[test]
     fn env_duration_composes_with_resolve() {
+        let g = env_lock();
         let key = "DAGR_TEST_DURATION";
-        std::env::set_var(key, "250ms");
+        set_env(&g, key, "250ms");
         let got = resolve::<EnvDuration>(None, key, EnvDuration(Duration::from_secs(1)))
             .expect("valid duration");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(got.into_inner(), Duration::from_millis(250));
     }
 
     #[test]
     fn env_duration_bad_value_is_invalid_usage() {
+        let g = env_lock();
         let key = "DAGR_TEST_DURATION_BAD";
-        std::env::set_var(key, "notaduration");
+        set_env(&g, key, "notaduration");
         let err = resolve::<EnvDuration>(None, key, EnvDuration(Duration::from_secs(1)))
             .expect_err("a bad duration must error");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(key));
     }
@@ -774,24 +841,26 @@ mod tests {
 
     #[test]
     fn unknown_failure_mode_through_resolve_is_invalid_usage() {
+        let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_BAD";
-        std::env::set_var(key, "halt");
+        set_env(&g, key, "halt");
         let err =
             resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
                 .expect_err("an unknown failure mode must error");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(key));
     }
 
     #[test]
     fn env_failure_mode_composes_with_resolve() {
+        let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_OK";
-        std::env::set_var(key, "stop-on-first-failure");
+        set_env(&g, key, "stop-on-first-failure");
         let got =
             resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
                 .expect("valid failure mode");
-        std::env::remove_var(key);
+        unset_env(&g, key);
         assert_eq!(got.into_inner(), FailureMode::StopOnFirstFailure);
     }
 
@@ -810,32 +879,23 @@ mod tests {
 
     // --- Pool pins + headroom resolvers ----------------------------------
     //
-    // These read the REAL DAGR_POOL_* / DAGR_HEADROOM names, so they take a
-    // module-local lock and set/remove inside it (never a shared mutable OS var
-    // observed across parallel tests). The generic-resolver tests above avoid the
-    // lock by using unique names; these cannot, because the resolver hardcodes the
-    // real names it wires.
-
-    fn pool_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
+    // These read the REAL DAGR_POOL_* / DAGR_HEADROOM names, so they cannot use a
+    // unique key the way the generic-resolver tests above do; they rely on
+    // `env_lock` alone (which every test in this module holds anyway).
 
     #[test]
     fn pool_pins_flag_beats_env_and_env_fills_the_rest() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_POOL_COMPUTE_THREADS, "9");
-        std::env::set_var(DAGR_POOL_MEMORY, "4096");
-        std::env::remove_var(DAGR_POOL_BLOCKING_THREADS);
+        let g = env_lock();
+        set_env(&g, DAGR_POOL_COMPUTE_THREADS, "9");
+        set_env(&g, DAGR_POOL_MEMORY, "4096");
+        unset_env(&g, DAGR_POOL_BLOCKING_THREADS);
         let pins = resolve_pool_pins(PoolPinFlags {
             compute_threads: Some(2),
             ..PoolPinFlags::default()
         })
         .expect("valid pins");
-        std::env::remove_var(DAGR_POOL_COMPUTE_THREADS);
-        std::env::remove_var(DAGR_POOL_MEMORY);
+        unset_env(&g, DAGR_POOL_COMPUTE_THREADS);
+        unset_env(&g, DAGR_POOL_MEMORY);
         assert_eq!(pins.compute_threads_pin(), Some(2), "flag wins over env");
         assert_eq!(pins.memory_pin(), Some(4096), "env fills memory");
         assert_eq!(pins.blocking_threads_pin(), None, "unset stays un-pinned");
@@ -843,10 +903,10 @@ mod tests {
 
     #[test]
     fn pool_pins_bad_env_is_invalid_usage_naming_the_variable() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_POOL_MEMORY, "notanumber");
+        let g = env_lock();
+        set_env(&g, DAGR_POOL_MEMORY, "notanumber");
         let err = resolve_pool_pins(PoolPinFlags::default()).expect_err("bad pool env fails");
-        std::env::remove_var(DAGR_POOL_MEMORY);
+        unset_env(&g, DAGR_POOL_MEMORY);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(DAGR_POOL_MEMORY));
@@ -854,24 +914,24 @@ mod tests {
 
     #[test]
     fn headroom_flag_env_default_precedence() {
-        let _g = pool_env_lock();
+        let g = env_lock();
         // default when neither
-        std::env::remove_var(DAGR_HEADROOM);
+        unset_env(&g, DAGR_HEADROOM);
         assert!((resolve_headroom(None).expect("default") - HEADROOM_DEFAULT).abs() < f64::EPSILON);
         // env used when no flag
-        std::env::set_var(DAGR_HEADROOM, "0.5");
+        set_env(&g, DAGR_HEADROOM, "0.5");
         assert!((resolve_headroom(None).expect("env") - 0.5).abs() < f64::EPSILON);
         // flag beats env
         assert!((resolve_headroom(Some(0.1)).expect("flag") - 0.1).abs() < f64::EPSILON);
-        std::env::remove_var(DAGR_HEADROOM);
+        unset_env(&g, DAGR_HEADROOM);
     }
 
     #[test]
     fn headroom_out_of_range_is_bootstrap_failure() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_HEADROOM, "1.5");
+        let g = env_lock();
+        set_env(&g, DAGR_HEADROOM, "1.5");
         let err = resolve_headroom(None).expect_err("1.5 is out of range");
-        std::env::remove_var(DAGR_HEADROOM);
+        unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
         assert!(err.to_string().contains(DAGR_HEADROOM));
@@ -879,8 +939,8 @@ mod tests {
 
     #[test]
     fn headroom_out_of_range_flag_is_bootstrap_failure_naming_the_flag() {
-        let _g = pool_env_lock();
-        std::env::remove_var(DAGR_HEADROOM);
+        let g = env_lock();
+        unset_env(&g, DAGR_HEADROOM);
         let err = resolve_headroom(Some(-0.5)).expect_err("negative headroom is out of range");
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
@@ -889,10 +949,10 @@ mod tests {
 
     #[test]
     fn headroom_non_float_env_is_parse_failure() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_HEADROOM, "half");
+        let g = env_lock();
+        set_env(&g, DAGR_HEADROOM, "half");
         let err = resolve_headroom(None).expect_err("a non-float is a parse failure");
-        std::env::remove_var(DAGR_HEADROOM);
+        unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
     }
@@ -915,8 +975,8 @@ mod tests {
 
     #[test]
     fn metastore_toggle_defaults_off() {
-        let _g = pool_env_lock();
-        std::env::remove_var(DAGR_METASTORE);
+        let g = env_lock();
+        unset_env(&g, DAGR_METASTORE);
         assert!(
             !resolve_metastore_toggle(None).expect("default off"),
             "the toggle defaults OFF (no flag, no env)"
@@ -925,30 +985,30 @@ mod tests {
 
     #[test]
     fn metastore_toggle_env_used_when_no_flag() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_METASTORE, "1");
+        let g = env_lock();
+        set_env(&g, DAGR_METASTORE, "1");
         let on = resolve_metastore_toggle(None).expect("env used");
-        std::env::remove_var(DAGR_METASTORE);
+        unset_env(&g, DAGR_METASTORE);
         assert!(on, "with no flag, the env value turns the toggle on");
     }
 
     #[test]
     fn metastore_toggle_flag_beats_env() {
-        let _g = pool_env_lock();
+        let g = env_lock();
         // Env says ON, flag says OFF — the flag must win (env never read on the
         // flag path).
-        std::env::set_var(DAGR_METASTORE, "1");
+        set_env(&g, DAGR_METASTORE, "1");
         let resolved = resolve_metastore_toggle(Some(false)).expect("flag wins");
-        std::env::remove_var(DAGR_METASTORE);
+        unset_env(&g, DAGR_METASTORE);
         assert!(!resolved, "a present flag wins outright over the env var");
     }
 
     #[test]
     fn metastore_toggle_bad_env_is_invalid_usage_naming_the_variable() {
-        let _g = pool_env_lock();
-        std::env::set_var(DAGR_METASTORE, "notabool");
+        let g = env_lock();
+        set_env(&g, DAGR_METASTORE, "notabool");
         let err = resolve_metastore_toggle(None).expect_err("a bad env value fails loudly");
-        std::env::remove_var(DAGR_METASTORE);
+        unset_env(&g, DAGR_METASTORE);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(DAGR_METASTORE));
     }
