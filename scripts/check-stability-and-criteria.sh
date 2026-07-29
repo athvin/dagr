@@ -72,10 +72,10 @@ fi
 # This assertion is deliberately STRUCTURAL rather than a version literal.
 #
 # The ADR is a historical record of what was decided when T0.10 shipped, and it
-# names the MSRV of that day (1.95.0). Ticket 109 (T94) moved the pin to 1.97.1
-# and its DoD forbids rewriting `docs/implementation/*.md` to the new version — so
-# a hardcoded literal here would either force that rewrite (falsifying the record)
-# or go stale at every MSRV bump. What T0.10's Test plan actually asks is that the
+# names the MSRV of that day. Ticket 109 (T94) moved the pin, and its DoD forbids
+# rewriting `docs/implementation/*.md` to the new version — so a hardcoded literal
+# here would either force that rewrite (falsifying the record) or go stale at
+# every MSRV bump. What T0.10's Test plan actually asks is that the
 # ADR names *a single concrete* minimum — "there is exactly one MSRV, not a
 # range" — which is a property, not a number. So: exactly one distinct concrete
 # `1.x.y` appears in the ADR body.

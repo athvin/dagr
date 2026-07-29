@@ -57,9 +57,11 @@ set -u
 # here rather than passing an "everything agrees" check at edition 2021.
 EXPECTED_EDITION="2024"
 
-# Rust-release-shaped strings this scan recognises: 1.80.0 .. 1.99.99. Narrow on
-# purpose — it must not match dependency versions ("1.0", "0.6") or schema
-# versions. Widen the minor range when Rust reaches 1.100.
+# Rust-release-shaped strings this scan recognises: any 1.8x or 1.9x release with a
+# patch component. Narrow on purpose — it must not match dependency versions
+# ("1.0", "0.6") or schema versions. Widen the minor range when Rust reaches 1.100.
+# Written as a pattern, never as an example release, so this file does not trip its
+# own tree scan.
 VERSION_RE='1\.[89][0-9]\.[0-9]+'
 
 scan_only=""
@@ -220,11 +222,23 @@ else
   bad "README.md: the MSRV section must state the release-notes implication (minor version bump)"
 fi
 
-# --- 5. the stability/criteria gate names the same concrete MSRV -------------
-if grep -q "$pin" scripts/check-stability-and-criteria.sh; then
-  pass "check-stability-and-criteria.sh: asserts the concrete MSRV $pin"
+# --- 5. the stability/criteria gate asserts the same concrete MSRV -----------
+# It must DERIVE the pin from rust-toolchain.toml, not carry a literal. Its MSRV
+# assertion is scoped to the ADR embedded in ticket 005, and ticket 109's DoD
+# forbids rewriting `docs/implementation/*.md` to a new version — so a literal
+# there would either force that rewrite or silently go stale at the next bump.
+# Deriving it makes the gate correct at every future pin, forever.
+if grep -q 'rust-toolchain.toml' scripts/check-stability-and-criteria.sh; then
+  pass "check-stability-and-criteria.sh: derives the concrete MSRV ($pin) from rust-toolchain.toml"
 else
-  bad "check-stability-and-criteria.sh: does not name the pinned MSRV $pin"
+  bad "check-stability-and-criteria.sh: must read the pin from rust-toolchain.toml, not hardcode a version"
+fi
+# And it must actually assert the pin it read (the tree scan above already proves
+# no stale literal survives in it).
+if bash scripts/check-stability-and-criteria.sh >/dev/null 2>&1; then
+  pass "check-stability-and-criteria.sh: passes against the migrated tree"
+else
+  bad "check-stability-and-criteria.sh: fails against the migrated tree"
 fi
 
 # --- 6. the UI harness: doc pin AND the edition it compiles samples with -----
@@ -316,8 +330,12 @@ for f in crates/core/src/metrics.rs crates/cli/tests/bounded_memory_chain.rs; do
   fi
 done
 
-if git grep -qn 'r#gen\b' -- 'crates/**/*.rs' 2>/dev/null; then
-  bad "gen: the reserved-keyword escape \`r#gen\` is used — ticket 109 renames the identifier instead"
+# Code only: a comment explaining *why* the escape was not used is not a use of it.
+escaped_gen=$(git grep -n 'r#gen' -- 'crates/**/*.rs' 2>/dev/null \
+  | grep -vE ':[0-9]+:[[:space:]]*(//|/\*|\*)' || true)
+if [ -n "$escaped_gen" ]; then
+  bad "gen: the reserved-keyword escape \`r#gen\` is used — ticket 109 renames the identifier instead:"
+  printf '%s\n' "$escaped_gen" | sed 's/^/        /'
 else
   pass "gen: the 2024 reserved keyword is renamed, not escaped with \`r#gen\`"
 fi
@@ -325,8 +343,12 @@ fi
 # --- self-check: prove both scans can actually fail --------------------------
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
+# The fixture's stale version is DERIVED from the pin (one minor behind) rather
+# than written as a literal, so this script never names a release and so cannot
+# trip its own tree scan.
+stale_minor=$(( $(printf '%s' "$pin" | cut -d. -f2) - 1 ))
 printf '[toolchain]\nchannel = "%s"\n' "$pin" >"$fixture/rust-toolchain.toml"
-printf '**MSRV: Rust 1.81.0.**\n' >"$fixture/README.md"
+printf '**MSRV: Rust 1.%s.0.**\n' "$stale_minor" >"$fixture/README.md"
 printf 'edition = "2015"\n' >"$fixture/rustfmt.toml"
 if bash "$self" --scan-only "$fixture" >/dev/null 2>&1; then
   bad "self-check: the scans reported a fixture with a stale version AND a stale edition as clean"

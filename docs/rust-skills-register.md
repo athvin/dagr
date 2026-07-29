@@ -118,12 +118,12 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
-| unsafe-extern-block | unsafe | n-a | — | the workspace declares no `extern` block; the only FFI is `libc` in a `cfg(unix)` dev-dependency test |
+| unsafe-extern-block | unsafe | n-a | — | the workspace declares no `extern` block; the only FFI is `libc` in a `cfg(unix)` dev-dependency test. T94's edition bump makes `unsafe extern` *available*, but with nothing to apply it to the row stays structurally inapplicable rather than adopted |
 | unsafe-maybeuninit | unsafe | n-a | — | no uninitialized memory is constructed anywhere; `mem::uninitialized`/`zeroed` appear nowhere |
-| unsafe-minimize-scope | unsafe | adopt | T94 | edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default, so T94 wraps each operation in the `GlobalAlloc` impl individually |
+| unsafe-minimize-scope | unsafe | satisfied | — | T94 (ticket 109) moved the workspace to edition 2024, where `unsafe_op_in_unsafe_fn` is deny-by-default — the compiler now enforces this rule. Every unsafe operation sits in its own `unsafe { }` block: the four `GlobalAlloc` methods in `crates/core/src/metrics.rs`, the test allocator in `bounded_memory_chain.rs`, the `libc::raise` call, and the `std::env::set_var`/`remove_var` wrappers (unsafe fns as of 2024). `scripts/check-edition-and-msrv-pins.sh` also asserts each block carries its own `// SAFETY:` |
 | unsafe-miri-ci | unsafe | adopt | T98 | T98 adds a miri job where it can help, or records why miri cannot exercise a `#[global_allocator]` |
-| unsafe-no-mangle-unsafe | unsafe | n-a | — | no `#[no_mangle]`, `#[export_name]`, or `#[link_section]` anywhere in the workspace |
-| unsafe-safety-comment | unsafe | adopt | T94 | the one production `unsafe impl` already carries a block-level `// SAFETY:`; T94 adds the per-operation comments edition 2024 requires |
+| unsafe-no-mangle-unsafe | unsafe | n-a | — | no `#[no_mangle]`, `#[export_name]`, or `#[link_section]` anywhere in the workspace. T94's edition bump makes `#[unsafe(no_mangle)]` *available* (and the bare form a hard error), but there is no attribute to rewrite |
+| unsafe-safety-comment | unsafe | satisfied | — | T94 (ticket 109) added the per-operation `// SAFETY:` comments edition 2024's per-operation blocks require, on top of the block-level comment the production `unsafe impl` already carried, and added the one that was missing at the `libc::raise` site. Kept honest mechanically: `scripts/check-edition-and-msrv-pins.sh` fails the build on an unsafe block with no `// SAFETY:` above it, or on a file with more blocks than comments |
 | unsafe-send-sync-manual | unsafe | n-a | — | no manual `Send`/`Sync` impl exists; every auto-derivation is left to the compiler |
 
 ## 5 · API Design (`api-`, 17)
@@ -272,7 +272,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | pat-at-bindings | pat | declined | — | no match site currently needs to bind and test the same value; forcing `@` in would not improve any existing arm |
 | pat-exhaustive-enum | pat | satisfied | — | owned enums are matched exhaustively; `clippy::wildcard_enum_match_arm` pressure plus the `#[non_exhaustive]` discipline keeps new variants visible |
-| pat-if-let-chains | pat | declined | — | reachable only after T94's edition bump, and T94's Out of scope defers adopting them at call sites to ordinary future work rather than a mechanical sweep |
+| pat-if-let-chains | pat | declined | — | **now reachable**: T94 (ticket 109) landed edition 2024, so let-chains compile. Still not adopted — T94's Out of scope defers the call-site sweep to ordinary future work rather than folding a 25-site refactor into a migration. The work list is recorded as a lint decision, not prose: `clippy::collapsible_if` is `allow` in the lint policy precisely because its edition-2024 fix *is* a let-chain, so re-denying that one lint enumerates every site an adopting ticket must visit |
 | pat-let-else | pat | satisfied | — | `let ... else` is the early-return extraction form throughout the driver and planner |
 | pat-matches-macro | pat | satisfied | — | 29 `matches!` uses for boolean pattern tests |
 
@@ -293,7 +293,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
-| closure-disjoint-capture | closure | satisfied | — | edition 2021 disjoint capture is already in force and the edition bump preserves it; captures are minimal at the spawn sites |
+| closure-disjoint-capture | closure | satisfied | — | disjoint closure capture (edition 2021 onward) is in force, and T94's bump to edition 2024 preserved it — verified by the suite passing unchanged; captures are minimal at the spawn sites |
 | closure-fn-trait-bounds | closure | satisfied | — | callbacks take the least restrictive bound they need; the completion callback is `FnOnce` where it is consumed once |
 | closure-impl-fn-return | closure | n-a | — | no function returns a closure; the seams return futures or concrete types |
 | closure-move-capture | closure | satisfied | — | spawned attempts `move` their captures and clone `Arc`s beforehand, which is what makes them `'static` |
@@ -407,7 +407,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | proj-lib-main-split | proj | satisfied | — | both binaries are thin (161 and 96 lines) and delegate to their library |
 | proj-mod-by-feature | proj | declined | — | modules already follow arch.md's C-numbered components. Splitting the ten files over 1200 lines is a structure refactor, not hardening, and is excluded from M9's scope; recommended as its own follow-up |
 | proj-mod-rs-dir | proj | n-a | — | no multi-file module exists to need a `mod.rs`; the flat layout is deliberate |
-| proj-msrv-declare | proj | adopt | T94 | `rust-version` is declared and CI pins the toolchain; T94 moves it and adds the MSRV-aware `resolver = "3"` |
+| proj-msrv-declare | proj | satisfied | — | `rust-version` is declared at the workspace level and CI pins the toolchain; T94 (ticket 109) moved both to 1.97.1 and added the MSRV-aware `resolver = "3"` explicitly (rather than inheriting it from edition 2024), so a transitive dependency upgrade cannot raise the declared minimum unnoticed. `scripts/check-edition-and-msrv-pins.sh` asserts all six sites that name the pin agree |
 | proj-prelude-module | proj | satisfied | — | `dagr_cli::prelude` exists so a task author needs one glob import |
 | proj-pub-crate-internal | proj | satisfied | — | internal helpers are `pub(crate)`; `clippy::redundant_pub_crate` is denied |
 | proj-pub-super-parent | proj | satisfied | — | used where a helper belongs to the parent module only |

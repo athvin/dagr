@@ -418,18 +418,17 @@ impl Task for RaiseThenWait {
     async fn run(&mut self, c: &RunContext, _i: ()) -> Result<u64, TaskError> {
         // Deliver the real signal; the installed handler catches it and fires the
         // cancel handle. `raise` needs unsafe — justified at the calling fn boundary.
-        //
-        // SAFETY: `libc::raise` is an FFI call with no pointer arguments and no
-        // memory obligations — `self.sig` is one of the SIGTERM/SIGINT constants
-        // this fixture is constructed with, so the signal number is valid. The
-        // handler under test is installed *before* the task runs, so the signal is
-        // caught rather than taking the default fatal action.
         #[allow(
             unsafe_code,
             reason = "libc::raise is the only way to deliver a real OS signal to \
                       prove the installed handler catches it; safe because the \
                       handler is installed first so the signal is caught, not fatal"
         )]
+        // SAFETY: `libc::raise` is an FFI call with no pointer arguments and no
+        // memory obligations — `self.sig` is one of the SIGTERM/SIGINT constants
+        // this fixture is constructed with, so the signal number is valid. The
+        // handler under test is installed *before* the task runs, so the signal is
+        // caught rather than taking the default fatal action.
         unsafe {
             libc::raise(self.sig);
         }
