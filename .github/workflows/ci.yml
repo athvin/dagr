@@ -478,6 +478,38 @@ jobs:
       - name: Self-test the register verifier
         run: bash scripts/check-rust-skills-verifier-selftest.sh
 
+  # --- Cargo build profiles (T93) ---------------------------------------------
+  # The workspace's compiler settings are a checked-in decision with two
+  # load-bearing GUARANTEES inside it, not just tuning:
+  #
+  #   * `panic = "abort"` must never be set, by any profile or rustflag. dagr
+  #     contains a task panic with `catch_unwind` and reports it as a panicked
+  #     attempt; under abort there is nothing to catch, and
+  #     `execution::check_panic_strategy` refuses to start the run at all.
+  #   * `strip` must never be enabled — dagr attributes a panic to its node
+  #     through a panic hook, and needs the symbols to do it.
+  #
+  # scripts/check-cargo-profiles.sh asserts both mechanically (and proves the
+  # scans non-vacuous against a fixture that does set them), plus pins the profile
+  # values so LTO or codegen-units cannot silently drift back to Cargo's defaults
+  # and quietly cost the per-node budget arch.md's "Performance envelope" holds.
+  #
+  # The second step is the guarantee end-to-end rather than by inspection: the
+  # panic-containment suite, compiled under the real `[profile.release]` this
+  # ticket adds (fat LTO, one codegen unit, explicit `panic = "unwind"`). If the
+  # release profile ever did break containment, this is the job that says so.
+  # dagr-core carries no runtime dependencies, so the LTO'd release build is cheap.
+  cargo-profiles:
+    name: cargo-profiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the Cargo build profiles
+        run: bash scripts/check-cargo-profiles.sh
+      - name: Panic containment holds under the release profile
+        run: cargo test -p dagr-core --release --test panic_containment
+
   # --- Cross-toolchain STRUCTURAL determinism (SL4a, T65) --------------------
   # The executable form of system-level acceptance criterion 4(a): "two builds of
   # the same source produce identical fingerprints AND byte-identical graph
@@ -554,6 +586,7 @@ jobs:
       - structural-determinism
       - coverage-matrix
       - rust-skills-register
+      - cargo-profiles
     steps:
       - uses: actions/checkout@v4
       - name: All system-level acceptance constituents are green
