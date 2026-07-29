@@ -457,6 +457,27 @@ jobs:
       - name: Self-test the coverage-matrix verifier
         run: bash scripts/check-coverage-verifier-selftest.sh
 
+  # --- rust-skills adoption register (T92) ------------------------------------
+  # docs/rust-skills-register.md dispositions every rule in the
+  # .claude/skills/rust-skills skill exactly once, with a reason. This job is
+  # what stops it rotting into a decorative table: it fails when a rule is
+  # skipped, contradicted, dangling, given a bare verdict, or when an `adopt` row
+  # names a ticket outside M9. The rule total is derived from the rules
+  # directory, so a rule added upstream fails the build until it is
+  # dispositioned — which is the point.
+  #
+  # It needs no toolchain (two bash scripts over markdown), so it runs without a
+  # rust-cache step and is one of the fastest checks in the gate.
+  rust-skills-register:
+    name: rust-skills-register
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the rust-skills adoption register
+        run: bash scripts/check-rust-skills-adoption.sh
+      - name: Self-test the register verifier
+        run: bash scripts/check-rust-skills-verifier-selftest.sh
+
   # --- Cross-toolchain STRUCTURAL determinism (SL4a, T65) --------------------
   # The executable form of system-level acceptance criterion 4(a): "two builds of
   # the same source produce identical fingerprints AND byte-identical graph
@@ -532,6 +553,7 @@ jobs:
       - cross-toolchain-fingerprint
       - structural-determinism
       - coverage-matrix
+      - rust-skills-register
     steps:
       - uses: actions/checkout@v4
       - name: All system-level acceptance constituents are green
