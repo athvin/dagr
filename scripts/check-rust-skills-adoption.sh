@@ -79,12 +79,19 @@ if [ "$rule_total" -eq 0 ]; then
 fi
 
 # --- Parse the register's table rows ----------------------------------------
-# A row is `| rule | category | disposition | ticket | reason |`. The header and
-# its `|---|` separator are skipped by requiring column 1 to be a rule-shaped
-# token (no spaces) that is not the literal header word.
+# A register row is exactly `| rule | category | disposition | ticket | reason |`
+# — five data columns, which splitting on `|` renders as NF == 7 (an empty field
+# either side of the leading and trailing pipe).
+#
+# The NF test is load-bearing, not cosmetic: the register also carries
+# explanatory tables (the disposition vocabulary, follow-ups) with different
+# column counts. A parser keying only on a leading `|` swallows those too and
+# then reports phantom dangling rules and phantom bad dispositions for words like
+# "satisfied". Requiring the exact column count is what keeps prose out of the
+# data set. Self-test case 8 pins this.
 awk -F'|' '
-  /^[[:space:]]*\|/ {
-    rule = $2; disp = $4; ticket = $5; reason = $6
+  /^[[:space:]]*\|/ && NF == 7 {
+    rule = $2; cat = $3; disp = $4; ticket = $5; reason = $6
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", rule)
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", disp)
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", ticket)

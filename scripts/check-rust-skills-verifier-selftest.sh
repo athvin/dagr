@@ -241,7 +241,40 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Case 8 — The verifier defaults to the REAL register and the REAL rules
+# Case 8 — Non-register markdown tables in the same file are IGNORED. A real
+# register carries prose and explanatory tables (the disposition vocabulary, a
+# follow-up list) alongside the data table. Those have a different column count,
+# and treating their rows as register rows would report phantom dangling rules
+# and phantom bad dispositions — which is exactly what a naive `|`-prefix parser
+# does. Only a row with the register's five data columns is a register row.
+# ---------------------------------------------------------------------------
+{ cat "$work/good.md"
+  echo
+  echo '## the disposition vocabulary'
+  echo
+  echo '| Disposition | Meaning |'
+  echo '|---|---|'
+  echo '| `satisfied` | already complies |'
+  echo '| `adopt` | a ticket applies it |'
+  echo
+  echo '| A | B | C |'
+  echo '|---|---|---|'
+  echo '| three | column | table |'
+} >"$work/prose.md"
+out=$(run_verifier "$work/prose.md" "$work/rules"); rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "explanatory tables with a different column count are ignored"
+else
+  bad "a register with explanatory tables must still pass; output: $out"
+fi
+if ! printf '%s' "$out" | grep -qE 'satisfied.*dangling|dangling.*satisfied|Disposition'; then
+  pass "no phantom dangling rule is reported from an explanatory table"
+else
+  bad "explanatory-table rows must not be parsed as register rows; output: $out"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 9 — The verifier defaults to the REAL register and the REAL rules
 # directory when given no flags. This is how CI invokes it, so the default must
 # not silently resolve to nothing and report success.
 # ---------------------------------------------------------------------------
