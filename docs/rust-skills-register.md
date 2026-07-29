@@ -186,16 +186,16 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | opt-bounds-check | opt | satisfied | — | iterators and `.get()` are the access forms; the audit found no runtime-variable raw indexing in production |
 | opt-cache-friendly | opt | declined | — | unmeasured, and the per-node budget is met with room; reshaping data layout without a profile is what `perf-profile-first` forbids |
-| opt-codegen-units | opt | adopt | T93 | no profile exists today, so release builds run at the default 16 units |
+| opt-codegen-units | opt | satisfied | — | T93 (ticket 108) set `codegen-units = 1` in `[profile.release]`, replacing Cargo's default 16; `scripts/check-cargo-profiles.sh` fails the build if it drifts back |
 | opt-cold-unlikely | opt | declined | — | zero `#[cold]` attributes and no profile showing an error path costs anything |
 | opt-inline-always-rare | opt | n-a | — | vacuous: there is no `#[inline(always)]` to over-use, and none is warranted |
 | opt-inline-never-cold | opt | declined | — | unmeasured; adding inline hints to error paths without a profile is premature |
 | opt-inline-small | opt | declined | — | zero `#[inline]` hints today. With `lto = "fat"` and `codegen-units = 1` (T93) the compiler inlines across crates anyway, so hand hints would be noise |
 | opt-likely-hint | opt | n-a | — | the intrinsics are nightly-only and the workspace is pinned to stable |
-| opt-lto-release | opt | adopt | T93 | no `[profile.release]` exists anywhere, so LTO is off — the single largest unclaimed compiler win |
-| opt-pgo-profile | opt | declined | — | dagr ships portable container builds; a PGO profile gathered on a build host does not transfer, and the workflow cost is real |
+| opt-lto-release | opt | satisfied | — | T93 (ticket 108) added `[profile.release]` with `lto = "fat"` (fat over thin deliberately: a leaf binary built rarely and run repeatedly, `"thin"` the documented fallback if CI wall-clock binds); pinned by `scripts/check-cargo-profiles.sh` |
+| opt-pgo-profile | opt | declined | — | dagr ships portable container builds; a PGO profile gathered on a build host does not transfer, and the workflow cost is real. Restated as out of scope by T93 (ticket 108), which added the profiles without it |
 | opt-simd-portable | opt | n-a | — | portable SIMD is nightly-only, and dagr's work is scheduling and I/O, not numeric kernels |
-| opt-target-cpu | opt | declined | — | would trade a supported multi-host deployment story for single-digit percentages; arch.md commits to portable Linux containers |
+| opt-target-cpu | opt | declined | — | would trade a supported multi-host deployment story for single-digit percentages; arch.md commits to portable Linux containers. Restated as out of scope by T93 (ticket 108), which added the profiles without it |
 
 ## 9 · Numeric & Arithmetic Safety (`num-`, 5)
 
@@ -394,7 +394,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | perf-iter-lazy | perf | satisfied | — | iterators stay lazy to the point of use; `clippy::needless_collect` is denied |
 | perf-iter-over-index | perf | satisfied | — | iteration is the access form; the audit found no manual indexing in production |
 | perf-profile-first | perf | adopt | T97 | this rule *governs* T97: every allocation change must carry a before/after measurement, and unmeasured sites are left alone |
-| perf-release-profile | perf | adopt | T93 | no profile exists. Adopted **except** `panic = "abort"`, which `execution::check_panic_strategy` refuses at startup, and `strip`, which would remove the symbols dagr needs to attribute a task panic |
+| perf-release-profile | perf | satisfied | — | T93 (ticket 108) added `[profile.release]` (opt-level 3, fat LTO, one codegen unit), `[profile.bench]`, and `[profile.dev.package."*"]`. Adopted **except two knowing deviations**, both asserted mechanically by `scripts/check-cargo-profiles.sh`: `panic = "abort"` is REFUSED (`execution::check_panic_strategy` will not start a run under it — containment needs unwinding — so `panic = "unwind"` is set explicitly instead), and `strip` stays off (it would remove the symbols the panic hook needs to attribute a panic to its node) |
 
 ## 24 · Project Structure (`proj-`, 14)
 
