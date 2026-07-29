@@ -424,7 +424,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | lint-clippy-nursery-selected | lint | declined | — | the nursery lints that would matter here are already covered by the denied `pedantic` group; enabling more selectively is churn without a named defect to catch |
 | lint-deny-correctness | lint | satisfied | — | `clippy::all` is denied at group level, which subsumes `correctness` |
 | lint-missing-docs | lint | adopt | T96 | at `warn` today, effectively denied by `warnings = "deny"`; T96 makes the intent explicit and retires the stale deferral note |
-| lint-pedantic-selective | lint | satisfied | — | `pedantic` is denied wholesale with exactly one documented exception (`module_name_repetitions`), which is stricter than selective adoption |
+| lint-pedantic-selective | lint | satisfied | — | `pedantic` is denied wholesale with exactly two documented exceptions, each justified in `docs/lint-policy.md`'s table — `module_name_repetitions` (the C-numbered module names read fine repeated) and `collapsible_if` (added by T94: its edition-2024 fix *is* a let-chain, and adopting let-chains at call sites is deferred, so denying it would demand a change this milestone declined). Still stricter than selective adoption |
 | lint-rustfmt-check | lint | satisfied | — | `cargo fmt --all --check` runs as its own CI job |
 | lint-unsafe-doc | lint | adopt | T95 | T95 enables `clippy::undocumented_unsafe_blocks`, making the safety-comment convention mechanical |
 | lint-warn-complexity | lint | satisfied | — | denied, not warned, via the `clippy::all` group |
