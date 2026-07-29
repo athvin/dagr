@@ -46,6 +46,14 @@ jobs:
   # resolves it as the active toolchain, so every other job — and T8's UI /
   # compile-fail snapshot tests — runs deterministically on 1.95.0. Satisfies
   # the Test-plan item "Pinned toolchain is honored".
+  #
+  # The second step (T94) closes the other half: rustup honouring the pin proves
+  # nothing if the pin itself has drifted out of step with the five OTHER places
+  # dagr writes it down (the manifest, rustfmt.toml, the README MSRV line, the
+  # stability gate, and the UI harness's `--edition`). A migration that updates
+  # five of six sites reviews clean and is wrong, so the agreement is asserted
+  # mechanically, tree-wide, with `docs/implementation/*.md` excluded as the
+  # historical record it is.
   toolchain:
     name: toolchain
     runs-on: ubuntu-latest
@@ -62,6 +70,8 @@ jobs:
             "${pinned}"*) echo "OK: active toolchain matches the pinned channel";;
             *) echo "MISMATCH: active '${active}' does not start with pinned '${pinned}'"; exit 1;;
           esac
+      - name: Every pin site agrees, and the edition-2024 surface holds
+        run: bash scripts/check-edition-and-msrv-pins.sh
 
   # --- Formatting -------------------------------------------------------------
   fmt:
