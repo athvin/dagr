@@ -14,8 +14,8 @@
 //! `cargo test --workspace`.
 
 use dagr_cli::graph::{
-    emit_graph, graph_verb, mask_generated_at, BuildProvenance, GraphEmitError,
-    GRAPH_SCHEMA_VERSION,
+    BuildProvenance, GRAPH_SCHEMA_VERSION, GraphEmitError, emit_graph, graph_verb,
+    mask_generated_at,
 };
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};

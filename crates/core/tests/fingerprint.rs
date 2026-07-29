@@ -25,7 +25,7 @@
 use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::{RunContext, Task};
 use dagr_core::{
-    FingerprintSlot, Flow, NodePolicy, Pipeline, TaskError, FINGERPRINT_ALGORITHM_VERSION,
+    FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, Flow, NodePolicy, Pipeline, TaskError,
 };
 
 // === Fixture value types (author-declared stable names) =====================

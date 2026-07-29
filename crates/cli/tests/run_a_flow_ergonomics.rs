@@ -35,12 +35,12 @@
 //! scratch test uses a PRIVATE temp dir. No wall-clock sleeps (the retry backoff
 //! resolves immediately). Portable — macOS is in CI.
 
-use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
+use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, read_records};
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 

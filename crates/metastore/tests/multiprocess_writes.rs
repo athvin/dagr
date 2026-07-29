@@ -38,8 +38,8 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use dagr_metastore::store::OpenMode;
 use dagr_metastore::MetaStore;
+use dagr_metastore::store::OpenMode;
 
 /// The compiled `write_worker` binary (built for this crate's test run), the real
 /// OS process each writer spawns.

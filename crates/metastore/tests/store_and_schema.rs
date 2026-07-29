@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use dagr_metastore::schema::{migrations, NODE_TERMINAL_STATES, RUN_STATES, TABLES};
-use dagr_metastore::store::{OpenMode, RetryPolicy, WriteError};
 use dagr_metastore::MetaStore;
+use dagr_metastore::schema::{NODE_TERMINAL_STATES, RUN_STATES, TABLES, migrations};
+use dagr_metastore::store::{OpenMode, RetryPolicy, WriteError};
 
 /// A private per-test store path under the OS temp dir: `<tmp>/dagr-metastore-t83
 /// -<pid>-<nanos>-<counter>.db`. Collision-proof across tests, processes, and

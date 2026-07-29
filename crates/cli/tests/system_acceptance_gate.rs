@@ -47,7 +47,7 @@ use serde_json::Value;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::full_pipeline::{FullPipelineTest, Outcome};
-use dagr_cli::graph::{emit_graph, mask_generated_at, BuildProvenance};
+use dagr_cli::graph::{BuildProvenance, emit_graph, mask_generated_at};
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::stable_name::StableName;

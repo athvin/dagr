@@ -48,8 +48,8 @@ use serde_json::Value;
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 use dagr_artifact::fold::fold_stream;
-use dagr_cli::structure_snapshot::{assert_structure, bless_structure, StructureAssertError};
-use dagr_cli::t63_demo::{assemble, base_groups, ConsumerFrom, PIPELINE, STAGE_VALUE};
+use dagr_cli::structure_snapshot::{StructureAssertError, assert_structure, bless_structure};
+use dagr_cli::t63_demo::{ConsumerFrom, PIPELINE, STAGE_VALUE, assemble, base_groups};
 
 /// Cargo sets `CARGO_BIN_EXE_<name>` for every bin in the package when compiling an
 /// integration test — the demo binary's path, resolved at build time.

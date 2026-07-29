@@ -15,13 +15,13 @@
 //! gated so it only compiles when the kit does.
 #![cfg(feature = "test-kit")]
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use dagr_core::TaskError;
 use dagr_core::context::{DataInterval, ResourceRegistry, Secret};
 use dagr_core::task::{RunContext, Task};
 use dagr_core::test_kit::SingleTaskTest;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // Fake resources: substituted through the kit's registry with NO task change

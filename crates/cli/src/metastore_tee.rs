@@ -38,7 +38,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
-use dagr_artifact::event_stream::{EventSink, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::{EVENTS_FILE_NAME, EventSink};
 use dagr_metastore::MetastoreSink;
 
 use crate::run_store::FileSink;

@@ -27,14 +27,14 @@
 
 pub use crate::flow_builder::FlowBuilder;
 #[cfg(feature = "dag")]
-pub use crate::run::{run, DagRegistration};
+pub use crate::run::{DagRegistration, run};
 pub use crate::run_flow::RunnableFlow;
 /// The run-store defaults a hand-written driver reaches for: the default local-file
 /// [`FileSink`], the wall-clock [`SystemClock`], and the [`DEFAULT_STORE_BASE`] — so
 /// [`RunnableFlow::run`](crate::run_flow::RunnableFlow::run) needs no hand-written
 /// sink/clock. (The one-call [`run_to_store`](crate::run_flow::RunnableFlow::run_to_store)
 /// builds them for you; these are here for the explicit path.)
-pub use crate::run_store::{FileSink, SystemClock, DEFAULT_STORE_BASE};
+pub use crate::run_store::{DEFAULT_STORE_BASE, FileSink, SystemClock};
 /// The `#[dag]` attribute macro (M6, T80) — the DAG-authoring sibling of `#[task]`.
 /// Carried in the prelude under the default-on `dag` feature so `use
 /// dagr_cli::prelude::*;` brings it into scope; absent under `--no-default-features`.
@@ -48,9 +48,9 @@ pub use dagr_macros::dag;
 /// coexists with the `StableName` *trait* re-exported below (type namespace) — the
 /// standard trait+derive pairing. A proc-macro is never linked into the shipped
 /// binary, so this adds no runtime dependency.
-pub use dagr_macros::{task, StableName};
+pub use dagr_macros::{StableName, task};
 
+pub use dagr_core::TaskError;
 pub use dagr_core::context::RunContext;
 pub use dagr_core::stable_name::{StableInputNames, StableName};
 pub use dagr_core::task::Task;
-pub use dagr_core::TaskError;

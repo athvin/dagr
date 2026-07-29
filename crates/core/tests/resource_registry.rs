@@ -393,9 +393,11 @@ fn a_missing_resource_produces_the_bootstrap_failure_artifact_with_zero_attempts
 
     // The resource-validation error is in the error list.
     assert_eq!(failure.errors().len(), 1);
-    assert!(failure.errors()[0]
-        .resource_type_name()
-        .contains("ObjectStore"));
+    assert!(
+        failure.errors()[0]
+            .resource_type_name()
+            .contains("ObjectStore")
+    );
 }
 
 /// **All requirements satisfied passes.** A registry containing every declared
@@ -450,19 +452,27 @@ fn declared_requirements_are_surfaced_for_artifact_emission() {
     // Every (node, resource-type-name) pair the nodes declared is present in the
     // surfaced set.
     let surfaced = dagr_core::context::surface_requirements(&declarations);
-    assert!(surfaced
-        .iter()
-        .any(|(n, name)| *n == a && name.contains("ObjectStore")));
-    assert!(surfaced
-        .iter()
-        .any(|(n, name)| *n == b && name.contains("ObjectStore")));
-    assert!(surfaced
-        .iter()
-        .any(|(n, name)| *n == b && name.contains("DbPool")));
+    assert!(
+        surfaced
+            .iter()
+            .any(|(n, name)| *n == a && name.contains("ObjectStore"))
+    );
+    assert!(
+        surfaced
+            .iter()
+            .any(|(n, name)| *n == b && name.contains("ObjectStore"))
+    );
+    assert!(
+        surfaced
+            .iter()
+            .any(|(n, name)| *n == b && name.contains("DbPool"))
+    );
     // node a did not declare DbPool.
-    assert!(!surfaced
-        .iter()
-        .any(|(n, name)| *n == a && name.contains("DbPool")));
+    assert!(
+        !surfaced
+            .iter()
+            .any(|(n, name)| *n == a && name.contains("DbPool"))
+    );
 }
 
 // === Secret wrapper ========================================================

@@ -19,11 +19,11 @@
 use std::fs;
 use std::path::PathBuf;
 
+use dagr_core::BootstrapOutcome;
 use dagr_core::admission::{Pool, PoolCost};
 use dagr_core::limits::{
-    detect_capacities, CapacityError, ContainerLimitProbe, PinnedPools, HEADROOM_DEFAULT,
+    CapacityError, ContainerLimitProbe, HEADROOM_DEFAULT, PinnedPools, detect_capacities,
 };
-use dagr_core::BootstrapOutcome;
 
 // ===========================================================================
 // Fixture cgroup / proc trees under a temp probe root

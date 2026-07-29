@@ -77,7 +77,7 @@ use std::path::Path;
 use dagr_core::Pipeline;
 use serde_json::Value;
 
-use crate::graph::{build_artifact, BuildProvenance, GraphEmitError};
+use crate::graph::{BuildProvenance, GraphEmitError, build_artifact};
 
 /// A fixed, never-varying instant used when capturing a snapshot: the snapshot
 /// **excludes** the generation-time field, so the value is immaterial — a constant

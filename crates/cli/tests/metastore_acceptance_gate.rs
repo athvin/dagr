@@ -50,15 +50,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use dagr_cli::driver::{RunConfig, ShutdownExit};
-use dagr_cli::metastore_tee::{stream_path, RunSink};
+use dagr_cli::metastore_tee::{RunSink, stream_path};
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::run_store::TickClock;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
-use dagr_metastore::store::OpenMode;
 use dagr_metastore::MetaStore;
+use dagr_metastore::store::OpenMode;
 
 // ===========================================================================
 // Harness
@@ -374,8 +374,8 @@ fn two_node_flow() -> RunnableFlow {
 /// sink's store pinned to a one-attempt retry cap so the contention is a hard fault.
 #[test]
 fn a_metastore_write_failure_surfaces_as_the_sink_failure_exit_code() {
-    use dagr_metastore::store::RetryPolicy;
     use dagr_metastore::MetastoreSink;
+    use dagr_metastore::store::RetryPolicy;
 
     let base = temp_base("fault");
     let base_str = base.to_string_lossy().to_string();

@@ -7,12 +7,12 @@
 //! any flow is built. This corpus submits two records both named `dup` so any `run`
 //! invocation over it takes the duplicate-rejection path.
 
-use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::DagRegistration;
+use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// A payload with a declared stable name. The duplicate is rejected before any flow
 /// is built, so this value is never produced or read.

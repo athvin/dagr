@@ -63,7 +63,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 use dagr_artifact::fold::{
-    fold_stream, RunArtifact, PHASE_EXECUTING, PHASE_PERMIT_WAIT, PHASE_READY_WAIT,
+    PHASE_EXECUTING, PHASE_PERMIT_WAIT, PHASE_READY_WAIT, RunArtifact, fold_stream,
 };
 use serde_json::Value;
 
@@ -784,7 +784,7 @@ fn criteria_matrix_coverage_check_passes() {
 #[cfg(feature = "schema-validation")]
 #[test]
 fn both_artifacts_validate_against_their_published_schemas() {
-    use dagr_artifact::schema::{validate_value, ArtifactKind};
+    use dagr_artifact::schema::{ArtifactKind, validate_value};
 
     let a = produce("run-schema-valid");
     let graph: Value = serde_json::from_slice(&a.graph_bytes()).unwrap();
@@ -860,11 +860,7 @@ mod reference_tools {
     }
 
     fn null_device() -> &'static str {
-        if cfg!(windows) {
-            "NUL"
-        } else {
-            "/dev/null"
-        }
+        if cfg!(windows) { "NUL" } else { "/dev/null" }
     }
 
     struct ToolRun {

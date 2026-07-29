@@ -14,10 +14,10 @@
 //! order) is deliberately **not** here. This file covers only the builder
 //! skeleton, node identity, and the immutable pipeline the seams read.
 
+use dagr_core::TaskError;
 use dagr_core::flow::{Flow, Pipeline, PipelineNode};
 use dagr_core::handle::{Handle, NodeId};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // --- Illustrative value + task types (distinct, so mismatches would show) ---
 struct Rows;
@@ -248,11 +248,13 @@ fn data_dependent_node_records_its_edges() {
     assert_eq!(edges[0].position(), 0);
     assert_eq!(edges[1].position(), 1);
     // A source node records no data edges.
-    assert!(pipeline
-        .node(NodeId::from_name("rows"))
-        .unwrap()
-        .data_edges()
-        .is_empty());
+    assert!(
+        pipeline
+            .node(NodeId::from_name("rows"))
+            .unwrap()
+            .data_edges()
+            .is_empty()
+    );
 }
 
 /// **Builder does not touch the environment.** Building and finalizing a small

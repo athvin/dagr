@@ -15,8 +15,8 @@
 use std::collections::BTreeMap;
 
 use dagr_cli::contract::{
-    fold_verb, parse_cli, render_verb, reserved_flag_names, validate_verb, verb_table, Cli,
-    ExitCode, LibraryFlagCollision, ParamSpec, ParseOutcome, RenderFormat, Verb,
+    Cli, ExitCode, LibraryFlagCollision, ParamSpec, ParseOutcome, RenderFormat, Verb, fold_verb,
+    parse_cli, render_verb, reserved_flag_names, validate_verb, verb_table,
 };
 use dagr_core::flow::Flow;
 use dagr_core::stable_name::StableName;
@@ -577,8 +577,8 @@ fn fold_tiny_success_run(node: &str) -> String {
 /// fold has real records to derive from.
 fn success_stream(node: &str) -> String {
     use dagr_artifact::event_stream::{
-        AttemptOutcomeRecord, EventStreamWriter, RunId, RunOutcome, RunStartedHeader,
-        TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+        AttemptOutcomeRecord, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION, RunId, RunOutcome,
+        RunStartedHeader, TerminalState,
     };
 
     let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -666,8 +666,8 @@ fn prior_run_with_durable_producer() -> String {
 /// attempt records a durable reference iff `durable`.
 fn two_node_prior(durable: bool) -> String {
     use dagr_artifact::event_stream::{
-        record_durable_reference, AttemptOutcomeRecord, EventStreamWriter, RunId, RunOutcome,
-        RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+        AttemptOutcomeRecord, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION, RunId, RunOutcome,
+        RunStartedHeader, TerminalState, record_durable_reference,
     };
 
     let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

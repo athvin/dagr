@@ -79,10 +79,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, TerminalState, EVENTS_FILE_NAME, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EVENTS_FILE_NAME, EventSink, EventStreamWriter,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId, RunOutcome, RunStartedHeader,
+    TerminalState,
 };
-use dagr_cli::graph::{emit_graph, BuildProvenance};
+use dagr_cli::graph::{BuildProvenance, emit_graph};
 use dagr_core::metrics::AttemptMetrics;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};

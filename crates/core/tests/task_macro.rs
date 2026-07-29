@@ -22,9 +22,9 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
+use dagr_core::TaskError;
 use dagr_core::task;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
-use dagr_core::TaskError;
 
 /// Drive a future to completion on the current thread with no runtime — the
 /// task futures here never suspend on external I/O, so a busy-poll with the

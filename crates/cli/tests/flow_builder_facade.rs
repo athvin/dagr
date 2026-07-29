@@ -22,10 +22,10 @@
 use dagr_cli::prelude::FlowBuilder;
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::structure_snapshot::StructureSnapshot;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // The example tasks — a two-node `extract -> load` DAG, stable-named so the DAG

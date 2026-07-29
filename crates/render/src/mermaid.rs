@@ -34,7 +34,7 @@
 use std::fmt::Write as _;
 
 use crate::model::{Edge, EdgeKind, GraphArtifact, Node};
-use crate::overlay::{all_classes, Overlay};
+use crate::overlay::{Overlay, all_classes};
 
 /// Render `artifact` to Mermaid flowchart source. Deterministic and byte-stable;
 /// accepted by Mermaid's parser.

@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use dagr_artifact::event_stream::{EventSink, MonotonicClock, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::{EVENTS_FILE_NAME, EventSink, MonotonicClock};
 
 /// The default run-store base when none is supplied — a relative directory under the
 /// current working directory. A real deployment points the base at durable storage

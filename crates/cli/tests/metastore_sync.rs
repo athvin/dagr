@@ -114,8 +114,8 @@ fn write_minimal_run(base: &Path, pipeline: &str, run_id: &str, finished: bool) 
 
 /// Count how many `dag_run` rows the store the CLI wrote holds.
 fn count_dag_runs(db: &Path) -> i64 {
-    use dagr_metastore::store::OpenMode;
     use dagr_metastore::MetaStore;
+    use dagr_metastore::store::OpenMode;
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

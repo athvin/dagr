@@ -87,12 +87,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::assembly::{output_is_unit, DurableOutput, DurableWitness, EffectivePolicy, NodePolicy};
+use crate::Deps;
+use crate::assembly::{DurableOutput, DurableWitness, EffectivePolicy, NodePolicy, output_is_unit};
 use crate::binding::{DataEdge, NodeBinding, OrderingEdge, OrderingHandle, TriggerRule};
 use crate::handle::{Handle, NodeId};
 use crate::stable_name::{StableInputNames, StableName};
 use crate::task::{ExecutionClass, Task};
-use crate::Deps;
 
 /// The **author-declared stable names** a node carries for the graph artifact —
 /// the stable *task* name, the ordered stable *input* type names, and the stable

@@ -62,11 +62,7 @@ fn git_head_commit() -> Option<String> {
         return None;
     }
     let sha = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha)
-    }
+    if sha.is_empty() { None } else { Some(sha) }
 }
 
 /// The workspace `Cargo.lock` path — two levels up from this crate's manifest

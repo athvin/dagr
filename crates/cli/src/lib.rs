@@ -71,24 +71,24 @@ pub mod temp;
 pub use dagr_macros::dag;
 pub use flow_builder::{FlowBuilder, NodeBuilder};
 pub use graph::{
-    emit_graph, graph_verb, BuildProvenance, GraphEmitError, GraphVerbError, GRAPH_SCHEMA_MAJOR,
-    GRAPH_SCHEMA_VERSION,
+    BuildProvenance, GRAPH_SCHEMA_MAJOR, GRAPH_SCHEMA_VERSION, GraphEmitError, GraphVerbError,
+    emit_graph, graph_verb,
 };
 /// The DAG auto-discovery surface (M6, ADR 092), re-exported at the crate root under
 /// the default-on `dag` feature: [`run()`] (the one-call entrypoint a DAG-hosting
 /// binary's `main` delegates to) and [`DagRegistration`] (the record a binary submits
 /// per DAG). Absent under `--no-default-features`.
 #[cfg(feature = "dag")]
-pub use run::{run, DagRegistration};
+pub use run::{DagRegistration, run};
 pub use run_flow::RunToStoreError;
 /// The run-store defaults (the local-file event sink, the wall-clock and deterministic
 /// clocks, the default store base, and the run-id minter) — reusable so a hand-written
 /// driver, the registry, the `#[dag]` run path, and the one-call
 /// [`RunnableFlow::run_to_store`](run_flow::RunnableFlow::run_to_store) all share one
 /// implementation and no one hand-writes a `FileSink` again.
-pub use run_store::{mint_run_id, FileSink, SystemClock, TickClock, DEFAULT_STORE_BASE};
+pub use run_store::{DEFAULT_STORE_BASE, FileSink, SystemClock, TickClock, mint_run_id};
 pub use structure_snapshot::{
-    assert_structure, bless_structure, StructureAssertError, StructureDiff, StructureSnapshot,
+    StructureAssertError, StructureDiff, StructureSnapshot, assert_structure, bless_structure,
 };
 
 #[cfg(test)]

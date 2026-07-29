@@ -26,8 +26,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use dagr_metastore::store::OpenMode;
 use dagr_metastore::MetaStore;
+use dagr_metastore::store::OpenMode;
 
 /// A private per-test store path.
 fn temp_store_path(tag: &str) -> PathBuf {

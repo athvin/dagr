@@ -105,21 +105,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
-use dagr_artifact::fold::{fold_stream, RunArtifact};
+use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, read_records};
+use dagr_artifact::fold::{RunArtifact, fold_stream};
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::binding::TriggerRule;
 use dagr_core::context::{ResourceRegistry, ResourceRequirements, RunContext, TerminalState};
 use dagr_core::execution::{
-    run_attempt_caught, run_with_retries_caught, AttemptEventSink, Backoff, NoJitter, RetryConfig,
+    AttemptEventSink, Backoff, NoJitter, RetryConfig, run_attempt_caught, run_with_retries_caught,
 };
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
-use crate::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use crate::driver::{NodeRunner, RunConfig, RunPlan, drive};
 
 /// A run's type-erased node runners, keyed by node name — the map the driver
 /// consumes.

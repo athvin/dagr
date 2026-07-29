@@ -77,10 +77,10 @@ use dagr_core::binding::EdgeKind;
 use dagr_core::flow::{Pipeline, PipelineNode};
 use dagr_core::task::ExecutionClass;
 use dagr_core::{
-    is_well_formed, EffectivePolicy, FingerprintSlot, TriggerRule, FINGERPRINT_ALGORITHM_VERSION,
-    UNIT_STABLE_NAME,
+    EffectivePolicy, FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, TriggerRule, UNIT_STABLE_NAME,
+    is_well_formed,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// The self-identifying schema version this emitter targets (matches
 /// `schemas/graph/v1.schema.json`).

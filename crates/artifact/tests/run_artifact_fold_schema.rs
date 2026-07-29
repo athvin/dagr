@@ -21,14 +21,14 @@ use std::io;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EventSink, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION,
+    MonotonicClock, RunId, RunOutcome, RunStartedHeader, TerminalState,
 };
 use dagr_artifact::fold::fold_stream;
-use dagr_artifact::schema::{validate_value, ArtifactKind};
+use dagr_artifact::schema::{ArtifactKind, validate_value};
 
 fn env(seq: u64, offset_ns: u64, kind: &str) -> Value {
     json!({

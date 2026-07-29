@@ -13,10 +13,10 @@
 //! runs in the default `cargo test --workspace` and covers the fold's behavioral
 //! criteria.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::fold::{
-    fold_stream, FoldError, ACCEPTED_STREAM_SCHEMA_VERSIONS, FOLD_READER_VERSION,
+    ACCEPTED_STREAM_SCHEMA_VERSIONS, FOLD_READER_VERSION, FoldError, fold_stream,
 };
 
 // === stream-building helpers ==============================================

@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use dagr_artifact::schema::{validate_value, ArtifactKind};
+use dagr_artifact::schema::{ArtifactKind, validate_value};
 use serde_json::Value;
 
 fn fixture(name: &str) -> PathBuf {

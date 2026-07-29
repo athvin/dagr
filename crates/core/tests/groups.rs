@@ -16,11 +16,11 @@
 //! name uniqueness across grouping (a duplicate name in different groups is an
 //! assembly error naming both declarations), and reorder-stability under grouping.
 
+use dagr_core::TaskError;
 use dagr_core::assembly::ProblemKind;
 use dagr_core::flow::Flow;
 use dagr_core::handle::NodeId;
 use dagr_core::task::{RunContext, Task};
-use dagr_core::TaskError;
 
 // --- Illustrative value + task types ----------------------------------------
 struct Rows;

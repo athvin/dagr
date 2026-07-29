@@ -149,7 +149,7 @@ pub struct SignalGuard {
 /// cancellation stays reachable through the programmatic `CancelHandle` seam.
 #[cfg(unix)]
 pub fn install_signal_handlers(handle: CancelHandle) -> std::io::Result<SignalGuard> {
-    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::signal::unix::{SignalKind, signal};
 
     // A dedicated single-worker runtime for signal reception — isolated from every
     // task-execution surface, so a jammed task fleet cannot starve it.

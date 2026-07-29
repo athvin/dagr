@@ -13,9 +13,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{
-    read_records, AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunId,
-    RunOutcome, RunStartedHeader, TerminalState, EVENTS_FILE_NAME, EVENT_STREAM_SCHEMA_VERSION,
-    EVENT_STREAM_UNWRITABLE, FINGERPRINT_ALGORITHM_VERSION, FINGERPRINT_UNAVAILABLE,
+    AttemptOutcomeRecord, EVENT_STREAM_SCHEMA_VERSION, EVENT_STREAM_UNWRITABLE, EVENTS_FILE_NAME,
+    Event, EventSink, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION, FINGERPRINT_UNAVAILABLE,
+    MonotonicClock, RunId, RunOutcome, RunStartedHeader, TerminalState, read_records,
 };
 
 // === Test doubles =========================================================

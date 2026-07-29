@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::resume::{
-    plan_resume, PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal,
+    PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal, plan_resume,
 };
 use dagr_core::task::Task;
 use dagr_core::{RehydrateError, RunContext, TaskError, TerminalState};

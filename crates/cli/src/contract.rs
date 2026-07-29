@@ -65,11 +65,11 @@ use clap::ValueEnum;
 
 use dagr_artifact::event_stream::RunOutcome;
 use dagr_artifact::fold::fold_stream;
-use dagr_core::flow::Pipeline;
-use dagr_core::resume::{plan_resume, PriorNode, PriorRun, ReferenceExistence, ResumePlan};
 use dagr_core::TerminalState;
+use dagr_core::flow::Pipeline;
+use dagr_core::resume::{PriorNode, PriorRun, ReferenceExistence, ResumePlan, plan_resume};
 use dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay};
-use dagr_render::{render_dot, render_mermaid, GraphArtifact};
+use dagr_render::{GraphArtifact, render_dot, render_mermaid};
 
 use crate::driver::{RunReport, ShutdownExit};
 

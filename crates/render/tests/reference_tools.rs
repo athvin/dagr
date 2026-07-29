@@ -42,8 +42,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use dagr_render::overlay::{render_dot_overlay, render_mermaid_overlay, RunArtifact};
-use dagr_render::{render_dot, render_mermaid, GraphArtifact};
+use dagr_render::overlay::{RunArtifact, render_dot_overlay, render_mermaid_overlay};
+use dagr_render::{GraphArtifact, render_dot, render_mermaid};
 
 /// Whether CI has declared the reference tools mandatory. When set, an absent
 /// tool is a failure, not a skip.
@@ -368,11 +368,7 @@ try {
 
 /// The platform null device path for discarding `dot`'s output.
 fn null_device() -> &'static str {
-    if cfg!(windows) {
-        "NUL"
-    } else {
-        "/dev/null"
-    }
+    if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
 
 /// A cheap unique-ish token for temp file names (no external rng dependency).

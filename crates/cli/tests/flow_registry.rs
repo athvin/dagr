@@ -11,15 +11,15 @@
 //! `flow_name = None` parse of every existing verb/flag.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dagr_cli::contract::{parse_cli, Cli, ExitCode, ParseOutcome, Verb};
-use dagr_cli::registry::{run_registry, FlowRegistry};
+use dagr_cli::contract::{Cli, ExitCode, ParseOutcome, Verb, parse_cli};
+use dagr_cli::registry::{FlowRegistry, run_registry};
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // Test tasks — two trivial single-node flows named `etl` and `nightly`.

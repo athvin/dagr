@@ -9,7 +9,7 @@
 //! `schemas/run/v1.schema.json` with the schema UNCHANGED (the metrics map is an
 //! open numeric map the schema already declares).
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::fold::fold_stream;
 
@@ -122,7 +122,7 @@ fn collected_metrics_reach_the_artifact_byte_for_value_identical() {
 #[cfg(feature = "schema-validation")]
 mod schema {
     use super::*;
-    use dagr_artifact::schema::{validate_value, ArtifactKind};
+    use dagr_artifact::schema::{ArtifactKind, validate_value};
 
     #[test]
     fn a_real_metrics_carrying_folded_artifact_validates_against_the_published_run_schema() {

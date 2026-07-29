@@ -13,11 +13,11 @@
 //! `dagr-artifact`.
 
 use dagr_artifact::fold::fold_stream;
-use dagr_cli::graph::{emit_graph, BuildProvenance};
+use dagr_cli::graph::{BuildProvenance, emit_graph};
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
 use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct Rows;
 impl StableName for Rows {

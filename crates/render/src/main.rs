@@ -21,7 +21,7 @@
 
 use std::process::ExitCode;
 
-use dagr_render::{render_dot, render_mermaid, GraphArtifact};
+use dagr_render::{GraphArtifact, render_dot, render_mermaid};
 
 /// The output format the standalone binary emits.
 enum Format {

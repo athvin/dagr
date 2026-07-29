@@ -23,9 +23,9 @@ use dagr_artifact::event_stream::{
 };
 use dagr_artifact::fold::fold_stream;
 
+use dagr_metastore::MetaStore;
 use dagr_metastore::mapping::sync_run_store;
 use dagr_metastore::store::OpenMode;
-use dagr_metastore::MetaStore;
 
 // === Test scaffolding ======================================================
 

@@ -36,9 +36,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use dagr_core::metrics::{
-    AttemptMetrics, AttributingAllocator, MetricError, MAX_ENCODED_BYTES, MAX_ENTRIES,
-    METRIC_PEAK_MEMORY_BYTES, METRIC_TRUNCATED_DROPPED_BYTES, METRIC_TRUNCATED_DROPPED_ENTRIES,
-    RESERVED_PREFIX,
+    AttemptMetrics, AttributingAllocator, MAX_ENCODED_BYTES, MAX_ENTRIES, METRIC_PEAK_MEMORY_BYTES,
+    METRIC_TRUNCATED_DROPPED_BYTES, METRIC_TRUNCATED_DROPPED_ENTRIES, MetricError, RESERVED_PREFIX,
 };
 
 // The metrics allocator installed as this test binary's global allocator so the

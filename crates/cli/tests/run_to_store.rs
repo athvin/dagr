@@ -12,12 +12,12 @@
 //! Determinism/portability: each test uses a PRIVATE temp base under the OS temp dir
 //! (disjoint per process + nanos), and no wall-clock sleeps. macOS is in CI.
 
-use dagr_artifact::event_stream::{read_records, MonotonicClock, RunOutcome};
+use dagr_artifact::event_stream::{MonotonicClock, RunOutcome, read_records};
 use dagr_cli::run_flow::{RunToStoreError, RunnableFlow};
 use dagr_cli::run_store::{SystemClock, TickClock};
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// A source producing a fixed number.
 struct Count {

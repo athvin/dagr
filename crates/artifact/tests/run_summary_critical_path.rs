@@ -16,7 +16,7 @@
 //! / `node-admitted` / `attempt-started` / `attempt-outcome` / `node-terminal`
 //! lifecycle with offsets that encode the intended graph shape.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::fold::fold_stream;
 

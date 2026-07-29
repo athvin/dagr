@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use dagr_core::context::{PipelineId, RunId};
 use dagr_core::handle::NodeId;
-use dagr_core::scratch::{ScratchStore, SCRATCH_DIR_NAME};
+use dagr_core::scratch::{SCRATCH_DIR_NAME, ScratchStore};
 
 /// The checked-in test-support harness binary (a real run that writes scratch and
 /// exits). Cargo sets `CARGO_BIN_EXE_<name>` for every bin in the package when

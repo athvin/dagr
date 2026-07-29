@@ -16,11 +16,11 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use dagr_cli::logging::{
-    attempt_span, human_subscriber, structured_subscriber, OutputMode, LOG_FORMAT_ENV,
+    LOG_FORMAT_ENV, OutputMode, attempt_span, human_subscriber, structured_subscriber,
 };
 use dagr_core::context::{ResourceRegistry, Secret};
-use tracing::subscriber::with_default;
 use tracing::Instrument;
+use tracing::subscriber::with_default;
 
 /// A shared, thread-safe in-memory sink the capturing subscriber writes into, so
 /// a test can read back exactly the framework-emitted bytes for the code that

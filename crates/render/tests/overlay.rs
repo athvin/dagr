@@ -29,10 +29,10 @@ use std::path::{Path, PathBuf};
 
 use dagr_artifact::fold::fold_stream;
 use dagr_render::overlay::{
-    render_dot_overlay, render_mermaid_overlay, RunArtifact, TERMINAL_STATES,
+    RunArtifact, TERMINAL_STATES, render_dot_overlay, render_mermaid_overlay,
 };
-use dagr_render::{render_dot, render_mermaid, GraphArtifact};
-use serde_json::{json, Value};
+use dagr_render::{GraphArtifact, render_dot, render_mermaid};
+use serde_json::{Value, json};
 
 // === Fixture loading =========================================================
 

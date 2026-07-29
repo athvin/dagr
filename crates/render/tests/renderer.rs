@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use dagr_render::{render_dot, render_mermaid, EdgeKind, GraphArtifact, Node, RenderError};
+use dagr_render::{EdgeKind, GraphArtifact, Node, RenderError, render_dot, render_mermaid};
 
 // === Fixture loading =========================================================
 

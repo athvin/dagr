@@ -53,8 +53,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, TerminalState, EVENTS_FILE_NAME, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EVENTS_FILE_NAME, EventSink, EventStreamWriter,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId, RunOutcome, RunStartedHeader,
+    TerminalState,
 };
 
 /// A minimal append-only local-file [`EventSink`]: it appends each complete line

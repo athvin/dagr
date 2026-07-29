@@ -65,8 +65,8 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, DeriveInput, Expr, ExprLit, FnArg, GenericArgument, ImplItem, ItemFn,
-    ItemImpl, Lit, Meta, Pat, PatType, PathArguments, ReturnType, Type,
+    DeriveInput, Expr, ExprLit, FnArg, GenericArgument, ImplItem, ItemFn, ItemImpl, Lit, Meta, Pat,
+    PatType, PathArguments, ReturnType, Type, parse_macro_input,
 };
 
 /// The execution class the attribute argument selected, mapped to the

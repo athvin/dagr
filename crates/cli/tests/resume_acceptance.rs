@@ -55,19 +55,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::event_stream::{
-    record_durable_reference, record_durable_reference_meta, AttemptOutcomeRecord,
-    DurableReferenceMeta, EventSink, EventStreamWriter, MonotonicClock, RunId as WireRunId,
-    RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
-    FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, DurableReferenceMeta, EventSink, EventStreamWriter,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId as WireRunId, RunOutcome,
+    RunStartedHeader, TerminalState as WireTerminalState, record_durable_reference,
+    record_durable_reference_meta,
 };
 use dagr_artifact::fold::fold_stream;
-use dagr_cli::contract::{resume_verb, ExitCode, ResumeOptions, ResumeOutcome};
+use dagr_cli::contract::{ExitCode, ResumeOptions, ResumeOutcome, resume_verb};
 use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::context::{PipelineId, RunContext, RunId as CoreRunId, TerminalState};
-use dagr_core::execution::{run_attempt_caught, AttemptEvent, AttemptEventSink};
+use dagr_core::execution::{AttemptEvent, AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::resume::{ReferenceExistence, ResumePlan};
@@ -264,7 +264,7 @@ impl StepClock {
 struct ClockRef<'a>(&'a StepClock);
 impl MonotonicClock for ClockRef<'_> {
     fn elapsed_ns(&self) -> u64 {
-        self.0 .0.get()
+        self.0.0.get()
     }
 }
 
