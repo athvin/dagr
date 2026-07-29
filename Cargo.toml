@@ -72,3 +72,55 @@ missing_errors_doc = "warn"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+# Build profiles (T93, docs/implementation/108-T93-cargo-profiles.md). Cargo only
+# honours `[profile.*]` in the workspace ROOT manifest, so this is the single
+# place the decision lives; scripts/check-cargo-profiles.sh fails the build if a
+# member manifest grows one (Cargo would silently ignore it) or if any of the
+# values below drift. Two settings here are GUARANTEES, not tuning, and are
+# commented at the setting rather than in a changelog.
+
+# arch.md "Performance envelope" budgets framework overhead per node — scheduling,
+# admission, event writing — at under one millisecond, and holds it with a CI
+# benchmark. Cargo's defaults (`lto = false`, `codegen-units = 16`) switch off the
+# cross-crate inlining a six-crate workspace with a hot per-node scheduling path
+# benefits from most, so that budget was being met with the compiler settings it
+# assumes turned off. `lto = "fat"` over `"thin"` is deliberate: dagr is a leaf
+# binary built rarely and run repeatedly, so compile time is the cheap side of the
+# trade. If CI wall-clock ever becomes the binding constraint, `"thin"` is the
+# documented fallback.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# EXPLICIT, never defaulted. dagr contains a task panic with `catch_unwind` and
+# reports it as a panicked attempt (a `failed` terminal state), which is only
+# possible while panics unwind. `crates/core/src/execution.rs`'s
+# `check_panic_strategy` therefore REFUSES to start a run under `panic = "abort"`:
+# setting it here would turn every task panic into a process abort and every run
+# into a bootstrap refusal. It is written out rather than left to Rust's default
+# so a consumer inheriting these settings cannot flip it without deleting a line
+# that says why not.
+panic = "unwind"
+# `strip` is deliberately absent (and absent everywhere else). dagr's pitch is
+# explaining a run after the fact, and it attributes a panic to its node through a
+# panic hook; stripping symbols trades that away for a binary size dagr does not
+# compete on. This is a knowing deviation from the rust-skills
+# `perf-release-profile` recommendation, recorded as such in
+# docs/rust-skills-register.md.
+
+# A profiled binary needs symbols, so `bench` keeps debuginfo on top of the
+# release settings it inherits — otherwise a profile names addresses, not nodes.
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
+
+# Optimize DEPENDENCIES in dev and test builds while leaving dagr's own crates
+# unoptimized and fast to rebuild: `package."*"` reaches dependencies only, never
+# a workspace member. This one has a measurable consequence — the scale benchmark
+# (crates/cli/tests/scale_benchmark.rs) runs under `cargo test`, i.e. this profile,
+# so it now measures dagr's scheduling overhead over an optimized tokio instead of
+# a debug-mode one.
+[profile.dev.package."*"]
+opt-level = 3
