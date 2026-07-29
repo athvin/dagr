@@ -6,7 +6,10 @@
 # that do not run rustfmt (indent = 4 spaces, LF line endings, final newline,
 # UTF-8). Keep the two files in agreement — the hygiene check (Test 6) fails on
 # any contradiction.
-edition = "2021"
+# Must match `[workspace.package].edition` in Cargo.toml: rustfmt parses and
+# formats against the edition it is told, so a lagging value here would check the
+# tree under the wrong grammar (ticket 109 / T94).
+edition = "2024"
 tab_spaces = 4
 hard_tabs = false
 newline_style = "Unix"

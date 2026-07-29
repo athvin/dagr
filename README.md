@@ -171,11 +171,24 @@ concrete.
 
 ## MSRV
 
-**MSRV: Rust 1.95.0.** The supported minimum is pinned in
+**MSRV: Rust 1.97.1.** The supported minimum is pinned in
 [`rust-toolchain.toml`](rust-toolchain.toml) and in the workspace manifest
 ([`Cargo.toml`](Cargo.toml), `[workspace.package].rust-version`), and must match
 this line with no drift. Raising the MSRV is a minor version bump, called out in
 release notes.
+
+dagr is an **edition 2024** workspace, with the MSRV-aware dependency resolver
+(`resolver = "3"`) so a transitive upgrade cannot silently raise that minimum.
+The pinned channel *is* the MSRV, deliberately: the pin is what makes dagr's
+compile-fail diagnostics byte-reproducible across machines, so the declared
+minimum and the pinned toolchain cannot be different numbers. Raising the pin
+therefore raises the minimum — a minor version bump, in the release notes, with
+all six sites that name it ([`Cargo.toml`](Cargo.toml),
+[`rust-toolchain.toml`](rust-toolchain.toml), [`rustfmt.toml`](rustfmt.toml),
+this line, [`scripts/check-stability-and-criteria.sh`](scripts/check-stability-and-criteria.sh),
+and `crates/core/tests/ui.rs`) moving together.
+[`scripts/check-edition-and-msrv-pins.sh`](scripts/check-edition-and-msrv-pins.sh)
+fails the build if any of them disagrees.
 
 ## Platform support
 

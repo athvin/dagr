@@ -8,7 +8,12 @@
 # workspace MSRV and MUST match the "MSRV" line in the README verbatim; bumping
 # it is a minor version bump per arch.md "Stability" and updates both files
 # together.
+#
+# All six sites that name the pin (this file, Cargo.toml's edition/rust-version/
+# resolver, rustfmt.toml, the README MSRV line, scripts/check-stability-and-
+# criteria.sh, and crates/core/tests/ui.rs) are asserted to agree by
+# scripts/check-edition-and-msrv-pins.sh, which runs in the `toolchain` CI job.
 [toolchain]
-channel = "1.95.0"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

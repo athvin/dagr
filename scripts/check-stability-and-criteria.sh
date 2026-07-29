@@ -69,10 +69,42 @@ fi
 
 # --- MSRV is stated and singular (Test plan: "MSRV is stated and singular";
 # DoD line 1) -----------------------------------------------------------------
-if has 'msrv' && has '1\.95\.0'; then
-  pass "msrv: a single concrete minimum Rust version (1.95.0) is named"
+# This assertion is deliberately STRUCTURAL rather than a version literal.
+#
+# The ADR is a historical record of what was decided when T0.10 shipped, and it
+# names the MSRV of that day (1.95.0). Ticket 109 (T94) moved the pin to 1.97.1
+# and its DoD forbids rewriting `docs/implementation/*.md` to the new version — so
+# a hardcoded literal here would either force that rewrite (falsifying the record)
+# or go stale at every MSRV bump. What T0.10's Test plan actually asks is that the
+# ADR names *a single concrete* minimum — "there is exactly one MSRV, not a
+# range" — which is a property, not a number. So: exactly one distinct concrete
+# `1.x.y` appears in the ADR body.
+#
+# The *live* pin is checked separately below, and exhaustively across all six pin
+# sites by scripts/check-edition-and-msrv-pins.sh (ticket 109).
+adr_versions=$(printf '%s' "$adr_body" | grep -oE '\b1\.[0-9]+\.[0-9]+\b' | sort -u)
+adr_version_count=$(printf '%s' "$adr_versions" | grep -c . || true)
+if has 'msrv' && [ "$adr_version_count" -eq 1 ]; then
+  pass "msrv: a single concrete minimum Rust version ($adr_versions) is named"
+elif ! has 'msrv'; then
+  bad "msrv: the ADR body does not mention the MSRV at all"
 else
-  bad "msrv: a single concrete MSRV (1.95.0) must be named"
+  bad "msrv: exactly one concrete MSRV must be named, found $adr_version_count: $(printf '%s' "$adr_versions" | tr '\n' ' ')"
+fi
+
+# The live pin, read from its source of truth, must itself be a single concrete
+# version (never a floating channel) and must be what the README documents —
+# arch.md "Stability": pinned in the workspace, documented in the README.
+pinned_msrv=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | head -1)
+if printf '%s' "$pinned_msrv" | grep -qE '^1\.[0-9]+\.[0-9]+$'; then
+  pass "msrv: the live pin ($pinned_msrv) is a single concrete version, not a floating channel"
+else
+  bad "msrv: rust-toolchain.toml pins '$pinned_msrv', which is not a single concrete x.y.z"
+fi
+if grep -qE "MSRV: Rust ${pinned_msrv//./\\.}\b" README.md; then
+  pass "msrv: the README documents the live pin ($pinned_msrv) with no drift"
+else
+  bad "msrv: the README's MSRV line does not name the live pin ($pinned_msrv)"
 fi
 if has 'workspace' && has 'readme'; then
   pass "msrv: workspace pin location and README documentation location stated"

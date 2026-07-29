@@ -42,6 +42,7 @@ or the top-level clippy group denies.
 |---|---|---|
 | `clippy::module_name_repetitions` | allow | dagr's modules follow the C-numbered component names (`node`, `node_policy`); repeated stems read naturally here. |
 | `clippy::missing_errors_doc` | warn (not deny) | Encouraged but non-blocking until the error taxonomy (T3) defines the canonical error docs; revisited then. |
+| `clippy::collapsible_if` | allow | Under edition 2024 (T94) the lint's fix for `if let A { if let B { … } }` is a **let-chain** (`if let A && let B`), so denying it would force let-chain adoption at 25 sites — which T94's Out of scope defers to ordinary future work (see `pat-if-let-chains` in [`rust-skills-register.md`](rust-skills-register.md)). Re-denying the lint is how the adopting ticket finds its work list. |
 | `rust::missing_docs` | warn (not deny) | Public-item rustdoc is enforced by the rustdoc job; kept at `warn` pre-workspace so scaffolding crates in T1 are not blocked before their public surface exists. |
 | `rust::unsafe_code` | warn | dagr targets safe Rust; `unsafe` is not forbidden outright but every use is surfaced for review. |
 
