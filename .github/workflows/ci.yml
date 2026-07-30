@@ -36,11 +36,11 @@
 #   1. `save-if: ${{ github.ref == 'refs/heads/main' }}` — pull requests RESTORE
 #      main's cache and never write one. Cache writes are therefore proportional
 #      to merges, not to open PRs.
-#   2. `shared-key: workspace` on every step, with exactly ONE designated WRITER
-#      per distinct cache key (`test`, `rustdoc`, `structural-determinism`);
-#      every other job sets `save-if: false` and is a pure reader. The shared key
-#      collapses the six Linux jobs that were each storing their own near-identical
-#      copy of the same dependency build into one entry.
+#   2. `shared-key: workspace` wherever jobs genuinely share a build, with exactly
+#      ONE designated WRITER per distinct cache key; every other job on that key
+#      sets `save-if: false` and is a pure reader. This collapses the Linux jobs
+#      that were each storing a near-identical copy of the same dependency build
+#      into one entry.
 #
 #   Partitioning is automatic: rust-cache hashes the runner OS and the build
 #   environment into the key itself, so the macOS `test` leg, the `RUSTDOCFLAGS`
@@ -48,6 +48,15 @@
 #   anyone hand-assigning them. A single writer (rather than letting jobs race to
 #   save) means the stored entry is always the one from the job that builds the
 #   most, not whichever light job happened to finish first.
+#
+#   SHARING IS NOT FREE, AND THE TEST IS MEASUREMENT, NOT ARCHITECTURE. `clippy`
+#   looks like it should read the `workspace` entry — same toolchain, same flags,
+#   dependencies built by the same rustc — and reading it made the job 17x slower
+#   (8 s to 134 s), because what clippy actually spends its time on is linting
+#   dagr's own targets through clippy-driver, and no other job produces those
+#   artifacts. It keeps its own key. Before pointing a new job at `workspace`,
+#   compare the step time both ways; a plausible story about shared dependencies
+#   is not evidence.
 
 name: CI
 
@@ -131,13 +140,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned toolchain (clippy)
         run: rustup component add clippy
-      # Reader (see BUILD-CACHE SCHEME above). `cargo clippy` builds DEPENDENCIES
-      # with ordinary rustc — only workspace members go through clippy-driver — so
-      # the expensive half of this job's build is exactly what `test` stores.
+      # WRITER of its own key (see BUILD-CACHE SCHEME above), and it MUST be one.
+      #
+      # This job was briefly a reader of the `workspace` entry, on the reasoning that
+      # `cargo clippy` builds dependencies with ordinary rustc and so could live off
+      # what `test` stores. Measured, that was wrong by 17x: the clippy step went from
+      # 8 s to 134 s. Dependencies are indeed shared, but they are not the expensive
+      # half — linting dagr's OWN 125-plus targets is, and those artifacts come from
+      # clippy-driver, which nothing in `test`'s entry contains. Restoring the larger
+      # `workspace` entry also cost 19 s instead of 3. The 0.15 GB this key holds buys
+      # back 140 seconds on every run.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: workspace
-          save-if: false
+          shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
