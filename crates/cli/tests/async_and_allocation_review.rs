@@ -54,10 +54,8 @@ impl TempBase {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let path = std::env::temp_dir().join(format!(
-            "dagr-t97-{tag}-{}-{nanos}-{n}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("dagr-t97-{tag}-{}-{nanos}-{n}", std::process::id()));
         std::fs::create_dir_all(&path).expect("create temp base");
         Self { path }
     }
