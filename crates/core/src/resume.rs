@@ -243,6 +243,16 @@ pub enum ResumeRefusal {
 }
 
 impl std::fmt::Display for ResumeRefusal {
+    /// These messages are full prose sentences with trailing stops, which is a
+    /// **deliberate exception** to the workspace's terse-fragment error-message
+    /// convention (`err-lowercase-msg`), recorded in
+    /// `docs/rust-skills-register.md`. The convention exists because a typical
+    /// error message is a *chain fragment* that a wrapper composes into a longer
+    /// sentence. A resume refusal is not: it is terminal, operator-facing text that
+    /// has to name the offending node, both values that disagreed, and what to do
+    /// about it. Several are pinned verbatim by tests, which is the right treatment
+    /// for text that is part of the operator contract — do not reflow one without
+    /// updating the test's intent alongside it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResumeRefusal::StructuralMismatch { prior, current } => write!(

@@ -46,6 +46,15 @@ or the top-level clippy group denies.
 | `rust::missing_docs` | warn (not deny) | Public-item rustdoc is enforced by the rustdoc job; kept at `warn` pre-workspace so scaffolding crates in T1 are not blocked before their public surface exists. |
 | `rust::unsafe_code` | warn | dagr targets safe Rust; `unsafe` is not forbidden outright but every use is surfaced for review. |
 
+## Additions beyond the deny groups
+
+A lint added here **strengthens** the deny set; it is listed for the same reason
+the exceptions are — so the deviation from the plain group posture is reviewable.
+
+| Lint | Level | Rationale |
+|---|---|---|
+| `clippy::undocumented_unsafe_blocks` | deny | Added by T95. `unsafe_code` above surfaces each use for review; this makes the *justification* mandatory rather than customary — every `unsafe` block and `unsafe impl` must carry a `// SAFETY:` comment. dagr's whole `unsafe` surface is one `GlobalAlloc` impl whose blocks T94 had already commented, so this cost a single new comment and denies the next uncommented one. |
+
 When T1/T7 apply the policy, any change to this exception set is reviewed as an
 API decision (arch.md "Stability": additions to the core dependency/lint set are
 reviewed).

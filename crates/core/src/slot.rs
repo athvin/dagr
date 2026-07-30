@@ -455,6 +455,9 @@ impl<T: Send + Sync + 'static> Slot<T> {
         }
     }
 
+    /// Poison policy: recover — the same rule the free [`lock`] helper documents,
+    /// applied to the reference half: a defect assertion that panicked under this
+    /// lock must not wedge the slot for every other node.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -744,7 +747,22 @@ impl<T: Send + Sync + 'static> RedemptionHandle<T> {
 /// Lock the interior, recovering from poisoning (a panicking consumer must not
 /// wedge the whole slot machinery — the ledger and release discipline stay
 /// correct).
+///
+/// Poison policy: recover. This is the *recovering* half of the workspace rule
+/// (recover where user-or-defect code can panic while the lock is held, panic
+/// otherwise — `dagr_cli::driver` and [`crate::admission`] are the panicking
+/// half). It is not a preference here but a requirement: [`read_arc`] below panics
+/// loudly, **while holding this lock**, on read-before-fill and on a type-erasure
+/// violation. Those are the framework's own defect assertions, so this lock is the
+/// one lock in the workspace that a *documented, expected* panic poisons — and a
+/// panicking policy would convert one node's defect into a wedged run for every
+/// other node, hiding the original diagnostic behind an unrelated one. The
+/// invariants the guarded state carries (the residency ledger, the release
+/// discipline) are updated in single statements, so a recovered guard sees
+/// consistent state.
 fn lock(inner: &Arc<Mutex<Inner>>) -> std::sync::MutexGuard<'_, Inner> {
+    // Poison policy: recover — see this function's rustdoc for why this lock is
+    // the one lock in the workspace an expected panic legitimately poisons.
     inner
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

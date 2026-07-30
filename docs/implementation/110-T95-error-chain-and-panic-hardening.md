@@ -135,6 +135,57 @@ them into `BootstrapFailure` would be more honest and is a larger change than
 this ticket's scope; **recommend recording them in the register as a known,
 accepted panic surface** and revisiting separately.
 
+### Resolutions (recorded by this ticket)
+
+Every question this ticket had to settle, and where the answer lives. Nothing was
+picked silently.
+
+1. **The four runtime-builder `expect`s** — resolved as the ticket recommends:
+   recorded in `docs/rust-skills-register.md` ("The accepted bootstrap-panic
+   surface") as a **known, accepted panic surface**, with the reason (a run that
+   cannot build its execution surfaces has not started, so there is nothing to
+   record and no partial state to explain) and a named revisit. Not routed into
+   `BootstrapFailure` — that is a larger change than this ticket owns.
+
+2. **`ResumeRefusal` / `BootstrapRefusal` message style** — resolved as a
+   **deliberate exception** to `err-lowercase-msg`, recorded in the register
+   ("Refusal messages are prose, and stay prose") and restated at both `Display`
+   impls. The rule targets *chain fragments*; these are terminal operator-facing
+   explanations, several pinned verbatim by tests. Normalizing them would make
+   them worse and would churn pinned test text for a convention that does not
+   apply. **No test's expected text changed.**
+
+3. **The `let _ = slot.fill(value)` discrepancy** — resolved: **the code was
+   wrong, not the comment.** `run_attempt` reported `AttemptOutcome::Succeeded`
+   unconditionally, which is exactly the "silently swallowed as success" its own
+   comment disclaimed. A rejected fill now yields
+   `AttemptOutcome::PermanentFailure` (terminal `failed`): the attempt delivered
+   no output, so nothing downstream can honestly treat it as a success. It is not
+   a panic, deliberately — `classify_and_fill` runs *outside* the caught-attempt
+   boundary, so panicking there would unwind past panic containment and take the
+   whole run down. The untimed path was folded onto the shared
+   `classify_and_fill`, so the two paths cannot drift again.
+
+4. **The two mutex-poisoning philosophies** — reconciled under one rule, stated in
+   the register and at every lock site: *recover where user-or-defect code can
+   panic while the lock is held, panic otherwise*. The rule reproduces both
+   existing behaviours and explains them (`Slot`'s lock is the one lock an
+   expected, documented panic legitimately poisons), so **no site changed
+   policy**; one site that used a bare `.unwrap()` (`t63_demo.rs`) was brought
+   onto the panic policy explicitly.
+
+5. **Whether to promote `clippy::unwrap_used`**, which
+   `docs/rust-skills-register.md` had listed as part of T95's adoption of
+   `err-no-unwrap-prod` / `anti-unwrap-abuse` — **declined**, with the reasoning
+   recorded in the register ("`clippy::unwrap_used` is not promoted"). It
+   contradicts this ticket's own Definition of done, which records the 31
+   provably-infallible sites as *clean, not changed*: the lint cannot distinguish
+   them from genuine risk, so denying it would replace 31 documented invariants
+   with 31 `#[expect]` attributes. The register rows were rewritten to say what
+   shipped. `clippy::undocumented_unsafe_blocks` — the same rows' other lint claim
+   — **was** enabled, because T94 had already commented every `unsafe` block and
+   it cost one new `// SAFETY:` comment.
+
 ## Out of scope
 
 - Replacing the hand-written error types with `thiserror`. `dagr-core`'s

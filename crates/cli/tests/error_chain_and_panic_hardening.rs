@@ -171,7 +171,7 @@ fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
         ("declined", TerminalState::Skipped),
         ("expired", TerminalState::TimedOut),
     ];
-    let report = drive_scripted(&nodes, RunConfig::new(temp_base("outcome-classes")));
+    let report = drive_scripted(&nodes, &RunConfig::new(temp_base("outcome-classes")));
     assert_every_node_terminal(&report, &nodes);
 }
 
@@ -188,7 +188,7 @@ fn the_capacity_pending_path_leaves_the_counter_balanced() {
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        RunConfig::new(temp_base("capacity-pending"))
+        &RunConfig::new(temp_base("capacity-pending"))
             .capacities(PoolCapacities::new().memory(1000)),
     );
     assert_every_node_terminal(&report, &nodes);
@@ -212,7 +212,7 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        RunConfig::new(temp_base("stop-cancel"))
+        &RunConfig::new(temp_base("stop-cancel"))
             .capacities(PoolCapacities::new().memory(1000))
             .failure_mode(dagr_core::flow::FailureMode::StopOnFirstFailure),
     );
@@ -344,7 +344,7 @@ fn production_lock_sites() -> Vec<(PathBuf, usize, String)> {
             let is_stdio =
                 line.contains("stdout()") || line.contains("stderr()") || line.contains("stdin()");
             let is_comment =
-                line.trim_start().starts_with("//") || line.trim_start().starts_with("*");
+                line.trim_start().starts_with("//") || line.trim_start().starts_with('*');
             if !line.contains(".lock()") || is_stdio || is_comment {
                 continue;
             }
@@ -447,7 +447,7 @@ fn the_in_flight_decrement_saturates_and_asserts_its_invariant() {
         "the decrement must saturate, like the 25 other counter sites"
     );
     assert!(
-        driver.contains("debug_assert!(in_flight > 0"),
+        driver.contains("debug_assert!(") && driver.contains("in_flight > 0,"),
         "the paired invariant (a reported attempt was counted in flight) must be \
          asserted rather than relied on silently"
     );
@@ -781,7 +781,7 @@ impl<T: Task<Input = (), Output = u64>> NodeRunner for SourceRunner<T> {
 
 /// Drive `nodes` as independent zero-cost source nodes, each scripted to its
 /// terminal state.
-fn drive_scripted(nodes: &[(&str, TerminalState)], config: RunConfig) -> RunReport {
+fn drive_scripted(nodes: &[(&str, TerminalState)], config: &RunConfig) -> RunReport {
     drive_scripted_with_cost(nodes, 0, config)
 }
 
@@ -790,7 +790,7 @@ fn drive_scripted(nodes: &[(&str, TerminalState)], config: RunConfig) -> RunRepo
 fn drive_scripted_with_cost(
     nodes: &[(&str, TerminalState)],
     mem: u64,
-    config: RunConfig,
+    config: &RunConfig,
 ) -> RunReport {
     let pipeline = scripted_pipeline(nodes, mem);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
@@ -798,7 +798,7 @@ fn drive_scripted_with_cost(
         runners.insert((*name).to_string(), ScriptedRunner::boxed(name, *state));
     }
     drive(
-        &config,
+        config,
         "hardening",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

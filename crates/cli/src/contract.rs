@@ -2,6 +2,25 @@
 //! seam, reserved library-flag namespace, and the exhaustive exit-code table
 //! every pipeline binary inherits unchanged.
 //!
+//! # Discarded writes
+//!
+//! Every `let _ = writeln!(out, …)` in this module discards its
+//! [`io::Write`](std::io::Write) result **deliberately**. This paragraph is the
+//! convention — a rule stated once, rather than the same comment repeated at each
+//! of the sites — so a reviewer can check the rule instead of counting comments.
+//!
+//! The rule: *operator-facing output is a courtesy, never a result*. Each `out`
+//! here is a caller-supplied writer that is, in practice, the process's
+//! stdout/stderr, and the one failure they realistically hit is a **broken pipe**
+//! — a downstream `head`, a closed terminal, a killed pager. Propagating that
+//! would turn a successful run into a failed one and change the exit code the
+//! orchestrator reads, which inverts the exit-code table's whole purpose: the code
+//! reports what the *run* did, never what its printing did. Anything a caller must
+//! be able to detect is returned as a value or an error instead, never printed and
+//! then checked. A write whose failure *does* matter — the run store, the event
+//! stream — is not in this module at all, and the handful of writes into an
+//! in-memory `String` are infallible by construction.
+//!
 //! # What this module owns
 //!
 //! Every dagr pipeline binary exposes the **same** command surface so operators
