@@ -190,6 +190,20 @@ pub fn install_signal_handlers(handle: CancelHandle) -> std::io::Result<SignalGu
 /// shared re-entry-hardened `router`. Split out so each signal owns its stream for
 /// the runtime's lifetime, and so both signals are awaited without `tokio::select!`
 /// (no `macros` feature).
+///
+/// # The one spawned task that outlives its call — deliberately
+///
+/// This is the workspace's **stated exception** to "no detached task outlives the
+/// work that spawned it": the handle is dropped, so the task runs for the whole
+/// lifetime of the listener runtime rather than for a bounded piece of work. That
+/// is the point of a signal listener — it must still be listening at the moment the
+/// operator interrupts the run — and it does **not** weaken the no-orphans
+/// guarantee, because the task cannot outlive the runtime it was spawned on and
+/// that runtime is owned by the returned [`SignalGuard`]: dropping the guard drops
+/// the runtime, which tears the listener down. Nothing here is reachable after the
+/// guard is gone, so a late signal is ignored rather than delivered into a finished
+/// run. `crates/cli/tests/async_and_allocation_review.rs` holds the inventory this
+/// exception is listed in.
 #[cfg(unix)]
 fn spawn_listener(router: std::sync::Arc<SignalRouter>, mut stream: tokio::signal::unix::Signal) {
     tokio::spawn(async move {

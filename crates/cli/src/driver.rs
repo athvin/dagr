@@ -377,6 +377,52 @@ impl CancelTrigger {
 }
 
 // ===========================================================================
+// Queue-depth observability (T97)
+// ===========================================================================
+
+/// An observer of the run loop's `AttemptDone` queue, recording the **peak
+/// occupancy** the loop ever sees.
+///
+/// The queue is deliberately unbounded (see the comment at its construction site in
+/// [`run_loop`]), and the argument for that is an invariant rather than a capacity.
+/// An invariant nothing measures is a comment, so this probe exists to let a test
+/// *measure* the depth instead of inferring it from the loop's own bookkeeping.
+/// Install one with [`RunConfig::attempt_queue_probe`]; when none is installed the
+/// loop does no extra work at all.
+///
+/// This is an observability seam for dagr's own tests, not part of the supported
+/// API — it is hidden from the documented surface and may change without notice.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct AttemptQueueProbe {
+    peak: std::sync::atomic::AtomicUsize,
+}
+
+impl AttemptQueueProbe {
+    /// A fresh probe that has observed nothing (peak zero).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The greatest queue occupancy observed so far, counting the message being
+    /// dequeued. Zero means the probe was never consulted — which a test asserting
+    /// a bound must treat as a failure, not a pass.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn peak_depth(&self) -> usize {
+        self.peak.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Fold one observation into the running maximum.
+    fn observe(&self, depth: usize) {
+        self.peak
+            .fetch_max(depth, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// ===========================================================================
 // Configuration
 // ===========================================================================
 
@@ -403,6 +449,10 @@ pub struct RunConfig {
     // the loop; a `CancelHandle` handed out by `cancel_handle` shares the same
     // `Arc`. Never serialized/compared.
     cancel_trigger: Arc<CancelTrigger>,
+    // An optional observer of the loop's `AttemptDone` queue depth. `None` for
+    // every production run — the loop then does no extra work — and installed by a
+    // test that needs to measure the queue rather than infer it.
+    attempt_queue_probe: Option<Arc<AttemptQueueProbe>>,
 }
 
 impl RunConfig {
@@ -429,7 +479,22 @@ impl RunConfig {
             // handle (or stop-on-first-failure routes through the core), the run is
             // never cancelled and its behaviour is unchanged.
             cancel_trigger: Arc::new(CancelTrigger::new()),
+            // No queue observer: the loop's receive path is exactly what it was.
+            attempt_queue_probe: None,
         }
+    }
+
+    /// Install an [`AttemptQueueProbe`] so the loop reports the peak occupancy of
+    /// its `AttemptDone` queue.
+    ///
+    /// An observability seam for dagr's own tests (the channel is unbounded by
+    /// design and the bound that makes that safe deserves to be measured, not
+    /// asserted in prose). Not part of the supported API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn attempt_queue_probe(mut self, probe: Arc<AttemptQueueProbe>) -> Self {
+        self.attempt_queue_probe = Some(probe);
+        self
     }
 
     /// Override the minted run identity with an operator-supplied value, used
@@ -1175,6 +1240,7 @@ where
         &temp_dir,
         &config.base,
         &pre_satisfied,
+        config.attempt_queue_probe.as_ref(),
         &mut writer,
     );
 
@@ -1399,6 +1465,7 @@ fn run_loop<S, C>(
     temp_dir: &std::path::Path,
     scratch_base: &str,
     pre_satisfied: &BTreeMap<String, Option<String>>,
+    attempt_queue_probe: Option<&Arc<AttemptQueueProbe>>,
     writer: &mut EventStreamWriter<S, C>,
 ) -> (
     RunOutcome,
@@ -1444,6 +1511,37 @@ where
     let mut cancel_origin: Option<CancellationOrigin> = None;
 
     framework.block_on(async {
+        // The loop's completion channel. It is **unbounded on purpose**, and the
+        // invariant that makes that safe is stronger than any capacity would be:
+        //
+        //   the queue holds at most one message per node counted into `in_flight`,
+        //   plus one sentinel per cancellation request.
+        //
+        // Enforced by the pairing this loop maintains and asserts on the receive
+        // side: a node is counted into `in_flight` exactly once — when it is
+        // admitted (`admit`), cancelled without running (`cancel_node`), or rejected
+        // as over-demand (`reject_over_demand`) — and each counted node sends
+        // exactly one `AttemptDone`. So the depth never exceeds `in_flight`, which
+        // never exceeds the node count.
+        //
+        // That is the whole bound: the admission limit (C12) and the execution-class
+        // pools (C13) do **not** tighten it, however narrow they are pinned. A
+        // permit is released when the attempt returns, *before* the loop is told it
+        // finished (see `admit`), so a node stays counted in `in_flight` after its
+        // permit is gone — and the frontier and `drain_pending` walks can admit its
+        // successor, and its successor's successor, without the loop returning to
+        // the receive point in between. A one-permit pool therefore still queues one
+        // completion per node. Measured, not assumed:
+        // `crates/cli/tests/async_and_allocation_review.rs` pins the execution bound
+        // (one attempt body at a time) and the queue bound (the node count)
+        // separately, because they are separate facts.
+        //
+        // A **bounded** channel would not merely duplicate that invariant, it would
+        // deadlock: `cancel_node` and `reject_over_demand` send from *inside* this
+        // loop, so a full queue would block the only task that drains it — and at
+        // the stop-on-first-failure transition the loop emits one such message per
+        // pending node, in a single synchronous burst that exceeds the permit count
+        // by design.
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AttemptDone>();
         // Install the loop's wake channel on the cancellation trigger so a request
         // (the programmatic handle or an OS-signal handler) wakes the loop by
@@ -1583,6 +1681,13 @@ where
             let Some(done) = recv_next(&mut rx, draining, drain_deadline).await else {
                 break;
             };
+            // Observe the queue's real occupancy at the moment of dequeue (the
+            // backlog still queued, plus the message just taken), so the bound
+            // argued at the channel's construction site is measured rather than
+            // asserted. `None` in production — this is a test seam.
+            if let Some(probe) = attempt_queue_probe {
+                probe.observe(rx.len() + 1);
+            }
 
             // A cancellation wake (the reserved-name sentinel): enter the cancellation
             // core (full drain — an external interrupt), which arms the drain

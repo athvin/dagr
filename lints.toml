@@ -61,6 +61,17 @@ collapsible_if = "allow"
 # universal — denying it makes it mechanical instead of a review habit, which is
 # the point: the next `unsafe` block cannot land without stating why it is sound.
 undocumented_unsafe_blocks = "deny"
+# No lock guard may be alive across a suspension point (rust-skills
+# `anti-lock-across-await` / `async-no-lock-await`, adopted by T97). dagr denies
+# `clippy::all`, which already IMPLIES this lint — which is why the workspace has
+# been green under it since the driver was written — but an implied deny lasts only
+# as long as upstream keeps the lint in that group. Writing it out at priority 0
+# makes the guarantee independent of clippy's grouping, and makes the intent
+# readable at the setting (the same ratchet T96 applied to `missing_docs`). This is
+# the ONE mechanical check standing behind dagr's async discipline: an `allow` here
+# would defeat it, so a guard that must span an await needs a scoped, justified
+# exception at the site instead.
+await_holding_lock = "deny"
 
 [rustdoc]
 # Broken intra-doc links fail the docs job (arch.md "Documentation").

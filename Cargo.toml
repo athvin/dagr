@@ -98,6 +98,12 @@ collapsible_if = "allow"
 # universal — denying it makes it mechanical instead of a review habit, which is
 # the point: the next `unsafe` block cannot land without stating why it is sound.
 undocumented_unsafe_blocks = "deny"
+# No lock guard may be alive across a suspension point (T97). `clippy::all` already
+# implies this lint today; writing it out at priority 0 keeps the guarantee if
+# upstream ever regroups it, and makes the intent readable at the setting.
+# scripts/check-lint-parity.sh fails the build if it drops below `deny` here or in
+# lints.toml.
+await_holding_lock = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

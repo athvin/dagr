@@ -30,14 +30,31 @@
 //! `EventSink` is a **synchronous** two-operation port, while [`MetaStore`] is
 //! async, so the sink owns a **dedicated worker thread** running a current-thread
 //! tokio runtime that holds the store connection. Each `append_line` hands the
-//! worker the growing raw byte buffer; the worker folds it via `fold_stream` and
-//! re-projects it via [`sync_run_live`] under one
-//! write txn (an idempotent UPSERT), then reports success/failure back over a
-//! channel the caller blocks on — so a write failure surfaces **synchronously**,
-//! preserving the guaranteed contract. Because the projection is a pure,
-//! deterministic UPSERT of the folded stream, re-projecting the stream on each
-//! event converges on exactly what a post-hoc `sync` of the finished stream
+//! worker **the bytes it just appended**; the worker owns the accumulated stream,
+//! extends it, folds it via `fold_stream` and re-projects it via [`sync_run_live`]
+//! under one write txn (an idempotent UPSERT), then reports success/failure back
+//! over a channel the caller blocks on — so a write failure surfaces
+//! **synchronously**, preserving the guaranteed contract. Because the projection is
+//! a pure, deterministic UPSERT of the folded stream, re-projecting the stream on
+//! each event converges on exactly what a post-hoc `sync` of the finished stream
 //! produces (**live == reconcile**).
+//!
+//! # Queue depth and copy volume
+//!
+//! Two properties of that handover are load-bearing enough to be measured rather
+//! than assumed (`crates/metastore/tests/live_sink_queue_and_copy_volume.rs`):
+//!
+//! * The request channel is an unbounded `std::sync::mpsc`, but the reply channel
+//!   is a **rendezvous** (`sync_channel(0)`) the sole producer blocks on, so the
+//!   queue can never hold more than one request. A slow store therefore applies
+//!   **backpressure** to `append_line` — which is exactly the guaranteed-write
+//!   contract, seen from the other side — instead of letting an unbounded queue
+//!   absorb a backlog it could later lose. A capacity would add nothing this does
+//!   not already give.
+//! * Each request carries only the **delta** (the newly appended bytes), because
+//!   the worker owns the accumulated buffer. Handing over the whole buffer each
+//!   time would copy O(n) bytes per event and O(n²) over a run, on the run's
+//!   guaranteed-write path.
 //!
 //! # What it does not do
 //!
@@ -48,6 +65,8 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -58,12 +77,33 @@ use crate::MetaStore;
 use crate::mapping::sync_run_live;
 use crate::store::{OpenError, OpenMode, RetryPolicy};
 
-/// One projection request handed to the worker thread: the full raw event-stream
-/// bytes accumulated so far, and whether the stream has already carried its
-/// `run-finished` record (so the worker knows whether to stamp `running`).
+/// The sink's invariant gauge: the depth of the worker's request queue and the
+/// volume of bytes handed across it.
+///
+/// Both are properties the design *implies* — a rendezvous reply bounds the queue
+/// at one, and a delta-carrying request bounds the copy volume at the stream's
+/// length — and both would regress silently. Counting them costs two relaxed atomic
+/// operations per event, against a write transaction that fsyncs, so the
+/// measurement is free at the scale it measures.
+#[derive(Debug, Default)]
+struct SinkGauge {
+    /// Requests sent but not yet taken off the channel by the worker.
+    queued: AtomicUsize,
+    /// The greatest value [`queued`](Self::queued) ever reached.
+    peak_queued: AtomicUsize,
+    /// Total bytes handed to the worker across every request.
+    bytes_to_worker: AtomicU64,
+}
+
+/// One projection request handed to the worker thread: the bytes appended since the
+/// previous request, and whether the stream has already carried its `run-finished`
+/// record (so the worker knows whether to stamp `running`).
 struct Request {
-    /// The full raw JSONL bytes of the stream so far (every line appended to date).
-    bytes: Vec<u8>,
+    /// The raw JSONL bytes appended since the previous request — one line for an
+    /// `append_line`, empty for a `flush`-only re-projection. The worker owns the
+    /// accumulated stream and extends it with this, so the volume copied over a run
+    /// is the stream's length rather than the sum of its prefixes.
+    delta: Vec<u8>,
     /// `true` once the `run-finished` record has been appended — the run is no
     /// longer in flight, so the folded terminal outcome is stamped.
     finished: bool,
@@ -78,9 +118,6 @@ struct Request {
 /// driver's single `EventStreamWriter::new` injection point. See the
 /// [module docs](self) for the guarantee and the incremental-projection model.
 pub struct MetastoreSink {
-    /// The accumulated raw bytes of every line appended so far — the buffer the
-    /// worker folds and projects on each event.
-    buffer: Vec<u8>,
     /// Whether a `run-finished` record has been appended (drives the `running`
     /// vs terminal `dag_run.state`).
     finished: bool,
@@ -93,6 +130,8 @@ pub struct MetastoreSink {
     /// sink surfaces it from every later call so the driver's exit-code precedence
     /// reliably reports the sink failure (the failure is never swallowed).
     fault: Option<String>,
+    /// The queue-depth / copy-volume gauge, shared with the worker.
+    gauge: Arc<SinkGauge>,
 }
 
 impl MetastoreSink {
@@ -130,9 +169,11 @@ impl MetastoreSink {
         // fail loudly at construction, not silently on the first event.
         let (open_tx, open_rx) = mpsc::sync_channel::<Result<(), String>>(0);
         let (tx, rx) = mpsc::channel::<Request>();
+        let gauge = Arc::new(SinkGauge::default());
+        let worker_gauge = Arc::clone(&gauge);
         let worker = std::thread::Builder::new()
             .name("dagr-metastore-live-sink".to_string())
-            .spawn(move || worker_main(path, events_path, retry, &open_tx, &rx))
+            .spawn(move || worker_main(path, events_path, retry, &open_tx, &rx, &worker_gauge))
             .map_err(|e| {
                 OpenError::Libsql(libsql::Error::SqliteFailure(
                     1,
@@ -142,11 +183,11 @@ impl MetastoreSink {
 
         match open_rx.recv() {
             Ok(Ok(())) => Ok(Self {
-                buffer: Vec::new(),
                 finished: false,
                 tx: Some(tx),
                 worker: Some(worker),
                 fault: None,
+                gauge,
             }),
             Ok(Err(msg)) => {
                 let _ = worker.join();
@@ -163,11 +204,19 @@ impl MetastoreSink {
         }
     }
 
-    /// Project the current buffer through the worker and block on the result. On a
+    /// Hand `delta` (the bytes appended since the previous request, empty for a
+    /// flush-only re-projection) to the worker and block on the result. On a
     /// durable-write failure the sink is sticky-faulted and the error is returned
     /// (and re-returned from every later call), so the driver's exit-code
     /// precedence reliably reports the sink failure.
-    fn project(&mut self) -> io::Result<()> {
+    ///
+    /// The block on the rendezvous reply is what makes the request queue depth one:
+    /// this is the only producer, and it cannot send again until the worker has
+    /// committed the previous write. A failure to hand the delta over — a stopped
+    /// worker, a dropped reply — loses that delta, but both faults are **sticky**,
+    /// so no later projection is attempted against a stream the worker no longer
+    /// has in full; the sink surfaces the fault from every subsequent call instead.
+    fn project(&mut self, delta: &[u8]) -> io::Result<()> {
         // Already faulted: keep surfacing the same fault (never swallow it, never
         // attempt a further write on a poisoned worker).
         if let Some(msg) = &self.fault {
@@ -180,11 +229,18 @@ impl MetastoreSink {
         };
         let (reply_tx, reply_rx) = mpsc::sync_channel::<Result<(), String>>(0);
         let request = Request {
-            bytes: self.buffer.clone(),
+            delta: delta.to_vec(),
             finished: self.finished,
             reply: reply_tx,
         };
+        self.gauge.bytes_to_worker.fetch_add(
+            u64::try_from(delta.len()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        let depth = self.gauge.queued.fetch_add(1, Ordering::AcqRel) + 1;
+        self.gauge.peak_queued.fetch_max(depth, Ordering::Relaxed);
         if tx.send(request).is_err() {
+            self.gauge.queued.fetch_sub(1, Ordering::AcqRel);
             return Err(self.fault_with("the metastore live-sink worker has stopped".to_string()));
         }
         match reply_rx.recv() {
@@ -204,18 +260,42 @@ impl MetastoreSink {
         }
         err
     }
+
+    /// The greatest number of requests ever outstanding on the worker's queue.
+    ///
+    /// The design bounds this at **one** (the producer blocks on a rendezvous reply
+    /// before it can send again), which is what makes the unbounded channel safe and
+    /// gives a slow store backpressure rather than an unbounded backlog. Exposed so
+    /// a test can measure that rather than restate it; not part of the supported
+    /// API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn peak_queue_depth(&self) -> usize {
+        self.gauge.peak_queued.load(Ordering::Relaxed)
+    }
+
+    /// Total bytes handed to the worker across every request so far.
+    ///
+    /// Because each request carries only the newly appended bytes, this equals the
+    /// length of the stream appended so far — linear in the run, where handing over
+    /// the accumulated buffer each time would make it quadratic. Exposed so a test
+    /// can measure the copy volume; not part of the supported API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bytes_handed_to_worker(&self) -> u64 {
+        self.gauge.bytes_to_worker.load(Ordering::Relaxed)
+    }
 }
 
 impl EventSink for MetastoreSink {
     fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
-        // Accumulate the raw line (the sink never perturbs the bytes), then note
-        // whether this record finishes the run so the projection stamps the right
-        // dag_run.state.
-        self.buffer.extend_from_slice(line);
+        // Note whether this record finishes the run so the projection stamps the
+        // right dag_run.state, then hand the worker exactly these bytes — the sink
+        // never perturbs them, and the worker owns the accumulated stream.
         if line_is_run_finished(line) {
             self.finished = true;
         }
-        self.project()
+        self.project(line)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -227,8 +307,9 @@ impl EventSink for MetastoreSink {
         }
         // Nothing to make durable beyond what each write txn already committed
         // (each event is its own committed txn); re-project once more so a final
-        // flush with no new event is still a consistent, up-to-date row set.
-        self.project()
+        // flush with no new event is still a consistent, up-to-date row set. There
+        // are no new bytes, so the delta is empty.
+        self.project(&[])
     }
 }
 
@@ -264,9 +345,15 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// The worker thread's body: open the store on a current-thread runtime, report
-/// readiness, then serve each projection request by folding the buffer and
-/// upserting it via [`sync_run_live`]. The store connection lives entirely on this
-/// thread, so its libsql/tokio resources are created and dropped here.
+/// readiness, then serve each projection request by extending **its own**
+/// accumulated stream buffer with the request's delta, folding it, and upserting it
+/// via [`sync_run_live`]. The store connection lives entirely on this thread, so its
+/// libsql/tokio resources are created and dropped here.
+///
+/// The buffer lives here rather than on the sink so a request carries only the newly
+/// appended bytes: the sink is the only producer and it blocks until this thread has
+/// committed, so the two views of the stream cannot diverge while the sink is
+/// healthy — and once it faults it never projects again.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "path/events_path/retry are owned for the whole thread lifetime — the \
@@ -279,6 +366,7 @@ fn worker_main(
     retry: RetryPolicy,
     open_tx: &mpsc::SyncSender<Result<(), String>>,
     rx: &mpsc::Receiver<Request>,
+    gauge: &SinkGauge,
 ) {
     // A current-thread runtime is enough: the sink drives one projection at a time
     // (each `append_line` blocks on its reply), so there is no concurrency to
@@ -309,11 +397,18 @@ fn worker_main(
         return;
     }
 
+    // The accumulated raw bytes of every line appended so far. Owned here, extended
+    // by each request's delta — so the handover cost per event is one line, not one
+    // copy of the whole stream.
+    let mut buffer: Vec<u8> = Vec::new();
+
     // Serve requests until the sink drops the sender (channel closed).
     while let Ok(request) = rx.recv() {
+        gauge.queued.fetch_sub(1, Ordering::AcqRel);
+        buffer.extend_from_slice(&request.delta);
         let result = rt.block_on(project_once(
             &store,
-            &request.bytes,
+            &buffer,
             events_path.as_deref(),
             request.finished,
         ));

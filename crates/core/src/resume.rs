@@ -526,6 +526,11 @@ fn resolve_demand<P>(
 where
     P: Fn(&str, &str, Option<&str>) -> ReferenceExistence,
 {
+    // The must-run set starts as the seed and only grows. The clone is genuine, not
+    // an oversight: the caller keeps `seed` as well (it is a field of the returned
+    // `ResumePlan`, so an operator can see *why* the plan re-runs what it re-runs),
+    // so two sets are needed either way — taking the parameter by value would only
+    // move this clone to the call site.
     let mut must_run = seed.clone();
     let mut rehydrate: BTreeMap<String, String> = BTreeMap::new();
     loop {
@@ -544,17 +549,21 @@ where
             let Some(inputs) = graph.data_inputs.get(&consumer) else {
                 continue;
             };
-            for producer in inputs.clone() {
-                if must_run.contains(&producer) {
+            // Iterated by reference: most producers are discarded by the `continue`
+            // on the next line, and eagerly cloning the whole input list paid for
+            // every one of them. Each surviving producer is cloned where it is
+            // actually kept.
+            for producer in inputs {
+                if must_run.contains(producer) {
                     continue; // already re-running; nothing to rehydrate
                 }
                 // A non-succeeded producer is already in the seed, so reaching here
                 // means the producer succeeded before — carry it forward.
                 let prior_success = prior
                     .nodes
-                    .get(&producer)
+                    .get(producer)
                     .filter(|p| p.terminal == TerminalState::Succeeded);
-                let is_durable = graph.is_durable.get(&producer).copied().unwrap_or(false);
+                let is_durable = graph.is_durable.get(producer).copied().unwrap_or(false);
                 let durable_ref = prior_success
                     .and_then(|p| p.durable_reference.clone())
                     .filter(|_| is_durable);
@@ -569,16 +578,16 @@ where
                     // recorded content hash, when any). A definite absence fails the
                     // plan up front (dangling); a definite content mismatch fails it
                     // (mutated). Present / cannot-determine proceed.
-                    match probe(&producer, &reference, expected_hash.as_deref()) {
+                    match probe(producer, &reference, expected_hash.as_deref()) {
                         ReferenceExistence::Absent => {
                             return Err(ResumeRefusal::DanglingReference {
-                                node: producer,
+                                node: producer.clone(),
                                 reference,
                             });
                         }
                         ReferenceExistence::Changed { actual } => {
                             return Err(ResumeRefusal::MutatedReference {
-                                node: producer,
+                                node: producer.clone(),
                                 reference,
                                 // A `Changed` verdict is only returned when a hash was
                                 // recorded, so `expected_hash` is `Some` here; fall
@@ -589,12 +598,12 @@ where
                         }
                         ReferenceExistence::Present | ReferenceExistence::CannotDetermine => {}
                     }
-                    rehydrate.insert(producer, reference);
+                    rehydrate.insert(producer.clone(), reference);
                 } else {
                     // A demanded in-memory producer cannot be rehydrated: it joins
                     // the must-run set and cascades its own demands next iteration.
-                    rehydrate.remove(&producer);
-                    must_run.insert(producer);
+                    rehydrate.remove(producer);
+                    must_run.insert(producer.clone());
                 }
             }
         }

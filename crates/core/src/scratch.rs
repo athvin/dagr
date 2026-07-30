@@ -44,6 +44,27 @@
 //! disk it does not, and such a run is simply not resumable — that is the
 //! operator's one infrastructure choice, not this store's concern.
 //!
+//! # This API blocks, and the default execution class does not expect that
+//!
+//! Those two fsyncs are the price of the guarantee above, and they are paid
+//! **synchronously, on the calling thread**: [`ScratchStore::get`],
+//! [`put`](ScratchStore::put) and [`remove`](ScratchStore::remove) are ordinary
+//! blocking file I/O. A task reaches them through
+//! [`RunContext::scratch`](crate::context::RunContext::scratch), and the default
+//! [`ExecutionClass`](crate::task::ExecutionClass) is
+//! [`AwaitBound`](crate::task::ExecutionClass::AwaitBound) — driven on the **async
+//! worker** pool. So a default task that checkpoints is blocking an async worker
+//! across two fsyncs, with no type-level warning.
+//!
+//! There is deliberately no async alternative to reach for: an async scratch API
+//! would put a runtime dependency inside `dagr-core`, whose zero-runtime-dependency
+//! guarantee (arch.md "Stability") is architectural. This is therefore documented
+//! rather than prevented, and **the remedy is to declare the node
+//! [`Blocking`](crate::task::ExecutionClass::Blocking)** — through
+//! `Task::EXECUTION_CLASS` or a policy override — so its attempt runs on the
+//! dedicated blocking pool, where holding a thread through an fsync is precisely
+//! what that pool is for.
+//!
 //! # Survives a process restart
 //!
 //! Because a write lands **through the run store on disk**, a value written by one

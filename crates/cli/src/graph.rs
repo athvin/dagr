@@ -345,7 +345,9 @@ pub fn build_artifact(
     // Nodes in deterministic, registration-order-independent order. `Pipeline`
     // already iterates by identity name (a total, stable key), which is exactly
     // the canonical node ordering.
-    let mut nodes = Vec::new();
+    // Sized up front: the pipeline knows exactly how many nodes it holds, so the
+    // emitter never grows this vector.
+    let mut nodes = Vec::with_capacity(pipeline.len());
     for node in pipeline.nodes() {
         nodes.push(build_node(pipeline, node)?);
     }

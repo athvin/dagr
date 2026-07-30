@@ -153,7 +153,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
 | async-async-fn-bounds | async | declined | — | the callback seams take concrete `Fn` bounds returning a boxed future because they must stay dyn-compatible; `AsyncFn` cannot express that |
-| async-bounded-channel | async | adopt | T97 | two unbounded channels exist; T97 either bounds them or proves the admission controller already bounds them structurally |
+| async-bounded-channel | async | adopt | T97 | resolved: both unbounded channels are **structurally** bounded by something stronger than a capacity (the loop's in-flight pairing; the sink's rendezvous reply), each now pinned by a test that measures the real depth. Adding a bound would deadlock the driver — see "Decisions T97 recorded" |
 | async-broadcast-pubsub | async | n-a | — | no pub/sub fan-out: the driver has exactly one consumer of attempt completions |
 | async-cancel-safety | async | n-a | — | vacuous here — there is no `select!` anywhere, so no branch can be cancelled mid-poll |
 | async-cancellation-token | async | satisfied | — | C16 cancellation uses dagr's own `CancelHandle`/`CancellationSignal` seam, which is the same pattern without the `tokio-util` dependency |
@@ -162,11 +162,11 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | async-join-parallel | async | n-a | — | concurrency comes from the admission controller spawning attempts, not from joining a fixed set of futures |
 | async-joinset-structured | async | declined | — | completion is tracked through a channel plus an in-flight counter, which the driver needs anyway for admission; a `JoinSet` would duplicate that state |
 | async-mpsc-queue | async | satisfied | — | the finished-attempt hand-off from spawned attempts back to the single-owner writer is exactly an `mpsc` queue |
-| async-no-lock-await | async | adopt | T97 | audited clean today; T97 enables `clippy::await_holding_lock` so it becomes a standing guarantee rather than a review finding |
+| async-no-lock-await | async | adopt | T97 | resolved: `clippy::await_holding_lock` is written out at `deny` in both halves of the lint policy and asserted by `scripts/check-lint-parity.sh`, so the guarantee no longer depends on the lint's clippy grouping. The workspace is green under it |
 | async-oneshot-response | async | satisfied | — | the metastore sink's open handshake and per-request reply use rendezvous channels, the request-response shape this names |
 | async-select-racing | async | declined | — | deliberately avoided so tokio's `macros` feature stays out of the tree; the timeout path uses a hand-rolled, documented `race` combinator instead |
-| async-spawn-blocking | async | adopt | T97 | the execution-class dispatcher already routes blocking work correctly; T97 documents the scratch-store seam where a task author can still block an async worker |
-| async-tokio-fs | async | adopt | T97 | `dagr-core` cannot depend on tokio, so the scratch store is synchronous by necessity; T97 documents that at the seam and names `Blocking` as the remedy |
+| async-spawn-blocking | async | adopt | T97 | resolved: the execution-class dispatcher already routes blocking work through `spawn_blocking`; T97 documented the one residual seam — a default `AwaitBound` task calling the synchronous scratch store — at `RunContext::scratch` and in the `scratch` module docs, naming `Blocking` as the remedy |
+| async-tokio-fs | async | n-a | — | architecturally forced, documented at the seam: `dagr-core` carries no runtime dependency, so it *cannot* offer an async file API and the scratch store is synchronous by necessity. T97 documented the consequence at `RunContext::scratch` and in the `scratch` module docs, naming `Blocking` as the remedy |
 | async-tokio-runtime | async | satisfied | — | the driver builds two separate multi-threaded runtimes by hand so a saturated task pool cannot stall the framework loop (ADR 004) |
 | async-try-join | async | n-a | — | no site awaits a fixed set of fallible futures needing early return; failures propagate through the attempt-outcome channel |
 | async-watch-latest | async | n-a | — | no latest-value broadcast: cancellation is a one-shot edge, not a changing value observers poll |
@@ -393,7 +393,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | perf-io-buffering | perf | n-a | — | **contrary to the crash-safety contract**: `FileSink` writes and flushes each record line so a crash cannot lose a buffered event (C19). A `BufWriter` would trade the guarantee the sink exists to provide for syscall count |
 | perf-iter-lazy | perf | satisfied | — | iterators stay lazy to the point of use; `clippy::needless_collect` is denied |
 | perf-iter-over-index | perf | satisfied | — | iteration is the access form; the audit found no manual indexing in production |
-| perf-profile-first | perf | adopt | T97 | this rule *governs* T97: every allocation change must carry a before/after measurement, and unmeasured sites are left alone |
+| perf-profile-first | perf | adopt | T97 | applied: T97 took only the three sites carrying a stated argument, checked each against the code (one did not survive the check and was declined), and reported the scale benchmark's per-node figure before and after. Everything unmeasured was left alone |
 | perf-release-profile | perf | satisfied | — | T93 (ticket 108) added `[profile.release]` (opt-level 3, fat LTO, one codegen unit), `[profile.bench]`, and `[profile.dev.package."*"]`. Adopted **except two knowing deviations**, both asserted mechanically by `scripts/check-cargo-profiles.sh`: `panic = "abort"` is REFUSED (`execution::check_panic_strategy` will not start a run under it — containment needs unwinding — so `panic = "unwind"` is set explicitly instead), and `strip` stays off (it would remove the symbols the panic hook needs to attribute a panic to its node) |
 
 ## 24 · Project Structure (`proj-`, 14)
@@ -443,10 +443,10 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | anti-expect-lazy | anti | adopt | T95 | T95 classified every production `expect`; each `Mutex` site now also states its poisoning policy and the reason, so no `expect` is left as a shrug |
 | anti-format-hot-path | anti | satisfied | — | no `format!` sits in a measured hot loop; the per-row SQL builders are bounded by pipeline size and run once per event |
 | anti-index-over-iter | anti | satisfied | — | the only indexing is macro-generated compile-time-constant tuple access, not runtime indexing |
-| anti-lock-across-await | anti | adopt | T97 | audited clean; T97 enables `clippy::await_holding_lock` so it stays clean mechanically rather than by review |
+| anti-lock-across-await | anti | adopt | T97 | resolved: no guard is held across an `.await` anywhere, and `clippy::await_holding_lock` is now written out at `deny` so that stays true mechanically rather than by review |
 | anti-over-abstraction | anti | satisfied | — | the generic surface is driven by the typed-handle guarantees; dynamic dispatch is used exactly where types are heterogeneous |
 | anti-panic-expected | anti | adopt | T95 | resolved: the **code** was wrong, not the comment — a rejected `slot.fill` is now `AttemptOutcome::PermanentFailure`, not a `Succeeded` over a discarded value |
-| anti-premature-optimize | anti | adopt | T97 | this rule *constrains* T97: no allocation change lands without a measurement, and the unmeasured candidates are recorded as declined |
+| anti-premature-optimize | anti | adopt | T97 | applied: the one change T97 made on complexity grounds alone (the live sink's O(n²) per-append clone) carries the complexity argument as its evidence; every other candidate was left alone, and the ~40 `Value::from(self.field.clone())` sites in `crates/artifact/` were checked and found to have no saving available |
 | anti-string-for-str | anti | satisfied | — | zero `&String` parameters; `clippy::ptr_arg` is denied |
 | anti-stringly-typed | anti | satisfied | — | enums and newtypes carry the closed vocabularies; strings remain only for genuinely open data |
 | anti-type-erasure | anti | satisfied | — | boxing appears only where a trait must stay dyn-compatible or a future must be stored across polls, each documented at the site |
@@ -590,6 +590,151 @@ that look incidental. The function's own doc comment already argues this; record
 here so it reads as a decision rather than an oversight.
 
 ---
+
+## Decisions T97 recorded
+
+### Both unbounded channels are structurally bounded — deliberately
+
+`async-bounded-channel` wants a capacity on every channel. dagr has two unbounded
+ones, and in both the queue is already bounded by something **stronger** than a
+capacity, so a bound would duplicate an invariant at best and deadlock at worst.
+Each is now pinned by a test that measures the real occupancy rather than
+restating the argument.
+
+- **The run loop's `AttemptDone` queue** (`crates/cli/src/driver.rs`). The loop
+  counts a node into `in_flight` exactly once — when it is admitted, cancelled
+  without running, or rejected as over-demand — and each counted node sends exactly
+  one message. So the depth never exceeds `in_flight`, hence never exceeds the node
+  count. That is the whole bound: the admission limit does **not** tighten it,
+  however narrow the pool is pinned, because a permit is released when the attempt
+  returns — *before* the loop is told it finished — so a node stays counted in
+  flight after its permit is gone and the loop's frontier and `drain_pending` walks
+  can admit its successor before returning to the receive point. The first version
+  of the test asserted the permit count as the queue's bound and was refuted by CI
+  (a peak of 11 under a one-permit pool); admission bounds how many attempts
+  *execute* at once, which the test now pins separately with a gauge over the
+  attempt bodies. A bounded channel would **deadlock**: `cancel_node` and
+  `reject_over_demand` send from *inside* the loop, so a full queue would block the
+  only task that drains it — and the stop-on-first-failure transition emits one such
+  message per pending node in a single synchronous burst that exceeds the permit
+  count by design. `crates/cli/tests/async_and_allocation_review.rs` measures all
+  three cases, including that burst.
+- **The metastore live sink's request queue** (`crates/metastore/src/live_sink.rs`).
+  The sole producer blocks on a zero-capacity **rendezvous** reply before it can
+  send again, so the queue holds at most one request — and a slow store applies
+  backpressure to `append_line` instead of accumulating a backlog it could later
+  lose, which is the guaranteed-write contract seen from the other side.
+  `crates/metastore/tests/live_sink_queue_and_copy_volume.rs` measures the peak
+  depth and asserts the row is committed before `append_line` returns.
+
+### `clippy::await_holding_lock` was already denied — and is now written down
+
+The ticket expected to *enable* the lint. It was already on: `await_holding_lock`
+sits in the `suspicious` group, which `clippy::all` includes, and dagr denies
+`clippy::all` workspace-wide. So the workspace has been green under it since the
+driver was written, and the sweep the ticket describes has effectively been running
+on every build. That is a stronger result than the ticket assumed, not a weaker one
+— but it rests entirely on upstream keeping the lint in that group.
+
+So the lint is now written out at `deny` at priority 0 in **both** `lints.toml` and
+`[workspace.lints.clippy]`, and `scripts/check-lint-parity.sh` asserts it in both
+(the same ratchet T96 applied to `missing_docs` and `missing_errors_doc`, for the
+same reason: an implied deny is not readable at the setting, and here it is also not
+durable). No suppression of this lint exists anywhere, and none should: it is the
+only mechanical guarantee behind dagr's async discipline.
+
+### The confirmed non-findings
+
+Recorded so they are not re-discovered. Each was checked, not assumed.
+
+- **No lock is held across an `.await` anywhere.** Every guard in production covers
+  a short synchronous mutation — an `Option` assignment, a `BTreeSet` insert, a
+  `Vec` take — and is dropped before the next suspension point. `signals.rs` fires
+  the cancel handle *while* holding its count lock, but `on_signal` is a synchronous
+  function and the guard dies with it. This is a consistent discipline rather than
+  luck, and the lint above now keeps it that way. No `std::sync::RwLock` exists in
+  production at all.
+- **There is no `select!` anywhere.** The five source matches are all prose
+  explaining its absence. The loop is woken by a sentinel pushed onto the channel it
+  already awaits, and both OS signals get their own listener task, so tokio's
+  `macros` feature is never needed — which is also what makes `async-cancel-safety`
+  vacuous here: with no `select!`, no branch can be cancelled mid-poll.
+- **Determinism rests on a near-total `BTreeMap`/`BTreeSet` preference.** 261
+  `BTreeMap`/`BTreeSet` mentions in production against 8 `HashMap` mentions and
+  **zero** `HashSet`. The `HashMap`s are three lookup tables keyed by `TypeId` or
+  `NodeId` (`context.rs`'s resource registry and terminal-state map,
+  `run_flow.rs`'s slot registry); none is iterated into output, so none can reach a
+  byte-diffed artifact.
+- **There is no collect-then-reiterate waste** in the workspace (`perf-collect-once`).
+- **The two `O(n²)` `Vec::contains` loops are bounded — one more tightly than the
+  ticket's brief stated.** `crates/core/src/readiness.rs`'s
+  `distinct_upstream_count` dedups over **one node's** data edges, bounded by
+  `MAX_INPUT_ARITY = 8`. `crates/core/src/context.rs`'s `validate_requirements`
+  dedups `requiring_nodes` per missing resource type — that list is bounded by the
+  *node* count, not by the resource-type count as the brief said, so the quadratic
+  term is real. It is still not worth changing: the `contains` runs **only** when a
+  declared resource type is unregistered, i.e. on the bootstrap-failure path where
+  the run is already aborting and the loop's whole purpose is to build the operator's
+  error list. On the success path `missing` stays empty and the branch never
+  executes. Both are left as they are.
+
+### The one quadratic allocation, and the one that is not being fixed
+
+`MetastoreSink::project` handed the worker `self.buffer.clone()` — the **whole
+accumulated stream** — on every appended line: O(n) bytes per event, O(n²) over a
+run, on the guaranteed-write path. No profile was needed; the complexity argument is
+the evidence. The worker now owns the accumulated buffer and each request carries
+only the newly appended bytes, so the volume copied over a run is exactly the
+stream's length. The guaranteed-write contract is untouched, and both halves are
+asserted in the same tests.
+
+What is **not** being changed, and should be recorded rather than rediscovered: the
+worker still re-parses and re-folds the whole buffer on every event, which is also
+quadratic — in CPU, not in bytes. That cost is inherent to the design's
+*correctness* argument (re-projecting the folded stream as an idempotent UPSERT is
+what makes live projection converge on exactly what a post-hoc `sync` produces), so
+removing it means incrementalizing the projection, which is a design change with its
+own correctness burden and no measurement behind it. `perf-profile-first` says leave
+it; a future ticket that wants it should arrive with a profile.
+
+### The three argued allocation sites: two taken, one declined
+
+- **`crates/cli/src/graph.rs`** — taken. `Vec::with_capacity(pipeline.len())`; the
+  length is already known and the emitter now never grows the vector.
+- **`crates/core/src/resume.rs`, the eager `inputs.clone()`** — taken. The loop
+  cloned every producer name up front and the next line discarded most of them via
+  an early `continue`; it now iterates by reference and clones only what it keeps.
+- **`crates/core/src/resume.rs`, `seed.clone()`** — **declined, because the stated
+  argument does not survive contact with the code.** The brief says "the sole caller
+  never reuses `seed`, so the parameter can take ownership". The caller does reuse
+  it: `seed` is a field of the returned `ResumePlan`, so an operator can see why the
+  plan re-runs what it re-runs. `must_run` starts as the seed and grows, so two sets
+  are genuinely needed and taking the parameter by value would only move the same
+  clone to the call site. The site now carries that reasoning as a comment.
+
+The ~40 `Value::from(self.field.clone())` sites in `crates/artifact/` were left
+alone as the brief directs: `Value::from(&str)` allocates identically, so there is no
+saving available without consuming `self`, which these retained records cannot do.
+
+### Every spawn site is accounted for, and one is a stated exception
+
+Nine constructs in production source spawn a task or thread or name a join handle,
+in four files, and `crates/cli/tests/async_and_allocation_review.rs` holds the
+inventory with a disposition for each — so a new one cannot land undocumented. The
+dispatcher's three surfaces are owned by a `Dispatcher` the driver shuts down at run
+end; the live sink's worker is **joined** on drop.
+
+Two are deliberately not joined, and both are documented at their sites:
+
+- **The signal listener** (`crates/cli/src/signals.rs`) — the stated exception. It
+  must still be listening at the moment the operator interrupts the run, so it lives
+  for the whole lifetime of the listener runtime. That does not orphan anything: the
+  runtime is owned by the returned `SignalGuard`, and dropping the guard tears the
+  task down, so a late signal is ignored rather than delivered into a finished run.
+- **The leftover-temp-dir reclamation thread** (`crates/cli/src/driver.rs`) — a
+  detached sweep of *prior* runs' ephemeral `tmp/` subtrees. It touches nothing
+  belonging to the current run, and the guarantee it serves is eventual reclamation
+  by a next invocation, not a synchronous one.
 
 ## Follow-ups recorded here, deliberately outside M9
 
