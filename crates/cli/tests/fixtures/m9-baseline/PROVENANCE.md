@@ -66,10 +66,13 @@ cp crates/cli/examples/m9_baseline_capture.rs /tmp/dagr-pre-m9/crates/cli/exampl
 git worktree remove /tmp/dagr-pre-m9
 ```
 
-Then update `probe-fnv1a64` above. The pre-M9 tree pins toolchain 1.95.0 in its
-own `rust-toolchain.toml`, so rustup selects it inside the worktree
-automatically; `RUSTFLAGS=` clears the `-D warnings` a CI shell may be exporting,
-which that older tree is not obliged to be clean under.
+Then update `probe-fnv1a64` above. The pre-M9 tree carries its own
+`rust-toolchain.toml` pinning the older channel of the day, so rustup selects it
+inside the worktree automatically — that version is deliberately not written out
+here, because `scripts/check-edition-and-msrv-pins.sh` requires that no Rust
+release other than the current pin be named outside `docs/implementation/`; read
+it from the recorded commit. `RUSTFLAGS=` clears the `-D warnings` a CI shell may
+be exporting, which that older tree is not obliged to be clean under.
 
 ## If the gate fails
 

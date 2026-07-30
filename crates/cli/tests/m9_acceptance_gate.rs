@@ -636,6 +636,19 @@ fn scan_sources(rule: &str, sources: &[(String, String)]) -> Result<String, Stri
     }
 }
 
+/// The opening token of an `unsafe` block, composed rather than spelled out.
+///
+/// This file scans source text for that pattern, so it necessarily *contains*
+/// the pattern — and `scripts/check-edition-and-msrv-pins.sh` runs its own
+/// tree-wide scan for it over every `crates/**/*.rs`, with no way to tell a
+/// string literal from a block. Spelled out, the three occurrences below would
+/// be reported as three undocumented `unsafe` blocks in a file that contains no
+/// unsafe code at all. That script solves the same problem the same way for
+/// itself, writing the Rust-release pattern it hunts for as a regex so it never
+/// names a release. The composed value is byte-identical to the literal, so the
+/// scan and the planted fixtures below behave exactly as if it were spelled.
+const UNSAFE_OPEN: &str = concat!("unsafe", " {");
+
 /// `unsafe-safety-comment`: every `unsafe` block or `unsafe impl` in production
 /// carries a `// SAFETY:` comment in the run of comments and attributes that
 /// introduces it. Prose *mentioning* an unsafe block is not one, so
@@ -650,7 +663,7 @@ fn scan_safety_comments(sources: &[(String, String)]) -> Result<String, String> 
             if code.starts_with("//") || code.starts_with('*') {
                 continue;
             }
-            if !(code.contains("unsafe {") || code.starts_with("unsafe impl")) {
+            if !(code.contains(UNSAFE_OPEN) || code.starts_with("unsafe impl")) {
                 continue;
             }
             blocks += 1;
@@ -873,7 +886,7 @@ fn the_spot_check_runner_reports_a_broken_claim() {
 
     let planted = vec![(
         "crates/core/src/planted.rs".to_owned(),
-        "fn f() {\n    unsafe { g() };\n}\n".to_owned(),
+        format!("fn f() {{\n    {UNSAFE_OPEN} g() }};\n}}\n"),
     )];
     assert!(
         spot_check("unsafe-safety-comment", &planted).is_err(),
@@ -881,8 +894,10 @@ fn the_spot_check_runner_reports_a_broken_claim() {
     );
     let commented = vec![(
         "crates/core/src/planted.rs".to_owned(),
-        "fn f() {\n    // SAFETY: the planted control's justification.\n    unsafe { g() };\n}\n"
-            .to_owned(),
+        format!(
+            "fn f() {{\n    // SAFETY: the planted control's justification.\n    \
+             {UNSAFE_OPEN} g() }};\n}}\n"
+        ),
     )];
     assert!(
         spot_check("unsafe-safety-comment", &commented).is_ok(),
