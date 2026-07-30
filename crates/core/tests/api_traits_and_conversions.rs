@@ -22,6 +22,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use dagr_core::TaskError;
 use dagr_core::admission::PoolCost;
 use dagr_core::assembly::{DurableReferenceMeta, NodePolicy};
 use dagr_core::context::{PipelineId, RunContext, RunId, ScratchStore};
@@ -29,7 +30,6 @@ use dagr_core::flow::Flow;
 use dagr_core::handle::NodeId;
 use dagr_core::limits::ContainerLimitProbe;
 use dagr_core::slot::{ResidencyLedger, Slot};
-use dagr_core::TaskError;
 use dagr_core::task::Task;
 
 /// A deliberately un-`Debug` payload: the slot types' `Debug` must not require
@@ -113,6 +113,29 @@ fn the_four_slot_capability_types_format_under_debug_non_exhaustively() {
     assert!(
         format!("{slot:?}").contains("producer"),
         "a slot's Debug names the node whose output it holds"
+    );
+}
+
+/// The lesser `Debug` case in this crate: the kit owns the task under test and a
+/// registry of erased fakes, neither of which is `Debug`, so it follows the same
+/// precedent — the configured context identity shown, the un-printable interior
+/// recorded as omitted.
+#[test]
+fn single_task_test_formats_under_debug_non_exhaustively() {
+    let kit = dagr_core::test_kit::SingleTaskTest::new(Loader).node("loader");
+    let rendered = format!("{kit:?}");
+    assert!(
+        rendered.starts_with("SingleTaskTest"),
+        "the kit names itself in a diagnostic: {rendered}"
+    );
+    assert!(
+        rendered.contains("loader"),
+        "the kit's Debug carries the node identity it configured: {rendered}"
+    );
+    assert!(
+        rendered.contains(".."),
+        "the task and the erased fake registry are omitted with \
+         finish_non_exhaustive(): {rendered}"
     );
 }
 

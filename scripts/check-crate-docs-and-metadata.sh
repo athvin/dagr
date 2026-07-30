@@ -273,11 +273,17 @@ if command -v cargo >/dev/null 2>&1; then
     [ -f "$dir/Cargo.toml" ] || continue
     [ "$(toml_value "$dir/Cargo.toml" package publish)" = "false" ] && continue
     name=$(crate_name "$dir/Cargo.toml")
-    out=$(cargo package -p "$name" --list --allow-dirty --offline 2>&1) || {
-      pkg_failures="$pkg_failures$name: $(printf '%s' "$out" | tr '\n' ' ')
+    # `--offline` first (this is a manifest question, not a network one). A cold
+    # CI cache can leave the registry index unmaterialized, in which case the
+    # offline resolve fails for a reason that has nothing to do with metadata —
+    # so fall back once, online, rather than failing the build on a cache miss.
+    out=$(cargo package -p "$name" --list --allow-dirty --offline 2>&1) \
+      || out=$(cargo package -p "$name" --list --allow-dirty 2>&1) \
+      || {
+        pkg_failures="$pkg_failures$name: $(printf '%s' "$out" | tr '\n' ' ')
 "
-      continue
-    }
+        continue
+      }
     if printf '%s' "$out" | grep -q 'manifest has no'; then
       pkg_failures="$pkg_failures$name: $(printf '%s' "$out" | grep 'manifest has no' | tr '\n' ' ')
 "

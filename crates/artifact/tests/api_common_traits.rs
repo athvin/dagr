@@ -56,6 +56,47 @@ fn schema_validation_error_is_comparable_cloneable_and_hashable() {
     assert_eq!(err.artifact(), clone.artifact());
 }
 
+/// The lesser `Debug` case in this crate: the writer owns an injected sink and
+/// clock (neither usefully printable, and locking or reading them inside a
+/// formatter is not something a diagnostic may do), so it follows the same
+/// `finish_non_exhaustive()` precedent — identity and sequence position shown,
+/// the injected seams recorded as omitted.
+#[test]
+fn event_stream_writer_formats_under_debug_non_exhaustively() {
+    use dagr_artifact::event_stream::{EventSink, EventStreamWriter, MonotonicClock, RunId};
+
+    struct NullSink;
+    impl EventSink for NullSink {
+        fn append_line(&mut self, _line: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    struct ZeroClock;
+    impl MonotonicClock for ZeroClock {
+        fn elapsed_ns(&self) -> u64 {
+            0
+        }
+    }
+
+    let writer = EventStreamWriter::new(NullSink, ZeroClock, RunId::from_operator("run-7"), "etl");
+    let rendered = format!("{writer:?}");
+    assert!(
+        rendered.starts_with("EventStreamWriter"),
+        "the writer names itself in a diagnostic: {rendered}"
+    );
+    assert!(
+        rendered.contains("run-7") && rendered.contains("etl"),
+        "the writer's Debug carries the run and pipeline identity it stamps: {rendered}"
+    );
+    assert!(
+        rendered.contains(".."),
+        "the injected sink and clock are omitted with finish_non_exhaustive(): {rendered}"
+    );
+}
+
 #[test]
 fn read_error_keeps_the_deserializer_cause_instead_of_a_derive() {
     // A terminated non-final line that does not parse is corruption.

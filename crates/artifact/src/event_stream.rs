@@ -689,6 +689,25 @@ pub struct EventStreamWriter<S: EventSink, C: MonotonicClock> {
     faulted: bool,
 }
 
+// Hand-written `Debug`, following the same precedent as the slot and admission
+// capability types: a derive would emit `impl<S: Debug, C: Debug>`, so a writer
+// over an injected sink or clock that is not itself `Debug` — the ordinary case,
+// since both are test-and-production seams — would vanish from every `{:?}`
+// diagnostic. What a diagnostic needs is the identity the writer stamps and where
+// in the stream it is; the sink and clock are omitted with
+// `finish_non_exhaustive()`, which also keeps the formatter from touching a seam
+// that may be mid-append.
+impl<S: EventSink, C: MonotonicClock> fmt::Debug for EventStreamWriter<S, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventStreamWriter")
+            .field("run_id", &self.run_id)
+            .field("pipeline", &self.pipeline)
+            .field("next_seq", &self.next_seq)
+            .field("faulted", &self.faulted)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
     /// Construct the writer at bootstrap from an injected sink, clock, run id,
     /// and pipeline identity.

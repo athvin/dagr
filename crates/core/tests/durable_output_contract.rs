@@ -258,7 +258,9 @@ fn an_impl_may_supply_durable_reference_metadata() {
         Some("the-produced-bytes".len() as u64)
     );
     assert_eq!(meta.recorded_produced_at_offset_ns(), Some(4242));
-    let hash = meta.recorded_content_hash().expect("a content hash is supplied");
+    let hash = meta
+        .recorded_content_hash()
+        .expect("a content hash is supplied");
     assert!(
         hash.starts_with("fnv:"),
         "the content hash is the impl's own opaque digest, carried verbatim"
