@@ -113,6 +113,14 @@ expect_level lints.toml rust                     missing_docs         '"deny"' "
 expect_level Cargo.toml workspace.lints.rust     missing_docs         '"deny"' "Cargo.toml [workspace.lints.rust]"
 expect_level lints.toml clippy                   missing_errors_doc   '"deny"' "lints.toml [clippy]"
 expect_level Cargo.toml workspace.lints.clippy   missing_errors_doc   '"deny"' "Cargo.toml [workspace.lints.clippy]"
+# `clippy::await_holding_lock` (T97) is a third ratchet of the same shape, and the
+# one with the most riding on it: it is the ONLY mechanical guarantee that no lock
+# guard is alive across a suspension point anywhere in the workspace. `clippy::all`
+# implies it today, so writing it out changes no build — it makes the guarantee
+# independent of upstream's grouping, and makes weakening it a visible edit here
+# rather than an invisible consequence of a clippy release.
+expect_level lints.toml clippy                   await_holding_lock   '"deny"' "lints.toml [clippy]"
+expect_level Cargo.toml workspace.lints.clippy   await_holding_lock   '"deny"' "Cargo.toml [workspace.lints.clippy]"
 
 # --- Every member opts in ----------------------------------------------------
 members=$(ls -d crates/*/ 2>/dev/null | sed 's:/$::')
@@ -239,6 +247,7 @@ else
   grep -q 'disagree'                       "$fixture/out" || missed="$missed parity"
   grep -q "ratchet:.*missing_docs"         "$fixture/out" || missed="$missed ratchet-missing-docs"
   grep -q "ratchet:.*missing_errors_doc"   "$fixture/out" || missed="$missed ratchet-missing-errors-doc"
+  grep -q "ratchet:.*await_holding_lock"   "$fixture/out" || missed="$missed ratchet-await-holding-lock"
   grep -q 'does not inherit'               "$fixture/out" || missed="$missed opt-in"
   grep -q 'silences the workspace policy'  "$fixture/out" || missed="$missed no-escape"
   grep -q 'production #\[allow\] never expires' "$fixture/out" || missed="$missed expect-over-allow"
