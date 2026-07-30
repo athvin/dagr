@@ -103,30 +103,48 @@ impl GraphArtifact {
     /// not match the graph-artifact shape (a missing required field, or a field
     /// of the wrong type). The message names the offending field/reason.
     pub fn from_json_str(json: &str) -> Result<Self, RenderError> {
-        serde_json::from_str(json).map_err(|e| RenderError::Malformed(e.to_string()))
+        serde_json::from_str(json).map_err(RenderError::Malformed)
     }
 }
 
 /// A failure to read or render a graph artifact.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The variant **carries the deserializer's own error**, not a string copy of it.
+/// That is deliberate and load-bearing: `serde_json::Error` knows the offending
+/// **line and column**, and `to_string()` is a lossy projection of it. Stringifying
+/// at construction destroyed the one piece of information an operator needs to fix
+/// a hand-edited or truncated artifact, and destroyed it *before* any caller could
+/// choose otherwise. Carrying the error costs this type its `Clone`/`PartialEq`
+/// derives (`serde_json::Error` has neither) — a structural consequence of holding
+/// a real cause, the same trade `io::Error`-carrying types in this workspace make.
+#[derive(Debug)]
 pub enum RenderError {
     /// The input is not a schema-shaped graph artifact — not valid JSON, or a
-    /// required field is missing or of the wrong type. The wrapped message names
-    /// the field/reason (from the deserializer), so a schema-invalid artifact is
-    /// rejected with an actionable diagnostic rather than rendered partially.
-    Malformed(String),
+    /// required field is missing or of the wrong type. The wrapped
+    /// [`serde_json::Error`] names the field/reason and its position, so a
+    /// schema-invalid artifact is rejected with an actionable diagnostic rather
+    /// than rendered partially.
+    Malformed(serde_json::Error),
 }
 
 impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Malformed(msg) => write!(
+            Self::Malformed(e) => write!(
                 f,
                 "not a valid C20 graph artifact (does not conform to the published \
-                 schemas/graph/v1.schema.json): {msg}"
+                 schemas/graph/v1.schema.json): {e}"
             ),
         }
     }
 }
 
-impl std::error::Error for RenderError {}
+impl std::error::Error for RenderError {
+    /// Exposes the deserializer error the variant carries, so a caller that walks
+    /// the chain reaches the line/column the `Display` form only summarizes.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Malformed(e) => Some(e),
+        }
+    }
+}

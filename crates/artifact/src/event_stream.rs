@@ -1266,8 +1266,9 @@ pub fn read_records(bytes: &[u8]) -> Result<ReadStream, ReadError> {
         match serde_json::from_slice::<serde_json::Value>(seg) {
             Ok(v) => records.push(v),
             // A terminated line that does not parse is genuine corruption, not
-            // the tolerated trailing partial.
-            Err(_) => return Err(ReadError { line: i }),
+            // the tolerated trailing partial. The deserializer's own error is
+            // carried, not stringified: it knows what it expected and where.
+            Err(cause) => return Err(ReadError { line: i, cause }),
         }
     }
 
@@ -1289,19 +1290,38 @@ pub fn read_records(bytes: &[u8]) -> Result<ReadStream, ReadError> {
 
 /// A corruption error: a **non-final** line failed to parse (not the tolerated
 /// trailing partial).
+///
+/// It carries the **deserializer's own error**, not a string copy of it: the line
+/// index says *which* record is corrupt, and the wrapped [`serde_json::Error`]
+/// says *how* (what was expected, at which column). Recording only the index threw
+/// the second half away at construction, before any caller could ask for it —
+/// which matters more here than in a typical crate, because reading a stream back
+/// is how dagr explains a run after the fact.
 #[derive(Debug)]
 pub struct ReadError {
     /// The zero-based index of the line that failed to parse.
     pub line: usize,
+    /// The deserializer error that rejected that line.
+    pub cause: serde_json::Error,
 }
 
 impl fmt::Display for ReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "non-final record at line {} failed to parse", self.line)
+        write!(
+            f,
+            "non-final record at line {} failed to parse: {}",
+            self.line, self.cause
+        )
     }
 }
 
-impl std::error::Error for ReadError {}
+impl std::error::Error for ReadError {
+    /// Exposes the deserializer error, so a caller walking the chain reaches the
+    /// parser's own diagnostic rather than only "line N failed to parse".
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -38,10 +38,11 @@ async fn open_error_exposes_the_libsql_error_through_source() {
     let dir = temp_store_path("open-dir");
     std::fs::create_dir_all(&dir).expect("temp dir creates");
 
-    let err = MetaStore::open(OpenMode::LocalFile(dir))
-        .await
-        .err()
-        .expect("opening a directory as a database file must fail");
+    // `MetaStore` is not `Debug`, so the refutable-let form stands in for
+    // `expect_err` here.
+    let Err(err) = MetaStore::open(OpenMode::LocalFile(dir)).await else {
+        panic!("opening a directory as a database file must fail");
+    };
 
     let OpenError::Libsql(_) = &err else {
         panic!("expected a libsql-backed open failure, got {err}");
@@ -64,13 +65,14 @@ async fn open_error_exposes_the_libsql_error_through_source() {
 /// fabricate a link.
 #[tokio::test]
 async fn open_error_with_no_cause_has_no_source() {
-    let err = MetaStore::open(OpenMode::RemoteSqld {
+    let Err(err) = MetaStore::open(OpenMode::RemoteSqld {
         url: "http://example.invalid".to_string(),
         auth_token: String::new(),
     })
     .await
-    .err()
-    .expect("a recognized stub mode is refused");
+    else {
+        panic!("a recognized stub mode is refused");
+    };
 
     assert!(
         err.source().is_none(),
@@ -97,8 +99,7 @@ async fn write_error_exposes_the_libsql_error_through_source() {
             })
         })
         .await
-        .err()
-        .expect("invalid SQL fails the transaction");
+        .expect_err("invalid SQL fails the transaction");
 
     let WriteError::Libsql(_) = &err else {
         panic!("expected a libsql-backed write failure, got {err}");

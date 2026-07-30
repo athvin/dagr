@@ -641,7 +641,12 @@ fn rejects_a_schema_invalid_artifact() {
         .expect("invalid fixture readable");
     let err =
         GraphArtifact::from_json_str(&raw).expect_err("a schema-invalid artifact must be rejected");
-    let RenderError::Malformed(msg) = &err;
+    // The variant now carries the deserializer's own error (T95: the cause is
+    // wrapped, not stringified at construction), so the diagnostic is read off
+    // that error rather than off a `String` copy of it — the assertion is the
+    // same, over the same text.
+    let RenderError::Malformed(cause) = &err;
+    let msg = cause.to_string();
     assert!(
         msg.contains("output_type_name"),
         "the diagnostic must name the missing field, got: {msg}"
