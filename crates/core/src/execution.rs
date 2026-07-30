@@ -447,23 +447,9 @@ where
     let result = task.run(ctx, ()).await;
 
     // (5) Classify into the normative taxonomy, and (6) fill the slot on
-    // success only.
-    let outcome = match result {
-        Ok(value) => {
-            // Declared output residency transfers to the slot at fill. A fresh
-            // slot is empty, so this fill succeeds; a refused second fill would
-            // be a framework defect (the runner fills a node's slot at most
-            // once — sequential attempts do not overlap), so a rejected fill is
-            // dropped rather than silently swallowed as success.
-            let _ = slot.fill(value);
-            AttemptOutcome::Succeeded
-        }
-        Err(err) => match err.class() {
-            TaskErrorClass::Permanent => AttemptOutcome::PermanentFailure,
-            TaskErrorClass::Retryable => AttemptOutcome::RetryEligibleFailure,
-            TaskErrorClass::Skip => AttemptOutcome::Skipped,
-        },
-    };
+    // success only. Both the timed and untimed paths route through the one
+    // `classify_and_fill`, so the fill decision cannot drift between them.
+    let outcome = classify_and_fill(result, slot);
 
     // (7) The exactly-one attempt-outcome record for this attempt. The
     // node-terminal record is the caller's to emit (once), so a retried node
@@ -684,19 +670,38 @@ where
 
 /// Classify one attempt's `Result` into the normative taxonomy and fill the slot
 /// on success only — the shared body of the success/failure/skip classification
-/// used by both timed and untimed await paths.
+/// used by both timed and untimed await paths, and the **one** place the fill
+/// decision lives.
+///
+/// # A rejected fill is a failure, not a success
+///
+/// The once-writable slot refuses a second fill (and a fill of a released slot).
+/// A fresh slot is empty and sequential attempts do not overlap, so a rejection
+/// cannot happen in a correctly-wired run — it is a framework-invariant violation.
+/// What it is *not* is a success: the attempt's value never reached the slot, so
+/// every downstream consumer would read either a stale value or nothing at all.
+/// Reporting [`AttemptOutcome::Succeeded`] over a discarded value is precisely the
+/// silent swallowing this runner must not do, so a rejected fill is classified
+/// [`AttemptOutcome::PermanentFailure`] — permanent because retrying cannot make a
+/// once-writable slot writable again, and because a defect must surface as a
+/// failed node rather than as a run that looks clean.
+///
+/// It is deliberately **not** a panic: this classification runs *outside* the
+/// caught-attempt boundary (see [`run_one_attempt_caught`]), so a panic here would
+/// unwind past panic containment and take the whole run down — the opposite of
+/// what a contained framework defect should do.
 fn classify_and_fill<O>(result: Result<O, TaskError>, slot: &Slot<O>) -> AttemptOutcome
 where
     O: Send + Sync + 'static,
 {
     match result {
-        Ok(value) => {
-            // Fill the once-writable slot. A fresh slot is empty, so this
-            // succeeds; a refused fill is a framework defect, so the rejected
-            // value is dropped rather than swallowed as success.
-            let _ = slot.fill(value);
-            AttemptOutcome::Succeeded
-        }
+        Ok(value) => match slot.fill(value) {
+            // Declared output residency transferred to the slot at fill.
+            Ok(()) => AttemptOutcome::Succeeded,
+            // The value did not reach the slot: the attempt delivered nothing, and
+            // the recorded outcome says so.
+            Err(_rejected) => AttemptOutcome::PermanentFailure,
+        },
         Err(err) => match err.class() {
             TaskErrorClass::Permanent => AttemptOutcome::PermanentFailure,
             TaskErrorClass::Retryable => AttemptOutcome::RetryEligibleFailure,
@@ -1866,6 +1871,12 @@ impl BootstrapRefusal {
 }
 
 impl std::fmt::Display for BootstrapRefusal {
+    /// Prose with a trailing stop, and deliberately so: like [`ResumeRefusal`], this
+    /// is terminal operator-facing text (it names the profile setting to change and
+    /// the fix to apply), not a chain fragment. Recorded as an exception to
+    /// `err-lowercase-msg` in `docs/rust-skills-register.md`.
+    ///
+    /// [`ResumeRefusal`]: crate::resume::ResumeRefusal
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
