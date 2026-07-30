@@ -1,23 +1,23 @@
-// UI compile-failure fixture — case `typed_handle_data_cycle`.
-//
-// PROVES: a cycle via DATA edges is INEXPRESSIBLE by CONSTRUCTION —
-// structural, never a later or runtime validation pass. Because a handle is
-// obtained ONLY by registering a node, and `register` accepts only already-
-// existing handles, no expression can name a node that is not yet registered.
-// Binding node B's handle as an input to node A, when A is registered BEFORE B,
-// cannot be written: B's handle does not exist yet at A's registration point, so
-// it is a use of an undeclared binding (E0425). This is the data-edge half of
-// the "an attempt to express a cycle — through data edges or ordering edges —
-// fails to compile" guarantee (the ordering-edge half is the ordering fixtures).
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts
-// this sample FAILS to compile under the pinned toolchain.
-//
-// THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (typed handles and the real binding land later). It models only the
-// settled backward-reference registration discipline shared with ordering
-// edges.
+//! UI compile-failure fixture — case `typed_handle_data_cycle`.
+//!
+//! PROVES: a cycle via DATA edges is INEXPRESSIBLE by CONSTRUCTION —
+//! structural, never a later or runtime validation pass. Because a handle is
+//! obtained ONLY by registering a node, and `register` accepts only already-
+//! existing handles, no expression can name a node that is not yet registered.
+//! Binding node B's handle as an input to node A, when A is registered BEFORE B,
+//! cannot be written: B's handle does not exist yet at A's registration point, so
+//! it is a use of an undeclared binding (E0425). This is the data-edge half of
+//! the "an attempt to express a cycle — through data edges or ordering edges —
+//! fails to compile" guarantee (the ordering-edge half is the ordering fixtures).
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts
+//! this sample FAILS to compile under the pinned toolchain.
+//!
+//! THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
+//! (typed handles and the real binding land later). It models only the
+//! settled backward-reference registration discipline shared with ordering
+//! edges.
 
 use std::marker::PhantomData;
 

@@ -1,18 +1,18 @@
-// UI compile-failure fixture,
-// case `data_binding_non_default_rule`.
-//
-// PROVES: a node that carries a DATA
-// dependency cannot be given any trigger rule other than `all-succeeded` — the
-// builder TYPESTATE makes it INEXPRESSIBLE, a COMPILE error rather than a runtime
-// check. `NodeBinding` starts in the `ConsumesNothing` state where
-// `.trigger_rule(..)` IS offered; binding a data dependency transitions it to the
-// `ConsumesData` state, which offers NO `trigger_rule` method. Calling it there
-// is a "no method in this state" error (E0599).
-//
-// This is the REAL binding API (dagr_core::binding), not a throwaway sketch.
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture,
+//! case `data_binding_non_default_rule`.
+//!
+//! PROVES: a node that carries a DATA
+//! dependency cannot be given any trigger rule other than `all-succeeded` — the
+//! builder TYPESTATE makes it INEXPRESSIBLE, a COMPILE error rather than a runtime
+//! check. `NodeBinding` starts in the `ConsumesNothing` state where
+//! `.trigger_rule(..)` IS offered; binding a data dependency transitions it to the
+//! `ConsumesData` state, which offers NO `trigger_rule` method. Calling it there
+//! is a "no method in this state" error (E0599).
+//!
+//! This is the REAL binding API (dagr_core::binding), not a throwaway sketch.
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::binding::test_support::source;
 use dagr_core::binding::{NodeBinding, TriggerRule};

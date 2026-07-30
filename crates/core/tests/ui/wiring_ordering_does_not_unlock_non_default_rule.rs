@@ -1,28 +1,28 @@
-// UI compile-failure fixture,
-// case `wiring_ordering_does_not_unlock_non_default_rule`.
-//
-// PROVES: a *non-default* trigger rule
-// (`all-terminal` / `any-failed`) is expressible ONLY on a node that consumes
-// NOTHING — and adding an ORDERING edge to a DATA-consuming node does NOT unlock
-// it. This is enforced at COMPILE time by the shape of the real authoring API
-// (`dagr_core::flow::Flow`), not a runtime check.
-//
-// The only registrar that accepts a trigger rule alongside ordering edges is
-// `register_source_ordered_after_with_trigger`, whose bound is `T: Task<Input =
-// ()>` — a CONSUME-NOTHING task. A data-consuming task (`Input = Rows`, NOT `()`)
-// cannot satisfy that bound, so trying to give it a non-default rule fails to
-// compile with a trait-bound error (E0271: the associated `Input` type is `Rows`,
-// not `()`). There is deliberately no `..._ordered_after_with_trigger` variant on
-// the DATA registrars (`register` / `register_ordered_after`), so a data node has
-// no path to a non-default rule at all — an ordering edge on it (via
-// `register_ordered_after`) still leaves it locked to `all-succeeded`.
-//
-// This is the ordering-edge-aware counterpart of the typed-handle typestate fixture
-// `typed_handle_non_default_rule_on_data_node`, now shown against the real API.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture,
+//! case `wiring_ordering_does_not_unlock_non_default_rule`.
+//!
+//! PROVES: a *non-default* trigger rule
+//! (`all-terminal` / `any-failed`) is expressible ONLY on a node that consumes
+//! NOTHING — and adding an ORDERING edge to a DATA-consuming node does NOT unlock
+//! it. This is enforced at COMPILE time by the shape of the real authoring API
+//! (`dagr_core::flow::Flow`), not a runtime check.
+//!
+//! The only registrar that accepts a trigger rule alongside ordering edges is
+//! `register_source_ordered_after_with_trigger`, whose bound is `T: Task<Input =
+//! ()>` — a CONSUME-NOTHING task. A data-consuming task (`Input = Rows`, NOT `()`)
+//! cannot satisfy that bound, so trying to give it a non-default rule fails to
+//! compile with a trait-bound error (E0271: the associated `Input` type is `Rows`,
+//! not `()`). There is deliberately no `..._ordered_after_with_trigger` variant on
+//! the DATA registrars (`register` / `register_ordered_after`), so a data node has
+//! no path to a non-default rule at all — an ordering edge on it (via
+//! `register_ordered_after`) still leaves it locked to `all-succeeded`.
+//!
+//! This is the ordering-edge-aware counterpart of the typed-handle typestate fixture
+//! `typed_handle_non_default_rule_on_data_node`, now shown against the real API.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::binding::TriggerRule;
 use dagr_core::flow::Flow;

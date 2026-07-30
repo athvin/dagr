@@ -1,18 +1,18 @@
-// UI compile-failure fixture, case
-// `teardown_no_data_dependency`.
-//
-// PROVES: a teardown node NEVER has data
-// dependencies, and this is a COMPILE error, not a runtime or assembly check. A
-// teardown fires on the non-default `all-terminal` rule, which the builder
-// typestate makes inexpressible on any node that consumes data — so the
-// `register_teardown` seam only accepts a consume-nothing task (`Task<Input =
-// ()>`). Passing a task that consumes a value is a trait-bound error: `Input = ()`
-// is not satisfied. A data-dependent teardown therefore cannot even be spelled.
-//
-// This is the REAL authoring API (dagr_core::flow::Flow::register_teardown), not a
-// throwaway sketch. Wired to the UI harness (crates/core/tests/ui.rs); the
-// sibling `.stderr` names the substrings the diagnostic must contain, and the
-// harness asserts this sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture, case
+//! `teardown_no_data_dependency`.
+//!
+//! PROVES: a teardown node NEVER has data
+//! dependencies, and this is a COMPILE error, not a runtime or assembly check. A
+//! teardown fires on the non-default `all-terminal` rule, which the builder
+//! typestate makes inexpressible on any node that consumes data — so the
+//! `register_teardown` seam only accepts a consume-nothing task (`Task<Input =
+//! ()>`). Passing a task that consumes a value is a trait-bound error: `Input = ()`
+//! is not satisfied. A data-dependent teardown therefore cannot even be spelled.
+//!
+//! This is the REAL authoring API (dagr_core::flow::Flow::register_teardown), not a
+//! throwaway sketch. Wired to the UI harness (crates/core/tests/ui.rs); the
+//! sibling `.stderr` names the substrings the diagnostic must contain, and the
+//! harness asserts this sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;

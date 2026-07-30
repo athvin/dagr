@@ -1,17 +1,17 @@
-// UI compile-failure fixture,
-// case `data_binding_wrong_arity_too_many`.
-//
-// PROVES: binding MORE handles than the task declares is a
-// COMPILE error. A task declaring `type Input = (Alpha, Beta)` (exactly two
-// inputs) is bound a THREE-tuple; the sealed `Deps` impl for a 3-tuple has
-// `Inputs = (Alpha, Beta, Gamma)`, which does not equal the task's `(Alpha,
-// Beta)`, so the `Inputs = T::Input` bound is unsatisfied. This is the REAL
-// binding API (dagr_core::binding), distinct from the too-few case and from the
-// arity-CEILING case (which fires the curated on_unimplemented message instead).
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture,
+//! case `data_binding_wrong_arity_too_many`.
+//!
+//! PROVES: binding MORE handles than the task declares is a
+//! COMPILE error. A task declaring `type Input = (Alpha, Beta)` (exactly two
+//! inputs) is bound a THREE-tuple; the sealed `Deps` impl for a 3-tuple has
+//! `Inputs = (Alpha, Beta, Gamma)`, which does not equal the task's `(Alpha,
+//! Beta)`, so the `Inputs = T::Input` bound is unsatisfied. This is the REAL
+//! binding API (dagr_core::binding), distinct from the too-few case and from the
+//! arity-CEILING case (which fires the curated on_unimplemented message instead).
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::binding::test_support::{register, source};
 use dagr_core::task::Task;

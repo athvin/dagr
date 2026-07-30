@@ -1,25 +1,25 @@
-// UI compile-failure fixture — case `wiring_data_cycle_self_edge`.
-//
-// PROVES: a cycle via a DATA edge is
-// INEXPRESSIBLE by CONSTRUCTION — structural, never a later or runtime
-// validation pass. This is the REAL authoring API (`dagr_core::flow::Flow`,
-// `Flow::register`), not the throwaway typed-handle sketch: a node's output handle is the
-// return value of its own `register` call, so it does not exist at the point its
-// own binding expression is evaluated. A node therefore cannot bind its OWN
-// not-yet-returned handle as a data input — it is a use of an undeclared binding
-// (E0425), and the self-cycle cannot be written.
-//
-// This is the data-edge half of the acceptance criterion "an attempt to express
-// a cycle — through data edges or ordering edges — fails to compile, demonstrated
-// by a checked-in compile-failure test"; the ordering-edge half is the
-// `ordering_edge_*` fixtures, folded into this same suite.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain. The positive
-// counterpart (an acyclic data chain that DOES compile) lives in
-// crates/core/tests/flow_builder.rs, so a regression that loosened this
-// guarantee would fail review.
+//! UI compile-failure fixture — case `wiring_data_cycle_self_edge`.
+//!
+//! PROVES: a cycle via a DATA edge is
+//! INEXPRESSIBLE by CONSTRUCTION — structural, never a later or runtime
+//! validation pass. This is the REAL authoring API (`dagr_core::flow::Flow`,
+//! `Flow::register`), not the throwaway typed-handle sketch: a node's output handle is the
+//! return value of its own `register` call, so it does not exist at the point its
+//! own binding expression is evaluated. A node therefore cannot bind its OWN
+//! not-yet-returned handle as a data input — it is a use of an undeclared binding
+//! (E0425), and the self-cycle cannot be written.
+//!
+//! This is the data-edge half of the acceptance criterion "an attempt to express
+//! a cycle — through data edges or ordering edges — fails to compile, demonstrated
+//! by a checked-in compile-failure test"; the ordering-edge half is the
+//! `ordering_edge_*` fixtures, folded into this same suite.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain. The positive
+//! counterpart (an acyclic data chain that DOES compile) lives in
+//! crates/core/tests/flow_builder.rs, so a regression that loosened this
+//! guarantee would fail review.
 
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;

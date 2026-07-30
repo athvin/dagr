@@ -1,18 +1,18 @@
-// UI compile-failure sample — the output-type bound (missing
-// `Sync`).
-//
-// Output values must be `Send + Sync + 'static` so concurrent consumers can
-// read a shared slot value. This sample declares an
-// output type that is `Send + 'static` but NOT `Sync` and shows it is rejected.
-//
-// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
-// real `Task` trait is unavailable; the exact output bound (`Send + Sync +
-// 'static`) is reproduced with a local `assert_output_bound`. `Cell<u32>` is
-// `Send + 'static` but `!Sync`, so it violates the bound.
-//
-// The diagnostic names two distinct types the snapshot keys on: `Cell` (the
-// non-`Sync` output value's type) and `NonSyncOutput` (the offending output
-// type wrapping it).
+//! UI compile-failure sample — the output-type bound (missing
+//! `Sync`).
+//!
+//! Output values must be `Send + Sync + 'static` so concurrent consumers can
+//! read a shared slot value. This sample declares an
+//! output type that is `Send + 'static` but NOT `Sync` and shows it is rejected.
+//!
+//! The harness compiles this STANDALONE with no `--extern dagr_core`, so the
+//! real `Task` trait is unavailable; the exact output bound (`Send + Sync +
+//! 'static`) is reproduced with a local `assert_output_bound`. `Cell<u32>` is
+//! `Send + 'static` but `!Sync`, so it violates the bound.
+//!
+//! The diagnostic names two distinct types the snapshot keys on: `Cell` (the
+//! non-`Sync` output value's type) and `NonSyncOutput` (the offending output
+//! type wrapping it).
 
 use std::cell::Cell;
 

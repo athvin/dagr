@@ -1,19 +1,19 @@
-// UI compile-failure fixture — case `wiring_handle_no_lookup`.
-//
-// PROVES: there is NO API to retrieve a node's
-// output handle by name, index, or string key. This is the REAL authoring
-// surface (`dagr_core::flow::Flow` / `dagr_core::flow::Pipeline`): neither the
-// builder nor the finalized pipeline exposes a `get(name)` / `lookup(index)` /
-// `handle(key)` that conjures a `Handle` — the ONLY route to a handle is a
-// registration return value. Attempting such a lookup is a "no method" error
-// (E0599), so a by-name/index/string lookup cannot be written. This is the
-// "No API exists to retrieve a node's output by name, index, or string key"
-// acceptance criterion, and it is why a cycle stays inexpressible: without a
-// lookup there is no way to name a node that has not yet been registered.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture — case `wiring_handle_no_lookup`.
+//!
+//! PROVES: there is NO API to retrieve a node's
+//! output handle by name, index, or string key. This is the REAL authoring
+//! surface (`dagr_core::flow::Flow` / `dagr_core::flow::Pipeline`): neither the
+//! builder nor the finalized pipeline exposes a `get(name)` / `lookup(index)` /
+//! `handle(key)` that conjures a `Handle` — the ONLY route to a handle is a
+//! registration return value. Attempting such a lookup is a "no method" error
+//! (E0599), so a by-name/index/string lookup cannot be written. This is the
+//! "No API exists to retrieve a node's output by name, index, or string key"
+//! acceptance criterion, and it is why a cycle stays inexpressible: without a
+//! lookup there is no way to name a node that has not yet been registered.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 

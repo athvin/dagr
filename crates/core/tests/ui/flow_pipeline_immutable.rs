@@ -1,16 +1,16 @@
-// UI compile-failure fixture — case `flow_pipeline_immutable`.
-//
-// PROVES: finalization CONSUMES the builder and
-// yields an IMMUTABLE pipeline — "once produced, no further registration or
-// mutation is possible." Mutation-after-finalize is not a runtime check; it is
-// INEXPRESSIBLE. The finalized `Pipeline` exposes only read access to its node
-// set, so it has no `register`/`register_source` method: a call to one is a
-// compile error ("no method named ..."). This is the REAL flow builder API
-// (dagr_core::flow), not a throwaway sketch.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture — case `flow_pipeline_immutable`.
+//!
+//! PROVES: finalization CONSUMES the builder and
+//! yields an IMMUTABLE pipeline — "once produced, no further registration or
+//! mutation is possible." Mutation-after-finalize is not a runtime check; it is
+//! INEXPRESSIBLE. The finalized `Pipeline` exposes only read access to its node
+//! set, so it has no `register`/`register_source` method: a call to one is a
+//! compile error ("no method named ..."). This is the REAL flow builder API
+//! (dagr_core::flow), not a throwaway sketch.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 use dagr_core::handle::Handle;

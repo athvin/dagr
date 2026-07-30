@@ -1,16 +1,16 @@
-// UI compile-failure fixture — case `data_binding_wrong_type`.
-//
-// PROVES: binding a handle whose VALUE TYPE does not exactly
-// match the consuming task's declared input is a COMPILE error whose message
-// names BOTH the expected and the supplied type. This is the REAL binding API
-// (dagr_core::binding), not a throwaway sketch: the sealed positional `Deps`
-// trait's `Inputs = T::Input` bound is unsatisfied when a `Handle<Beta>` is
-// bound to a task declaring `type Input = Alpha`.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain — asserting only that
-// both type names appear, never prose quality (the message-quality clause).
+//! UI compile-failure fixture — case `data_binding_wrong_type`.
+//!
+//! PROVES: binding a handle whose VALUE TYPE does not exactly
+//! match the consuming task's declared input is a COMPILE error whose message
+//! names BOTH the expected and the supplied type. This is the REAL binding API
+//! (dagr_core::binding), not a throwaway sketch: the sealed positional `Deps`
+//! trait's `Inputs = T::Input` bound is unsatisfied when a `Handle<Beta>` is
+//! bound to a task declaring `type Input = Alpha`.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain — asserting only that
+//! both type names appear, never prose quality (the message-quality clause).
 
 use dagr_core::binding::test_support::{register, source};
 use dagr_core::task::Task;
