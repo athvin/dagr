@@ -45,6 +45,22 @@
 //! [`the_panic_abort_scan_catches_a_planted_profile`], and
 //! [`the_spot_check_runner_reports_a_broken_claim`]. The remaining assertions run
 //! shipped verifiers whose own non-vacuity is proven by their self-test scripts.
+//!
+//! Each in-repository control was additionally confirmed by breaking the real
+//! thing and watching this suite fail: a traceability row deleted and an
+//! evidence token reverted; a spot-check row deleted; a register rule row
+//! deleted; one byte appended to the probe; a recorded per-node figure raised
+//! over the ceiling; the README total edited; a `dagr-core` edge planted in
+//! `dagr-render`; `panic = "abort"` planted in `[profile.release]`; a runtime
+//! dependency planted on `dagr-core`; and the engine's default backoff base
+//! moved by one millisecond, which the behavioural-identity check caught in the
+//! graph artifact *and* the policy hash.
+//!
+//! # Coverage-matrix posture
+//!
+//! M9 maps to **no new machine criterion** — it changed no component contract
+//! and no acceptance criterion, and neither did T92–T98 — so this gate adds no
+//! matrix row, exactly as the M7 gate did for its milestone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

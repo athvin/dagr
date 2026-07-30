@@ -30,6 +30,15 @@ pipeline shape or the printed bytes breaks the cross-toolchain determinism gate.
 - **`reference_pipeline_artifact.rs`** — a fixed pipeline whose emitted graph
   artifact + fingerprints must be byte-identical across toolchains (kept in sync
   with `tests/system_acceptance_gate.rs`).
+- **`m9_baseline_capture.rs`** — the M9 gate's behavioural-identity probe: one
+  deterministic snapshot of the reference pipeline's graph artifact, both
+  fingerprints, a scripted run's terminal states, its folded run artifact, and
+  every event-stream record. `tests/m9_acceptance_gate.rs` spawns it and diffs
+  its output against `tests/fixtures/m9-baseline/reference.snapshot.txt`, which
+  the **same file** produced against the pre-M9 tree — so it is byte-diffed
+  across two *engines* rather than two toolchains. Its source digest is recorded
+  in that fixture's `PROVENANCE.md` and re-checked on every run: editing this
+  file without re-capturing the baseline fails the gate.
 
 ## Test discovery corpora — spawned by integration tests
 

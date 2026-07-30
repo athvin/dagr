@@ -244,3 +244,68 @@ modify the shipped ergonomics API (run_flow.rs) to make an example prettier … 
 the API genuinely cannot express something … write the example against the API AS
 IT IS." These three entries are the "API cannot express it literally" case,
 resolved by the real-API shape rather than a workaround.
+
+---
+
+## 2026-07-30 · 114 (T99) — the adopt/satisfied tables live in the register, not only in the PR description
+
+**Quoted DoD line.** *"Every `adopt` row is traced to a shipped ticket item,
+tabulated in the PR description; a sample of `satisfied` rows is independently
+verified with the check recorded."*
+
+**Deviation.** Both tables are authored in
+[`docs/rust-skills-register.md`](../rust-skills-register.md) under "The M9
+gate's verification record (T99)", not in the pull-request body. The implementer
+of a ticket on the autonomous loop does not author the PR description — the
+orchestrator does, after the branch is handed over — so the literal location is
+not reachable from inside the ticket. The tables can be lifted verbatim into the
+PR body, and the orchestrator is told so at hand-over.
+
+**Rationale.** The chosen location is strictly stronger than the one the DoD
+names. A PR description is written once and never checked again; these tables
+are **data the gate parses**. `crates/cli/tests/m9_acceptance_gate.rs` fails if
+the traceability table does not cover exactly the register's `adopt` rows, if a
+row's ticket disagrees with its disposition, if an evidence token has gone
+missing from the file that is supposed to carry it, or if the spot-check table
+and the checks the suite actually runs are different sets. Both properties were
+confirmed by deleting a row and by reverting a shipped item and watching the gate
+fail. A table in a PR body would satisfy the sentence and guard nothing.
+
+**Operator decision.** Traces to the standing autonomous-loop split recorded in
+the 002 entry above: the implementer owns the branch, the orchestrator owns push,
+PR, and merge. Nothing about the substance of the DoD line is reduced — the
+tracing and the independent verification both happened, and both are now
+enforced.
+
+---
+
+## 2026-07-30 · 114 (T99) — the pre-M9 baseline is captured from the pre-M9 commit, not stashed before the branches landed
+
+**Quoted DoD line.** *"Reference artifacts, event stream, and structural
+fingerprint are byte-identical to the pre-M9 baseline modulo legitimately varying
+fields; the baseline was captured before the M9 branches landed."*
+
+**Deviation.** The baseline was captured on 2026-07-30, after every M9 branch had
+merged, by checking out the pre-M9 tree (`5f87d11`, the last commit before any M9
+work) in a worktree and running the probe there. Its second clause — "captured
+before the M9 branches landed" — describes a sequencing that only the ticket's
+own author could have arranged, and T99 is written and executed last by
+construction.
+
+**Rationale.** What the clause is protecting is that the baseline comes from a
+pre-M9 **engine** rather than being re-derived from the head it is meant to
+check. Git holds that tree exactly, so capturing from the commit is not a
+weakening — it is *stronger* than a file stashed at the time, because it is
+reproducible by anyone from the recorded sha rather than trusted. The probe used
+is one checked-in file copied unmodified into the worktree, and its FNV-1a digest
+is recorded in the fixture's `PROVENANCE.md` and recomputed by the gate, so the
+comparison cannot silently become one program against another. `PROVENANCE.md`'s
+regeneration recipe names only the recorded pre-M9 commit, so re-capturing from
+the current head — the tautology the clause exists to prevent — is not the
+documented path. The comparison found no difference, so nothing was reclassified.
+
+**Operator decision.** Traces to the ticket's own Open questions section, which
+makes the rule explicit: *"If the behavioural-identity comparison finds a
+difference, the gate fails and the difference is investigated — it is not
+reclassified as an accepted change at gate time."* That rule is preserved intact;
+only the capture mechanism differs from the sentence's assumed sequencing.
