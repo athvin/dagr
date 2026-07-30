@@ -199,7 +199,11 @@ impl From<ScratchError> for TaskError {
 /// Cheap to clone (a clone shares the resolved path); the store keeps no open
 /// file handles between calls, so a `RunContext` carrying one stays `Send + Sync`
 /// and hand-constructable.
-#[derive(Debug, Clone)]
+/// A store **is** the namespace it resolved to, so it compares and hashes as one
+/// path: two handles on one node's namespace are the same store, and an unwired
+/// store equals only another unwired store. There is no interior mutability and
+/// no open file handle to make that untrue.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScratchStore {
     // The resolved directory for THIS node's namespace, and only this node's:
     // `<base>/<pipeline>/<run-id>/scratch/<node>/`. The handle exposes no method

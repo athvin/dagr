@@ -228,6 +228,9 @@ impl PoolCost {
     /// Read a node's declared cost from its [`CostVector`] — the
     /// controller consumes the declared-cost vectors without duplicating their
     /// definition.
+    ///
+    /// Equivalent to [`PoolCost::from`]/`.into()`; the two are one conversion
+    /// with two spellings and are asserted against a single fixture.
     #[must_use]
     pub fn from_cost_vector(cost: CostVector) -> Self {
         Self {
@@ -308,6 +311,17 @@ impl PoolCost {
             Pool::BlockingThreads => u64::from(self.blocking_threads),
             Pool::ComputeThreads => u64::from(self.compute_threads),
         }
+    }
+}
+
+/// The idiomatic spelling of [`PoolCost::from_cost_vector`], added **alongside**
+/// it rather than replacing it (`api-from-not-into`): a `From` impl is what
+/// `.into()`, `?`-adjacent code, and any generic bound on `Into<PoolCost>` can
+/// reach, while the named inherent constructor keeps the conversion greppable at
+/// its call sites. The two share one body, so they cannot drift.
+impl From<CostVector> for PoolCost {
+    fn from(cost: CostVector) -> Self {
+        Self::from_cost_vector(cost)
     }
 }
 

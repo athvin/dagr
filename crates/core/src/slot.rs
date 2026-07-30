@@ -465,6 +465,64 @@ impl<T: Send + Sync + 'static> Slot<T> {
     }
 }
 
+// The four slot capability types below hand-write `Debug` rather than derive it,
+// following the `Permit` / `ResidencyLease` precedent in `admission.rs`:
+//
+//   * a derive would emit `impl<T: Debug>`, so a slot on a non-`Debug` output —
+//     which the delivery model explicitly supports — would vanish from every
+//     `{:?}` diagnostic;
+//   * the shared `Arc<Mutex<Inner>>` interior is not usefully printable (locking
+//     it inside a formatter risks re-entrancy on the very lock a panicking reader
+//     may be holding), so the identity a diagnostic actually needs is printed and
+//     `finish_non_exhaustive()` records that the interior was deliberately
+//     omitted rather than silently dropped.
+//
+// The node name is read through the recovering `lock` helper, so formatting a
+// slot whose lock a panicking consumer poisoned still produces a diagnostic —
+// the one moment a diagnostic matters most.
+impl<T> std::fmt::Debug for Slot<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = lock(&self.inner);
+        f.debug_struct("Slot")
+            .field("node", &inner.name)
+            .field("filled", &matches!(inner.content, Content::Filled(_)))
+            .field("retained", &inner.retained)
+            .field("consumers", &inner.total_consumers)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for SlotRef<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = lock(&self.inner);
+        f.debug_struct("SlotRef")
+            .field("node", &inner.name)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for ConsumerLease<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = lock(&self.inner);
+        f.debug_struct("ConsumerLease")
+            .field("node", &inner.name)
+            .field("marked_terminal", &self.marked_terminal)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> std::fmt::Debug for RedemptionHandle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = lock(&self.inner);
+        f.debug_struct("RedemptionHandle")
+            .field("node", &inner.name)
+            .field("retained", &inner.retained)
+            .field("redeemable", &matches!(inner.content, Content::Filled(_)))
+            .finish_non_exhaustive()
+    }
+}
+
 /// Which delivery mode a [`SlotRef`] was minted for — the
 /// [`ReceiveMode`](crate::binding::ReceiveMode) its edge declared, carried on the
 /// reference so the runner knows which delivery method to call

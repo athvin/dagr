@@ -305,7 +305,13 @@ pub enum CancellationOrigin {
 /// context. The **subscriber integration** — structured-vs-human output,
 /// third-party line capture, secret scrubbing on framework paths — is handled by
 /// the logging integration.
-#[derive(Debug, Clone)]
+/// A span **is** its identity triple, so it compares and hashes as one: two
+/// spans naming the same run, node, and attempt are the same span. That is what
+/// lets a subscriber or a test key a map on a span rather than on a reassembled
+/// string. `Copy` is deliberately absent — [`RunId`] is `String`-backed, so a
+/// span owns a heap allocation and copying it would hide that cost
+/// (`own-clone-explicit`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LogSpan {
     run: RunId,
     node: NodeId,

@@ -123,7 +123,14 @@ pub const UNKNOWN_WORKER: &str = "unknown";
 /// A fold failure. The fold is tolerant of exactly one *trailing* partial
 /// record; anything else that prevents producing a faithful artifact is
 /// one of these.
-#[derive(Debug)]
+///
+/// Both variants carry plain data (a line index, or nothing), so the type gets
+/// every trait its fields freely allow (`api-common-traits`): a caller can match
+/// on it, compare it, copy it, and key a map on it, rather than asserting on a
+/// substring of its `Display`. It carries no underlying cause — the fold's
+/// tolerance boundary *is* the whole diagnostic — so `source()` is correctly
+/// `None` and nothing is given up by deriving here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FoldError {
     /// A record could not be parsed and it was **not** the single tolerated
     /// trailing partial — a non-final corruption, or a second trailing

@@ -227,10 +227,20 @@ pub trait DurableOutput {
 /// The **fluent setters** ([`content_hash`](Self::content_hash),
 /// [`size_bytes`](Self::size_bytes), [`scheme`](Self::scheme),
 /// [`produced_at_offset_ns`](Self::produced_at_offset_ns)) build the value; the
-/// distinctly-named **read accessors** ([`get_content_hash`](Self::get_content_hash),
-/// [`get_size_bytes`](Self::get_size_bytes), [`get_scheme`](Self::get_scheme),
-/// [`get_produced_at_offset_ns`](Self::get_produced_at_offset_ns)) read it back —
-/// the same builder/getter split [`NodePolicy`] uses.
+/// distinctly-named **read accessors**
+/// ([`recorded_content_hash`](Self::recorded_content_hash),
+/// [`recorded_size_bytes`](Self::recorded_size_bytes),
+/// [`recorded_scheme`](Self::recorded_scheme),
+/// [`recorded_produced_at_offset_ns`](Self::recorded_produced_at_offset_ns)) read
+/// it back — the same builder/getter split [`NodePolicy`] uses.
+///
+/// A getter and its consuming builder setter cannot share a name in Rust, and
+/// Rust convention has no `get_` prefix for a plain read (`name-no-get-prefix`),
+/// so the getters carry the `recorded_` qualifier — the same resolution
+/// [`NodePolicy`] (`is_durable`, `retry_count`, `backoff_shape`,
+/// `timeout_budget`) and [`PoolCost`](crate::admission::PoolCost)
+/// (`working_memory_bytes`, `blocking_thread_count`) already use. It reads as
+/// what it is: what the impl *recorded*, if anything.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DurableReferenceMeta {
     content_hash: Option<String>,
@@ -282,25 +292,25 @@ impl DurableReferenceMeta {
 
     /// The recorded content hash, if any — the impl's opaque digest resume verifies.
     #[must_use]
-    pub fn get_content_hash(&self) -> Option<&str> {
+    pub fn recorded_content_hash(&self) -> Option<&str> {
         self.content_hash.as_deref()
     }
 
     /// The recorded size in bytes, if any.
     #[must_use]
-    pub fn get_size_bytes(&self) -> Option<u64> {
+    pub fn recorded_size_bytes(&self) -> Option<u64> {
         self.size_bytes
     }
 
     /// The recorded scheme, if any.
     #[must_use]
-    pub fn get_scheme(&self) -> Option<&str> {
+    pub fn recorded_scheme(&self) -> Option<&str> {
         self.scheme.as_deref()
     }
 
     /// The recorded produced-at monotonic offset (nanoseconds), if any.
     #[must_use]
-    pub fn get_produced_at_offset_ns(&self) -> Option<u64> {
+    pub fn recorded_produced_at_offset_ns(&self) -> Option<u64> {
         self.produced_at_offset_ns
     }
 

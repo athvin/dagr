@@ -228,7 +228,12 @@ struct RawLimits {
 /// temp dir) or [`from_host`](Self::from_host) (production: rooted at `/`, host
 /// cores from `available_parallelism`). Attach optional [pins](Self::with_pins) and
 /// a non-default [headroom](Self::with_headroom), then call [`detect`](Self::detect).
-#[derive(Debug, Clone)]
+/// A probe **is** its configuration (root, host cores, headroom, pins), so two
+/// identically-configured probes compare equal and a test can assert that a
+/// builder chain produced the probe it meant to. `Eq`/`Hash` are deliberately
+/// absent: `headroom` is an `f64`, and a type carrying a float has no total
+/// equality to offer (`num-float-compare`).
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContainerLimitProbe {
     root: PathBuf,
     host_cores: u32,

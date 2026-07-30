@@ -107,6 +107,25 @@ impl GraphArtifact {
     }
 }
 
+/// The idiomatic spelling of [`GraphArtifact::from_json_str`], added
+/// **alongside** it rather than replacing it (`conv-tryfrom-fallible`,
+/// `api-from-not-into`): parsing from a string is fallible, so `TryFrom<&str>` is
+/// the conversion trait that fits, and it is what `.try_into()` and any generic
+/// bound on `TryFrom<&str>` can reach. The named inherent reader stays, so no
+/// call site changes and the parse remains greppable. Both spellings share one
+/// body, so they cannot drift.
+impl TryFrom<&str> for GraphArtifact {
+    type Error = RenderError;
+
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Malformed`] exactly as
+    /// [`GraphArtifact::from_json_str`] does — same input, same diagnostic.
+    fn try_from(json: &str) -> Result<Self, Self::Error> {
+        Self::from_json_str(json)
+    }
+}
+
 /// A failure to read or render a graph artifact.
 ///
 /// The variant **carries the deserializer's own error**, not a string copy of it.

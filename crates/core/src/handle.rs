@@ -220,6 +220,24 @@ impl<T> Handle<T> {
     }
 }
 
+// Manual `Debug` — NOT `#[derive]`, for the same reason `Clone`/`Copy` above are
+// manual: a derive would emit `impl<T: Debug>`, so a handle on a value type that
+// is not itself `Debug` (the common case — a handle carries `fn() -> T` and owns
+// no `T`) would silently drop out of every `{:?}` diagnostic. The unconditional
+// impl keeps a handle printable for every `T`.
+//
+// `finish_non_exhaustive()` follows the `Permit`/`ResidencyLease` precedent
+// (`admission.rs`): the `value: PhantomData<fn() -> T>` marker carries no runtime
+// information and printing it would only add noise, so the identity is shown and
+// the marker is recorded as omitted rather than silently dropped.
+impl<T> std::fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Test-only construction seam for this crate's own unit tests.
 ///
 /// The registration seam ([`Handle::for_registration`]) is `pub(crate)`, so an

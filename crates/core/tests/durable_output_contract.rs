@@ -252,13 +252,13 @@ fn an_impl_may_supply_durable_reference_metadata() {
     let meta = produced
         .durable_reference_meta()
         .expect("this impl supplies metadata");
-    assert_eq!(meta.get_scheme(), Some("file"));
+    assert_eq!(meta.recorded_scheme(), Some("file"));
     assert_eq!(
-        meta.get_size_bytes(),
+        meta.recorded_size_bytes(),
         Some("the-produced-bytes".len() as u64)
     );
-    assert_eq!(meta.get_produced_at_offset_ns(), Some(4242));
-    let hash = meta.get_content_hash().expect("a content hash is supplied");
+    assert_eq!(meta.recorded_produced_at_offset_ns(), Some(4242));
+    let hash = meta.recorded_content_hash().expect("a content hash is supplied");
     assert!(
         hash.starts_with("fnv:"),
         "the content hash is the impl's own opaque digest, carried verbatim"
@@ -272,13 +272,13 @@ fn durable_reference_meta_fields_are_each_optional() {
     // A partial metadata value — only a content hash — is expressible; every
     // other field stays None.
     let meta = DurableReferenceMeta::new().content_hash("sha256:abc");
-    assert_eq!(meta.get_content_hash(), Some("sha256:abc"));
-    assert_eq!(meta.get_size_bytes(), None);
-    assert_eq!(meta.get_scheme(), None);
-    assert_eq!(meta.get_produced_at_offset_ns(), None);
+    assert_eq!(meta.recorded_content_hash(), Some("sha256:abc"));
+    assert_eq!(meta.recorded_size_bytes(), None);
+    assert_eq!(meta.recorded_scheme(), None);
+    assert_eq!(meta.recorded_produced_at_offset_ns(), None);
     // An entirely empty metadata value is also expressible (all fields None).
     let empty = DurableReferenceMeta::new();
-    assert_eq!(empty.get_content_hash(), None);
+    assert_eq!(empty.recorded_content_hash(), None);
     assert!(empty.is_empty());
 }
 

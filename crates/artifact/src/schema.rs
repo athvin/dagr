@@ -148,7 +148,12 @@ pub fn published_schema_versions(kind: ArtifactKind) -> Vec<u32> {
 /// The outcome of a failed schema validation, naming the artifact and the
 /// reason so tests and CI can assert on it — an actionable error identifying the
 /// artifact and reason on failure.
-#[derive(Debug)]
+///
+/// Both fields are owned `String`s already rendered by the validator, so the
+/// type gets every trait they freely allow (`api-common-traits`) — a corpus check
+/// can collect, deduplicate, and compare failures rather than re-parsing their
+/// `Display` form.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SchemaValidationError {
     /// Human-readable identity of the artifact that failed (kind + version, and
     /// the source path when validating a corpus fixture).
