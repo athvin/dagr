@@ -1134,6 +1134,29 @@ impl RunContext {
     /// hook. A value written on one attempt is readable on the next. A context
     /// built with **no run store** carries an honestly-unwired store that never
     /// pretends to persist (see [`ScratchStore`]).
+    ///
+    /// # This store blocks — mind your execution class
+    ///
+    /// [`ScratchStore::get`], [`put`](ScratchStore::put) and
+    /// [`remove`](ScratchStore::remove) are **synchronous and do real blocking file
+    /// I/O**. A single `put` writes a temporary file, **fsyncs** it, renames it into
+    /// place, and then **fsyncs the containing directory** — that is what makes the
+    /// write crash-safe, and it is not cheap. The default
+    /// [`ExecutionClass`](crate::task::ExecutionClass) is
+    /// [`AwaitBound`](crate::task::ExecutionClass::AwaitBound), whose attempts are
+    /// driven on the **async worker** pool, so a checkpoint written from a default
+    /// task **blocks an async worker across two fsyncs** — and nothing in the type
+    /// system warns you, because there is no async scratch API to reach for instead:
+    /// `dagr-core` carries no runtime dependency (arch.md "Stability"), so it cannot
+    /// offer one.
+    ///
+    /// **The remedy is to declare the node
+    /// [`Blocking`](crate::task::ExecutionClass::Blocking)** — through
+    /// `Task::EXECUTION_CLASS` or a policy override. Blocking nodes run on the
+    /// dedicated blocking pool, where occupying a thread for the duration of an
+    /// fsync is exactly the intended behaviour. A task that only reads scratch
+    /// occasionally, or writes a few kilobytes once per attempt, is fine as-is; a
+    /// task that checkpoints in a loop is not.
     #[must_use]
     pub fn scratch(&self) -> &ScratchStore {
         &self.scratch
