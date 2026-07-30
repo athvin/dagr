@@ -340,7 +340,21 @@ impl fmt::Display for StructureAssertError {
     }
 }
 
-impl std::error::Error for StructureAssertError {}
+impl std::error::Error for StructureAssertError {
+    /// The two **wrapping** variants expose their cause; [`Mismatch`] does not,
+    /// because it carries a computed [`StructureDiff`] rather than an underlying
+    /// error — a fabricated link there would be a lie about where the failure came
+    /// from.
+    ///
+    /// [`Mismatch`]: StructureAssertError::Mismatch
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mismatch(_) => None,
+            Self::Emit(e) => Some(e),
+            Self::Io(e) => Some(e),
+        }
+    }
+}
 
 impl From<GraphEmitError> for StructureAssertError {
     fn from(e: GraphEmitError) -> Self {

@@ -474,7 +474,12 @@ fn parse_meminfo_total_bytes(raw: &str) -> Option<u64> {
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "headroom is a deliberate f64 round-trip over a byte count: the precision \
+              loss above 2^53 bytes (8 PiB) is irrelevant to a container limit, the \
+              truncation is the `floor` this function exists to apply, and the sign loss \
+              cannot occur because `headroom` is clamped to [0, 1) so the product is \
+              non-negative"
 )]
 fn apply_headroom_u64(raw: u64, headroom: f64) -> u64 {
     let kept = (raw as f64 * (1.0 - headroom)).floor();
@@ -486,7 +491,10 @@ fn apply_headroom_u64(raw: u64, headroom: f64) -> u64 {
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "the u32 twin of `apply_headroom_u64`: `f64::from(u32)` is exact, the \
+              truncation is the intended `floor`, and a headroom clamped to [0, 1) keeps \
+              the product non-negative"
 )]
 fn apply_headroom_u32(raw: u32, headroom: f64) -> u32 {
     let kept = (f64::from(raw) * (1.0 - headroom)).floor();

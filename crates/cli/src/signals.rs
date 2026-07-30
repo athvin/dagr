@@ -93,9 +93,15 @@ impl SignalRouter {
     /// every subsequent signal idempotently (re-entry hardened — no shortcut of the
     /// final flush).
     ///
-    /// Poison-tolerant: a panic in a prior handler that poisoned the count is
-    /// recovered from rather than propagated, so a signal is never dropped on the
-    /// floor because of an unrelated panic.
+    /// Poison policy: recover. This is the *recovering* half of the workspace rule
+    /// (recover where user-or-defect code can panic while the lock is held, panic
+    /// otherwise — [`crate::driver`] and [`dagr_core::admission`] are the panicking
+    /// half), and it applies here for a concrete reason: the cancel handle is fired
+    /// **while this lock is held**, so a panic anywhere beneath `fire()` poisons
+    /// the count. Dropping every later signal on the floor because an unrelated
+    /// handler panicked would leave the operator unable to cancel a run at exactly
+    /// the moment they most need to. The guarded state is a single `u32`, so a
+    /// recovered guard sees a consistent value.
     pub fn on_signal(&self) {
         let handle = self.handle.clone();
         let mut count = self
@@ -107,7 +113,10 @@ impl SignalRouter {
     }
 
     /// Whether at least one signal has been routed (fired the cancel handle).
-    /// Poison-tolerant (recovers a poisoned count rather than panicking).
+    ///
+    /// Poison policy: recover — the same count, the same reason as
+    /// [`on_signal`](Self::on_signal): an observer must not panic because an
+    /// unrelated handler did.
     #[must_use]
     pub fn was_fired(&self) -> bool {
         *self

@@ -364,11 +364,17 @@ struct MemorySink {
 }
 impl MemorySink {
     fn bytes(&self) -> Vec<u8> {
+        // Poison policy: panic — nothing but a byte-vector append runs under this
+        // lock, so poisoning means the framework panicked inside its own critical
+        // section and the captured stream is half-written; reading it back would
+        // report a stream that was never produced (the workspace rule: recover
+        // where user-or-defect code can panic under the lock, panic otherwise).
         self.lines.lock().expect("sink mutex not poisoned").clone()
     }
 }
 impl EventSink for MemorySink {
     fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
+        // Poison policy: panic — the same buffer, the same reason as `bytes`.
         self.lines
             .lock()
             .expect("sink mutex not poisoned")

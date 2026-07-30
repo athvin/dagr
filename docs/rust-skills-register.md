@@ -80,16 +80,16 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
 | err-anyhow-app | err | n-a | — | M9 adds no runtime dependency; the CLI already returns typed errors mapped to a `ExitCode`, which is stronger than an opaque `anyhow` chain |
-| err-context-chain | err | adopt | T95 | the wrapping types that drop their cause are exactly what T95 fixes |
+| err-context-chain | err | adopt | T95 | T95 restored the chain on all six types: `GraphVerbError`, `StructureAssertError`, `OpenError`, `WriteError` override `source()`; `RenderError` and `ReadError` now carry the real `serde_json::Error` instead of a string of it |
 | err-custom-type | err | satisfied | — | 29 domain error types implement `std::error::Error`; no `String` or `Box<dyn Error>` is returned as an API error |
 | err-doc-errors | err | adopt | T96 | clippy reports zero missing `# Errors` today; T96 promotes the lint from warn to deny so it stays that way |
-| err-expect-bugs-only | err | adopt | T95 | 31 of 33 production sites are provable invariants; T95 classifies the remainder and documents the invariants |
+| err-expect-bugs-only | err | adopt | T95 | T95 classified all of them: the provable-invariant sites are recorded clean below, and the four runtime-builder `expect`s are recorded as an accepted, named bootstrap-panic surface |
 | err-from-impl | err | satisfied | — | six `From` impls target error types and are used through `?` at their call sites |
-| err-lowercase-msg | err | adopt | T95 | `ResumeRefusal`'s five variants and `BootstrapRefusal` are full sentences with trailing stops; T95 reconciles or records them |
-| err-no-unwrap-prod | err | adopt | T95 | T95 fixes the genuinely fallible sites and enables `clippy::unwrap_used` |
+| err-lowercase-msg | err | adopt | T95 | T95 reconciled them as a **deliberate exception**: operator-facing refusal text is terminal prose, not a chain fragment — see "Refusal messages are prose" below |
+| err-no-unwrap-prod | err | adopt | T95 | T95 fixed the one genuinely-unjustified production `unwrap` (a `Mutex` lock in the T63 demo) and classified the rest; promoting `clippy::unwrap_used` is **declined** — see "`clippy::unwrap_used` is not promoted" below |
 | err-question-mark | err | satisfied | — | `?` is the propagation form throughout; the `map_err` sites convert, they do not branch |
 | err-result-over-panic | err | satisfied | — | every recoverable failure is a `Result`; the panic sites are documented framework-invariant violations |
-| err-source-chain | err | adopt | T95 | four types wrap a real cause but leave `impl Error` empty, so `source()` returns `None` |
+| err-source-chain | err | adopt | T95 | T95 gave all four wrapping types a `source()` override and left `None` where a variant genuinely has no cause; asserted per type by the `error_source_chain` suites |
 | err-thiserror-lib | err | n-a | — | `dagr-core` is zero-runtime-dependency by architectural commitment (arch.md "Stability", ADR 081/082); its hand-written types already provide everything `thiserror` generates |
 
 ## 3 · Memory Optimization (`mem-`, 17)
@@ -204,8 +204,8 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | num-cast-try-from | num | satisfied | — | 13 `as` casts in all of production; the seven widening ones are exact and all six precision-affecting ones carry a reviewed `#[allow]` |
 | num-float-compare | num | satisfied | — | zero float `==` comparisons in production; the headroom comparisons use an epsilon |
 | num-nonzero | num | satisfied | — | `NonZero` types are used where zero is invalid; pool sizes clamp to at least one |
-| num-overflow-explicit | num | adopt | T95 | 25 sites already use `checked_`/`saturating_`; T95 fixes the one non-saturating counter decrement that breaks the pattern |
-| num-saturating-clamp | num | adopt | T95 | the headroom path already clamps; T95 brings the driver's in-flight counter onto the same discipline |
+| num-overflow-explicit | num | adopt | T95 | T95 brought the last outlier onto the pattern: the driver's `in_flight` decrement saturates and asserts its paired invariant, so all 26 counter sites are explicit |
+| num-saturating-clamp | num | adopt | T95 | done: `in_flight = in_flight.saturating_sub(1)` — a wrapped counter would have turned `while in_flight > 0` into a non-terminating loop under the release profile |
 
 ## 10 · Type Safety (`type-`, 13)
 
@@ -284,7 +284,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | macro-fragment-specifiers | macro | satisfied | — | the internal declarative macros capture with precise specifiers rather than raw `:tt` |
 | macro-prefer-functions | macro | satisfied | — | `#[task]`/`#[dag]` exist because a function cannot generate a trait impl or a link-time registration; the tuple-arity impls likewise cannot be written generically |
 | macro-private-helpers | macro | satisfied | — | generated code targets existing public items and the sealed marker traits, so no helper surface leaks into the docs |
-| macro-proc-error-spans | macro | adopt | T95 | the crate already emits spanned `syn::Error` → `compile_error!` everywhere; T95 addresses the one internal `unreachable!` |
+| macro-proc-error-spans | macro | adopt | T95 | T95 replaced the one internal `unreachable!` in `take_run` with a spanned `syn::Error`, so no path in the proc macro panics inside the compiler |
 | macro-proc-syn-quote | macro | satisfied | — | `dagr-macros` is built on `syn`, `quote`, and `proc-macro2`, all build-time only |
 | macro-proc-two-crate | macro | satisfied | — | `dagr-macros` is a dedicated `proc-macro = true` crate re-exported through `dagr-core` and `dagr-cli` behind features (ADR 082) |
 | macro-rules-hygiene | macro | satisfied | — | the declarative macros rely on hygiene; the proc-macro expansions use fully-qualified `::dagr_core::` / `::inventory::` paths |
@@ -362,7 +362,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | doc-intra-links | doc | satisfied | — | intra-doc links are used throughout and `rustdoc::broken_intra_doc_links` is denied in CI |
 | doc-link-types | doc | satisfied | — | same enforcement: a broken type link fails the rustdoc job |
 | doc-module-inner | doc | satisfied | — | every one of the production `.rs` files opens with a `//!` module doc; zero exceptions |
-| doc-panics-section | doc | adopt | T95 | clippy reports none missing; T95 adds the sections for the slot state-machine invariants it documents |
+| doc-panics-section | doc | adopt | T95 | verified by T95: clippy reports none missing and the slot state-machine's panicking readers (`read`, `clone_value`, `ConsumerLease::read`/`take`) each already carry a `# Panics` section naming the framework defect |
 | doc-question-mark | doc | adopt | T96 | four executed doctests use `.unwrap()`; T96 converts them to `?` |
 | doc-safety-section | doc | satisfied | — | the one production `unsafe impl` carries its safety argument, and `unsafe_code` is surfaced for review by lint |
 
@@ -370,7 +370,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
-| obs-error-chain | obs | adopt | T95 | logging the full chain is only possible once `source()` returns it, which is T95's fix |
+| obs-error-chain | obs | adopt | T95 | unblocked by T95: `source()` now returns the cause on every wrapping type, so a chain-walking logger reaches the emitter/libSQL/deserializer diagnostic instead of the wrapper's summary |
 | obs-instrument-spans | obs | satisfied | — | every attempt runs beneath a span carrying run/node/attempt identity, so any line is attributable without correlating timestamps (C25) |
 | obs-levels-filter | obs | satisfied | — | levels are used meaningfully and an env var selects the output mode; `env-filter` is deliberately omitted so `regex`/`matchers` stay out of the tree |
 | obs-library-facade | obs | satisfied | — | `dagr-core` emits nothing and installs no subscriber — it exposes only a dependency-free `LogSpan` payload; the subscriber install lives in the binary crate |
@@ -426,7 +426,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | lint-missing-docs | lint | adopt | T96 | at `warn` today, effectively denied by `warnings = "deny"`; T96 makes the intent explicit and retires the stale deferral note |
 | lint-pedantic-selective | lint | satisfied | — | `pedantic` is denied wholesale with exactly two documented exceptions, each justified in `docs/lint-policy.md`'s table — `module_name_repetitions` (the C-numbered module names read fine repeated) and `collapsible_if` (added by T94: its edition-2024 fix *is* a let-chain, and adopting let-chains at call sites is deferred, so denying it would demand a change this milestone declined). Still stricter than selective adoption |
 | lint-rustfmt-check | lint | satisfied | — | `cargo fmt --all --check` runs as its own CI job |
-| lint-unsafe-doc | lint | adopt | T95 | T95 enables `clippy::undocumented_unsafe_blocks`, making the safety-comment convention mechanical |
+| lint-unsafe-doc | lint | adopt | T95 | T95 enabled `clippy::undocumented_unsafe_blocks` workspace-wide; it cost exactly one new `// SAFETY:` (on the `unsafe impl GlobalAlloc`), because T94 had already commented every block |
 | lint-warn-complexity | lint | satisfied | — | denied, not warned, via the `clippy::all` group |
 | lint-warn-perf | lint | satisfied | — | denied via the `clippy::all` group |
 | lint-warn-style | lint | satisfied | — | denied via the `clippy::all` group |
@@ -439,19 +439,104 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | anti-clone-excessive | anti | adopt | T97 | T97 removes the per-append full-buffer clone in the metastore live sink — an O(n) copy per event, quadratic over a run |
 | anti-collect-intermediate | anti | satisfied | — | no intermediate collect exists to remove; `clippy::needless_collect` is denied |
-| anti-empty-catch | anti | adopt | T95 | the ~25 discarded `writeln!` results are deliberate but undocumented; T95 states the convention once per module instead of 25 times |
-| anti-expect-lazy | anti | adopt | T95 | T95 classifies every production `expect` as provable-invariant or genuinely fallible and fixes the latter |
+| anti-empty-catch | anti | adopt | T95 | T95 stated the write-discard convention once in each of `registry.rs` and `contract.rs` ("operator-facing output is a courtesy, never a result") rather than 25 times |
+| anti-expect-lazy | anti | adopt | T95 | T95 classified every production `expect`; each `Mutex` site now also states its poisoning policy and the reason, so no `expect` is left as a shrug |
 | anti-format-hot-path | anti | satisfied | — | no `format!` sits in a measured hot loop; the per-row SQL builders are bounded by pipeline size and run once per event |
 | anti-index-over-iter | anti | satisfied | — | the only indexing is macro-generated compile-time-constant tuple access, not runtime indexing |
 | anti-lock-across-await | anti | adopt | T97 | audited clean; T97 enables `clippy::await_holding_lock` so it stays clean mechanically rather than by review |
 | anti-over-abstraction | anti | satisfied | — | the generic surface is driven by the typed-handle guarantees; dynamic dispatch is used exactly where types are heterogeneous |
-| anti-panic-expected | anti | adopt | T95 | T95 resolves the `slot.fill` discard, where the recorded outcome and the code's comment disagree |
+| anti-panic-expected | anti | adopt | T95 | resolved: the **code** was wrong, not the comment — a rejected `slot.fill` is now `AttemptOutcome::PermanentFailure`, not a `Succeeded` over a discarded value |
 | anti-premature-optimize | anti | adopt | T97 | this rule *constrains* T97: no allocation change lands without a measurement, and the unmeasured candidates are recorded as declined |
 | anti-string-for-str | anti | satisfied | — | zero `&String` parameters; `clippy::ptr_arg` is denied |
 | anti-stringly-typed | anti | satisfied | — | enums and newtypes carry the closed vocabularies; strings remain only for genuinely open data |
 | anti-type-erasure | anti | satisfied | — | boxing appears only where a trait must stay dyn-compatible or a future must be stored across polls, each documented at the site |
-| anti-unwrap-abuse | anti | adopt | T95 | T95 fixes the genuinely fallible production sites and enables `clippy::unwrap_used` to hold the line |
+| anti-unwrap-abuse | anti | adopt | T95 | T95 fixed the unjustified production `unwrap` and documented the remainder; the lint that would "hold the line" is declined with reasons below |
 | anti-vec-for-slice | anti | satisfied | — | zero `&Vec<T>` parameters; `clippy::ptr_arg` is denied |
+
+---
+
+## Decisions recorded by T95 (error chains, panics, arithmetic)
+
+Ticket 110 (T95,
+[`docs/implementation/110-T95-error-chain-and-panic-hardening.md`](implementation/110-T95-error-chain-and-panic-hardening.md))
+audited every `impl Error` block, every production `unwrap`/`expect`, every `as`
+cast, and every `let _ =` discard. Four defects were fixed; the rest is recorded
+here, because a finding that is only ever "checked once" is a finding that rots.
+
+### The mutex-poisoning rule
+
+The workspace ran **two** poisoning philosophies with nothing to choose between
+them: `core::slot` and `cli::signals` recovered
+(`unwrap_or_else(PoisonError::into_inner)`), while `core::admission`, `cli::driver`
+and the in-memory sinks panicked. Both are defensible; having both, undocumented,
+is not. T95 reconciled them under one rule, stated at every lock site:
+
+> **Recover** where user-or-defect code can panic *while the lock is held*;
+> **panic** otherwise.
+
+That rule reproduces both existing behaviours, and it explains them. `Slot`'s lock
+is the one lock in the workspace that a *documented, expected* panic poisons —
+`read_arc` panics loudly on read-before-fill while holding it — so a panicking
+policy there would convert one node's defect into a wedged run for every other
+node, hiding the original diagnostic behind an unrelated one. `SignalRouter` fires
+the cancel handle under its lock, so a panic beneath `fire()` must not cost the
+operator the ability to cancel a later run. Every other lock in production guards a
+short bookkeeping mutation with no task body, no user callback and no defect
+assertion under it, so a poisoned one can only mean the framework panicked inside
+its own critical section and left the state half-written — and continuing on that
+would corrupt the run record the state exists to produce.
+
+### Refusal messages are prose, and stay prose
+
+`err-lowercase-msg` wants terse, lowercase, punctuation-free fragments, because an
+error message is usually a *chain fragment* that gets composed into a longer
+sentence by its wrapper. `ResumeRefusal`'s five variants and `BootstrapRefusal` are
+not that. They are **terminal operator-facing text**: multi-sentence explanations
+that name the offending node, both fingerprints, and the action to take, printed
+directly to a human who is deciding what to do next. They already satisfy the
+rule's lowercase-initial half; what they do not satisfy is single-fragment brevity,
+and they should not — a refusal that fits the convention would have to stop
+explaining itself. Several are pinned verbatim by tests, which is the correct
+treatment for text that is part of the operator contract. Recorded as a
+**deliberate exception**, not an oversight; the convention continues to bind every
+non-refusal message.
+
+### The accepted bootstrap-panic surface
+
+Four `.expect()`s build a runtime and are genuinely fallible — OS thread
+exhaustion under a tight container `ulimit` is a real scenario:
+`crates/cli/src/dispatch.rs` (the task and blocking runtimes) and
+`crates/cli/src/driver.rs` (the framework runtime and the teardown-phase runtime).
+They are **deliberately fatal**: a run that cannot build its execution surfaces has
+not started, so there is nothing to record and no partial state to explain. Routing
+them into `BootstrapFailure` would be more honest about the *exit code*, and is a
+larger change than this ticket's scope. Recorded as a **known, accepted panic
+surface** with a named revisit, rather than left as an unexamined `expect`.
+
+### `clippy::unwrap_used` is not promoted
+
+The obvious mechanical follow-through to the unwrap audit would be to deny
+`clippy::unwrap_used` in production. T95 declines it. The audit found 31 of 33
+sites provably infallible with their invariant already documented at the call
+(a `char::from_digit` on a value masked to 4 bits; a `get_mut` on a key inserted
+two lines above), and the lint cannot tell those from a genuine risk. Denying it
+would replace 31 documented invariants with 31 `#[expect]` attributes — strictly
+less information, and a review signal that has been trained to mean nothing. The
+one site that was *not* justified (a `Mutex` lock in the T63 demo) was fixed. The
+line is held by the audit and by this record, not by a lint that would cry wolf.
+
+### Recorded as clean, not changed
+
+Verified during the audit and now asserted mechanically by
+`crates/cli/tests/error_chain_and_panic_hardening.rs`, so the claims cannot go
+quietly stale:
+
+- **zero** `todo!` / `unimplemented!` anywhere in production;
+- **zero** float `==` comparisons;
+- **zero** missing `# Errors` / `# Panics` sections (clippy's `missing_errors_doc`
+  and `missing_panics_doc` both report none);
+- every production `Mutex` lock site states its poisoning policy and reason;
+- every `#[allow(clippy::cast_*)]` carries a `reason`.
 
 ---
 

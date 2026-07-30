@@ -374,7 +374,13 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
             .map(|b| String::from_utf8_lossy(b).into_owned()),
         // What the re-executing consumer RECEIVED — the rehydrated durable value,
         // traced end-to-end (never a constant next to the assertion).
-        "consumer_received": consumer_capture.lock().unwrap().clone(),
+        // Poison policy: panic — only the capture cell's own read/write runs under
+        // this lock, so poisoning means the framework panicked inside its own
+        // critical section and the demo's traced value is half-written.
+        "consumer_received": consumer_capture
+            .lock()
+            .expect("capture cell mutex not poisoned")
+            .clone(),
     });
     if let Err(e) = std::fs::write(
         result_path,
@@ -402,12 +408,22 @@ struct CaptureSink {
 }
 impl CaptureSink {
     fn bytes(&self) -> Vec<u8> {
-        self.lines.lock().unwrap().clone()
+        // Poison policy: panic — nothing but a byte-vector read runs under this
+        // lock, so poisoning means the captured stream is half-written and reading
+        // it back would report a stream that was never produced.
+        self.lines
+            .lock()
+            .expect("capture sink mutex not poisoned")
+            .clone()
     }
 }
 impl EventSink for CaptureSink {
     fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
-        self.lines.lock().unwrap().extend_from_slice(line);
+        // Poison policy: panic — the same buffer, the same reason as `bytes`.
+        self.lines
+            .lock()
+            .expect("capture sink mutex not poisoned")
+            .extend_from_slice(line);
         Ok(())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -424,13 +440,27 @@ struct TeeSink {
 }
 impl EventSink for TeeSink {
     fn append_line(&mut self, line: &[u8]) -> io::Result<()> {
-        if let Some(f) = self.file.lock().unwrap().as_mut() {
+        // Poison policy: panic — the lock guards only the optional file handle; a
+        // poisoned one means the framework panicked mid-swap, and writing through a
+        // half-swapped handle would corrupt the on-disk stream.
+        if let Some(f) = self
+            .file
+            .lock()
+            .expect("tee file mutex not poisoned")
+            .as_mut()
+        {
             f.append_line(line)?;
         }
         self.capture.append_line(line)
     }
     fn flush(&mut self) -> io::Result<()> {
-        if let Some(f) = self.file.lock().unwrap().as_mut() {
+        // Poison policy: panic — the same file handle, the same reason as above.
+        if let Some(f) = self
+            .file
+            .lock()
+            .expect("tee file mutex not poisoned")
+            .as_mut()
+        {
             f.flush()?;
         }
         self.capture.flush()

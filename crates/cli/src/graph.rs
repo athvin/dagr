@@ -295,7 +295,20 @@ impl fmt::Display for GraphVerbError {
     }
 }
 
-impl std::error::Error for GraphVerbError {}
+impl std::error::Error for GraphVerbError {
+    /// Both variants **wrap** a genuine underlying error, so both expose it: a
+    /// caller that walks the chain (a logger, a `{:#}`-style reporter) reaches the
+    /// emitter's own diagnostic or the OS's I/O reason, not just this wrapper's
+    /// one-line summary. dagr's pitch is explaining a run after the fact, and a
+    /// truncated chain is exactly the diagnostic that sends an operator back into
+    /// the logs.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Emit(e) => Some(e),
+            Self::Io(e) => Some(e),
+        }
+    }
+}
 
 impl From<GraphEmitError> for GraphVerbError {
     fn from(e: GraphEmitError) -> Self {

@@ -85,6 +85,12 @@ pedantic = { level = "deny", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "warn"
 collapsible_if = "allow"
+# Every `unsafe` block and `unsafe impl` must carry a `// SAFETY:` comment
+# (rust-skills `lint-unsafe-doc`, adopted by T95). dagr targets safe Rust and its
+# `unsafe` surface is a single `GlobalAlloc` impl, so the convention was already
+# universal — denying it makes it mechanical instead of a review habit, which is
+# the point: the next `unsafe` block cannot land without stating why it is sound.
+undocumented_unsafe_blocks = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

@@ -249,8 +249,18 @@ fn take_run(item: &mut ItemImpl) -> syn::Result<syn::ImplItemFn> {
             "#[task] requires an `async fn run` in the impl block",
         ));
     };
+    // The index came from a `matches!(ImplItem::Fn(..))` scan two statements
+    // above, so the removed item is always an `ImplItem::Fn`. It is reported as a
+    // spanned macro error rather than asserted with `unreachable!`, because a
+    // proc macro that panics panics *inside the compiler*: the user sees a macro
+    // ICE with no span instead of a diagnostic pointing at their code
+    // (`macro-proc-error-spans`). Every other exit from this crate is a spanned
+    // `syn::Error`; this is the last one that was not.
     let ImplItem::Fn(run) = item.items.remove(idx) else {
-        unreachable!("index located an ImplItem::Fn");
+        return Err(syn::Error::new(
+            item.span(),
+            "#[task] internal error: the located `run` item was not a function",
+        ));
     };
     if run.sig.asyncness.is_none() {
         return Err(syn::Error::new(

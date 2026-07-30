@@ -573,6 +573,15 @@ impl AdmissionController {
         self
     }
 
+    /// Poison policy: panic. The workspace rule is *recover where user-or-defect
+    /// code can panic while the lock is held, panic otherwise* — and nothing runs
+    /// under this lock but the ledger's own arithmetic: no task body, no user
+    /// callback, no defect assertion (contrast [`crate::slot`]'s lock, which a
+    /// read-before-fill panic legitimately poisons, and which therefore recovers).
+    /// So a poisoned ledger can only mean a panic left a pool's counted total
+    /// half-updated. Continuing on that would silently over- or under-admit for the
+    /// rest of the run — capacity accounting that is quietly wrong is worse than a
+    /// run that stops.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()

@@ -45,6 +45,12 @@ missing_errors_doc = "warn"         # encouraged, not blocking, until the error 
 # `pat-if-let-chains`), so the lint is allowed until a ticket owns it; re-denying it
 # is how that ticket will find its work list.
 collapsible_if = "allow"
+# Every `unsafe` block and `unsafe impl` must carry a `// SAFETY:` comment
+# (rust-skills `lint-unsafe-doc`, adopted by T95). dagr targets safe Rust and its
+# `unsafe` surface is a single `GlobalAlloc` impl, so the convention was already
+# universal — denying it makes it mechanical instead of a review habit, which is
+# the point: the next `unsafe` block cannot land without stating why it is sound.
+undocumented_unsafe_blocks = "deny"
 
 [rustdoc]
 # Broken intra-doc links fail the docs job (arch.md "Documentation").

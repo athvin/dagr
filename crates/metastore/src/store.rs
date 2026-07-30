@@ -69,7 +69,19 @@ impl std::fmt::Display for OpenError {
     }
 }
 
-impl std::error::Error for OpenError {}
+impl std::error::Error for OpenError {
+    /// [`Libsql`](OpenError::Libsql) **wraps** the substrate's own error and
+    /// exposes it: the reason a store could not be opened (a locked file, a
+    /// permission denial, a failed migration) lives in that error and nowhere
+    /// else. [`ModeNotImplemented`](OpenError::ModeNotImplemented) is refused from
+    /// data — a recognized stub, not a failure — so it has no cause to expose.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OpenError::Libsql(e) => Some(e),
+            OpenError::ModeNotImplemented(_) => None,
+        }
+    }
+}
 
 impl From<libsql::Error> for OpenError {
     fn from(e: libsql::Error) -> Self {
@@ -105,7 +117,19 @@ impl std::fmt::Display for WriteError {
     }
 }
 
-impl std::error::Error for WriteError {}
+impl std::error::Error for WriteError {
+    /// [`Libsql`](WriteError::Libsql) **wraps** the error the caller's closure or
+    /// the commit produced and exposes it;
+    /// [`BusyRetriesExhausted`](WriteError::BusyRetriesExhausted) is built from an
+    /// attempt count, not from a single underlying error, so it has none to
+    /// expose.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            WriteError::Libsql(e) => Some(e),
+            WriteError::BusyRetriesExhausted { .. } => None,
+        }
+    }
+}
 
 /// The bounded-retry schedule for [`MetaStore::with_write_txn`]: how many times a
 /// `SQLITE_BUSY` write is retried and the backoff shape. Exposed so a test can

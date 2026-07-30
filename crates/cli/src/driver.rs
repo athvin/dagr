@@ -35,6 +35,22 @@
 //!    verb) can select the exit code — the driver reports the outcome, it does
 //!    **not** own the exit-code table.
 //!
+//! # Mutex poisoning
+//!
+//! **Poison policy: panic**, at every lock in this module — the cancel-waker, the
+//! cancel-origin, the buffered event records, the live set, and the runner map.
+//! The workspace rule is *recover where user-or-defect code can panic while the
+//! lock is held, panic otherwise*
+//! ([`dagr_core::slot`] and [`crate::signals`] are the recovering half, and say
+//! why at their locks). Every lock here is held across a short bookkeeping
+//! mutation with no task body, no user callback, and no defect assertion beneath
+//! it — so a poisoned lock cannot mean "a task panicked", only "the framework
+//! panicked inside its own critical section and left this state half-written".
+//! Continuing on that state would corrupt the run record it exists to produce
+//! (the wrong abandoned set, a duplicated runner, an inconsistent event stream),
+//! which is strictly worse than failing loudly. Each site restates the reason in
+//! one line so a reader never has to come back here to know which policy applies.
+//!
 //! # Execution-class dispatch + the isolated framework runtime
 //!
 //! The framework machinery runs on an **isolated** runtime, separate from every
@@ -305,12 +321,16 @@ impl CancelTrigger {
     /// Install the loop's wake channel (called once by the loop at startup). A
     /// cancellation [request](Self::request) then wakes the loop through it.
     fn install_waker(&self, tx: tokio::sync::mpsc::UnboundedSender<AttemptDone>) {
+        // Poison policy: panic — a single `Option` assignment runs under this lock
+        // and nothing else, so poisoning can only mean the framework panicked
+        // inside its own critical section (see the module rule).
         *self.waker.lock().expect("cancel-waker mutex not poisoned") = Some(tx);
     }
 
     /// Uninstall the wake channel at run end, so a late request cannot touch a
     /// finished loop.
     fn clear_waker(&self) {
+        // Poison policy: panic — same lock, same reason as `install_waker`.
         *self.waker.lock().expect("cancel-waker mutex not poisoned") = None;
     }
 
@@ -319,6 +339,8 @@ impl CancelTrigger {
     /// origin; a request after the loop ended is a harmless no-op.
     fn request(&self, origin: CancellationOrigin) {
         {
+            // Poison policy: panic — the set-once origin decides the run's exit
+            // code; recovering a half-written one would report the wrong cause.
             let mut guard = self
                 .origin
                 .lock()
@@ -327,6 +349,7 @@ impl CancelTrigger {
                 *guard = Some(origin);
             }
         }
+        // Poison policy: panic — the waker lock, as above.
         if let Some(tx) = self
             .waker
             .lock()
@@ -345,6 +368,7 @@ impl CancelTrigger {
 
     /// The recorded origin, or `None` if no cancellation was requested.
     fn recorded_origin(&self) -> Option<CancellationOrigin> {
+        // Poison policy: panic — the origin lock, as in `request`.
         *self
             .origin
             .lock()
@@ -915,6 +939,9 @@ struct BufferingSink {
 
 impl BufferingSink {
     fn drain(&self) -> Vec<AttemptEvent> {
+        // Poison policy: panic — the buffer is drained into the run's event stream;
+        // a poisoned buffer means a panic left the record set half-mutated, and a
+        // recovered drain would write an inconsistent stream (see the module rule).
         let mut guard = self
             .records
             .lock()
@@ -925,6 +952,7 @@ impl BufferingSink {
 
 impl AttemptEventSink for BufferingSink {
     fn emit(&mut self, event: AttemptEvent) {
+        // Poison policy: panic — the event buffer, as in `drain`.
         self.records
             .lock()
             .expect("event buffer mutex not poisoned")
@@ -1571,7 +1599,30 @@ where
                 continue;
             }
 
-            in_flight -= 1;
+            // A real attempt reported terminal, so the count of admitted-not-yet-
+            // terminal nodes drops by one. The **paired invariant** — every
+            // `AttemptDone` that reaches here was counted in flight when its node
+            // was admitted, cancelled, or rejected — is asserted rather than
+            // relied on silently: it is the one thing that makes this decrement
+            // safe, and five call sites across async control flow do the pairing.
+            //
+            // The subtraction **saturates**, matching the discipline every other
+            // counter in the workspace follows (`crates/core/src/slot.rs`'s
+            // near-identical in-flight-lease counter saturates for the same
+            // reason). A bare `-= 1` fails in two different ways under the T93
+            // profiles: it panics in dev/test (overflow checks on) and wraps to
+            // `usize::MAX` in release, and a wrapped counter turns `while
+            // in_flight > 0` into a loop that never ends. Saturating means a
+            // hypothetical unpaired report ends the run early — visibly, with a
+            // node missing its terminal — instead of hanging the process.
+            debug_assert!(
+                in_flight > 0,
+                "in-flight underflow: `{}` reported terminal without having been counted in \
+                 flight (framework defect in the admit/cancel/reject pairing)",
+                done.node
+            );
+            in_flight = in_flight.saturating_sub(1);
+            // Poison policy: panic — the live set, as in `abandon_leftover`.
             live.lock()
                 .expect("live set not poisoned")
                 .remove(&done.node);
@@ -1912,6 +1963,8 @@ fn abandon_leftover<S, C>(
     S: EventSink,
     C: MonotonicClock,
 {
+    // Poison policy: panic — the live set decides which attempts are abandoned at
+    // grace; a half-mutated set would abandon the wrong nodes.
     let leftover: Vec<String> = live
         .lock()
         .expect("live set not poisoned")
@@ -2234,6 +2287,8 @@ where
         dagr_core::flow::PipelineNode::effective_class,
     );
 
+    // Poison policy: panic — the runner map is take-once per node; recovering a
+    // half-mutated map could hand the same runner out twice.
     let Some(mut runner) = actx
         .runners
         .lock()
@@ -2257,6 +2312,7 @@ where
     // Register this node as in flight: on cancellation the drain reads this set to
     // know which attempts to await and, past grace, abandon. Removed by the loop
     // when the attempt's `AttemptDone` arrives.
+    // Poison policy: panic — the live set, as in `abandon_leftover`.
     actx.live
         .lock()
         .expect("live set not poisoned")
@@ -2608,6 +2664,7 @@ fn run_teardown_phase<S, C>(
 /// authoritative terminal (the body did not emit its own) or the body genuinely
 /// returned `abandoned` on its own.
 fn sink_reported_terminal(sink: &BufferingSink, _state: TerminalState) -> bool {
+    // Poison policy: panic — the teardown record buffer, as in `BufferingSink`.
     sink.records
         .lock()
         .expect("event buffer mutex not poisoned")

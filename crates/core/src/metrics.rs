@@ -172,7 +172,14 @@ macro_rules! metric_value_from {
     ($($t:ty),* $(,)?) => {
         $(
             impl From<$t> for MetricValue {
-                #[allow(clippy::cast_lossless, clippy::cast_precision_loss)]
+                #[allow(
+                    clippy::cast_lossless,
+                    clippy::cast_precision_loss,
+                    reason = "a metric value IS an f64 by definition; the macro covers \
+                              both widening integer types (lossless) and the 64-bit ones \
+                              whose magnitude beyond 2^53 is not a precision a counter or \
+                              a nanosecond duration meaningfully carries"
+                )]
                 fn from(v: $t) -> Self {
                     MetricValue(v as f64)
                 }
@@ -567,6 +574,12 @@ fn on_dealloc(size: usize) {
     unsafe_code,
     reason = "GlobalAlloc is an inherently-unsafe trait; the attributing allocator must implement it — it only forwards to System and updates atomics/thread-local"
 )]
+// SAFETY: every method below forwards to `System` with the caller's arguments
+// untouched and adds only allocation-free accounting (atomics and a thread-local
+// `Cell`), so the set of blocks this allocator hands out is exactly the set
+// `System` hands out — which is what makes the alloc/dealloc pairing `GlobalAlloc`
+// requires hold. Each individual operation restates its own obligation at its own
+// `unsafe { }` block.
 unsafe impl GlobalAlloc for AttributingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: forwarding `alloc` with the caller's `layout` untouched. The

@@ -154,7 +154,12 @@ impl Task for Consumer {
     type Output = Blob;
     async fn run(&mut self, _c: &RunContext, i: Blob) -> Result<Blob, TaskError> {
         if let Some(cap) = &self.received {
-            *cap.lock().unwrap() = Some(i.0.clone());
+            // Poison policy: panic — only this assignment runs under the capture
+            // cell's lock (the task body around it does not hold it), so poisoning
+            // means the framework panicked inside its own critical section. The
+            // demo asserts on what it captured, and a recovered half-written cell
+            // would make that assertion meaningless.
+            *cap.lock().expect("capture cell mutex not poisoned") = Some(i.0.clone());
         }
         Ok(i)
     }
