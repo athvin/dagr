@@ -96,46 +96,63 @@ fi
 #
 # `--all-features` is the adversarial case: it is the one resolution in which
 # every optional edge in the workspace is switched on at once.
+#
+# Every leg below is guarded the way leg 1 is, and for the same reason: `tree`
+# swallows cargo's stderr, so a query that ERRORS is indistinguishable from a
+# clean resolution — an empty package list satisfies every "X is absent" loop in
+# this file at once. Without the guard a typo'd package name, a broken lockfile
+# or a resolver failure turns these checks green. The guard is what makes the
+# absence of a forbidden crate evidence of anything.
 core_all=$(tree dagr-core --all-features)
-offending=""
-for forbidden in inventory libsql dagr-metastore tokio clap rayon; do
-  if printf '%s\n' "$core_all" | grep -qx "$forbidden"; then
-    offending="$offending$forbidden
-"
-  fi
-done
-if [ -z "$offending" ]; then
-  pass "all-features: dagr-core still reaches no runtime dependency (only the build-time proc-macro edge)"
+if [ -z "$core_all" ]; then
+  bad "all-features: cargo tree produced nothing for dagr-core — the assertion is vacuous"
 else
-  bad "all-features: dagr-core reached a runtime dependency:"
-  printf '%s' "$offending" | sed 's/^/        /'
+  offending=""
+  for forbidden in inventory libsql dagr-metastore tokio clap rayon; do
+    if printf '%s\n' "$core_all" | grep -qx "$forbidden"; then
+      offending="$offending$forbidden
+"
+    fi
+  done
+  if [ -z "$offending" ]; then
+    pass "all-features: dagr-core still reaches no runtime dependency (only the build-time proc-macro edge)"
+  else
+    bad "all-features: dagr-core reached a runtime dependency:"
+    printf '%s' "$offending" | sed 's/^/        /'
+  fi
 fi
 
 # --- 4. The cli's default leg is free of the default-off metastore stack -----
 cli_default=$(tree dagr-cli)
-offending=""
-for forbidden in libsql dagr-metastore; do
-  if printf '%s\n' "$cli_default" | grep -qx "$forbidden"; then
-    offending="$offending$forbidden
+if [ -z "$cli_default" ]; then
+  bad "default: cargo tree produced nothing for dagr-cli — the assertion is vacuous"
+else
+  offending=""
+  for forbidden in libsql dagr-metastore; do
+    if printf '%s\n' "$cli_default" | grep -qx "$forbidden"; then
+      offending="$offending$forbidden
 "
+    fi
+  done
+  if [ -z "$offending" ]; then
+    pass "default: dagr-cli reaches neither libsql nor dagr-metastore (metastore is default-off, ADR 097 §5)"
+  else
+    bad "default: the default dagr-cli resolution pulled the default-off metastore stack:"
+    printf '%s' "$offending" | sed 's/^/        /'
   fi
-done
-if [ -z "$offending" ]; then
-  pass "default: dagr-cli reaches neither libsql nor dagr-metastore (metastore is default-off, ADR 097 §5)"
-else
-  bad "default: the default dagr-cli resolution pulled the default-off metastore stack:"
-  printf '%s' "$offending" | sed 's/^/        /'
-fi
 
-# `inventory` is the inverse case: default-ON behind `dag`, and dropped by
-# `--no-default-features`. Both halves are asserted so neither can silently flip.
-if printf '%s\n' "$cli_default" | grep -qx 'inventory'; then
-  pass "default: dagr-cli reaches inventory (the default-on dag feature, ADR 092)"
-else
-  bad "default: dagr-cli does not reach inventory — the default-on dag feature is not wired"
+  # `inventory` is the inverse case: default-ON behind `dag`, and dropped by
+  # `--no-default-features`. Both halves are asserted so neither can silently flip.
+  if printf '%s\n' "$cli_default" | grep -qx 'inventory'; then
+    pass "default: dagr-cli reaches inventory (the default-on dag feature, ADR 092)"
+  else
+    bad "default: dagr-cli does not reach inventory — the default-on dag feature is not wired"
+  fi
 fi
 cli_nodefault=$(tree dagr-cli --no-default-features)
-if printf '%s\n' "$cli_nodefault" | grep -qx 'inventory'; then
+if [ -z "$cli_nodefault" ]; then
+  bad "no-default: cargo tree produced nothing for dagr-cli — the assertion is vacuous"
+elif printf '%s\n' "$cli_nodefault" | grep -qx 'inventory'; then
   bad "no-default: dagr-cli still reaches inventory — the dag feature does not confine it"
 else
   pass "no-default: dagr-cli drops inventory (the dag feature confines it, ADR 092)"
