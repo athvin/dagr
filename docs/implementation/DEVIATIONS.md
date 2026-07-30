@@ -309,3 +309,42 @@ makes the rule explicit: *"If the behavioural-identity comparison finds a
 difference, the gate fails and the difference is investigated — it is not
 reclassified as an accepted change at gate time."* That rule is preserved intact;
 only the capture mechanism differs from the sentence's assumed sequencing.
+
+---
+
+## 2026-07-30 · 115 (T100) — the ADR's pinning check lives in `scripts/`, outside the DoD's path list
+
+**Quoted DoD line.** *"The diff touches only `docs/**`, `README.md`,
+`CONTRIBUTING.md`, and `schemas/event-stream/v1.schema.json` — **no `crates/**`,
+no `Cargo.lock**`."*
+
+**Deviation.** This branch also adds `scripts/check-remote-execution-scope-adr.sh`
+and one `bash scripts/…` run line in `.github/workflows/ci.yml`. Neither path is in
+the list the DoD line enumerates.
+
+**Rationale.** The line's *subject* is production code, and that half is honoured
+exactly: no `crates/**` file and no `Cargo.lock` entry changes, and the decision
+ships no remote-execution code (T101+ owns all of it). What the enumeration cannot
+be read literally to forbid is the ticket's own Test plan, which opens *"the 'tests'
+are mechanical file/content assertions"* and then lists nine of them — ADR
+completeness, exclusions intact, supersession recorded, the additive `@1.3` schema
+shape, criterion 7 still `[machine]`-classed, the matrices' row counts, the
+de-staled non-goals sentence. The repo keeps assertions of exactly that shape in
+`scripts/check-*-adr.sh`; twelve already exist and CI runs them in one step. The
+same line's siblings also fall outside its own list (it requires edits to
+`.claude/skills/…/SKILL.md`, `references/ticket-conventions.md`,
+`.github/pull_request_template.md`, `crates/core/README.md`, and
+`crates/cli/examples/quickstart.rs`), so the enumeration is a no-production-code
+statement rather than an exhaustive path allowlist. The `ci.yml` line is not
+optional: `crates/cli/tests/ci_and_test_hygiene.rs` fails any `scripts/check-*.sh`
+the workflow does not invoke, precisely so a checker cannot rot into a comment.
+
+**Operator decision.** Traces to the standing instruction for this ticket — *"this
+ticket ships a decision and its pinning checks only"* — and to the ADR's own
+premise that a moved *permanent* boundary must be held by something that fails when
+it widens, which is also what T112's boundary proof will do for shipped code
+(`docs/implementation/127-T112-m10-acceptance-gate.md`: *"the only thing keeping
+that carve-out narrow is a test that fails when it widens"*). Scope is respected in
+the other direction too: T112 keeps every *structural* invariant over code (no
+listener, no metastore link in a pod, zero-dep core, no HTTP/TLS stack in a default
+build); this checker asserts only the decision's text.
