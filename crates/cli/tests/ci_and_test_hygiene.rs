@@ -12,7 +12,7 @@
 //!   merely that the build passed.
 //! * **Dormant checkers.** Sixteen of the twenty-six `scripts/check-*.sh` invariant
 //!   checkers never ran in CI: they were authored as ticket-time gates and then left
-//!   behind. A checker nothing runs is a checker that rots — three of them had
+//!   behind. A checker nothing runs is a checker that rots — four of them had
 //!   already drifted into permanent failure. The scan below requires every one of
 //!   them to be named in the workflow.
 //! * **Test isolation.** Much of `crates/cli/tests/` hardcoded a shared literal
@@ -90,7 +90,7 @@ fn check_scripts() -> Vec<String> {
 
 /// **Test-plan scenario: dormant checkers.** Every `scripts/check-*.sh` is named in
 /// the workflow. A checker that nothing runs is not a guard, it is a comment — and
-/// three of the sixteen dormant ones had already drifted into permanent failure
+/// four of the sixteen dormant ones had already drifted into permanent failure
 /// before anyone noticed, which is exactly the rot this closes.
 ///
 /// The scan is proven non-vacuous by requiring a plausible number of checkers to

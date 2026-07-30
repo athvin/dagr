@@ -780,13 +780,19 @@ jobs:
   # --- Structural invariant checkers (T98) --------------------------------------
   # Sixteen of the twenty-six `scripts/check-*.sh` invariant checkers were DORMANT:
   # written as ticket-time acceptance gates, run once by their own ticket, and then
-  # never again. Three of them had already drifted into permanent failure with
-  # nobody looking — `check-hygiene.sh` asserting no crate existed anywhere (true
-  # only until T1 landed the workspace), and two ADR checkers asserting tokio/rayon
-  # were "not wired yet" (true only until T33 wired them). All three were repaired
-  # by correcting the PREDICATE to the durable invariant behind it, never by
-  # relaxing the check; each carries a `PREDICATE CORRECTED BY T98` note at the
-  # site. Nothing was retired.
+  # never again. FOUR of them had already drifted into permanent failure with
+  # nobody looking:
+  #   * `check-hygiene.sh` — asserting no crate existed anywhere (true only until
+  #     T1 landed the workspace).
+  #   * `check-workspace-skeleton.sh` — counting core's dependency entries and
+  #     demanding zero (true only until ADR 082 added the build-time proc-macro
+  #     edge, which is not a runtime dependency).
+  #   * `check-async-runtime-adr.sh` and `check-timeout-and-permit-adr.sh` —
+  #     asserting tokio/rayon were "not wired yet" (true only until T33 wired
+  #     them).
+  # All four were repaired by correcting the PREDICATE to the durable invariant
+  # behind it, never by relaxing the check; each carries a `PREDICATE CORRECTED
+  # BY T98` note at the site. Nothing was retired.
   #
   # `crates/cli/tests/ci_and_test_hygiene.rs` asserts that every `check-*.sh` in the
   # directory is both NAMED and INVOKED in this file, so a checker added later

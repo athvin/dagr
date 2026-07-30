@@ -143,8 +143,10 @@ decision.
 The cost of being wrong is also asymmetric. The whole job is bash over markdown
 with no Rust toolchain and is one of the fastest in the gate, so wiring a checker
 that turns out not to matter costs seconds; carving one out that did matter
-recreates exactly the dormancy this ticket exists to end. **Three of the sixteen
-were already failing on clean `main`** — nobody knew, because nothing ran them.
+recreates exactly the dormancy this ticket exists to end. **Four of the sixteen
+were already failing on clean `main`** — `check-hygiene.sh`,
+`check-workspace-skeleton.sh`, `check-async-runtime-adr.sh` and
+`check-timeout-and-permit-adr.sh`. Nobody knew, because nothing ran them.
 
 A carve-out remains available and needs only a stated reason. That standard, not
 the split, is what this job holds.
