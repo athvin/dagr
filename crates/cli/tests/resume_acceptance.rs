@@ -51,8 +51,7 @@
 //! single-process replay of a fixed graph) would be reaped; this suite spawns none.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -74,47 +73,12 @@ use dagr_core::resume::{ReferenceExistence, ResumePlan};
 use dagr_core::scratch::ScratchStore;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use dagr_core::{RehydrateError, TaskError};
 
 // ===========================================================================
 // Private per-test temp base (no shared /tmp collision, removed on drop).
 // ===========================================================================
-
-/// A **private** per-test run-store base, removed on drop. Its name blends the
-/// pid, a process-monotonic counter, and a nanosecond stamp, so two scenarios
-/// running concurrently — or two runs of the suite — never share a subtree and one
-/// scenario's cleanup never deletes another's.
-struct TempBase {
-    path: PathBuf,
-}
-
-impl TempBase {
-    fn new(tag: &str) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let unique = format!(
-            "dagr-t59-{tag}-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed),
-            nanos,
-        );
-        let path = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&path).expect("create private temp base");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
 
 // ===========================================================================
 // A recording probe — the observable "this task body executed" flag.

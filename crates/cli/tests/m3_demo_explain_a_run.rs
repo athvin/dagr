@@ -59,12 +59,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 use dagr_artifact::fold::{
     PHASE_EXECUTING, PHASE_PERMIT_WAIT, PHASE_READY_WAIT, RunArtifact, fold_stream,
 };
+use dagr_core::test_kit::TempBase;
 use serde_json::Value;
 
 /// The checked-in reference-pipeline producer (a real run leaving real artifacts).
@@ -103,22 +103,13 @@ const DESIGNED_WAITER: &str = "queue-limited";
 /// The never-ran node carrying a propagated terminal state (node coverage).
 const NEVER_RAN: &str = "skipped-consumer";
 
-/// A per-invocation collision-proof run-store base under the OS temp dir, so
-/// parallel test binaries never share — or delete — the same subtree.
-fn temp_base() -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("dagr-t49-{}-{stamp}-{unique}", std::process::id()))
-}
-
 /// The on-disk artifact paths a producer run leaves under
 /// `<base>/m3-demo-pipeline/<run-id>/`.
 struct Artifacts {
-    base: PathBuf,
+    /// The private run-store base, held as the RAII guard so the whole subtree is
+    /// reclaimed when the `Artifacts` value drops — the tests below no longer need
+    /// to remember an explicit `remove_dir_all`.
+    base: TempBase,
     run_dir: PathBuf,
 }
 
@@ -145,9 +136,9 @@ impl Artifacts {
 /// left on disk. The producer is a **separate OS process**, so the demo that reads
 /// the artifacts afterward has no access to the producer's live state.
 fn produce(run_id: &str) -> Artifacts {
-    let base = temp_base();
+    let base = TempBase::new("m3-demo");
     let status = Command::new(PRODUCER)
-        .arg(base.as_os_str())
+        .arg(base.path())
         .arg(run_id)
         // Plant a sentinel NOT on the allowlist (must never reach the artifact) and
         // the allowlisted region (which the header captures).
@@ -158,7 +149,7 @@ fn produce(run_id: &str) -> Artifacts {
         .status()
         .expect("the m3-demo producer launches as a separate OS process");
     assert!(status.success(), "the producer run completed successfully");
-    let run_dir = base.join(PIPELINE).join(run_id);
+    let run_dir = base.path().join(PIPELINE).join(run_id);
     Artifacts { base, run_dir }
 }
 
@@ -277,8 +268,6 @@ fn both_artifacts_are_produced_by_one_run() {
         "the full-run happy path completes successfully (skips are success-like)"
     );
     assert!(!run.is_interrupted(), "the full run is not interrupted");
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -303,8 +292,6 @@ fn artifacts_join_on_the_same_structural_fingerprint() {
         run_fp, graph_fp,
         "the run artifact's structural fingerprint equals the graph artifact's (C22 join)"
     );
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -368,8 +355,6 @@ fn every_graph_node_is_covered_by_the_run_artifact() {
         "skipped",
         "the originator carries the ORIGINATED skip state (distinct from propagated)"
     );
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -394,7 +379,6 @@ fn phase_durations_sum_exactly_to_the_attempt_total() {
             att.attempt_number()
         );
     }
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -419,7 +403,6 @@ fn slowest_node_is_identifiable_from_the_run_artifact_alone() {
         ranked.len() >= 2 && ranked[0].total_ns > ranked[1].total_ns,
         "the bottleneck's total strictly exceeds the runner-up's (unambiguous)"
     );
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -457,8 +440,6 @@ fn waiting_vs_working_is_answerable_from_the_run_artifact_alone() {
     );
     // Non-vacuity: the two verdicts are genuinely opposite, not both defaulting.
     assert_ne!(bottleneck.verdict(), waiter.verdict());
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -495,8 +476,6 @@ fn structure_vs_resource_limited_distinguishable_at_the_summary() {
         "total elapsed ({total}) exceeds the critical-path UPPER BOUND ({critical_upper_bound}) \
          — resource-limited (the true critical path is ≤ the bound, so this is robust)"
     );
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -541,8 +520,6 @@ fn metrics_reached_the_run_artifact_unmodified() {
         probe.attach("dagr.sneaky", 1u64).is_err(),
         "a task metric under the reserved prefix fails loudly at attach time (C23)"
     );
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -602,8 +579,6 @@ fn overlay_renders_from_artifacts_only_and_is_structurally_sound() {
     // Reference-tool acceptance in CI (dot parses; Mermaid parser accepts).
     reference_tools::assert_dot_accepted(&dot);
     reference_tools::assert_mermaid_accepted(&mermaid);
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -622,7 +597,7 @@ fn the_explainer_consults_no_log_line_and_no_binary() {
     // Fold ONCE, then make the event stream (the only log/stdout stream) and the
     // producer's live state provably inaccessible: delete the entire run store.
     let run = fold_artifacts(&a);
-    std::fs::remove_dir_all(&a.base)
+    std::fs::remove_dir_all(a.base.path())
         .expect("delete the run store — nothing but the artifact remains");
     assert!(!a.stream_path().exists(), "the event stream is gone");
     assert!(!a.graph_path().exists(), "even the graph file is gone");
@@ -685,8 +660,6 @@ fn no_non_allowlisted_environment_leaks_into_the_artifacts() {
         Some("us-east-1"),
         "the allowlisted env value IS captured (the allowlist is not a blanket drop)"
     );
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================
@@ -732,9 +705,6 @@ fn the_demo_is_deterministic_across_runs() {
         g1, g2,
         "graph artifacts are byte-identical outside generation time"
     );
-
-    let _ = std::fs::remove_dir_all(&a1.base);
-    let _ = std::fs::remove_dir_all(&a2.base);
 }
 
 // ===========================================================================
@@ -794,8 +764,6 @@ fn both_artifacts_validate_against_their_published_schemas() {
     let run_value = fold_artifacts(&a).to_value();
     validate_value(ArtifactKind::Run, 1, &run_value)
         .expect("the folded run artifact validates against its published schema");
-
-    let _ = std::fs::remove_dir_all(&a.base);
 }
 
 // ===========================================================================

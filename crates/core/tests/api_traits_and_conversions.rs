@@ -158,6 +158,9 @@ fn log_span_compares_and_hashes_by_identity() {
 
 #[test]
 fn scratch_store_compares_and_hashes_by_namespace() {
+    // TEMP-BASE-EXEMPT: a value-identity test over `ScratchStore` handles. Nothing
+    // is created, opened, or written — the path is only a component of the
+    // namespace whose equality and hashing are under test.
     let base = std::path::Path::new("/tmp/t96-scratch");
     let pipeline = PipelineId::new("p");
     let run = RunId::new("r");

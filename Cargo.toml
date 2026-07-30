@@ -84,6 +84,15 @@ warnings = "deny"
 # scripts/check-lint-parity.sh fails the build if this table and lints.toml
 # disagree, or if either lint drops back to `warn`.
 missing_docs = "deny"
+# Cfg-typo insurance (T98). A misspelled `#[cfg(feature = "…")]` is not an error;
+# it is a condition that is never true, so the gated code compiles into nothing and
+# the guarantee it was gating quietly does not exist. `warnings = "deny"` already
+# promotes this warn-by-default lint — writing it out makes the intent readable at
+# the setting. `check-cfg` declares dagr's CUSTOM cfg surface, which is empty (every
+# cfg in the workspace is a feature or a well-known name), so the next custom cfg
+# must be declared here to compile. scripts/check-lint-parity.sh fails the build if
+# this and lints.toml disagree, or if the level drops below `deny`.
+unexpected_cfgs = { level = "deny", check-cfg = [] }
 unsafe_code = "warn"
 
 [workspace.lints.clippy]

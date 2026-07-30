@@ -103,7 +103,9 @@
 //! assert_eq!(out.output(), Some(&7));
 //! ```
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::context::{
     CancellationSignal, CancellationSource, DataInterval, PipelineId, ResourceRegistry, RunContext,
@@ -113,6 +115,132 @@ use crate::error::TaskError;
 use crate::handle::NodeId;
 use crate::metrics::AttemptMetrics;
 use crate::task::Task;
+
+/// A **private, per-call temp directory**, removed with everything beneath it when
+/// the value drops.
+///
+/// This is the run-store base a test hands to a run. It exists because the run
+/// store namespaces by `<base>/<pipeline>/<run-id>`, which makes a *shared* literal
+/// base — `/tmp/dagr-test` and friends — collision-free only for as long as no two
+/// tests happen to pick the same pipeline name. That is an implicit invariant with
+/// nothing enforcing it, and this repository has already paid for exactly that
+/// class of flake once. A `TempBase` makes the isolation **structural**: the path
+/// itself is unique, so two tests cannot share one however they are named.
+///
+/// # What makes a path unique
+///
+/// Three components, each closing a different collision:
+///
+/// - the **process id** — two concurrent test *processes* (nextest runs each test
+///   in its own) cannot collide, nor can a test run alongside a live dagr process;
+/// - a **process-monotonic counter** — two calls on any thread of one process
+///   differ, including two calls in the same test. It is the load-bearing one:
+///   pid plus a wall-clock stamp is **not** sufficient, because the clock's
+///   effective resolution is coarse enough on CI runners for two calls to land on
+///   the same nanosecond. The counter makes disjointness causal rather than
+///   probabilistic;
+/// - a **nanosecond stamp** — a *later* run of the same suite cannot land on a
+///   directory a previous run left behind if the pid is recycled.
+///
+/// # Why a shared base is not merely untidy
+///
+/// Two concrete failures, both of which this repository has already debugged and
+/// both of which a distinct-pipeline-name convention does not prevent:
+///
+/// - **The reclamation sweep deletes a live run.** At run end the driver reclaims
+///   leftover per-run temp subtrees by removing every *sibling* run directory under
+///   `<base>/<pipeline>/` other than its own. Two concurrent runs sharing a base and
+///   a pipeline name therefore share that parent, and one run's terminal sweep wipes
+///   the other's freshly created run directory mid-run.
+/// - **Cleanup races creation on the identical path.** A shared base plus a *pinned*
+///   run id makes every concurrent drive resolve to the same
+///   `<base>/<pipeline>/<run-id>/tmp`. One drive's best-effort end-of-run cleanup
+///   then races another's create — and because the cleanup swallows its error, the
+///   directory is left behind and an `assert!(!exists())` reds at random.
+///
+/// # Cleanup
+///
+/// [`Drop`] removes the whole subtree, so a repeated local run does not accumulate
+/// stale directories. Removal is best-effort by design: a destructor cannot report
+/// a failure, and a test that has already panicked must not be turned into a
+/// second, less informative failure by its own cleanup.
+///
+/// # Example
+///
+/// ```
+/// use dagr_core::test_kit::TempBase;
+///
+/// let base = TempBase::new("my-test");
+/// assert!(base.path().is_dir());
+/// let path = base.path().to_path_buf();
+/// drop(base);
+/// assert!(!path.exists());
+/// ```
+#[derive(Debug)]
+pub struct TempBase {
+    path: PathBuf,
+}
+
+impl TempBase {
+    /// Create a private temp directory tagged with `tag`, which appears in the
+    /// path so a leftover directory names the test that made it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the directory cannot be created — a test that cannot obtain an
+    /// isolated base has nothing meaningful left to assert.
+    #[must_use]
+    pub fn new(tag: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let unique = format!(
+            "dagr-{tag}-{}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+            nanos,
+        );
+        let path = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&path)
+            .unwrap_or_else(|e| panic!("create private temp base {}: {e}", path.display()));
+        Self { path }
+    }
+
+    /// The base directory.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The base directory as a string, for the APIs that take one (the run
+    /// store's base is a `String`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform temp directory is not valid UTF-8, which no
+    /// supported platform (arch.md "Platform support": Linux and macOS) produces.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.path
+            .to_str()
+            .unwrap_or_else(|| panic!("temp base path is not valid UTF-8: {}", self.path.display()))
+    }
+}
+
+impl AsRef<Path> for TempBase {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempBase {
+    fn drop(&mut self) {
+        // Best-effort: see the type docs. A cleanup failure must not mask the
+        // assertion failure that is the actual result of the test.
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
 
 /// A configured single-task invocation.
 ///

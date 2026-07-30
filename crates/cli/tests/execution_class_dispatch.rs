@@ -41,6 +41,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::Flow;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::{ExecutionClass, Task};
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam)
@@ -336,8 +337,9 @@ fn await_bound_node_runs_on_the_async_runtime() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -406,8 +408,9 @@ fn blocking_node_runs_on_the_blocking_pool_and_async_makes_progress() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -457,9 +460,10 @@ fn compute_node_runs_on_the_compute_pool() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
         // Pin the compute pool so the surface is deterministic regardless of host.
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(2)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(2)),
         "dispatch",
         Ok(plan),
         &[],
@@ -516,8 +520,9 @@ fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(2)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(2)),
         "dispatch",
         Ok(plan),
         &[],
@@ -629,8 +634,9 @@ fn long_blocking_task_does_not_delay_unrelated_await_bound_work() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -690,8 +696,9 @@ fn compute_pool_concurrency_is_bounded_by_pool_size() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(N)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(N)),
         "dispatch",
         Ok(plan),
         &[],
@@ -737,9 +744,10 @@ fn compute_pool_has_a_floor_of_one_thread() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
         // Pin compute to zero: the floor-of-one still gives it a live thread.
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(0)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(0)),
         "dispatch",
         Ok(plan),
         &[],
@@ -819,9 +827,10 @@ fn safety_machinery_survives_a_fully_blocked_task_fleet() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
         // A tiny grace period so the run does not sit for the default 10s.
-        &RunConfig::new("/tmp/dagr-t33").grace(std::time::Duration::from_millis(10)),
+        &RunConfig::new(temp_base.as_str()).grace(std::time::Duration::from_millis(10)),
         "dispatch",
         Ok(plan),
         &[],
@@ -905,8 +914,9 @@ fn compute_pool_admits_up_to_pool_size_concurrently() {
     let plan = RunPlan::new(pipeline, runners);
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t33");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33")
+        &RunConfig::new(temp_base.as_str())
             .capacities(PoolCapacities::new().compute_threads(u32::try_from(N).unwrap())),
         "dispatch",
         Ok(plan),

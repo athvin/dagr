@@ -1,16 +1,16 @@
-// UI compile-failure fixture, case
-// `flow_finish_consumes_builder`.
-//
-// PROVES: finalization CONSUMES the builder by
-// value — "a finalization step that consumes the builder and yields an immutable
-// pipeline." Once `finish()` has been called, the builder is moved out and no
-// further registration through it is possible; using the builder afterward is a
-// use-of-moved-value COMPILE error, not a runtime check. This is the REAL flow
-// builder API (dagr_core::flow), not a throwaway sketch.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture, case
+//! `flow_finish_consumes_builder`.
+//!
+//! PROVES: finalization CONSUMES the builder by
+//! value — "a finalization step that consumes the builder and yields an immutable
+//! pipeline." Once `finish()` has been called, the builder is moved out and no
+//! further registration through it is possible; using the builder afterward is a
+//! use-of-moved-value COMPILE error, not a runtime check. This is the REAL flow
+//! builder API (dagr_core::flow), not a throwaway sketch.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::flow::Flow;
 use dagr_core::handle::Handle;

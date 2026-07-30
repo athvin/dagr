@@ -1,18 +1,18 @@
-// UI compile-failure sample — the output-type bound (missing
-// `'static`).
-//
-// Output values must be `Send + Sync + 'static`. An
-// output type that borrows data is not `'static` and cannot outlive the attempt
-// to live in the slot, so it is rejected.
-//
-// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
-// real `Task` trait is unavailable; the exact output bound is reproduced with a
-// local `assert_output_bound`. `BorrowedOutput<'a>` borrows data and is
-// therefore not `'static`.
-//
-// The diagnostic names two distinct types the snapshot keys on: `BorrowedOutput`
-// (the non-`'static` output type) and `assert_output_bound` (the bound function
-// whose `'static` requirement it violates), plus the lifetime-escape wording.
+//! UI compile-failure sample — the output-type bound (missing
+//! `'static`).
+//!
+//! Output values must be `Send + Sync + 'static`. An
+//! output type that borrows data is not `'static` and cannot outlive the attempt
+//! to live in the slot, so it is rejected.
+//!
+//! The harness compiles this STANDALONE with no `--extern dagr_core`, so the
+//! real `Task` trait is unavailable; the exact output bound is reproduced with a
+//! local `assert_output_bound`. `BorrowedOutput<'a>` borrows data and is
+//! therefore not `'static`.
+//!
+//! The diagnostic names two distinct types the snapshot keys on: `BorrowedOutput`
+//! (the non-`'static` output type) and `assert_output_bound` (the bound function
+//! whose `'static` requirement it violates), plus the lifetime-escape wording.
 
 /// An output type that borrows data — NOT `'static`, so it cannot live in the
 /// output slot beyond the attempt that produced it.

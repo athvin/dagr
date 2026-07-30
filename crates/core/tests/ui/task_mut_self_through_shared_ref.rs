@@ -1,22 +1,22 @@
-// UI compile-failure sample — the exclusive `&mut self` work
-// signature.
-//
-// The work takes the task EXCLUSIVELY (`&mut self`), which is what makes
-// sequential attempts safe without any synchronization written by the author
-// (the task-type contract). Invoking the work through a SHARED reference must
-// therefore fail to compile — the mirror of the behavioral test that invokes
-// the work twice through `&mut self` and observes the mutation.
-//
-// The harness compiles this STANDALONE with no `--extern dagr_core`, so the
-// real `Task` trait is unavailable; the `&mut self` work signature is
-// reproduced locally on a `TaskWork` trait (mirroring `Task::run`) implemented
-// by `MutableTask`. Calling that `&mut self` work through a `&MutableTask`
-// fails to compile — the shared reference cannot supply the exclusive access
-// the work demands.
-//
-// The diagnostic names two distinct types the snapshot keys on: `TaskWork` (the
-// work trait whose `&mut self` method is being called) and `MutableTask` (the
-// task type behind the shared reference), plus the mutability wording.
+//! UI compile-failure sample — the exclusive `&mut self` work
+//! signature.
+//!
+//! The work takes the task EXCLUSIVELY (`&mut self`), which is what makes
+//! sequential attempts safe without any synchronization written by the author
+//! (the task-type contract). Invoking the work through a SHARED reference must
+//! therefore fail to compile — the mirror of the behavioral test that invokes
+//! the work twice through `&mut self` and observes the mutation.
+//!
+//! The harness compiles this STANDALONE with no `--extern dagr_core`, so the
+//! real `Task` trait is unavailable; the `&mut self` work signature is
+//! reproduced locally on a `TaskWork` trait (mirroring `Task::run`) implemented
+//! by `MutableTask`. Calling that `&mut self` work through a `&MutableTask`
+//! fails to compile — the shared reference cannot supply the exclusive access
+//! the work demands.
+//!
+//! The diagnostic names two distinct types the snapshot keys on: `TaskWork` (the
+//! work trait whose `&mut self` method is being called) and `MutableTask` (the
+//! task type behind the shared reference), plus the mutability wording.
 
 /// The exclusive-access work trait, mirroring the real `Task::run(&mut self)`.
 trait TaskWork {

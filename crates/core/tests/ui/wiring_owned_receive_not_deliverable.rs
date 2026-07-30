@@ -1,26 +1,26 @@
-// UI compile-failure fixture,
-// case `wiring_owned_receive_not_deliverable`.
-//
-// PROVES (the data-dependency receive-mode contract): the TYPE
-// system alone rejects an OWNED receive of a value that is not movable into
-// owned delivery. This is the REAL `dagr_core::task::Task`. A data input is
-// delivered by OWNED move (the default receive mode — a bare `Handle<T>`), which
-// requires the value to cross the framework's send boundary: `Task::run` returns
-// a `Send` future, and an owned `!Send` input held across an await point makes
-// that future `!Send`. A task declaring `type Input = Rc<Data>` and receiving it
-// owned therefore cannot compile — an owned receive of an un-deliverable value
-// is a compile error, naming `Rc<Data>` and the `Send` bound.
-//
-// SCOPE (explicit): this is ONLY the TYPE-LEVEL slice of the ownership model.
-// The whole-graph multi-consumer ownership CONFLICT — the same value demanded
-// `owned` by two consumers, or an owned edge into a retrying node without
-// clone-on-read — is an ASSEMBLY error naming both consumers, NOT a compile
-// error, and is asserted by assembly validation, never here. This fixture
-// keeps only the type-system-decidable half of the model honest.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts this
-// sample FAILS to compile under the pinned toolchain.
+//! UI compile-failure fixture,
+//! case `wiring_owned_receive_not_deliverable`.
+//!
+//! PROVES (the data-dependency receive-mode contract): the TYPE
+//! system alone rejects an OWNED receive of a value that is not movable into
+//! owned delivery. This is the REAL `dagr_core::task::Task`. A data input is
+//! delivered by OWNED move (the default receive mode — a bare `Handle<T>`), which
+//! requires the value to cross the framework's send boundary: `Task::run` returns
+//! a `Send` future, and an owned `!Send` input held across an await point makes
+//! that future `!Send`. A task declaring `type Input = Rc<Data>` and receiving it
+//! owned therefore cannot compile — an owned receive of an un-deliverable value
+//! is a compile error, naming `Rc<Data>` and the `Send` bound.
+//!
+//! SCOPE (explicit): this is ONLY the TYPE-LEVEL slice of the ownership model.
+//! The whole-graph multi-consumer ownership CONFLICT — the same value demanded
+//! `owned` by two consumers, or an owned edge into a retrying node without
+//! clone-on-read — is an ASSEMBLY error naming both consumers, NOT a compile
+//! error, and is asserted by assembly validation, never here. This fixture
+//! keeps only the type-system-decidable half of the model honest.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts this
+//! sample FAILS to compile under the pinned toolchain.
 
 use dagr_core::task::Task;
 use dagr_core::{RunContext, TaskError};

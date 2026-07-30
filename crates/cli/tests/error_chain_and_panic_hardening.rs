@@ -39,6 +39,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Causal chains
@@ -171,7 +172,8 @@ fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
         ("declined", TerminalState::Skipped),
         ("expired", TerminalState::TimedOut),
     ];
-    let report = drive_scripted(&nodes, &RunConfig::new(temp_base("outcome-classes")));
+    let temp_base = TempBase::new("outcome-classes");
+    let report = drive_scripted(&nodes, &RunConfig::new(temp_base.as_str()));
     assert_every_node_terminal(&report, &nodes);
 }
 
@@ -185,11 +187,11 @@ fn the_capacity_pending_path_leaves_the_counter_balanced() {
         ("second", TerminalState::Succeeded),
         ("third", TerminalState::Succeeded),
     ];
+    let temp_base = TempBase::new("capacity-pending");
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        &RunConfig::new(temp_base("capacity-pending"))
-            .capacities(PoolCapacities::new().memory(1000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1000)),
     );
     assert_every_node_terminal(&report, &nodes);
 }
@@ -209,10 +211,11 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
         ("zzz-one", TerminalState::Succeeded),
         ("zzz-two", TerminalState::Succeeded),
     ];
+    let temp_base = TempBase::new("stop-cancel");
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        &RunConfig::new(temp_base("stop-cancel"))
+        &RunConfig::new(temp_base.as_str())
             .capacities(PoolCapacities::new().memory(1000))
             .failure_mode(dagr_core::flow::FailureMode::StopOnFirstFailure),
     );
@@ -231,7 +234,8 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
 /// decrement. Every node must still end with exactly one terminal state.
 #[test]
 fn an_external_interrupt_leaves_the_counter_balanced() {
-    let config = RunConfig::new(temp_base("interrupt"))
+    let temp_base = TempBase::new("interrupt");
+    let config = RunConfig::new(temp_base.as_str())
         .grace(std::time::Duration::from_millis(200))
         .capacities(PoolCapacities::new().memory(1000));
     let handle = config.cancel_handle();
@@ -297,8 +301,9 @@ fn teardown_runs_after_the_loop_drains_and_every_node_is_terminal() {
         ScriptedRunner::boxed("cleanup", TerminalState::Succeeded),
     );
 
+    let temp_base = TempBase::new("teardown");
     let report = drive(
-        &RunConfig::new(temp_base("teardown")),
+        &RunConfig::new(temp_base.as_str()),
         "hardening",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -592,15 +597,6 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
-}
-
-// ===========================================================================
-// Driver harness
-// ===========================================================================
-
-/// A private per-test run-store base, so parallel tests never share a directory.
-fn temp_base(tag: &str) -> String {
-    temp_dir(tag).to_string_lossy().into_owned()
 }
 
 fn temp_dir(tag: &str) -> PathBuf {

@@ -36,6 +36,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam).
@@ -320,8 +321,8 @@ fn order(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
         .collect()
 }
 
-fn config(mode: FailureMode) -> RunConfig {
-    RunConfig::new("/tmp/dagr-t34-test").failure_mode(mode)
+fn config(base: &str, mode: FailureMode) -> RunConfig {
+    RunConfig::new(base).failure_mode(mode)
 }
 
 // ===========================================================================
@@ -334,6 +335,7 @@ fn config(mode: FailureMode) -> RunConfig {
 /// This is the entire reason non-default rules exist.
 #[test]
 fn all_terminal_cleanup_fires_after_a_failure_in_both_modes() {
+    let temp_base = TempBase::new("t34-test");
     for mode in [
         FailureMode::ContinueIndependent,
         FailureMode::StopOnFirstFailure,
@@ -361,7 +363,7 @@ fn all_terminal_cleanup_fires_after_a_failure_in_both_modes() {
 
         let sink = MemorySink::default();
         let report = drive(
-            &config(mode),
+            &config(temp_base.as_str(), mode),
             "cleanup-run",
             Ok(RunPlan::with_ordering(
                 pipeline,
@@ -419,8 +421,9 @@ fn any_failed_contingency_fires_on_a_failure() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let _ = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "notify-run",
         Ok(RunPlan::with_ordering(
             pipeline,
@@ -474,8 +477,9 @@ fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "notify-run",
         Ok(RunPlan::with_ordering(
             pipeline,
@@ -539,8 +543,9 @@ fn failed_data_upstream_propagates_upstream_failed() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "prop",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -589,8 +594,9 @@ fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "prop",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -645,8 +651,9 @@ fn continue_independent_runs_unrelated_branch() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "continue",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -732,8 +739,10 @@ fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::StopOnFirstFailure).capacities(PoolCapacities::new().memory(10)),
+        &config(temp_base.as_str(), FailureMode::StopOnFirstFailure)
+            .capacities(PoolCapacities::new().memory(10)),
         "stop",
         Ok(RunPlan::with_ordering(
             pipeline,
@@ -838,8 +847,9 @@ fn every_node_has_exactly_one_terminal_state() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
-        &config(FailureMode::ContinueIndependent),
+        &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "mixed",
         Ok(RunPlan::with_ordering(
             pipeline,

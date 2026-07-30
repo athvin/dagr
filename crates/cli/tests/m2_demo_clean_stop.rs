@@ -107,6 +107,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Fixed knobs (pinned → deterministic)
@@ -510,35 +511,6 @@ struct CleanStop {
 const RUN_ID: &str = "t38-clean-stop-run";
 const PIPELINE: &str = "m2-clean-stop";
 
-/// A **collision-proof, per-invocation** run-store base under the OS temp dir.
-///
-/// Determinism (CI fs race): `drive_clean_stop` is called by six test functions in
-/// this binary, and the two `m2_demo_*` binaries run concurrently under
-/// `--test-threads>1`. A single *fixed shared* base with a *pinned* run id meant
-/// every concurrent drive resolved to the **same** `<base>/<pipeline>/<run-id>/tmp`
-/// path: one drive's synchronous end-of-run `cleanup_temp_dir` (a best-effort
-/// `remove_dir_all`) could then race another drive's `create_temp_dir` / in-flight
-/// debris write on the *identical* subtree, and — because the cleanup is best-effort
-/// and swallows its error — leave the directory behind, red-flaking
-/// `nothing_orphaned_…`'s hard `assert!(!exists())`. A process-monotonic `AtomicU64`
-/// counter makes every base provably disjoint, so no two drives ever share — or
-/// delete — the same subtree. No production change: this only picks a private
-/// run-store base for the test, exactly the `temp_base()` fix already applied in
-/// `os_signals_flush_and_cleanup.rs`.
-fn temp_base() -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir().join(format!(
-        "dagr-t38-clean-stop-{}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        unique
-    ))
-}
-
 /// Build the type-erased runner map for the clean-stop fixture over the shared
 /// residency `ledger`. `wrote` captures the failing node's temp-file path. The
 /// failing node's slot has one consumer (`data-dependent`); it fails, so its slot
@@ -627,11 +599,11 @@ fn build_runners(
 /// Assemble and drive the clean-stop pipeline under stop-on-first-failure, with the
 /// memory pool pinned so admission serializes. Returns the observed [`CleanStop`].
 fn drive_clean_stop() -> CleanStop {
+    let temp_base = TempBase::new("base");
     // A private, per-invocation run-store base so concurrent drives (six callers in
     // this binary + the sibling m2 binary under `--test-threads>1`) never share the
     // same `<base>/<pipeline>/<run-id>/tmp` path — see `temp_base`.
-    let base = temp_base();
-    let base = base.to_str().expect("temp base is valid UTF-8");
+    let base = temp_base.as_str();
     let ledger = ResidencyLedger::new();
     let wrote: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
@@ -971,8 +943,9 @@ fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t38-release");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t38-release"),
+        &RunConfig::new(temp_base.as_str()),
         "m2-release-mechanics",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

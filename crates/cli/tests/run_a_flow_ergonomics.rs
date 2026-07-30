@@ -41,6 +41,7 @@ use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -220,10 +221,11 @@ fn run_via_auto_adapter() -> (Vec<u8>, RunOutcome, Option<u64>) {
     let sink_handle = flow.register::<Sink, _>(SINK, Sink, transform);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow");
     let report = flow
         .run(
             "run-a-flow-m1",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -343,10 +345,11 @@ fn permanent_failure_propagates_downstream() {
     let _sink = flow.register::<Sink, _>(SINK, Sink, transform);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-fail");
     let report = flow
         .run(
             "run-a-flow-fail",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-fail"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -464,10 +467,11 @@ fn distinct_input_and_output_types_flow_through_the_adapter() {
     let measured = flow.register::<Measure, _>("measure", Measure, rendered.clone_on_read());
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-types");
     let report = flow
         .run(
             "run-a-flow-types",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-types"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -542,10 +546,11 @@ fn two_input_node_receives_upstreams_in_declared_order() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-order");
     let report = flow
         .run(
             "run-a-flow-tuple-order",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-order"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -580,10 +585,11 @@ fn two_input_node_honours_a_shared_edge_alongside_a_clone_on_read_edge() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-shared");
     let report = flow
         .run(
             "run-a-flow-tuple-shared",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-shared"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -642,10 +648,11 @@ fn three_input_node_reads_inside_run_after_upstreams_succeed() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-deferred");
     let report = flow
         .run(
             "run-a-flow-tuple-deferred",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-run-a-flow-tuple-deferred"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )

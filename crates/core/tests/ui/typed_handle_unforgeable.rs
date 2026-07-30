@@ -1,21 +1,21 @@
-// UI compile-failure fixture — case `typed_handle_unforgeable`.
-//
-// PROVES: a handle is obtainable ONLY by registering a node — there is NO
-// escape hatch to FABRICATE one. The handle's own fields are private to the
-// module that defines it and there is no public constructor, so a struct-literal
-// from outside the module (the only other way to make one) fails to compile.
-// This is the "No API exists to obtain a handle for a node that has not been
-// registered" acceptance criterion, and it is why there can be no lookup by
-// name/index/key: the ONLY currency is a handle a `register` call already
-// returned.
-//
-// Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
-// names the substrings the diagnostic must contain, and the harness asserts
-// this sample FAILS to compile under the pinned toolchain.
-//
-// THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (typed handles land later). It models only the settled decision that a
-// handle is unforgeable by construction (private fields, no constructor).
+//! UI compile-failure fixture — case `typed_handle_unforgeable`.
+//!
+//! PROVES: a handle is obtainable ONLY by registering a node — there is NO
+//! escape hatch to FABRICATE one. The handle's own fields are private to the
+//! module that defines it and there is no public constructor, so a struct-literal
+//! from outside the module (the only other way to make one) fails to compile.
+//! This is the "No API exists to obtain a handle for a node that has not been
+//! registered" acceptance criterion, and it is why there can be no lookup by
+//! name/index/key: the ONLY currency is a handle a `register` call already
+//! returned.
+//!
+//! Wired to the UI harness (crates/core/tests/ui.rs); the sibling `.stderr`
+//! names the substrings the diagnostic must contain, and the harness asserts
+//! this sample FAILS to compile under the pinned toolchain.
+//!
+//! THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
+//! (typed handles land later). It models only the settled decision that a
+//! handle is unforgeable by construction (private fields, no constructor).
 
 #![allow(dead_code)]
 

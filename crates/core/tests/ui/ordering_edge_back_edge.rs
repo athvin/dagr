@@ -1,21 +1,21 @@
-// UI compile-failure fixture — case `ordering_edge_back_edge`.
-//
-// PROVES: an ordering-edge cycle BACK to a descendant is inexpressible by
-// CONSTRUCTION — structural, enforced by the type system — because there is NO
-// after-the-fact "add edge" API to reach back to an already-closed registration
-// (the acceptance criterion: "no API exists to add an edge between two existing
-// nodes afterward"). Wired to the same UI harness (crates/core/tests/ui.rs) that
-// the full suite reuses; the sibling `.stderr` names the substrings the
-// diagnostic must contain, and the harness asserts this sample FAILS to compile
-// under the pinned toolchain.
-//
-// THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
-// (the real surface lands later). It models the settled discipline: A registers
-// first, then B registers an ordering edge on A; the only edge-declaring entry
-// point is `register`, taken at a node's OWN registration. To make A order-after
-// B afterward one would need a `Flow::add_ordering_edge(existing, existing)`
-// method — which the surface deliberately DOES NOT offer. Attempting to call it
-// is a compile error, so the back-edge is inexpressible; no runtime check exists.
+//! UI compile-failure fixture — case `ordering_edge_back_edge`.
+//!
+//! PROVES: an ordering-edge cycle BACK to a descendant is inexpressible by
+//! CONSTRUCTION — structural, enforced by the type system — because there is NO
+//! after-the-fact "add edge" API to reach back to an already-closed registration
+//! (the acceptance criterion: "no API exists to add an edge between two existing
+//! nodes afterward"). Wired to the same UI harness (crates/core/tests/ui.rs) that
+//! the full suite reuses; the sibling `.stderr` names the substrings the
+//! diagnostic must contain, and the harness asserts this sample FAILS to compile
+//! under the pinned toolchain.
+//!
+//! THROWAWAY, intentionally NON-COMPILING SKETCH — NOT dagr's real authoring API
+//! (the real surface lands later). It models the settled discipline: A registers
+//! first, then B registers an ordering edge on A; the only edge-declaring entry
+//! point is `register`, taken at a node's OWN registration. To make A order-after
+//! B afterward one would need a `Flow::add_ordering_edge(existing, existing)`
+//! method — which the surface deliberately DOES NOT offer. Attempting to call it
+//! is a compile error, so the back-edge is inexpressible; no runtime check exists.
 
 #[derive(Clone, Copy)]
 struct Handle;

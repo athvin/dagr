@@ -1,20 +1,20 @@
-// UI compile-failure fixture — case `typed_handle_wrong_arity`.
-//
-// PROVES: binding a DIFFERENT NUMBER of handles than the task declares is
-// a COMPILE error. A task that declares it consumes exactly two inputs
-// `(Alpha, Beta)` is bound ONE handle; the sealed `Deps` trait's
-// `Inputs = T::Input` bound is unsatisfied, so the mis-wiring fails to compile.
-// It is wired to the same UI harness (crates/core/tests/ui.rs) that the full
-// wiring compile-fail suite reuses: a sibling `.stderr` names the
-// substrings the diagnostic must contain, and the harness asserts this sample
-// FAILS to compile under the pinned toolchain.
-//
-// This is a THROWAWAY, intentionally NON-COMPILING SKETCH — NOT a use of dagr's
-// real authoring API (typed handles and the real binding land later). It
-// models only the settled dependency-encoding: a sealed positional trait
-// (`Deps`) maps a handle tuple to the task's declared input tuple, so COUNT,
-// ORDER, and TYPES are all compile-checked. Arity mismatch surfaces here as an
-// associated-type mismatch (E0271) naming the supplied vs required tuple.
+//! UI compile-failure fixture — case `typed_handle_wrong_arity`.
+//!
+//! PROVES: binding a DIFFERENT NUMBER of handles than the task declares is
+//! a COMPILE error. A task that declares it consumes exactly two inputs
+//! `(Alpha, Beta)` is bound ONE handle; the sealed `Deps` trait's
+//! `Inputs = T::Input` bound is unsatisfied, so the mis-wiring fails to compile.
+//! It is wired to the same UI harness (crates/core/tests/ui.rs) that the full
+//! wiring compile-fail suite reuses: a sibling `.stderr` names the
+//! substrings the diagnostic must contain, and the harness asserts this sample
+//! FAILS to compile under the pinned toolchain.
+//!
+//! This is a THROWAWAY, intentionally NON-COMPILING SKETCH — NOT a use of dagr's
+//! real authoring API (typed handles and the real binding land later). It
+//! models only the settled dependency-encoding: a sealed positional trait
+//! (`Deps`) maps a handle tuple to the task's declared input tuple, so COUNT,
+//! ORDER, and TYPES are all compile-checked. Arity mismatch surfaces here as an
+//! associated-type mismatch (E0271) naming the supplied vs required tuple.
 
 use std::marker::PhantomData;
 

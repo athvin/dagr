@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dagr_cli::graph::mask_generated_at;
+use dagr_core::test_kit::TempBase;
 
 /// The `InvalidUsage` exit code (`ExitCode::as_u8`), asserted numerically so this
 /// test needs no `dag`-feature-gated symbols of its own.
@@ -143,8 +144,9 @@ fn duplicate_name_is_invalid_usage_naming_the_duplicate() {
 /// (the sole flow dispatches without it), not replaced by a synthetic identity.
 #[test]
 fn single_discovered_dag_runs_with_no_name() {
-    let base = temp_base("single");
-    let run = run_example("one_dag", &["run", "--store", &base]);
+    let temp_base = TempBase::new("single");
+    let base = temp_base.as_str();
+    let run = run_example("one_dag", &["run", "--store", base]);
     assert_eq!(
         run.code, 0,
         "a single discovered DAG serves `run` with the name omitted, stderr:\n{}",
@@ -152,7 +154,7 @@ fn single_discovered_dag_runs_with_no_name() {
     );
     // The sole DAG really ran, under its own name `only` (not a synthetic `flow`).
     assert!(
-        run_store_has_a_stream(&base, "only"),
+        run_store_has_a_stream(base, "only"),
         "the sole DAG wrote an event stream under {base}/only/<run-id>/ (stdout:\n{})",
         run.stdout
     );
@@ -217,24 +219,6 @@ fn graph_and_validate_delegate_transparently() {
         "validate alpha reports the clean assembly, got:\n{}",
         validate.stdout
     );
-}
-
-// ===========================================================================
-// Test-support
-// ===========================================================================
-
-/// A unique run-store base under the OS temp dir, so concurrent test binaries never
-/// collide and each test's stores are inspectable in isolation.
-fn temp_base(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!(
-        "dagr-t79-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
-    dir.to_string_lossy().into_owned()
 }
 
 /// Whether the run store under `<base>/<pipeline>/` holds at least one

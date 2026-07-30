@@ -30,6 +30,7 @@ use dagr_core::execution::AttemptEventSink;
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::Handle;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -379,6 +380,7 @@ fn generated_runs_terminate_through_the_real_driver() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(40);
 
+    let temp_base = TempBase::new("termination");
     for idx in 0..cases {
         let seed = BASE_SEED ^ idx.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let case = generate(seed);
@@ -389,7 +391,7 @@ fn generated_runs_terminate_through_the_real_driver() {
         // hang (caught by the harness timeout) — returning at all is half the
         // property. A short grace keeps any timed-out zombie wait bounded.
         let report = drive(
-            &RunConfig::new("/tmp/dagr-termination").grace(std::time::Duration::from_millis(50)),
+            &RunConfig::new(temp_base.as_str()).grace(std::time::Duration::from_millis(50)),
             "termination",
             Ok(plan),
             &[],

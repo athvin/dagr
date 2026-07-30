@@ -28,48 +28,12 @@
 //! repeated suite runs) never share — or delete — the same subtree (the shared-
 //! `/tmp` parallelism bug class that has red-flaked this repo's CI).
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use dagr_core::context::{PipelineId, RunId};
 use dagr_core::handle::NodeId;
 use dagr_core::scratch::ScratchStore;
-
-/// A **private** per-test temp base, removed on drop. The name blends the pid, a
-/// process-monotonic counter, and a nanosecond stamp so two tests running
-/// concurrently — or two runs of the suite — never collide on a path, and one
-/// test's cleanup never deletes another's subtree.
-struct TempBase {
-    path: PathBuf,
-}
-
-impl TempBase {
-    fn new(tag: &str) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let unique = format!(
-            "dagr-t54b-{tag}-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed),
-            nanos,
-        );
-        let path = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&path).expect("create private temp base");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
+use dagr_core::test_kit::TempBase;
 
 /// Resolve a node's scratch store under one run — the ordinary production path a
 /// live run wires (`<base>/<pipeline>/<run-id>/scratch/<node>/`). Used both to

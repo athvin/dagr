@@ -26,6 +26,7 @@ use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
 
+use dagr_core::test_kit::TempBase;
 use dagr_metastore::MetaStore;
 use dagr_metastore::store::OpenMode;
 
@@ -59,18 +60,6 @@ fn two_node_flow() -> RunnableFlow {
     let counted = flow.register_source("count", Count { up_to: 21 });
     let _doubled = flow.register::<Double, _>("double", Double, counted);
     flow
-}
-
-/// A private, disjoint temp base under the OS temp dir.
-fn temp_base(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "dagr-t86-tee-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
 }
 
 /// Normalize a stream's per-record **informational** `wall` stamp to a fixed value
@@ -144,8 +133,8 @@ fn opt_string(store_path: &std::path::Path, sql: &str) -> Option<String> {
 #[test]
 fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_on() {
     // --- OFF run (default): plain FileSink, no metastore.
-    let off_base = temp_base("off");
-    let off_base_str = off_base.to_string_lossy().to_string();
+    let off_base = TempBase::new("off");
+    let off_base_str = off_base.as_str().to_owned();
     let off_run_id = "run-off";
     let off_stream = stream_path(&off_base_str, "pipe", off_run_id);
     let off_sink = build_run_sink(&off_stream, &off_base_str, &[]).expect("off sink builds");
@@ -160,14 +149,14 @@ fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_o
     let off_bytes = std::fs::read(&off_stream).expect("off stream written");
     // The OFF run created NO metastore db (no libsql activity).
     assert!(
-        !off_base.join("metastore.db").exists(),
+        !off_base.path().join("metastore.db").exists(),
         "toggle-off ⇒ no metastore.db is created (no libsql activity)"
     );
 
     // --- ON run: tee FileSink + MetastoreSink. Same pipeline, same run id, same
     // deterministic clock ⇒ same bytes.
-    let on_base = temp_base("on");
-    let on_base_str = on_base.to_string_lossy().to_string();
+    let on_base = TempBase::new("on");
+    let on_base_str = on_base.as_str().to_owned();
     let on_run_id = "run-off"; // same id so the stream bytes match byte-for-byte
     let on_stream = stream_path(&on_base_str, "pipe", on_run_id);
     let argv = vec![std::ffi::OsString::from("--dagr.metastore")];
@@ -193,7 +182,7 @@ fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_o
     );
 
     // The ON run populated the metastore: a terminal dag_run + both nodes' terminals.
-    let store = on_base.join("metastore.db");
+    let store = on_base.path().join("metastore.db");
     assert!(store.exists(), "toggle-on ⇒ the metastore.db is created");
     let state = opt_string(&store, "SELECT state FROM dag_run WHERE run_id='run-off'");
     assert_eq!(
@@ -223,10 +212,10 @@ fn a_metastore_write_failure_surfaces_as_the_sink_failure_exit() {
     use dagr_metastore::MetastoreSink;
     use dagr_metastore::store::RetryPolicy;
 
-    let base = temp_base("fault");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("fault");
+    let base_str = base.as_str().to_owned();
     std::fs::create_dir_all(&base).expect("mk base");
-    let store_path = base.join("metastore.db");
+    let store_path = base.path().join("metastore.db");
     let run_id = "run-fault";
     let stream = stream_path(&base_str, "pipe", run_id);
 
@@ -298,8 +287,8 @@ fn default_off_builds_a_plain_file_sink_and_opens_no_store() {
     // mutation cannot overlap another test's read of the same name.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    let base = temp_base("default");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("default");
+    let base_str = base.as_str().to_owned();
     let stream = stream_path(&base_str, "pipe", "run-default");
 
     let _guard = ENV_LOCK
@@ -323,7 +312,7 @@ fn default_off_builds_a_plain_file_sink_and_opens_no_store() {
         "default-off ⇒ a plain FileSink (no metastore, no libsql)"
     );
     assert!(
-        !base.join("metastore.db").exists(),
+        !base.path().join("metastore.db").exists(),
         "default-off opens no store"
     );
     // The stream file was created (the FileSink opened it).
@@ -341,8 +330,8 @@ fn default_off_builds_a_plain_file_sink_and_opens_no_store() {
 fn live_projection_through_the_tee_matches_the_folded_stream() {
     use dagr_artifact::fold::fold_stream;
 
-    let base = temp_base("live");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("live");
+    let base_str = base.as_str().to_owned();
     let run_id = "run-live";
     let stream = stream_path(&base_str, "pipe", run_id);
     let argv = vec![std::ffi::OsString::from("--dagr.metastore=true")];
@@ -370,7 +359,7 @@ fn live_projection_through_the_tee_matches_the_folded_stream() {
 
     // The live-produced attempt rows equal the folded stream's attempt count.
     let artifact = fold_stream(&bytes, &[]).expect("fold the finished stream");
-    let store = base.join("metastore.db");
+    let store = base.path().join("metastore.db");
     let attempt_rows = scalar_i64(
         &store,
         "SELECT count(*) FROM node_attempt WHERE run_id='run-live'",

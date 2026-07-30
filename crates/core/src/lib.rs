@@ -277,6 +277,12 @@
 //!   context-construction and fake-injection surface it exposes is the seam the
 //!   full-pipeline harness reuses. Adds **no** dependency and **no**
 //!   production runtime behavior.
+//! - [`test_kit::TempBase`] — the private, per-call run-store base a test hands to
+//!   a run, removed with its whole subtree on drop. The run store namespaces by
+//!   `<base>/<pipeline>/<run-id>`, so a *shared* base is collision-free only while
+//!   no two tests pick the same pipeline name; a `TempBase` path carries the pid, a
+//!   process-monotonic counter, and a nanosecond stamp, which makes the isolation
+//!   structural instead.
 //!
 //! Execution-class dispatch and the run-loop driver build on this
 //! core rather than reshape it.
@@ -446,4 +452,4 @@ pub use dagr_macros::StableName;
 #[cfg(feature = "macros")]
 pub use dagr_macros::task;
 #[cfg(feature = "test-kit")]
-pub use test_kit::{SingleTaskTest, TaskOutcome};
+pub use test_kit::{SingleTaskTest, TaskOutcome, TempBase};

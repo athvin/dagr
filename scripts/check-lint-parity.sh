@@ -121,6 +121,25 @@ expect_level Cargo.toml workspace.lints.clippy   missing_errors_doc   '"deny"' "
 # rather than an invisible consequence of a clippy release.
 expect_level lints.toml clippy                   await_holding_lock   '"deny"' "lints.toml [clippy]"
 expect_level Cargo.toml workspace.lints.clippy   await_holding_lock   '"deny"' "Cargo.toml [workspace.lints.clippy]"
+# `unexpected_cfgs` (T98) is a fourth ratchet, and the only one that is not merely
+# readability: a misspelled `#[cfg(feature = "…")]` compiles into DEAD CODE rather
+# than an error, so the feature boundary it was gating silently ceases to exist —
+# and dagr implements three architectural guarantees as feature boundaries. The
+# value is an inline table (`{ level = "deny", check-cfg = [...] }`) whose
+# `check-cfg` list declares the CUSTOM cfg surface, so a future `cfg(loom)` has to
+# be added in both files to compile. Whitespace inside the value is normalized by
+# `section_pairs`, so the two files' spellings compare equal.
+expect_cfg_ratchet() { # expect_cfg_ratchet FILE SECTION LABEL
+  got=$(section_pairs "$1" "$2" | sed -n 's/^unexpected_cfgs=//p')
+  case "$got" in
+    "")            bad "ratchet: $3 does not declare unexpected_cfgs at all" ;;
+    *'level="deny"'*check-cfg*|*check-cfg*'level="deny"'*)
+                   pass "ratchet: $3 sets unexpected_cfgs to deny with an explicit check-cfg surface" ;;
+    *)             bad "ratchet: $3 sets unexpected_cfgs = '$got', expected level = \"deny\" with a check-cfg list" ;;
+  esac
+}
+expect_cfg_ratchet lints.toml rust                 "lints.toml [rust]"
+expect_cfg_ratchet Cargo.toml workspace.lints.rust "Cargo.toml [workspace.lints.rust]"
 
 # --- Every member opts in ----------------------------------------------------
 members=$(ls -d crates/*/ 2>/dev/null | sed 's:/$::')
@@ -248,6 +267,7 @@ else
   grep -q "ratchet:.*missing_docs"         "$fixture/out" || missed="$missed ratchet-missing-docs"
   grep -q "ratchet:.*missing_errors_doc"   "$fixture/out" || missed="$missed ratchet-missing-errors-doc"
   grep -q "ratchet:.*await_holding_lock"   "$fixture/out" || missed="$missed ratchet-await-holding-lock"
+  grep -q "ratchet:.*unexpected_cfgs"      "$fixture/out" || missed="$missed ratchet-unexpected-cfgs"
   grep -q 'does not inherit'               "$fixture/out" || missed="$missed opt-in"
   grep -q 'silences the workspace policy'  "$fixture/out" || missed="$missed no-escape"
   grep -q 'production #\[allow\] never expires' "$fixture/out" || missed="$missed expect-over-allow"

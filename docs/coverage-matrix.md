@@ -44,7 +44,12 @@ the verifier's own self-tests,
 
 **`unmapped` is the normal early state.** A machine criterion whose covering
 test ships in a *later* ticket is legitimately `unmapped` and names that future
-ticket in `Covered-by` (quality-gates.md §3). Every component ticket, as it
+ticket in `Covered-by`. (Until T98 this sentence carried a citation to a
+repository-relative path that does not exist. The document it meant is the
+ticket-loop skill's `.claude/skills/shipping-dagr-tickets/references/quality-gates.md`,
+which describes the per-era local gate command list and says nothing about this
+matrix — so the citation was both dangling and wrong, and the rule stated here is
+the authoritative one.) Every component ticket, as it
 lands its covering test, edits this matrix to replace `unmapped` with the test
 id — that per-ticket duty is what keeps the debt from exploding at the T65
 acceptance gate. Human and disclaimer rows never carry a test.

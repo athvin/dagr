@@ -1,17 +1,17 @@
-// UI compile-failure sample — the task-type bound.
-//
-// THE most common first-hour error: capturing a
-// non-`Send` value in a task. The rustdoc on the real `Task` trait carries this
-// same worked example, and the cookbook's "non-`Send` capture" entry reproduces
-// this exact broken form; its FIXES (capture an `Arc`, or build the value inside
-// `run`) compile and are exercised by the compiling cookbook tests.
-//
-// This is the REAL authoring API: `dagr_core::flow::Flow::register_source`, whose
-// `T: Task` bound (and `Task: Send + 'static`) is what the framework requires
-// before moving a task value to a worker thread. Capturing an `Rc` (deliberately
-// `!Send`) violates it. The UI harness links this sample against the built
-// `dagr_core` rlib (crates/core/tests/ui.rs) and asserts only that it FAILS to
-// compile under the pinned toolchain, with the snapshot substrings present.
+//! UI compile-failure sample — the task-type bound.
+//!
+//! THE most common first-hour error: capturing a
+//! non-`Send` value in a task. The rustdoc on the real `Task` trait carries this
+//! same worked example, and the cookbook's "non-`Send` capture" entry reproduces
+//! this exact broken form; its FIXES (capture an `Arc`, or build the value inside
+//! `run`) compile and are exercised by the compiling cookbook tests.
+//!
+//! This is the REAL authoring API: `dagr_core::flow::Flow::register_source`, whose
+//! `T: Task` bound (and `Task: Send + 'static`) is what the framework requires
+//! before moving a task value to a worker thread. Capturing an `Rc` (deliberately
+//! `!Send`) violates it. The UI harness links this sample against the built
+//! `dagr_core` rlib (crates/core/tests/ui.rs) and asserts only that it FAILS to
+//! compile under the pinned toolchain, with the snapshot substrings present.
 
 use std::rc::Rc;
 

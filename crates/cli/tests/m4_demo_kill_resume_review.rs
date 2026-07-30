@@ -41,7 +41,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -50,6 +49,7 @@ use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 use dagr_artifact::fold::fold_stream;
 use dagr_cli::structure_snapshot::{StructureAssertError, assert_structure, bless_structure};
 use dagr_cli::t63_demo::{ConsumerFrom, PIPELINE, STAGE_VALUE, assemble, base_groups};
+use dagr_core::test_kit::TempBase;
 
 /// Cargo sets `CARGO_BIN_EXE_<name>` for every bin in the package when compiling an
 /// integration test — the demo binary's path, resolved at build time.
@@ -58,38 +58,6 @@ const DEMO: &str = env!("CARGO_BIN_EXE_dagr-t63-demo-run");
 // ===========================================================================
 // Private per-test run-store base (never shared /tmp; removed on drop).
 // ===========================================================================
-
-struct TempBase {
-    path: PathBuf,
-}
-impl TempBase {
-    fn new(tag: &str) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let unique = format!(
-            "dagr-t63-{tag}-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed),
-            nanos,
-        );
-        let path = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&path).expect("create private temp base");
-        Self { path }
-    }
-    fn path(&self) -> &Path {
-        &self.path
-    }
-    fn str(&self) -> &str {
-        self.path.to_str().expect("utf-8 temp path")
-    }
-}
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
 
 /// Poll `predicate` until it holds or the deadline elapses — spinning on observable
 /// state, never a fixed sleep the assertion depends on.
@@ -116,7 +84,7 @@ fn launch_kill_and_read(base: &TempBase, run_id: &str) -> Vec<u8> {
     let marker = base.path().join(format!("{run_id}.ready"));
     let mut child: Child = Command::new(DEMO)
         .arg("run")
-        .arg(base.str())
+        .arg(base.as_str())
         .arg(run_id)
         .arg(&marker)
         .spawn()
@@ -145,7 +113,7 @@ fn resume(base: &TempBase, prior: &str, new: &str) -> Value {
     let result_path = base.path().join(format!("{new}.result.json"));
     let status = Command::new(DEMO)
         .arg("resume")
-        .arg(base.str())
+        .arg(base.as_str())
         .arg(prior)
         .arg(new)
         .arg(&result_path)

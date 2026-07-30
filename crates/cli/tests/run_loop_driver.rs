@@ -26,6 +26,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // A capturing, in-memory run-store sink + monotonic clock (injection seam)
@@ -349,8 +350,9 @@ fn single_success_plan() -> (Pipeline, RunPlan) {
 fn happy_path_single_node_terminates() {
     let (_pipeline, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "demo",
         Ok(plan),
         &[],
@@ -431,8 +433,9 @@ fn linear_chain_drives_dependents() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -533,8 +536,9 @@ fn fast_branch_not_gated_on_slow_branch() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "diamond",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -558,8 +562,9 @@ fn fast_branch_not_gated_on_slow_branch() {
 fn identity_is_a_uuidv7_minted_at_bootstrap() {
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "demo",
         Ok(plan),
         &[],
@@ -585,8 +590,9 @@ fn identity_is_a_uuidv7_minted_at_bootstrap() {
 fn operator_override_replaces_the_minted_identity() {
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test").run_id("my-explicit-run-42"),
+        &RunConfig::new(temp_base.as_str()).run_id("my-explicit-run-42"),
         "demo",
         Ok(plan),
         &[],
@@ -623,8 +629,9 @@ fn assembly_failure_still_records() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "broken",
         assembled,
         &[],
@@ -677,8 +684,9 @@ fn allowlisted_env_captured_others_not() {
 
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "demo",
         Ok(plan),
         &["DAGR_TEST_ALLOWED".to_string()],
@@ -710,7 +718,7 @@ fn allowlisted_env_captured_others_not() {
     let (_p2, plan2) = single_success_plan();
     let sink2 = MemorySink::default();
     let _ = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "demo",
         Ok(plan2),
         &[],
@@ -754,8 +762,9 @@ fn run_started_header_carries_start_fields() {
     params.insert("threshold".to_string(), "5".to_string());
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
-        &RunConfig::new("/tmp/dagr-test")
+        &RunConfig::new(temp_base.as_str())
             .parameters(params)
             .data_interval(["2026-01-01".into(), "2026-01-02".into()]),
         "demo-pipeline",
@@ -834,8 +843,9 @@ fn every_outcome_is_fed_back() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "two",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -896,8 +906,9 @@ fn failing_upstream_propagates_and_run_fails() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "mixed",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -935,8 +946,9 @@ fn skip_only_run_reports_success() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "skips",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -960,8 +972,9 @@ fn skip_only_run_reports_success() {
 fn run_ends_when_nothing_pending_or_in_flight() {
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
-        &RunConfig::new("/tmp/dagr-test"),
+        &RunConfig::new(temp_base.as_str()),
         "demo",
         Ok(plan),
         &[],
@@ -1007,8 +1020,9 @@ fn framework_survives_a_misbehaving_task() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test").grace(Duration::from_millis(200)),
+        &RunConfig::new(temp_base.as_str()).grace(Duration::from_millis(200)),
         "blocked",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -1067,8 +1081,9 @@ fn zombie_at_natural_run_end() {
     let sink = MemorySink::default();
     let start = std::time::Instant::now();
     let grace = Duration::from_millis(200);
+    let temp_base = TempBase::new("test");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-test").grace(grace),
+        &RunConfig::new(temp_base.as_str()).grace(grace),
         "zombie-run",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -1118,11 +1133,15 @@ fn zombie_at_natural_run_end() {
 /// its own run identity.
 #[test]
 fn two_simultaneous_runs_do_not_interfere() {
-    let run_once = |run_id: &str| {
+    // ONE base, deliberately: this test is about two runs *sharing* a run store
+    // and still writing disjoint per-run directories. The base is still private to
+    // this test (and removed when the guard drops) — what is shared is shared on
+    // purpose, not by accident.
+    let run_once = |base: String, run_id: &str| {
         let (_p, plan) = single_success_plan();
         let sink = MemorySink::default();
         let _ = drive(
-            &RunConfig::new("/tmp/dagr-test-shared").run_id(run_id),
+            &RunConfig::new(base).run_id(run_id),
             "demo",
             Ok(plan),
             &[],
@@ -1131,13 +1150,15 @@ fn two_simultaneous_runs_do_not_interfere() {
         );
         sink.bytes()
     };
-    let h1 = std::thread::spawn(move || run_once("run-alpha"));
+    let temp_base = TempBase::new("test-shared");
+    let base_alpha = temp_base.as_str().to_owned();
+    let h1 = std::thread::spawn(move || run_once(base_alpha, "run-alpha"));
     let h2 = {
-        let run_once = |run_id: &str| {
+        let run_once = |base: String, run_id: &str| {
             let (_p, plan) = single_success_plan();
             let sink = MemorySink::default();
             let _ = drive(
-                &RunConfig::new("/tmp/dagr-test-shared").run_id(run_id),
+                &RunConfig::new(base).run_id(run_id),
                 "demo",
                 Ok(plan),
                 &[],
@@ -1146,7 +1167,8 @@ fn two_simultaneous_runs_do_not_interfere() {
             );
             sink.bytes()
         };
-        std::thread::spawn(move || run_once("run-beta"))
+        let base_beta = temp_base.as_str().to_owned();
+        std::thread::spawn(move || run_once(base_beta, "run-beta"))
     };
     let bytes1 = h1.join().unwrap();
     let bytes2 = h2.join().unwrap();

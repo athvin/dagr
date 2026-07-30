@@ -121,7 +121,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | unsafe-extern-block | unsafe | n-a | — | the workspace declares no `extern` block; the only FFI is `libc` in a `cfg(unix)` dev-dependency test. T94's edition bump makes `unsafe extern` *available*, but with nothing to apply it to the row stays structurally inapplicable rather than adopted |
 | unsafe-maybeuninit | unsafe | n-a | — | no uninitialized memory is constructed anywhere; `mem::uninitialized`/`zeroed` appear nowhere |
 | unsafe-minimize-scope | unsafe | satisfied | — | T94 (ticket 109) moved the workspace to edition 2024, where `unsafe_op_in_unsafe_fn` is deny-by-default — the compiler now enforces this rule. Every unsafe operation sits in its own `unsafe { }` block: the four `GlobalAlloc` methods in `crates/core/src/metrics.rs`, the test allocator in `bounded_memory_chain.rs`, the `libc::raise` call, and the `std::env::set_var`/`remove_var` wrappers (unsafe fns as of 2024). `scripts/check-edition-and-msrv-pins.sh` also asserts each block carries its own `// SAFETY:` |
-| unsafe-miri-ci | unsafe | adopt | T98 | T98 adds a miri job where it can help, or records why miri cannot exercise a `#[global_allocator]` |
+| unsafe-miri-ci | unsafe | adopt | T98 | **No miri job — verdict recorded, see below.** Miri needs a `nightly` toolchain, which contradicts the pinned channel six sites assert agreement on; it replaces the `#[global_allocator]` wholesale, so dagr's only production `unsafe impl` is precisely what it cannot execute; and the other `unsafe` (edition-2024 `env::set_var`) is a libc-level data race outside miri's UB model. A job over the remaining safe code would prove nothing. `crates/cli/tests/ci_and_test_hygiene.rs` pins the verdict to the two-file `unsafe` surface it was taken against, so a third site forces it to be re-taken |
 | unsafe-no-mangle-unsafe | unsafe | n-a | — | no `#[no_mangle]`, `#[export_name]`, or `#[link_section]` anywhere in the workspace. T94's edition bump makes `#[unsafe(no_mangle)]` *available* (and the bare form a hard error), but there is no attribute to rewrite |
 | unsafe-safety-comment | unsafe | satisfied | — | T94 (ticket 109) added the per-operation `// SAFETY:` comments edition 2024's per-operation blocks require, on top of the block-level comment the production `unsafe impl` already carried, and added the one that was missing at the `libc::raise` site. Kept honest mechanically: `scripts/check-edition-and-msrv-pins.sh` fails the build on an unsafe block with no `// SAFETY:` above it, or on a file with more blocks than comments |
 | unsafe-send-sync-manual | unsafe | n-a | — | no manual `Send`/`Sync` impl exists; every auto-derivation is left to the compiler |
@@ -338,7 +338,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | test-criterion-bench | test | declined | — | the 1000-node per-node budget is a deterministic `cargo test` asserting a wall-clock ceiling; criterion's statistical sampling would add a dependency and a flakier signal for a regression gate |
 | test-descriptive-names | test | satisfied | — | across ~1060 tests the shortest names are `ui` and `determinism`; there is no `test1`/`works`/`smoke` anywhere |
 | test-doctest-examples | test | adopt | T96 | done: executed `dagr-cli` doctests went 1 → 6 of 9, `ignore`d 2 → 0, and zero `ignore` fences remain anywhere in the workspace. The three that stay `no_run` state the reason at the fence (two are `fn main` one-liners; one writes a golden fixture). `dagr-metastore` gained its first example |
-| test-fixture-raii | test | adopt | T98 | `dagr-core`'s scratch tests already use a unique-temp-dir helper; T98 promotes it so `dagr-cli`'s tests stop sharing literal `/tmp` paths |
+| test-fixture-raii | test | adopt | T98 | taken. T98 promoted the pattern to `dagr_core::test_kit::TempBase` (pid + process-monotonic counter + nanosecond stamp, whole subtree removed on drop) and adopted it across `crates/{cli,core}/tests/`: 77 literal `/tmp` bases and seven hand-rolled copies are gone, and a scan keeps both from returning |
 | test-integration-dir | test | satisfied | — | 117 integration test files across the six crates' `tests/` directories |
 | test-loom-concurrency | test | declined | — | a genuine fit for the hand-rolled admission controller, but adopting it means porting the type to loom's primitives under `cfg(loom)` — a design change, not hardening. Recommended as its own follow-up |
 | test-mock-traits | test | satisfied | — | every injected dependency is a trait (`EventSink`, `MonotonicClock`, `Jitter`, `ZombieObserver`), which is what makes the fakes possible |
@@ -402,7 +402,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | proj-bin-dir | proj | satisfied | — | the extra binaries live under `src/bin/`, with the test-support ones gated behind `required-features` |
 | proj-build-rs-minimal | proj | n-a | — | no crate has a `build.rs`; build provenance is passed in rather than generated |
-| proj-feature-additive | proj | adopt | T98 | features are additive by design, but no CI job builds the matrix; T98 adds `--no-default-features` and `--all-features` legs |
+| proj-feature-additive | proj | adopt | T98 | taken. T98's `feature-matrix` job builds both ends of the matrix and tests under `--all-features`; `scripts/check-feature-matrix.sh` asserts the RESOLVED graph on the no-default leg, because a build succeeding is not the proof the guarantee needs |
 | proj-flat-small | proj | satisfied | — | every crate is flat `foo.rs` files in `src/` with no nested module directories |
 | proj-lib-main-split | proj | satisfied | — | both binaries are thin (161 and 96 lines) and delegate to their library |
 | proj-mod-by-feature | proj | declined | — | modules already follow arch.md's C-numbered components. Splitting the ten files over 1200 lines is a structure refactor, not hardening, and is excluded from M9's scope; recommended as its own follow-up |
@@ -420,7 +420,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
 | lint-cargo-metadata | lint | adopt | T96 | the metadata half is done (see `doc-cargo-metadata`), enforced by a dedicated shell check rather than by enabling the `clippy::cargo` GROUP — see "`clippy::cargo` is not enabled as a group" below for why the group is declined and what replaces it |
-| lint-cfg-check | lint | adopt | T98 | no `check-cfg` declaration exists. Harmless today (no custom cfgs) but unguarded against a future feature-name typo compiling into dead code |
+| lint-cfg-check | lint | adopt | T98 | taken. `unexpected_cfgs = { level = "deny", check-cfg = [] }` in both halves of the lint policy — the empty list states that dagr's custom-cfg surface is empty, so the next custom cfg must be declared there to compile. The guard is verified to bite on a deliberate typo, with a correctly-spelled negative control |
 | lint-clippy-nursery-selected | lint | declined | — | the nursery lints that would matter here are already covered by the denied `pedantic` group; enabling more selectively is churn without a named defect to catch |
 | lint-deny-correctness | lint | satisfied | — | `clippy::all` is denied at group level, which subsumes `correctness` |
 | lint-missing-docs | lint | adopt | T96 | done: `deny` in both files, the T1-era deferral note retired, and `scripts/check-lint-parity.sh` asserts the two files agree field for field so the pair cannot drift |
@@ -735,6 +735,38 @@ Two are deliberately not joined, and both are documented at their sites:
   detached sweep of *prior* runs' ephemeral `tmp/` subtrees. It touches nothing
   belonging to the current run, and the guarantee it serves is eventual reclamation
   by a next invocation, not a synchronous one.
+
+### Miri: the verdict, and why it is a verdict rather than a job (T98)
+
+`unsafe-miri-ci` asks for `cargo miri test` over the crates containing `unsafe`.
+T98 took the question seriously and answered **no job**, for three reasons that
+compound:
+
+1. **Miri cannot execute the one thing it would be brought in for.** dagr's only
+   production `unsafe impl` is the attributing `GlobalAlloc` in
+   `crates/core/src/metrics.rs`. Miri supplies its own allocator and ignores
+   `#[global_allocator]` entirely, so under miri that impl is never called. A job
+   named for the allocator that cannot run the allocator is worse than no job: it
+   reports green about something it did not check.
+2. **The other `unsafe` is outside miri's model.** `crates/cli/src/config.rs`
+   wraps `std::env::set_var`/`remove_var`, `unsafe` in edition 2024 because
+   concurrent environment mutation races at the libc level. That is a data race in
+   C, not Rust-level UB in the sense miri detects, and the wrapper is confined to
+   the test-support env helper behind a process-global lock.
+3. **Miri requires nightly.** `rust-toolchain.toml` pins a specific channel, and
+   `scripts/check-edition-and-msrv-pins.sh` asserts six sites agree on it —
+   deliberately, because that pin is what makes the trybuild diagnostics
+   byte-reproducible. Adding a second, floating toolchain to CI for a job that
+   cannot reach either `unsafe` site buys nothing and costs the thing the pin
+   exists to protect.
+
+What remains after those three is miri over **safe** code, which catches what the
+compiler already does. So the honest output is this verdict, not a green check.
+
+It is not left as prose that can quietly go stale: the verdict is pinned to the
+`unsafe` surface it was taken against. `crates/cli/tests/ci_and_test_hygiene.rs`
+enumerates both files and fails if a third `unsafe` site appears — at which point
+the verdict must be re-taken against the new facts rather than inherited.
 
 ## Follow-ups recorded here, deliberately outside M9
 

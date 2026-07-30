@@ -127,6 +127,82 @@ in every CI run. The PR proposes a split (standing invariants vs one-time
 acceptance) and records the reasoning; the default is to wire them all and only
 carve out with a stated reason.
 
+### Resolution — all 16 are wired; no carve-out
+
+**Answer: wire them all.** The proposed split was considered and rejected on its
+own premise. Recorded at the `structural-checks` job in
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+
+The premise — "a merged decision has no drift risk" — does not hold. A merged ADR
+is an ordinary markdown file: editable, deletable, and refactorable like any
+other. These checkers are the only thing standing between a decision record and a
+well-meaning edit that drops the rejected alternatives someone will need in two
+years. Nothing else in the repository asserts that an ADR still contains its
+decision.
+
+The cost of being wrong is also asymmetric. The whole job is bash over markdown
+with no Rust toolchain and is one of the fastest in the gate, so wiring a checker
+that turns out not to matter costs seconds; carving one out that did matter
+recreates exactly the dormancy this ticket exists to end. **Four of the sixteen
+were already failing on clean `main`** — `check-hygiene.sh`,
+`check-workspace-skeleton.sh`, `check-async-runtime-adr.sh` and
+`check-timeout-and-permit-adr.sh`. Nobody knew, because nothing ran them.
+
+A carve-out remains available and needs only a stated reason. That standard, not
+the split, is what this job holds.
+
+### Resolution — the temp-directory helper is promoted, not `tempfile`
+
+The Objective left this to the PR ("Prefer promoting the existing in-repo helper
+to adding a `tempfile` dev-dependency — but if `tempfile` turns out materially
+better… Decide in the PR").
+
+**Answer: promote the in-repo helper**, as `dagr_core::test_kit::TempBase`.
+`tempfile` was not materially better here for two reasons. dagr's tests need a
+*named, tagged, pid-bearing* base — a leftover directory has to say which test
+made it, and a bare `tempfile::TempDir` name does not. And `test_kit` is a
+*shipped* surface (arch.md C28: the testing levels ship with the library rather
+than being rebuilt in each pipeline), so the helper reaches downstream pipeline
+tests too; routing that through a dev-dependency would not. The `deny.toml`
+justification the ticket permits is therefore not needed, and no dependency was
+added.
+
+One consequence is worth recording: `crates/metastore/tests/` keeps its own four
+copies. `dagr-metastore` has **no** dependency edge onto `dagr-core` by design
+(ADR 097 §5 — the same C24-style boundary `render` holds), so it structurally
+cannot use the promoted helper, and adding the edge to share a test utility would
+trade an architectural guarantee for a de-duplication. Left as-is, deliberately.
+
+### Resolution — miri gets a verdict, not a job
+
+**Answer: no miri job.** Recorded in
+[`docs/rust-skills-register.md`](../rust-skills-register.md) (the `unsafe-miri-ci`
+row plus a section stating the three reasons), and *pinned* by
+`crates/cli/tests/ci_and_test_hygiene.rs`, which enumerates the two-file `unsafe`
+surface the verdict was taken against and fails if a third site appears — so the
+verdict must be re-taken against new facts rather than inherited.
+
+### Resolution — `check-coverage-matrix.sh`'s runtime, and `layer-c-runs/`
+
+Both DoD items were already satisfied on `main` when this ticket started, and are
+recorded here rather than silently skipped:
+
+- `check-coverage-matrix.sh` is **already wired**, on the tier-1 `test` leg, which
+  is the mechanism the ticket asks for: it resolves test ids against a suite that
+  job has *already compiled*, instead of a standalone job rebuilding one. The
+  reasoning is at the step. No change — but the remaining cost was measured rather
+  than assumed, because the ticket's "over two minutes" understates it: the
+  enumeration is `cargo test --workspace -- --list`, which **spawns all ~125 test
+  binaries**, and that took **≈10 minutes** on the development machine. Placement
+  removes the *build*; the *spawn* is inherent to resolving ids against the
+  compiled suite. A source-scan resolution (grep for `fn <name>`) would be roughly
+  instant and was rejected: it would stop distinguishing a test that exists in the
+  source from one that actually compiles into the suite, which is the dangling-
+  reference case the checker exists to catch. Weakening the check to speed it up is
+  what this ticket is against.
+- `layer-c-runs/` is **absent and untracked** — it was never committed. The
+  regression guard is now a test rather than an absence nobody re-checks.
+
 ## Out of scope
 
 - `loom` model-checking for the hand-rolled `AdmissionController`

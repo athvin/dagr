@@ -69,6 +69,7 @@ use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Injection seam: an in-memory run-store sink + a monotonic clock
@@ -454,8 +455,9 @@ fn run_demo() -> (Vec<u8>, RunOutcome) {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("m1-demo");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-m1-demo"),
+        &RunConfig::new(temp_base.as_str()),
         "m1-three-node-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -1060,8 +1062,9 @@ fn the_retried_value_flows_through_the_chain() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("m1-demo");
     let report = drive(
-        &RunConfig::new("/tmp/dagr-m1-demo"),
+        &RunConfig::new(temp_base.as_str()),
         "m1-three-node-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
