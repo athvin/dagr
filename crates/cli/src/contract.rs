@@ -5,7 +5,7 @@
 //! # Discarded writes
 //!
 //! Every `let _ = writeln!(out, …)` in this module discards its
-//! [`io::Write`](std::io::Write) result **deliberately**. This paragraph is the
+//! [`std::io::Write`] result **deliberately**. This paragraph is the
 //! convention — a rule stated once, rather than the same comment repeated at each
 //! of the sites — so a reviewer can check the rule instead of counting comments.
 //!
