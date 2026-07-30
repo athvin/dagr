@@ -430,11 +430,18 @@ static PROCESS_LIVE: AtomicU64 = AtomicU64::new(0);
 ///
 /// Install it once, as the binary's single global allocator:
 ///
-/// ```ignore
+/// ```no_run
 /// use dagr_core::metrics::AttributingAllocator;
+///
 /// #[global_allocator]
 /// static ALLOC: AttributingAllocator = AttributingAllocator::new();
+/// # fn main() {}
 /// ```
+///
+/// `no_run`, not executed: a `#[global_allocator]` is a whole-program choice, and
+/// installing one inside the doctest harness would swap the allocator out from
+/// under the harness itself. It is compile-checked, which is what the example
+/// exists to promise — that this is a valid `#[global_allocator]` static.
 pub struct AttributingAllocator;
 
 impl AttributingAllocator {

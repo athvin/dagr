@@ -66,7 +66,10 @@
 //!     type Input = ();
 //!     type Output = u32;
 //!     async fn run(&mut self, ctx: &RunContext, _i: ()) -> Result<u32, TaskError> {
-//!         let client = ctx.resources().get::<FakeClient>().unwrap();
+//!         let client = ctx
+//!             .resources()
+//!             .get::<FakeClient>()
+//!             .ok_or_else(|| TaskError::permanent("no FakeClient registered"))?;
 //!         Ok(client.fetch())
 //!     }
 //! }

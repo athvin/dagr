@@ -21,6 +21,10 @@
 //! }
 //! ```
 //!
+//! `no_run`, not executed: this example **is** a `main`, and running it would
+//! dispatch the doctest harness's own argv and return a process exit code. It is
+//! compile-checked, which is the whole of what a `main` one-liner can promise.
+//!
 //! # The leaf-binary contract
 //!
 //! [`inventory`] registers life-before-`main` constructors in a linker section, so a
@@ -75,14 +79,16 @@ use crate::run_flow::RunnableFlow;
 /// ticket) generates the factory and emits the submission; this ticket exercises
 /// discovery against hand-written [`inventory::submit!`]s.
 ///
-/// ```no_run
-/// # #[cfg(feature = "dag")] {
+/// ```
 /// use dagr_cli::run_flow::RunnableFlow;
 /// use dagr_cli::DagRegistration;
 ///
 /// fn build_etl() -> RunnableFlow { RunnableFlow::new() }
 /// inventory::submit! { DagRegistration { name: "etl", factory: build_etl } }
-/// # }
+///
+/// // The submission is collected at link time, before `main` — `run()` finds it
+/// // without the binary naming it anywhere.
+/// assert!(inventory::iter::<DagRegistration>().any(|d| d.name == "etl"));
 /// ```
 pub struct DagRegistration {
     /// The DAG's name — what `list` prints, what `run <name>` / `graph <name>` /
@@ -110,6 +116,10 @@ inventory::collect!(DagRegistration);
 ///     dagr_cli::run(std::env::args_os()).into()
 /// }
 /// ```
+///
+/// `no_run`, not executed: this example **is** a `main`, so running it would
+/// dispatch the doctest harness's own argv and return a process exit code. It is
+/// compile-checked instead.
 ///
 /// It iterates [`inventory::iter::<DagRegistration>()`](inventory::iter), **sorts**
 /// the records by name (neutralising [`inventory`]'s unspecified iteration order),

@@ -374,8 +374,11 @@ impl LogSpan {
 ///     .build();
 ///
 /// // Authorized code exposes it deliberately; the framework never can via Debug.
-/// let token = registry.get::<ApiToken>().unwrap();
+/// let token = registry
+///     .get::<ApiToken>()
+///     .ok_or("ApiToken was registered above")?;
 /// assert_eq!(token.0.expose(), "s3cr3t");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct Secret<T> {
     inner: T,
@@ -479,8 +482,11 @@ impl std::error::Error for RegistryError {}
 ///     .expect("AnalyticsClient is a distinct type despite the shared inner type")
 ///     .build();
 ///
-/// assert_eq!(registry.get::<BillingClient>().unwrap().0.base_url, "https://billing");
-/// assert_eq!(registry.get::<AnalyticsClient>().unwrap().0.base_url, "https://analytics");
+/// let billing = registry.get::<BillingClient>().ok_or("registered above")?;
+/// let analytics = registry.get::<AnalyticsClient>().ok_or("registered above")?;
+/// assert_eq!(billing.0.base_url, "https://billing");
+/// assert_eq!(analytics.0.base_url, "https://analytics");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// # Thread-safety bound and the owning-worker escape hatch

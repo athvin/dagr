@@ -119,9 +119,33 @@ impl<'a> FlowBuilder<'a> {
     ///
     /// This is the primary, reads-like-English wiring surface:
     ///
-    /// ```ignore
-    /// let count  = f.source("count", Count { up_to: 21 });
+    /// ```
+    /// # use dagr_cli::prelude::FlowBuilder;
+    /// # use dagr_cli::run_flow::RunnableFlow;
+    /// # use dagr_core::{TaskError, context::RunContext, stable_name::StableName, task::Task};
+    /// # #[derive(Clone)] struct Count(u64);
+    /// # impl StableName for Count { const STABLE_NAME: &'static str = "Count"; }
+    /// # #[derive(Clone)] struct Doubled(u64);
+    /// # impl StableName for Doubled { const STABLE_NAME: &'static str = "Doubled"; }
+    /// # struct CountTo { up_to: u64 }
+    /// # impl StableName for CountTo { const STABLE_NAME: &'static str = "CountTo"; }
+    /// # impl Task for CountTo {
+    /// #     type Input = ();
+    /// #     type Output = Count;
+    /// #     async fn run(&mut self, _: &RunContext, _: ()) -> Result<Count, TaskError> { Ok(Count(self.up_to)) }
+    /// # }
+    /// # struct Double;
+    /// # impl StableName for Double { const STABLE_NAME: &'static str = "Double"; }
+    /// # impl Task for Double {
+    /// #     type Input = Count;
+    /// #     type Output = Doubled;
+    /// #     async fn run(&mut self, _: &RunContext, c: Count) -> Result<Doubled, TaskError> { Ok(Doubled(c.0 * 2)) }
+    /// # }
+    /// # let mut flow = RunnableFlow::new();
+    /// # let mut f = FlowBuilder::new(&mut flow);
+    /// let count  = f.source("count", CountTo { up_to: 21 });
     /// let double = f.task("double", Double).depends_on(count); // double DEPENDS ON count
+    /// # drop(double);
     /// ```
     ///
     /// A [`Handle`] has no `depends_on`, so an edge can only point **backward** — a
@@ -211,10 +235,38 @@ impl<T> NodeBuilder<'_, '_, T> {
     /// `D: Deps<Inputs = T::Input>` check, so a wrong-typed or wrong-arity upstream is
     /// a **compile error** here, never a runtime surprise:
     ///
-    /// ```ignore
-    /// let double = f.task("double", Double).depends_on(count);        // one upstream
-    /// let report = f.task("join", Join).depends_on((left, right));    // fan-in: a tuple
     /// ```
+    /// # use dagr_cli::prelude::FlowBuilder;
+    /// # use dagr_cli::run_flow::RunnableFlow;
+    /// # use dagr_core::{TaskError, context::RunContext, stable_name::StableName, task::Task};
+    /// # #[derive(Clone)] struct Count(u64);
+    /// # impl StableName for Count { const STABLE_NAME: &'static str = "Count"; }
+    /// # #[derive(Clone)] struct Doubled(u64);
+    /// # impl StableName for Doubled { const STABLE_NAME: &'static str = "Doubled"; }
+    /// # struct CountTo { up_to: u64 }
+    /// # impl StableName for CountTo { const STABLE_NAME: &'static str = "CountTo"; }
+    /// # impl Task for CountTo {
+    /// #     type Input = ();
+    /// #     type Output = Count;
+    /// #     async fn run(&mut self, _: &RunContext, _: ()) -> Result<Count, TaskError> { Ok(Count(self.up_to)) }
+    /// # }
+    /// # struct Double;
+    /// # impl StableName for Double { const STABLE_NAME: &'static str = "Double"; }
+    /// # impl Task for Double {
+    /// #     type Input = Count;
+    /// #     type Output = Doubled;
+    /// #     async fn run(&mut self, _: &RunContext, c: Count) -> Result<Doubled, TaskError> { Ok(Doubled(c.0 * 2)) }
+    /// # }
+    /// # let mut flow = RunnableFlow::new();
+    /// # let mut f = FlowBuilder::new(&mut flow);
+    /// let count  = f.source("count", CountTo { up_to: 21 });
+    /// let double = f.task("double", Double).depends_on(count); // one upstream
+    /// # drop(double);
+    /// ```
+    ///
+    /// A fan-in names its upstreams as a **tuple**, and the tuple's value types
+    /// must match the task's `Input` tuple exactly:
+    /// `f.task("join", Join).depends_on((left, right))`.
     ///
     /// Equivalent to [`FlowBuilder::node(name, task, deps)`](FlowBuilder::node); this
     /// spelling makes the dependency direction explicit. For a `StableName`-less task
