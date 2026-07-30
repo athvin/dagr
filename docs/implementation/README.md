@@ -163,7 +163,7 @@ Applies the `.claude/skills/rust-skills` guidance (265 rules / 26 categories, wr
 - [x] **111** · [T96 — crate metadata, per-crate docs, and the lint ratchet](111-T96-docs-metadata-and-lint-ratchet.md) · M · feature (docs) — after T95
 - [x] **112** · [T97 — async discipline and allocation review](112-T97-async-and-allocation-review.md) · M · feature (tests) — after T95
 - [x] **113** · [T98 — CI coverage and test-isolation hygiene](113-T98-ci-and-test-hygiene.md) · M · feature (tests) — after T96
-- [ ] **114** · [T99 — M9 acceptance gate](114-T99-m9-acceptance-gate.md) · M · feature (gate) — after T93–T98
+- [x] **114** · [T99 — M9 acceptance gate](114-T99-m9-acceptance-gate.md) · M · feature (gate) — after T93–T98
 
 ## M10 — Remote execution (Kubernetes, opt-in)
 
