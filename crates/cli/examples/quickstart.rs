@@ -64,8 +64,8 @@ fn quickstart(f: &mut FlowBuilder) {
 // --- The whole binary is one line. `dagr_cli::run` discovers every `#[dag]`, builds
 // the run store, event sink, clock, and run id for you, and dispatches the verbs every
 // pipeline binary shares: `run` drives the flow, `graph` emits the DAG, `list` names
-// the flows. No server, no database, no scheduler — the binary and a run-store
-// directory are all you need.
+// the flows. Nothing here needs a server, a database, or a scheduler running — the
+// binary and a run-store directory are all you need.
 fn main() -> std::process::ExitCode {
     dagr_cli::run(std::env::args_os()).into()
 }

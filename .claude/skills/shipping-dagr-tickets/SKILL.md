@@ -41,9 +41,15 @@ files and deviations in `docs/implementation/DEVIATIONS.md`.
 7. NEVER read arch.md, ticket bodies, tasks.md, ADRs, dagx material, or CI
    logs in the orchestrator — delegate to subagents; run scripts for state.
 8. NEVER let a subagent's code cross the permanent scope boundary (no
-   scheduler, distributed execution, metadata store, web UI, DSL, backfill
-   orchestrator, runtime graph mutation) or another ticket's Out-of-scope
-   seam — that is what the scope check exists to catch.
+   scheduler, no *distributed* execution, no *coordinating* metadata store, no
+   web UI, DSL, backfill orchestrator, or runtime graph mutation) or another
+   ticket's Out-of-scope seam — that is what the scope check exists to catch.
+   BUT two terms are narrowed by operator-approved ADRs, so do NOT flag them:
+   a local, embedded, opt-in, non-coordinating **run index** is permitted
+   (ADR 097), and **one** orchestrator placing node attempts on remote compute
+   for **one run** is permitted (ADR 115). Still forbidden: a second
+   coordinating process, an inbound API, a served database, workloads touching
+   the index. See §8 of `references/ticket-conventions.md`.
 9. NEVER silently resolve a genuinely contested open question or rewrite a
    merged ADR — record, supersede, or STOP per
    `references/ticket-conventions.md`.

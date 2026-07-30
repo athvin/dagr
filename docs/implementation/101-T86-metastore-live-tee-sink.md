@@ -53,4 +53,4 @@ None. (The injected-sink seam, tee pattern, `SinkFault` model, and `DAGR_*` prec
 - The end-to-end acceptance gate — **T88**.
 - Lineage events/rows and `durable_reference_meta` — **M8** (the live sink maps only what the event stream carries today).
 - Any change to the event stream schema or the driver's core loop beyond wiring the tee at the existing injection point.
-- Scope boundary restated: a live local index is still non-coordinating; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: a live local index is still non-coordinating; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

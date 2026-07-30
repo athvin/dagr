@@ -59,4 +59,4 @@ None. (Substrate, concurrency recipe, and boundaries are fixed by ADR 097; this 
 - Multi-process write stress/validation — **T85** (this ticket asserts only the helper's single-file shape).
 - `RemoteSqld` / `SyncedReplica` implementations and any `sqld` server — future work behind the seam (recognized stubs only here).
 - Lineage columns/tables (`durable_reference_meta`, `output_produced`, `input_consumed`) — **M8**.
-- Scope boundary restated: the store is a local, embedded, non-coordinating index; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: the store is a local, embedded, non-coordinating index; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

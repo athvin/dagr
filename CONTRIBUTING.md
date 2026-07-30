@@ -114,11 +114,27 @@ checklist.
 
 ## Scope boundary
 
-dagr is, **permanently**, **not** a scheduler, a distributed execution system, a
-metadata store, a web interface, a domain-specific language, or a backfill
-orchestrator — and **the graph's shape never changes at runtime**. This process
-contract governs contribution only; it does not — and no contribution may —
+dagr is, **permanently**, **not** a scheduler, a *distributed* execution system, a
+*coordinating* metadata store, a web interface, a domain-specific language, or a
+backfill orchestrator — and **the graph's shape never changes at runtime**. This
+process contract governs contribution only; it does not — and no contribution may —
 reintroduce any of those as capability. Every ticket restates this boundary in
-its Out of scope section, and diffs that cross it fail review by design. See
+its Out of scope section, and diffs that cross it fail review by design.
+
+Two of those terms are read narrowly by recorded decision, and **only** that far.
+A contribution relying on either carve-out cites the ADR:
+
+- **"Metadata store"** = a store the engine depends on to *coordinate*. A local,
+  embedded, opt-in, non-coordinating run index derived from the event stream is
+  permitted (**ADR 097**, T82).
+- **"Distributed execution system"** = an engine that distributes *the graph and
+  its control* (cooperating orchestrators, work-stealing, cross-run queues, a
+  control plane outliving a run). A single orchestrator process placing individual
+  node attempts on remote compute it owns for one run is permitted (**ADR 115**,
+  T100). Still excluded: any second coordinating process, an inbound API on the
+  orchestrator, and task pods that read or write the run index.
+
+Moving a boundary is never a feature ticket's business: it takes its own decision
+ticket with recorded operator sign-off (ticket-conventions §8/§10). See
 [`docs/arch.md`](docs/arch.md) for the full component specification and the
 normative Vocabulary (terminal states, state classes, trigger rules).

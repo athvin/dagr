@@ -2,9 +2,10 @@
 
 The execution core of [dagr](https://github.com/athvin/dagr) — the authoring
 surface and run-loop machinery that make one compiled Rust binary *be* a DAG
-pipeline. You write units of work, declare how they connect, and the compiler has
-already checked the graph: no server, no scheduler, no database, no config file
-describing the shape, no parsing step.
+pipeline (or several, one selected per invocation). You write units of work,
+declare how they connect, and the compiler has already checked the graph: nothing
+here needs a server, a scheduler, or a database running, and there is no config
+file describing the shape and no parsing step.
 
 This crate is the **live-pipeline surface**. It holds the task abstraction, typed
 handles, dependency binding, flow assembly, output slots, readiness, admission,

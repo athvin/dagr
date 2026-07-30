@@ -118,12 +118,32 @@ reserved exit code — the real resume algorithm belongs to T58 (ticket 070).
 ## §8 Scope boundary
 
 arch.md's permanent non-goals, restated in every ticket's Out of scope, are a
-hard boundary: dagr is **not** a scheduler, distributed execution system,
-metadata store, web interface, DSL, or backfill orchestrator — and the graph's
-shape never changes at runtime (no dynamic fan-out). Adding "helpful" capability
-beyond the boundary (group-level concurrency, a push exporter, runtime graph
-mutation…) fails review by design. The orchestrator runs an independent scope
-check on M/L feature diffs; do not rely on it — stay inside the ticket.
+hard boundary: dagr is **not** a scheduler, a *distributed* execution system, a
+*coordinating* metadata store, a web interface, a DSL, or a backfill orchestrator
+— and the graph's shape never changes at runtime (no dynamic fan-out). Adding
+"helpful" capability beyond the boundary (group-level concurrency, a push
+exporter, runtime graph mutation…) fails review by design. The orchestrator runs
+an independent scope check on M/L feature diffs; do not rely on it — stay inside
+the ticket.
+
+**Two of those terms are read narrowly by recorded, operator-approved decision.
+Do not flag work that stays inside a carve-out as a boundary violation:**
+
+- **"Metadata store"** = a store the engine depends on to *coordinate*. A local,
+  embedded, opt-in, non-coordinating run index derived from the event stream is
+  **permitted** — **ADR 097** (ticket 097 · T82).
+- **"Distributed execution system"** = an engine that distributes *the graph and
+  its control* (cooperating orchestrators, work-stealing, cross-run queues, a
+  control plane outliving a run). **One** orchestrator process placing individual
+  node attempts on remote compute it owns for **one run** is **permitted** —
+  **ADR 115** (ticket 115 · T100).
+
+Still excluded under both carve-outs, and still a STOP: a second coordinating
+process, an inbound API on the orchestrator, a served database, task workloads
+that read or write the run index, and runtime graph expansion. A ticket relying
+on either carve-out **cites its ADR** in the Out-of-scope restatement. Moving a
+boundary is never a feature ticket's business — it takes its own decision ticket
+with recorded operator sign-off (§10).
 
 ## §9 Normative vocabulary
 

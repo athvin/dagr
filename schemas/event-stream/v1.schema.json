@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/athvin/dagr/schemas/event-stream/v1.schema.json",
   "title": "dagr.event-stream@1",
-  "description": "The C19 event stream: an append-only sequence of single-line JSON records (JSON Lines), one object per line. Every record carries the T0.6/C19 header (run identity, schema version, gapless strictly-increasing sequence, informational wall-clock stamp, authoritative monotonic offset) plus an event body keyed by `kind`. Published by T39 (ticket 050) against the T4 serialization ADR (017). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate and readers ignore them. MINOR REVISIONS (additive, same major @1, same file — old records keep validating): @1.1 (T89, ticket 104) lets an `attempt-outcome` record carry the optional `durable_reference_meta` object alongside `durable_reference`. @1.2 (T90, ticket 105) adds the `output-produced` lineage event kind (a durable output produced, or copied forward on resume — carried by value with NO foreign key to any asset row) and lets an `attempt-outcome` record carry the optional consumed `inputs` array.",
+  "description": "The C19 event stream: an append-only sequence of single-line JSON records (JSON Lines), one object per line. Every record carries the T0.6/C19 header (run identity, schema version, gapless strictly-increasing sequence, informational wall-clock stamp, authoritative monotonic offset) plus an event body keyed by `kind`. Published by T39 (ticket 050) against the T4 serialization ADR (017). Schema evolution is additive-only within a version (T0.10): no object sets additionalProperties:false, so unknown future fields validate and readers ignore them. MINOR REVISIONS (additive, same major @1, same file — old records keep validating): @1.1 (T89, ticket 104) lets an `attempt-outcome` record carry the optional `durable_reference_meta` object alongside `durable_reference`. @1.2 (T90, ticket 105) adds the `output-produced` lineage event kind (a durable output produced, or copied forward on resume — carried by value with NO foreign key to any asset row) and lets an `attempt-outcome` record carry the optional consumed `inputs` array. @1.3 (T108, ticket 123, ADR 115 §9) adds the `attempt-submitted` event kind: the WRITE-AHEAD record of a remote attempt's submission — what the orchestrator intended to launch, written BEFORE the remote work is created, so a crash between intent and creation leaves a durable record. Emitted ONLY by a remote executor, so a local in-process run's stream is byte-identical to a pre-@1.3 run. Unknown kinds are ignored by readers (the T42 fold skips them), so a pre-@1.3 reader folds an @1.3 stream unchanged.",
   "type": "object",
   "required": ["schema_version", "run_id", "seq", "wall", "offset_ns", "kind"],
   "properties": {
@@ -42,6 +42,7 @@
         "attempt-failed",
         "attempt-outcome",
         "output-produced",
+        "attempt-submitted",
         "node-terminal",
         "zombie-at-exit",
         "run-finished"
@@ -119,6 +120,39 @@
           "output_kind": { "type": "string", "minLength": 1 },
           "produced_at_offset_ns": { "type": "integer", "minimum": 0 },
           "originating_run": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "attempt-submitted" } }, "required": ["kind"] },
+      "then": {
+        "description": "An attempt-submitted record (T108, dagr.event-stream@1.3, minor+additive, ADR 115 §9): the WRITE-AHEAD record of what the orchestrator intended to launch for one remote attempt, written BEFORE the remote work is created. It answers 'what was this task launched with' after the remote work object has been garbage-collected, and it is what a restarted orchestrator reads to recover intent. `inputs` is the ORDERED, positional list of `{ uri, content_hash }` the attempt was given — order is load-bearing (dagr binds inputs positionally, ceiling 8), and an EMPTY array is the correct encoding for a consume-nothing source, never a null. The content hash travels with every reference so a recovering orchestrator can still detect an out-of-band overwrite (the resume MutatedReference gate) rather than trusting the path alone. The identity triple `(run_id, node, attempt)` is the idempotency key: `run_id` is on the envelope, `node` and `attempt` here. `structural_fingerprint`/`policy_hash`/`tool_version`/`image_digest` let a recovering orchestrator refuse to adopt work launched by a DIFFERENT program. `target_name` is the intended name of the remote work object; the OBSERVED identity the platform actually created (which can differ) is recorded additively via `observed_*` fields, because intent and reality are separate facts and a post-mortem needs both. References carried here MUST be opaque and non-secret — a credential-bearing URL (e.g. a presigned URL) must never be recorded (ADR 115 §9).",
+        "required": ["node", "attempt", "inputs"],
+        "properties": {
+          "node": { "type": "string", "minLength": 1 },
+          "attempt": { "type": "integer", "minimum": 1 },
+          "inputs": {
+            "description": "The ORDERED positional durable references supplied to this attempt. Empty for a consume-nothing source. Length equals the node's declared input arity (ceiling 8), so a mismatch is detectable rather than silent.",
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "required": ["uri"],
+              "properties": {
+                "uri": { "type": "string", "minLength": 1 },
+                "content_hash": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          "executor": { "description": "The executor that submitted this attempt (e.g. the remote backend's name). Absent on a local run, which never emits this kind.", "type": "string", "minLength": 1 },
+          "target_name": { "description": "The INTENDED name of the remote work object, before creation.", "type": "string", "minLength": 1 },
+          "observed_name": { "description": "The name the platform actually created, when known. Additive: recorded after creation succeeds.", "type": "string", "minLength": 1 },
+          "observed_uid": { "description": "The platform's own unique identifier for the created work object, when known — the field that distinguishes a recreated object from the original.", "type": "string", "minLength": 1 },
+          "observed_host": { "description": "The host/node the platform scheduled the work onto, when known. Diagnostic only.", "type": "string", "minLength": 1 },
+          "structural_fingerprint": { "type": "string", "minLength": 1 },
+          "policy_hash": { "type": "string", "minLength": 1 },
+          "tool_version": { "type": "string", "minLength": 1 },
+          "image_digest": { "description": "The image digest the attempt was launched with. Same digest as the orchestrator by construction under the re-entrant design (ADR 115 §2); a mismatch is a refusal, not a best-effort run.", "type": "string", "minLength": 1 }
         }
       }
     },

@@ -51,4 +51,4 @@ None. (`fold_stream` is the folding authority per T42/C22; this ticket maps its 
 - Multi-process concurrent-write validation — **T85**.
 - The `--features metastore` example and native-access docs — **T87**.
 - Lineage rows (`output_produced` / `input_consumed`) and `durable_reference_meta` — **M8**.
-- Scope boundary restated: `sync` reads the local run store and writes a local index; it coordinates nothing and adds no scheduler/backfill behavior. dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: `sync` reads the local run store and writes a local index; it coordinates nothing and adds no scheduler/backfill behavior. dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

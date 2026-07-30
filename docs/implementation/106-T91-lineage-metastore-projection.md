@@ -45,4 +45,4 @@ None. (The append-only + by-value-no-FK disciplines are fixed by T90 and ADR 097
 - Any asset-**scheduler** behavior — data-triggered scheduling, asset queues, partitions, watchers (Airflow's asset scheduler cluster) — permanently out of scope (no scheduler).
 - Deadline/expected-runtime and `#[dag]`-discovery-failure records (the LOW-priority review items) — deferred; open a follow-up ticket only on explicit demand.
 - Server/remote projection — behind the `MetaStore::open(mode)` seam, unshipped.
-- Scope boundary restated: lineage projection is a local, non-coordinating index of per-run provenance; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: lineage projection is a local, non-coordinating index of per-run provenance; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
