@@ -159,7 +159,7 @@ Applies the `.claude/skills/rust-skills` guidance (265 rules / 26 categories, wr
 - [x] **107** · [T92 — rust-skills adoption register (decision)](107-T92-rust-skills-adoption-register.md) · S · decision
 - [x] **108** · [T93 — Cargo release/bench/dev profiles](108-T93-cargo-profiles.md) · S · setup — after T92
 - [x] **109** · [T94 — edition 2024 migration and MSRV bump](109-T94-edition-2024-and-msrv-bump.md) · L · setup — after T93
-- [ ] **110** · [T95 — error-chain, panic, and arithmetic hardening](110-T95-error-chain-and-panic-hardening.md) · M · feature — after T94
+- [x] **110** · [T95 — error-chain, panic, and arithmetic hardening](110-T95-error-chain-and-panic-hardening.md) · M · feature — after T94
 - [ ] **111** · [T96 — crate metadata, per-crate docs, and the lint ratchet](111-T96-docs-metadata-and-lint-ratchet.md) · M · feature (docs) — after T95
 - [ ] **112** · [T97 — async discipline and allocation review](112-T97-async-and-allocation-review.md) · M · feature (tests) — after T95
 - [ ] **113** · [T98 — CI coverage and test-isolation hygiene](113-T98-ci-and-test-hygiene.md) · M · feature (tests) — after T96
