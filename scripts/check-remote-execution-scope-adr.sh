@@ -77,6 +77,23 @@ adr_body=$(awk '/^#+[[:space:]]+ADR:/ {found=1} found {print}' "$adr")
 has() { printf '%s' "$adr_body" | grep -qiE "$1"; }
 file_has() { grep -qiE "$2" "$1"; }
 
+# Line breaks are an accident of formatting, and the sentences that carry this
+# ADR's polarity ("Still rejected, unchanged", "stay verbatim") wrap. Flatten the
+# body so a sentence can be asserted AS WRITTEN rather than word by word.
+adr_flat=$(printf '%s' "$adr_body" | tr '\n' ' ')
+flat_has() { printf '%s' "$adr_flat" | grep -qE "$1"; }
+
+# Slice ONE bullet out of the ADR body and flatten it, so a polarity marker is
+# asserted on the bullet that carries it rather than anywhere in the file. Starts
+# at the line matching $1, stops at the next top-level bullet, heading, or blank.
+bullet() {
+  printf '%s' "$adr_body" | awk -v pat="$1" '
+    !f && $0 ~ pat { f=1; print; next }
+    f && (/^- / || /^#/ || /^[[:space:]]*$/) { exit }
+    f { print }
+  ' | tr '\n' ' '
+}
+
 # --- ADR skeleton (ticket-conventions §4) ------------------------------------
 if printf '%s' "$adr_body" | grep -qiE '^#+[[:space:]]+ADR:'; then
   pass "adr: an embedded 'ADR:' heading is present in the ticket file"
@@ -159,8 +176,22 @@ if has 'outlives a run|outliving a run|outlive .* run'; then
 else
   bad "violation: the outlives-a-run exclusion is missing"
 fi
+# POLARITY, not vocabulary. Every check above is satisfied by the words being
+# PRESENT — which a bullet flipped from "Still rejected, unchanged" to "Now
+# permitted" keeps in full. The marker is therefore asserted VERBATIM, on the
+# bullet that carries it, and the singular-orchestrator phrasing is asserted as
+# written: "permits many cooperating orchestrator" must not be able to pass.
+coop_bullet=$(bullet 'Multiple cooperating orchestrators')
+if printf '%s' "$coop_bullet" | grep -qF 'Still rejected, unchanged' \
+   && printf '%s' "$coop_bullet" | grep -qF 'permits exactly one orchestrator'; then
+  pass "violation: the cooperating-orchestrators bullet still reads 'Still rejected, unchanged' and 'permits exactly one orchestrator'"
+else
+  bad "violation: the cooperating-orchestrators bullet no longer reads 'Still rejected, unchanged' AND 'permits exactly one orchestrator' — the carve-out has been flipped to authorise what it forbids"
+fi
+# 'no shared lock' only — the bare 'shared lock' alternative was a superset of it
+# and could never add a constraint (it is satisfied by "a shared lock is fine").
 if (has 'no peer' || has 'gains no peer') && has 'no election' \
-   && (has 'no shared lock' || has 'shared lock') && has 'no queue' && has 'no service'; then
+   && has 'no shared lock' && has 'no queue' && has 'no service'; then
   pass "violation: no peer / no election / no shared lock / no queue / no service"
 else
   bad "violation: the no-peer/election/lock/queue/service list is incomplete"
@@ -171,8 +202,10 @@ if (has 'no inbound' || has 'no callback' || has 'nothing inbound') \
 else
   bad "violation: the no-inbound-listener exclusion is missing"
 fi
+# The bare 'index' alternative was a superset of 'run index' and matched the word
+# in a dozen unrelated sentences; dropping it makes the named-store conjunct bind.
 if (has 'pods never' || has 'never read or write the metastore' || has 'never touch the run index') \
-   && (has 'metastore' || has 'run index' || has 'index'); then
+   && (has 'metastore' || has 'run index'); then
   pass "violation: task pods never read or write the run index"
 else
   bad "violation: the pods-never-touch-the-index rule is missing"
@@ -184,14 +217,25 @@ else
 fi
 if (has 'graph expansion' || has 'N files' || has 'discovers N') \
    && (has 'still rejected' || has 'never .* how many' || has 'unchanged'); then
-  pass "violation: runtime graph expansion is still rejected, unchanged"
+  pass "violation: runtime graph expansion is still named"
 else
   bad "violation: the runtime-graph-expansion exclusion is missing"
 fi
-if has 'scheduler' && (has 'still' || has 'remains' || has 'not a scheduler' || has 'unchanged'); then
-  pass "violation: dagr is still not a scheduler"
+# Same polarity trap, same fix: on the bullet, verbatim.
+expansion_bullet=$(bullet 'Runtime graph expansion')
+if printf '%s' "$expansion_bullet" | grep -qF 'Still rejected, unchanged' \
+   && printf '%s' "$expansion_bullet" | grep -qE 'never .{0,3}how many'; then
+  pass "violation: the runtime-graph-expansion bullet still reads 'Still rejected, unchanged' — where, never how many"
 else
-  bad "violation: the still-not-a-scheduler restatement is missing"
+  bad "violation: the runtime-graph-expansion bullet no longer reads 'Still rejected, unchanged' — a task discovering N files has been permitted to become N pods"
+fi
+# 'scheduler' plus a stray 'still' is true of this file no matter what it says, so
+# the ONE sentence that keeps the other permanent exclusions out is asserted as a
+# sentence. Deleting it must fail, not fall through to an incidental 'scheduler'.
+if flat_has 'permanent exclusions[^.]*scheduler, coordinating metadata store, web interface, domain-specific language, backfill orchestrator[^.]*stay \*\*verbatim\*\*'; then
+  pass "violation: the other permanent exclusions (scheduler, coordinating metadata store, web interface, DSL, backfill orchestrator) still stay VERBATIM"
+else
+  bad "violation: the 'other permanent exclusions … stay verbatim' sentence is gone or reworded — dagr is no longer stated to be still not a scheduler"
 fi
 
 # --- 3. Substrate: Kubernetes pods, one watch per PROCESS --------------------
@@ -213,7 +257,12 @@ else
 fi
 
 # --- 4. Kubernetes must not retry — an INVARIANT, not a default --------------
-if (has 'backofflimit' && has '0') \
+# Asserted on the must-not-retry bullet and with the VALUE spelled out: `has '0'`
+# is true of any digit anywhere, so it accepted `backoffLimit=5`. The Context
+# section also cites Prefect's own `backoffLimit=0`, so a whole-body grep would
+# keep passing after dagr's own invariant had been changed to a non-zero value.
+retry_bullet=$(bullet 'Kubernetes must not retry')
+if printf '%s' "$retry_bullet" | grep -qiE 'backofflimit[[:space:]]*[:=][[:space:]]*0' \
    && (has 'invariant' || has 'refuses a configuration' || has 'not a default'); then
   pass "retry: Kubernetes must not retry (backoffLimit=0) is an invariant, not a default"
 else
@@ -310,7 +359,9 @@ if has 'payload' && (has 'encode' && has 'decode') && (has 'dagr-core' || has 'c
 else
   bad "data: the Payload codec trait is missing"
 fi
-if (has 'zero .*dependency' || has 'dependency set stays empty' || has 'zero-dep') && (has 'no serde' || has 'serde'); then
+# 'no serde' only — the bare 'serde' alternative was a superset, and the word is
+# unavoidable in a section whose whole point is that serde was rejected.
+if (has 'zero .*dependency' || has 'dependency set stays empty' || has 'zero-dep') && has 'no serde'; then
   pass "data: dagr-core's runtime dependency set stays empty (serde rejected)"
 else
   bad "data: the zero-dep-core guarantee for the codec is missing"
@@ -325,7 +376,8 @@ if has 'durableoutput' && (has 'blanket' || has 'bridge' || has 'bridged'); then
 else
   bad "data: the DurableOutput bridge is missing"
 fi
-if (has 'in-memory fast path' || has 'in-memory' ) && has 'local'; then
+# 'in-memory fast path' only — the bare 'in-memory' alternative was a superset.
+if has 'in-memory fast path' && has 'local'; then
   pass "data: local mode keeps the in-memory fast path"
 else
   bad "data: the local in-memory fast path is missing"
@@ -464,12 +516,25 @@ fi
 # --- 14. arch.md: every OTHER permanent exclusion survives verbatim ---------
 # The amendment moved exactly one word's meaning. If any of these disappears,
 # the amendment did more than it was accepted to do.
+#
+# Scoped to the PERMANENT-NON-GOALS SENTENCE the Test plan names, not the whole
+# file — the same bug the schema check below already avoids. "scheduler" occurs
+# seven times elsewhere in arch.md and "backfill orchestrator" twice, so a
+# whole-file grep stayed green after both had been struck from the one sentence
+# that is supposed to carry them. The slice is the sentence itself: the
+# 'What it is not, permanently:' paragraph, cut at its first sentence end.
+non_goals=$(awk '/^\*\*What it is not, permanently:\*\*/ {print; exit}' "$archmd" | sed 's/\. .*//')
+if [ -n "$non_goals" ]; then
+  pass "arch: the permanent-non-goals sentence is present"
+else
+  bad "arch: the permanent-non-goals sentence ('What it is not, permanently: …') is missing"
+fi
 for excl in 'scheduler' 'coordinating\** metadata store|\*coordinating\* metadata store' \
             'web interface' 'domain-specific language' 'backfill orchestrator'; do
-  if grep -qiE "$excl" "$archmd"; then
-    pass "arch: permanent exclusion still present — ${excl%%|*}"
+  if printf '%s' "$non_goals" | grep -qiE "$excl"; then
+    pass "arch: permanent exclusion still in the non-goals sentence — ${excl%%|*}"
   else
-    bad "arch: permanent exclusion LOST — ${excl%%|*}"
+    bad "arch: permanent exclusion LOST from the non-goals sentence — ${excl%%|*}"
   fi
 done
 if file_has "$archmd" "graph's shape never changes at runtime"; then
@@ -517,7 +582,10 @@ if grep -qiE 'Remote execution \(opt-in, ADR 115\)' "$archmd"; then
 else
   bad "arch: the Operational model's remote-executor paragraph is missing"
 fi
-if grep -qiE 'under one millisecond.*local, in-process execution|local, in-process execution' "$archmd" \
+# The budget-and-its-scope must sit in ONE sentence: the bare
+# 'local, in-process execution' alternative was a superset of the full form and
+# matched C12's purpose paragraph, so the budget could lose its local scoping.
+if grep -qiE 'under one millisecond.*local, in-process execution' "$archmd" \
    && grep -qiE 'submission-to-start latency' "$archmd"; then
   pass "arch: the Performance envelope scopes the sub-ms budget to local and reports remote latency separately"
 else
