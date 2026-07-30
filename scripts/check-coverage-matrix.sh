@@ -144,8 +144,10 @@ test_exists() { grep -qxF "$1" "$tests_file"; }
 # The T65 acceptance gate distinguishes a machine criterion whose mapped test is
 # UNMAPPED from one whose mapped test EXISTS BUT IS RED (covered-but-red). The
 # real gate has no live test-report to consult inside this script — a mapped test
-# that is red fails the `cargo test --workspace` gate itself, in its own CI job —
-# so the failing set is empty in the default (real) run and this check is a
+# that is red fails the `cargo test --workspace` gate itself, which in CI is a
+# step earlier in this very job (the tier-1 `test` leg, whose already-compiled
+# suite is why this check runs there rather than rebuilding it elsewhere) — so the
+# failing set is empty in the default (real) run and this check is a
 # provable no-op there. The hermetic self-tests inject a fixture failing set via
 # --failing-tests to prove the covered-but-red diagnostic has teeth (Test-plan
 # scenario 4). One test id per line.

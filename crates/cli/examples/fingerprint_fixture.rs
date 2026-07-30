@@ -16,7 +16,7 @@
 //!
 //! CI builds and runs this example under **two different toolchains** and
 //! compares the output byte-for-byte (`.github/workflows/ci.yml`, the
-//! `cross-toolchain-fingerprint` job). A divergence fails the job — that is the
+//! `structural-determinism` job). A divergence fails the job — that is the
 //! executable form of the "two builds of unchanged source, on different
 //! toolchains, produce the same fingerprint" guarantee. Because every
 //! hashed input is author-declared and the digest is pure integer arithmetic, the
