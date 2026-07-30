@@ -1,4 +1,4 @@
-# cargo-nextest configuration — TRIAL (see the nextest steps in ci.yml).
+# cargo-nextest configuration (see the nextest steps in ci.yml).
 #
 # nextest runs every test in its OWN PROCESS, from one global pool spanning all
 # test binaries, where `cargo test` runs each binary to completion in turn and
@@ -27,10 +27,25 @@ fail-fast = false
 filter = 'binary(scale_benchmark)'
 threads-required = 'num-test-threads'
 
-# The compile-fail / UI suites each shell out to a nested `cargo`, and they share
-# one `target/tests/trybuild` scratch directory. Run concurrently they race on it,
-# and the failure surfaces as a corrupted snapshot rather than as the lock
-# contention it is.
+# `trybuild::TestCases` drives a nested `cargo` through ONE shared scratch
+# directory, `target/tests/trybuild`. Two of these running at once race on it, and
+# the damage surfaces as a corrupted snapshot rather than as the lock contention it
+# actually is — a confusing failure a long way from its cause.
+#
+# Membership is exactly the binaries that CALL `trybuild::TestCases`, established
+# by grepping for the call rather than by reading names. Three others look like
+# members and are not:
+#   * `ui` — a hand-built harness that invokes `rustc` directly (it says so at
+#     length in its own module docs) and gives every sample its own output path
+#     under the temp dir. It never touches `target/tests/trybuild`, and it
+#     parallelises INTERNALLY, so capping it here would throttle the fan-out that
+#     makes it fast.
+#   * `cookbook`, `flow_builder_facade` — the word `trybuild` appears in their
+#     prose, not in their code.
+# Binaries that shell out to plain `cargo` via `env!("CARGO")` are absent too:
+# concurrent cargo invocations block on cargo's own target-directory lock, which is
+# safe by construction. Serialising them would trade a correctness non-problem for
+# real wall-clock.
 #
 # A TEST GROUP, not `threads-required`. The distinction is the whole point: this
 # serialises these binaries AGAINST EACH OTHER while the other ~1000 tests keep
@@ -38,8 +53,8 @@ threads-required = 'num-test-threads'
 # have each of them seize the entire pool and idle every other test for its
 # duration — which is exactly the serialisation nextest is here to remove.
 [test-groups]
-nested-cargo = { max-threads = 1 }
+trybuild-scratch-dir = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(ui) or binary(trybuild) or binary(flow_builder_compile_fail) or binary(dag_auto_discovery)'
-test-group = 'nested-cargo'
+filter = 'binary(trybuild) or binary(flow_builder_compile_fail)'
+test-group = 'trybuild-scratch-dir'
