@@ -1,25 +1,43 @@
 # dagr
 
 A Rust framework for pipelines that compile: you write units of work, declare
-how they connect, and build one binary that *is* the pipeline — no server, no
-scheduler, no database, no config file describing the graph, no parsing step.
+how they connect, and build one binary that *is* your pipeline — or every
+pipeline you declared, one selected per invocation. Nothing it needs is a server,
+a scheduler, or a database; there is no config file describing the graph and no
+parsing step.
 
 ## What it is not
 
-Permanently, dagr is **not** a scheduler, a distributed execution system, a
-metadata store, a web interface, a domain-specific language, or a backfill
-orchestrator. **The graph's shape never changes at runtime** — a task that
+Permanently, dagr is **not** a scheduler, a *distributed* execution system, a
+*coordinating* metadata store, a web interface, a domain-specific language, or a
+backfill orchestrator. **The graph's shape never changes at runtime** — a task that
 discovers N files does not become N nodes; it iterates internally with bounded,
 declared concurrency. Every one of those is a reasonable thing to want, and none
-of them belong here. See [`docs/arch.md`](docs/arch.md) for the full component
-specification.
+of them belong here.
+
+Two of those words are read narrowly, by recorded decision, and each carve-out
+moves nothing else on the list:
+
+- **"Metadata store"** means a store the engine *depends on to coordinate*. A
+  **local, embedded, opt-in, non-coordinating run index** derived from the event
+  stream is permitted — that is the [run index](#the-run-index-metastore) below
+  (ADR 097).
+- **"Distributed execution system"** means an engine that distributes *the graph
+  and its control* — cooperating orchestrators, work-stealing, cross-run queues, a
+  control plane that outlives a run. A **single orchestrator process placing
+  individual node attempts on remote compute it owns for one run** is permitted
+  (ADR 115): one process still owns the graph and the event stream and still exits
+  when the run ends. Remote execution changes *where* a node runs, never *how many*
+  nodes there are and never *when* a pipeline runs.
+
+See [`docs/arch.md`](docs/arch.md) for the full component specification.
 
 ## Quickstart
 
 From an empty directory to a compiled, run **two-node pipeline** — for a
 developer comfortable with Rust and cargo, **no async experience required**. You
-write two tasks and a DAG; the framework runs them. There is no server, no
-database, and no scheduler: the binary and a run-store directory are all you
+write two tasks and a DAG; the framework runs them. No server, database, or
+scheduler has to be running: the binary and a run-store directory are all you
 need.
 
 > This walkthrough is CI-verified. The Rust block below is byte-identical to the
@@ -104,8 +122,8 @@ fn quickstart(f: &mut FlowBuilder) {
 // --- The whole binary is one line. `dagr_cli::run` discovers every `#[dag]`, builds
 // the run store, event sink, clock, and run id for you, and dispatches the verbs every
 // pipeline binary shares: `run` drives the flow, `graph` emits the DAG, `list` names
-// the flows. No server, no database, no scheduler — the binary and a run-store
-// directory are all you need.
+// the flows. Nothing here needs a server, a database, or a scheduler running — the
+// binary and a run-store directory are all you need.
 fn main() -> std::process::ExitCode {
     dagr_cli::run(std::env::args_os()).into()
 }

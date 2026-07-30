@@ -1,41 +1,23 @@
-//! `dagr-metastore` — the local, embedded, opt-in run index (M7, ADR 097 · T82).
+#![doc = include_str!("../README.md")]
 //!
-//! A queryable projection of dagr's JSONL event stream into a **libSQL** (the
-//! `libsql` C fork) / `SQLite` file, so one many-DAG binary has a single place to
-//! query cross-run state instead of scanning per-run `events.jsonl` files.
+//! # Module index
 //!
-//! # What this crate is — and is not
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
-//! This is the **run store's** derived, opt-in index (arch.md "The shape of a
-//! run"), **not** a coordinating metadata store. It coordinates nothing: the
-//! event stream stays the source of truth and the index is a guaranteed
-//! projection of it. That carve-out is decided in **ADR 097 (T82)**. T83 shipped
-//! the crate, schema, and write-safe connection seam; **T84** adds the
-//! event→row [`mapping`] and the `sync` reconcile walk ([`mapping::sync_run_store`])
-//! that folds every run under a run store and upserts it idempotently. **T86** adds
-//! the guaranteed live tee sink ([`live_sink::MetastoreSink`]) that projects a run
-//! into the index **as it executes**, reusing that same mapping and write
-//! discipline; lineage columns are M8.
+//! The store itself — opening, the pragmas, the migrations, and the write-txn
+//! seam — is [`store`]; the event→row projection and the reconcile walk that
+//! folds every run under a run store are [`mapping`]
+//! ([`mapping::sync_run_store`]); the guaranteed live tee that projects a run
+//! into the index **as it executes** is [`live_sink`]
+//! ([`live_sink::MetastoreSink`]); the table definitions and ordered idempotent
+//! migrations are [`schema`].
 //!
-//! # The concurrency recipe (ADR 097 §3)
-//!
-//! libSQL's WAL is **single-writer**. A `DEFERRED` read-txn that later upgrades
-//! to a write hits an **instant `SQLITE_BUSY` that `busy_timeout` will not
-//! retry**. So this seam encodes the verified discipline:
-//!
-//! - open with `PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, and a
-//!   `busy_timeout` ([`MetaStore::open`]);
-//! - open **every write transaction** with `BEGIN IMMEDIATE`
-//!   ([`MetaStore::with_write_txn`]);
-//! - wrap each write txn in an **app-level bounded `SQLITE_BUSY` retry** with
-//!   exponential backoff + jitter, surfacing a hard error past the cap.
-//!
-//! # Boundary (ADR 097 §5)
-//!
-//! The only workspace edge is onto [`dagr_artifact`] (the event/artifact types).
-//! There is **no** path to `dagr-core`, so core's zero-runtime-dependency
-//! guarantee is untouched, and the CLI reaches this crate only behind a
-//! default-off `metastore` feature.
+//! The concurrency recipe the README summarises is encoded in
+//! [`MetaStore::open`] (the pragmas) and [`MetaStore::with_write_txn`]
+//! (`BEGIN IMMEDIATE` plus the bounded `SQLITE_BUSY` retry) — a caller does not
+//! reimplement it.
 
 pub mod live_sink;
 pub mod mapping;

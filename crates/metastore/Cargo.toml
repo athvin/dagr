@@ -32,6 +32,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "The local, embedded, opt-in libSQL/SQLite run index for dagr: a queryable projection of the event stream"
+documentation = "https://docs.rs/dagr-metastore"
+readme = "README.md"
+keywords = ["dag", "pipeline", "sqlite", "libsql", "index"]
+categories = ["database", "development-tools", "asynchronous"]
+
+# --- Publish metadata (T96) ---------------------------------------------------
+# `publish = false` is deliberately NOT set here. All six members are intended
+# for release: the publish graph is CLOSED, so it is not a per-crate choice —
+# Cargo refuses to publish a crate whose dependency (optional or build-time
+# included) is not on the registry, so `dagr-core` requires a published
+# `dagr-macros` and `dagr-cli` requires a published `dagr-metastore`. Marking
+# either unpublishable would make the crates that reach them unpublishable too,
+# i.e. the whole workspace. `scripts/check-crate-docs-and-metadata.sh` asserts
+# that closure, and that every publishable member carries the full metadata set
+# below — so the next crate added cannot skip it.
 
 [lib]
 name = "dagr_metastore"
@@ -59,7 +75,7 @@ bench = false
 # event/artifact types (and later folds event streams via `fold_stream`) into
 # rows, exactly as dagr-render consumes artifacts only and provably cannot reach
 # dagr-core (C24). There is deliberately NO `dagr-core` edge.
-dagr-artifact = { path = "../artifact" }
+dagr-artifact = { path = "../artifact", version = "0.0.0" }
 
 # libsql — the substrate PINNED EXACTLY by ADR 097 §2 (`=0.10.0-pre.4`; do not
 # float it). `default-features = false` + only `core` drops libSQL's network /

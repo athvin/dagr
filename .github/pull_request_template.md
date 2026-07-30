@@ -31,8 +31,12 @@ criterion without a test that pins it does not merge.
 - [ ] **Branch & PR.** Exactly one branch (name verbatim from the ticket header)
       and this one PR for the ticket.
 - [ ] **Scope.** Stays inside the ticket; no deferred scope pulled forward; the
-      permanent scope boundary (no scheduler / distributed execution / metadata
-      store / web UI / DSL / backfill; graph shape fixed at runtime) is intact.
+      permanent scope boundary (no scheduler / *distributed* execution /
+      *coordinating* metadata store / web UI / DSL / backfill; graph shape fixed
+      at runtime) is intact. Two terms are narrowed by ADR: a local, embedded,
+      opt-in, non-coordinating run index is permitted (**ADR 097**), and one
+      orchestrator placing node attempts on remote compute for one run is
+      permitted (**ADR 115**). If this PR relies on either, it cites the ADR.
 - [ ] **Open questions.** Every open question (ticket section **and** any
       `docs/tasks.md` `Q:` items) is resolved and recorded.
 - [ ] **Docs / rustdoc updated** where the change touches public surface or

@@ -59,5 +59,8 @@ None in the ticket; `docs/tasks.md` carries no `T77` entry (an M5 addition), so 
 ## Out of scope
 - The `resolve<T>` helper itself, the duration/`FailureMode` parsers, `EnvParseError`, and the extended reserved-flag list — those are **T76**; this ticket only applies them.
 - Any config-file or DSL surface — a permanent scope boundary (ADR 089 rejected alternatives; arch.md: dagr decides neither *when* to run nor via a config surface).
+  **[Superseded (in part) by ADR 128 (T113), 2026-07-29 — the config-file half only.]** A bootstrap-read file of
+  runtime knobs with named profiles is permitted as a fourth precedence tier; the **DSL** half stands, and so does
+  the prohibition on a configuration file **describing the graph**. This ticket's own scope is unchanged.
 - A `dagr config` printer that dumps effective knob values — an optional future affordance, not this ticket.
 - Cross-process coordination, scheduling, or advancing a data interval — the CLI never decides *when* a pipeline runs; env fallbacks only change how a single invocation is configured.

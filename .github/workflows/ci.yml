@@ -520,6 +520,39 @@ jobs:
       - name: Panic containment holds under the release profile
         run: cargo test -p dagr-core --release --test panic_containment
 
+  # --- Crate docs, publish metadata, and the lint pair (T96) -------------------
+  # Three invariants a release day would otherwise discover the hard way:
+  #
+  #   * every member declares the metadata a crates.io release needs, and a
+  #     member that is not `publish = false` carries the full set — including a
+  #     version requirement on every intra-workspace path dependency, without
+  #     which `cargo package` refuses the manifest outright. The publish graph is
+  #     asserted CLOSED, because an unpublishable dependency silently makes every
+  #     crate that reaches it unpublishable too;
+  #   * every crate's README is inlined into its crate root with
+  #     `#![doc = include_str!("../README.md")]`, so the crates.io landing page
+  #     and the rustdoc front page cannot drift apart;
+  #   * `lints.toml` (the source of truth) and `[workspace.lints]` (the applied
+  #     form Cargo reads) agree field for field — a documented pair with no other
+  #     guard — the two ratcheted lints stay `deny`, and every production
+  #     suppression is an `#[expect(…, reason = "…")]` that expires loudly rather
+  #     than an `#[allow]` that never does.
+  #
+  # Both scripts prove their own scans non-vacuous against fixtures that violate
+  # every rule, so neither can rot into a decorative pass.
+  crate-docs-and-metadata:
+    name: crate-docs-and-metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify the crate metadata, READMEs, and doc examples
+        run: bash scripts/check-crate-docs-and-metadata.sh
+      - name: The lint policy agrees with itself
+        run: bash scripts/check-lint-parity.sh
+      - name: Doc examples compile and run
+        run: cargo test --doc --workspace
+
   # --- Cross-toolchain STRUCTURAL determinism (SL4a, T65) --------------------
   # The executable form of system-level acceptance criterion 4(a): "two builds of
   # the same source produce identical fingerprints AND byte-identical graph
@@ -597,6 +630,7 @@ jobs:
       - coverage-matrix
       - rust-skills-register
       - cargo-profiles
+      - crate-docs-and-metadata
     steps:
       - uses: actions/checkout@v4
       - name: All system-level acceptance constituents are green

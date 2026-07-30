@@ -22,9 +22,14 @@
 [rust]
 # Compiler warnings are hard errors in CI; nothing ships with a warning.
 warnings = "deny"
-# rustdoc lint (arch.md "Documentation": rustdoc on every public item,
-# enforced by lint in CI).
-missing_docs = "warn"
+# Public-item rustdoc (arch.md "Documentation": rustdoc on every public item,
+# enforced by lint in CI). `missing_docs` is ALLOW-by-default in rustc, so `warn`
+# is what switches it on and `warnings = "deny"` then promotes it — it has been
+# effectively denied for the whole life of the workspace. T96 writes the level out
+# so the deny is readable AT the setting instead of derived two lines up, and
+# retires the "kept at warn pre-workspace so scaffolding crates in T1 are not
+# blocked" note, which stopped being true when T1 shipped.
+missing_docs = "deny"
 unsafe_code = "warn"       # dagr targets safe Rust; each use is reviewed (see rationale).
 
 [clippy]
@@ -37,7 +42,12 @@ pedantic = { level = "deny", priority = -1 }
 # docs/lint-processing.md's exception table. Priority 0 lets these override the
 # group-level deny above.
 module_name_repetitions = "allow"   # dagr's C-numbered modules read fine repeated.
-missing_errors_doc = "warn"         # encouraged, not blocking, until the error taxonomy (T3) lands.
+# Every fallible public fn documents what its `Result` means. Like `missing_docs`
+# above this was already effectively denied by `warnings = "deny"`; the deferral
+# it carried ("until the error taxonomy (T3) lands") expired when T3 shipped, and
+# T95's audit found ZERO missing sections — so this ratchet costs nothing today
+# and is what keeps that true.
+missing_errors_doc = "deny"
 # Under edition 2024 (T94) let-chains are available, so clippy's `collapsible_if`
 # fix for `if let A { if let B { .. } }` becomes `if let A && let B` — i.e. the lint
 # now demands LET-CHAIN ADOPTION at 25 sites. T94's Out of scope defers that

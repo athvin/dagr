@@ -66,7 +66,10 @@
 //!     type Input = ();
 //!     type Output = u32;
 //!     async fn run(&mut self, ctx: &RunContext, _i: ()) -> Result<u32, TaskError> {
-//!         let client = ctx.resources().get::<FakeClient>().unwrap();
+//!         let client = ctx
+//!             .resources()
+//!             .get::<FakeClient>()
+//!             .ok_or_else(|| TaskError::permanent("no FakeClient registered"))?;
 //!         Ok(client.fetch())
 //!     }
 //! }
@@ -135,6 +138,26 @@ pub struct SingleTaskTest<T: Task> {
     pre_cancelled: bool,
     resources: ResourceRegistry,
     scratch_root: Option<std::path::PathBuf>,
+}
+
+// Hand-written `Debug`: the kit owns the task under test and a registry of erased
+// fakes, neither of which is `Debug`, so a derive would bound `T: Debug` and make
+// the kit unprintable for exactly the tasks it exists to exercise. What a failing
+// test needs is the context it was configured with; the task and the erased
+// registry are omitted with `finish_non_exhaustive()`, the same precedent
+// `Permit` / `ResidencyLease` / the slot types use.
+impl<T: Task> std::fmt::Debug for SingleTaskTest<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SingleTaskTest")
+            .field("run", &self.run)
+            .field("pipeline", &self.pipeline)
+            .field("node_name", &self.node_name)
+            .field("attempt", &self.attempt)
+            .field("max_attempts", &self.max_attempts)
+            .field("pre_cancelled", &self.pre_cancelled)
+            .field("scratch_root", &self.scratch_root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: Task> SingleTaskTest<T> {

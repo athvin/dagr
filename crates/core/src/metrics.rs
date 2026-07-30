@@ -172,6 +172,14 @@ macro_rules! metric_value_from {
     ($($t:ty),* $(,)?) => {
         $(
             impl From<$t> for MetricValue {
+                // This attribute lives inside a `macro_rules!` body, so all twelve
+                // expansions share ONE span, and neither lint fires for every one of
+                // them: `cast_lossless` fires for the narrow integers (`u8`..`u32`)
+                // and `cast_precision_loss` for the wide ones
+                // (`u64`/`i64`/`usize`/`isize`) — never both, never for `f64`. An
+                // `#[expect]` would therefore report "unfulfilled" for whichever half
+                // did not fire at this shared span, on every build.
+                // EXPECT-EXEMPT: one span, twelve expansions, no lint fulfilled by all.
                 #[allow(
                     clippy::cast_lossless,
                     clippy::cast_precision_loss,
@@ -422,11 +430,18 @@ static PROCESS_LIVE: AtomicU64 = AtomicU64::new(0);
 ///
 /// Install it once, as the binary's single global allocator:
 ///
-/// ```ignore
+/// ```no_run
 /// use dagr_core::metrics::AttributingAllocator;
+///
 /// #[global_allocator]
 /// static ALLOC: AttributingAllocator = AttributingAllocator::new();
+/// # fn main() {}
 /// ```
+///
+/// `no_run`, not executed: a `#[global_allocator]` is a whole-program choice, and
+/// installing one inside the doctest harness would swap the allocator out from
+/// under the harness itself. It is compile-checked, which is what the example
+/// exists to promise — that this is a valid `#[global_allocator]` static.
 pub struct AttributingAllocator;
 
 impl AttributingAllocator {
@@ -570,7 +585,7 @@ fn on_dealloc(size: usize) {
 // fn`. That is the edition-2024 posture (`unsafe_op_in_unsafe_fn` is
 // deny-by-default): the accounting statements around each call are plainly safe
 // code, and the reader can see exactly which line carries the obligation.
-#[allow(
+#[expect(
     unsafe_code,
     reason = "GlobalAlloc is an inherently-unsafe trait; the attributing allocator must implement it — it only forwards to System and updates atomics/thread-local"
 )]

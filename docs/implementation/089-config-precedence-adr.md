@@ -52,3 +52,12 @@ Deliver precedence as **reusable library pieces wired at the binary layer**, kee
 - **Reading `DAGR_*` inside `dagr-core` (`limits.rs`, `RunConfig`).** Would put environment access in the dependency-lean core and defeat its testable, inject-once probe design. Rejected: the CLI parses env and passes parsed values inward.
 - **Clamping out-of-range env values silently.** Hides operator mistakes. Rejected in favour of a named `EnvParseError` with a distinct exit code.
 - **A config file / DSL.** Out of the permanent scope boundary (arch.md: dagr decides neither *when* to run nor via a config surface). Rejected; flags + env + defaults are the whole model.
+  **[Superseded (in part) by ADR 128 (T113), 2026-07-29 — the *config file* half only.]** ADR 128 permits a
+  **file of runtime knobs, read at bootstrap, with named profiles**, as a fourth precedence tier beneath
+  the environment (`flag > env > file(profile) > default`). Two corrections it records: this bullet's
+  parenthetical **misattributes** its rationale — arch.md contains no sentence saying dagr decides nothing
+  "via a config surface"; arch.md C26 says the *opposite polarity*, calling the flag/env layer "a config
+  *surface* only" and permitting it. And the genuine spec-level prohibition is narrower than this bullet
+  reads: arch.md forbids a configuration file **describing the graph**, which stays verbatim. **The DSL half
+  of this rejection stands unchanged**, as does every other clause of this ADR — the resolver, the `DAGR_*`
+  namespace, the strict never-silent errors, the opt-in builders, and the zero-env-in-core boundary.

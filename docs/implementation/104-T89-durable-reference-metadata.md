@@ -46,4 +46,4 @@ None. (The field is optional and the reference stays the task's opaque string pe
 - The `output-produced`/`inputs` lineage records — **T90** (this ticket only enriches the existing `durable_reference`).
 - Projecting metadata into the metastore (`node_attempt` columns) — **T91**.
 - Forcing content hashing on any `DurableOutput` impl (it stays optional).
-- Scope boundary restated: richer reference metadata is still per-run data on the existing record; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: richer reference metadata is still per-run data on the existing record; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

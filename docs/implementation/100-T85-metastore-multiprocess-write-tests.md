@@ -62,4 +62,4 @@ Everything else in the T83 seam (the `BEGIN IMMEDIATE`-for-every-write disciplin
 - The live tee sink itself — **T86** (this ticket exercises the store's write path directly, not via the driver).
 - Cross-**host** access / `sqld` / embedded replicas — out of scope per ADR 097 (same-host local FS only).
 - Any MVCC / `BEGIN CONCURRENT` path — that is the `turso` rewrite, rejected for M7.
-- Scope boundary restated: proving concurrent local writes adds no coordination; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: proving concurrent local writes adds no coordination; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

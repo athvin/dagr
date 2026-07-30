@@ -1339,7 +1339,13 @@ fn terminal_from_str(status: &str) -> TerminalState {
 /// originating run identity, copies durable references forward so it is
 /// self-contained, and links the header to both the immediate parent run and the
 /// lineage-root run.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a resumed artifact's header is assembled from eight independent \
+              published-schema facts (new and parent run ids, the prior header, \
+              parameters, data interval, the forced flag, the prior run, the plan); \
+              each is a distinct field of the emitted document, not a cohesive value"
+)]
 fn build_resumed_artifact(
     new_run_id: &str,
     prior_header: &serde_json::Value,

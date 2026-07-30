@@ -196,10 +196,6 @@ impl<T> Handle<T> {
     /// and why identity flows from the name rather than from registration order.
     // Crate-private registration seam consumed by the flow builder and the
     // binding; see `NodeId::from_name`.
-    #[allow(
-        dead_code,
-        reason = "crate-private registration seam consumed by the flow builder and the binding module"
-    )]
     pub(crate) fn for_registration(name: &str) -> Self {
         Self {
             id: NodeId::from_name(name),
@@ -217,6 +213,24 @@ impl<T> Handle<T> {
     #[must_use]
     pub fn id(self) -> NodeId {
         self.id
+    }
+}
+
+// Manual `Debug` — NOT `#[derive]`, for the same reason `Clone`/`Copy` above are
+// manual: a derive would emit `impl<T: Debug>`, so a handle on a value type that
+// is not itself `Debug` (the common case — a handle carries `fn() -> T` and owns
+// no `T`) would silently drop out of every `{:?}` diagnostic. The unconditional
+// impl keeps a handle printable for every `T`.
+//
+// `finish_non_exhaustive()` follows the `Permit`/`ResidencyLease` precedent
+// (`admission.rs`): the `value: PhantomData<fn() -> T>` marker carries no runtime
+// information and printing it would only add noise, so the identity is shown and
+// the marker is recorded as omitted rather than silently dropped.
+impl<T> std::fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Handle")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 

@@ -195,7 +195,7 @@ fn read_prior_artifact(base: &str, prior: &str, node_roster: &[String]) -> io::R
 /// with the satisfied-from-prior nodes pre-seeded and the demanded durable producer
 /// rehydrated into its consumer's slot, then write the resumed artifact and a JSON
 /// result the test asserts on.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "resume_mode is one linear sequence — read prior, run the real resume verb, \
               carry scratch forward, build the must-run subset, drive it, write the resumed \

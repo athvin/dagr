@@ -1,12 +1,10 @@
-//! `dagr-core` — the dagr execution core (the live-pipeline surface).
+#![doc = include_str!("../README.md")]
 //!
-//! This crate holds dagr's authoring surface and execution core: the task
-//! abstraction, typed handles, dependency binding, flow assembly, and the
-//! run-loop machinery — the code that *is* a running pipeline. It is the crate
-//! whose dependency set is kept minimal and review-gated, and it is the "live
-//! pipeline" surface that renderers must never reach into.
+//! # Module index
 //!
-//! # What lives here so far
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
 //! The **task abstraction**: the atomic unit of work.
 //!

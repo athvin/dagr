@@ -117,7 +117,8 @@ type FlowFactory = Box<dyn Fn() -> RunnableFlow + Send + Sync>;
 /// or [`single_flow`](Self::single_flow) for the one-flow ergonomic default (its
 /// name may be omitted on the command line), then dispatch with [`run_registry`]:
 ///
-/// ```no_run
+/// ```
+/// use dagr_cli::contract::ExitCode;
 /// use dagr_cli::registry::{run_registry, FlowRegistry};
 /// use dagr_cli::run_flow::RunnableFlow;
 ///
@@ -127,7 +128,12 @@ type FlowFactory = Box<dyn Fn() -> RunnableFlow + Send + Sync>;
 /// let registry = FlowRegistry::new()
 ///     .add("etl", build_etl)
 ///     .add("nightly", build_nightly);
-/// std::process::exit(run_registry(&registry, std::env::args_os()).as_u8().into());
+///
+/// // `list` prints the registered names, in registration order, and succeeds.
+/// assert_eq!(run_registry(&registry, ["pipeline", "list"]), ExitCode::Success);
+///
+/// // In a real `main`, dispatch the process's own argv and exit with the code:
+/// //   std::process::exit(run_registry(&registry, std::env::args_os()).as_u8().into());
 /// ```
 #[derive(Default)]
 pub struct FlowRegistry {
@@ -223,10 +229,22 @@ impl FlowRegistry {
 /// human-readable diagnostics to the process's standard streams. A pipeline binary
 /// calls this instead of hand-dispatching verbs:
 ///
-/// ```no_run
-/// # use dagr_cli::registry::{run_registry, FlowRegistry};
-/// # let registry = FlowRegistry::new();
-/// std::process::exit(run_registry(&registry, std::env::args_os()).as_u8().into());
+/// ```
+/// use dagr_cli::contract::ExitCode;
+/// use dagr_cli::registry::{run_registry, FlowRegistry};
+/// use dagr_cli::run_flow::RunnableFlow;
+///
+/// fn build_etl() -> RunnableFlow { RunnableFlow::new() }
+/// let registry = FlowRegistry::new().add("etl", build_etl);
+///
+/// // An unknown flow is invalid usage, not a failed run — and says so on stdout.
+/// assert_eq!(
+///     run_registry(&registry, ["pipeline", "run", "nope"]),
+///     ExitCode::InvalidUsage,
+/// );
+///
+/// // In a real `main`, the process's own argv and exit code:
+/// //   std::process::exit(run_registry(&registry, std::env::args_os()).as_u8().into());
 /// ```
 ///
 /// It routes the flow-selecting verbs: `list` (print the registered names, exit

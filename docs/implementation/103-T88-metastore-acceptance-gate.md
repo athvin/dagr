@@ -47,4 +47,4 @@ None. (A gate asserts already-merged behavior; any gap it surfaces is a STOP poi
 - Any capability not already delivered by T83–T87 (a gate adds none).
 - Lineage (M8) — this gate covers M7's run/attempt index only.
 - Server/remote/replica assertions — those paths are unshipped (behind the seam).
-- Scope boundary restated: the gate proves a local, embedded, non-coordinating index; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: the gate proves a local, embedded, non-coordinating index; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

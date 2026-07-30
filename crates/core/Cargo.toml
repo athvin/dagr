@@ -20,6 +20,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "The dagr execution core: the authoring surface and run loop that make one compiled Rust binary a DAG pipeline"
+documentation = "https://docs.rs/dagr-core"
+readme = "README.md"
+keywords = ["dag", "pipeline", "workflow", "dataflow", "task"]
+categories = ["concurrency", "asynchronous", "development-tools"]
+
+# --- Publish metadata (T96) ---------------------------------------------------
+# `publish = false` is deliberately NOT set here. All six members are intended
+# for release: the publish graph is CLOSED, so it is not a per-crate choice —
+# Cargo refuses to publish a crate whose dependency (optional or build-time
+# included) is not on the registry, so `dagr-core` requires a published
+# `dagr-macros` and `dagr-cli` requires a published `dagr-metastore`. Marking
+# either unpublishable would make the crates that reach them unpublishable too,
+# i.e. the whole workspace. `scripts/check-crate-docs-and-metadata.sh` asserts
+# that closure, and that every publishable member carries the full metadata set
+# below — so the next crate added cannot skip it.
 
 [lib]
 name = "dagr_core"
@@ -32,7 +48,7 @@ path = "src/lib.rs"
 # with no edge onto dagr-macros at all. A proc-macro is a build-time compiler
 # plugin, never linked into the runtime binary, so this adds ZERO runtime
 # dependency — core's zero-runtime-dependency guarantee (ADR 081) is preserved.
-dagr-macros = { path = "../macros", optional = true }
+dagr-macros = { path = "../macros", version = "0.0.0", optional = true }
 
 [features]
 # The C28 single-task test kit (ticket T60) — a shipped testing utility

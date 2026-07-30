@@ -180,6 +180,23 @@ impl RunArtifact {
     }
 }
 
+/// The idiomatic spelling of [`RunArtifact::from_json_str`], added **alongside**
+/// it rather than replacing it (`conv-tryfrom-fallible`, `api-from-not-into`) —
+/// the run-artifact twin of [`GraphArtifact`]'s impl, so
+/// the two published artifacts a renderer reads are reached the same way. Both
+/// spellings share one body, so they cannot drift.
+impl TryFrom<&str> for RunArtifact {
+    type Error = String;
+
+    /// # Errors
+    ///
+    /// Returns the same diagnostic [`RunArtifact::from_json_str`] does — same
+    /// input, same message naming the offending field/reason.
+    fn try_from(json: &str) -> Result<Self, Self::Error> {
+        Self::from_json_str(json)
+    }
+}
+
 /// One node's projected overlay outcome.
 #[derive(Debug, Clone)]
 struct NodeOutcome {

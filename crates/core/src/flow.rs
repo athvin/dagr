@@ -808,11 +808,14 @@ impl Flow {
     /// [`register_source_with_trigger`](Flow::register_source_with_trigger). The
     /// `ordering` slice adds ordering edges (empty for a non-ordered node).
     //
-    // The many parameters are the full, orthogonal set of registration facets
-    // (name, task, group, policy, durable witness, trigger rule, ordering edges);
-    // each public registrar forwards a fixed subset. Bundling them into a struct
-    // would only relocate the argument list without simplifying the delegation.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the full, orthogonal set of source-registration facets (name, task, \
+                  group, policy, durable witness, trigger rule, ordering edges); each \
+                  public registrar forwards a fixed subset, so bundling them into a \
+                  struct would only relocate the argument list without simplifying the \
+                  delegation"
+    )]
     #[must_use]
     fn register_source_in_group_with<T>(
         &mut self,
@@ -1015,10 +1018,12 @@ impl Flow {
     /// an explicit [`NodePolicy`] and durable-contract [`witness`](DurableWitness),
     /// plus any `ordering` edges — the full data-node-registration surface the
     /// other data registrars delegate to.
-    //
-    // The many parameters are the full, orthogonal set of registration facets;
-    // each public registrar forwards a fixed subset (see the source counterpart).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the data-node twin of `register_source_in_group_with`: the full, \
+                  orthogonal set of registration facets, each public registrar \
+                  forwarding a fixed subset"
+    )]
     #[must_use]
     fn register_in_group_with<T, D>(
         &mut self,

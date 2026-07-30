@@ -64,11 +64,17 @@
 //! # fn assembled() -> dagr_core::Pipeline { unimplemented!() }
 //! let pipeline = assembled();
 //! // One-time (or after a deliberate structural change): bless the fixture.
-//! bless_structure(&pipeline, "my-pipeline", "tests/fixtures/my-pipeline.snapshot.json").unwrap();
+//! bless_structure(&pipeline, "my-pipeline", "tests/fixtures/my-pipeline.snapshot.json")?;
 //! // In the test: assert the current structure against the checked-in golden.
-//! assert_structure(&pipeline, "my-pipeline", "tests/fixtures/my-pipeline.snapshot.json")
-//!     .expect("pipeline structure matches its golden fixture");
+//! assert_structure(&pipeline, "my-pipeline", "tests/fixtures/my-pipeline.snapshot.json")?;
+//! # Ok::<(), dagr_cli::StructureAssertError>(())
 //! ```
+//!
+//! `no_run`, not executed: blessing **writes** the golden fixture, so running this
+//! from a doctest would create `tests/fixtures/my-pipeline.snapshot.json` in
+//! whatever directory the harness happened to start in. It is compile-checked
+//! instead; the behaviour itself is covered by this crate's `structure_snapshot`
+//! integration suite against a real assembled pipeline.
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -220,6 +220,41 @@ impl MetaStore {
     /// ordered idempotent migrations. Only [`OpenMode::LocalFile`] is implemented
     /// here; the other modes return [`OpenError::ModeNotImplemented`].
     ///
+    /// The file is created if it does not exist, so opening a fresh path is the
+    /// whole of "initialize the index":
+    ///
+    /// ```
+    /// use dagr_metastore::{MetaStore, OpenMode};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let dir = std::env::temp_dir().join(format!("dagr-doc-open-{}", std::process::id()));
+    /// # std::fs::create_dir_all(&dir)?;
+    /// # let path = dir.join("runs.db");
+    /// // `path` is wherever the index lives — conventionally beside the run store.
+    /// let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// rt.block_on(async {
+    ///     let store = MetaStore::open(OpenMode::LocalFile(path.clone())).await?;
+    ///
+    ///     // Every write goes through `with_write_txn`, which opens `BEGIN IMMEDIATE`
+    ///     // and retries a bounded number of times on `SQLITE_BUSY` — so several
+    ///     // processes may hold this same file open.
+    ///     store
+    ///         .with_write_txn(|conn| {
+    ///             Box::pin(async move {
+    ///                 // The migrations `open` applied above created this table.
+    ///                 conn.execute("DELETE FROM dag_run WHERE run_id = ?1", ["never-existed"])
+    ///                     .await?;
+    ///                 Ok(())
+    ///             })
+    ///         })
+    ///         .await?;
+    ///     Ok::<(), Box<dyn std::error::Error>>(())
+    /// })?;
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     /// Returns [`OpenError`] if libSQL fails to open, a pragma fails, a migration
     /// fails, or a recognized-stub mode is requested.

@@ -1,23 +1,17 @@
-//! `dagr-cli` — the pipeline binary's command-line contract (placeholder
-//! skeleton).
+#![doc = include_str!("../README.md")]
 //!
-//! This crate will supply the standard verbs every dagr pipeline binary shares
-//! — emit the graph, validate, render, run, run a single node, resume, fold an
-//! event stream into a run artifact, and prune — along with the typed-parameter
-//! plumbing around them (the command-line contract).
+//! # Module index
 //!
-//! It is the one place the three other crates meet: it depends on
-//! [`dagr-core`](../dagr_core/index.html) (the live pipeline),
-//! [`dagr-artifact`](../dagr_artifact/index.html) (the records), and
-//! [`dagr-render`](../dagr_render/index.html) (diagram source). Invoking
-//! rendering here as the pipeline binary's `render` subcommand still consumes
-//! artifacts only, so it does not weaken the renderer-independence guarantee
-//! that the crate graph enforces.
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
-//! The first concrete code is the **run-loop driver** in [`driver`], the
-//! component that orchestrates one complete run from an assembled pipeline to a
-//! truthful end. The verb implementations and exit-code contract land alongside
-//! it.
+//! The **run-loop driver** is [`driver`] — the component that orchestrates one
+//! complete run from an assembled pipeline to a truthful end. The one-call
+//! run-a-flow seam is [`run_flow`]; the command-line contract and exit-code
+//! table are [`contract`]; many-DAGs-in-one-binary is [`registry`] (hand-wired)
+//! and [`run`](mod@run) (auto-discovered); the structure fixture is
+//! [`structure_snapshot`]; the C28 fakes harness is [`full_pipeline`].
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.

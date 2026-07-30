@@ -668,7 +668,7 @@ mod tests {
     }
 
     /// Set `key` to `value` while the caller holds the env lock.
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "std::env::set_var is an unsafe fn in edition 2024; the resolver \
                   under test reads the real process environment, so a test cannot \
@@ -685,7 +685,7 @@ mod tests {
     }
 
     /// Remove `key` while the caller holds the env lock.
-    #[allow(
+    #[expect(
         unsafe_code,
         reason = "std::env::remove_var is an unsafe fn in edition 2024; see set_env"
     )]

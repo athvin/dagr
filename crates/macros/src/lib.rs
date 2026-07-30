@@ -1,32 +1,16 @@
-//! `dagr-macros` — the optional, build-time-only proc-macro authoring layer.
+#![doc = include_str!("../README.md")]
 //!
-//! This crate exports two attributes and a derive:
+//! # Module index
 //!
-//! - [`macro@task`], applied to an inherent `impl` block, expands to the exact
-//!   `impl Task for Foo { … }` a task author writes by hand today
-//!   (`dagr_core::task::Task`), so an author can write only the `run` fn and have
-//!   the four declarations (input type, output type, execution class, work)
-//!   generated.
-//! - [`macro@dag`], applied to a `fn(&mut FlowBuilder)`, keeps the fn and emits a
-//!   DAG factory plus its `inventory` registration for auto-discovery (ADR 092).
-//! - [`derive@StableName`], derived on a task or payload **struct**, emits the
-//!   one-line `impl StableName` (`STABLE_NAME = "<ident>"`, overridable with
-//!   `#[stable_name = "…"]`) that the graph-emittable registrars require — so a
-//!   `#[task]` task and its payloads compose with `#[dag]` / `FlowBuilder::source`
-//!   / `node` with no hand-written trait bodies.
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
-//! # It is a build-time crate — never linked into a binary
-//!
-//! `dagr-macros` is a `proc-macro = true` crate: its only dependencies are the
-//! build-time `syn` / `quote` / `proc-macro2`, and a proc-macro runs **inside
-//! the compiler** and is never linked into the shipped program. `dagr-core`
-//! depends on this crate only behind its default-on `macros` feature and
-//! re-exports the attribute (`#[cfg(feature = "macros")] pub use
-//! dagr_macros::task;`), so `use dagr_core::task;` resolves it and
-//! `--no-default-features` turns it off. The expansion references only existing
-//! `dagr-core` items, so the produced program's **runtime** dependency graph is
-//! byte-for-byte unchanged — dagr-core's zero-runtime-dependency guarantee is
-//! preserved.
+//! The three exports are [`macro@task`], [`macro@dag`], and
+//! [`derive@StableName`]; `dagr-core` re-exports `#[task]` behind its default-on
+//! `macros` feature and `dagr-cli` re-exports `#[dag]` behind its default-on
+//! `dag` feature, so an author writes `use dagr_core::task;` /
+//! `use dagr_cli::dag;` rather than depending on this crate directly.
 //!
 //! # What this crate expands
 //!

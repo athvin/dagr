@@ -1,28 +1,15 @@
-//! `dagr-render` — dagr's diagram renderer.
+#![doc = include_str!("../README.md")]
 //!
-//! Given **one graph artifact**, this crate emits diagram source a human can
-//! read without hand-layout: **Graphviz DOT** ([`render_dot`]) and **Mermaid**
-//! ([`render_mermaid`]). Both outputs include every node and every edge, style
-//! **data** edges distinctly from **ordering** edges, label data edges with the
-//! carried stable type name, and cluster nodes by group.
+//! # Module index
 //!
-//! This is the **base** renderer. The run-artifact **overlay** — colouring
-//! nodes by terminal state, distinguishing originated from propagated skips, and
-//! annotating durations — is a separate concern layered on top by the overlay
-//! module; it is not part of this crate's surface.
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
-//! # Artifacts only — no access to the producing binary
-//!
-//! `dagr-render` depends on [`dagr-artifact`](../dagr_artifact/index.html) and
-//! the sanctioned `serde`/`serde_json` reader stack, and on **nothing else** in
-//! the workspace — in particular it has **no** dependency edge onto `dagr-core`,
-//! the live-pipeline surface. Because that edge does not exist, no code here
-//! *can* reference a live-pipeline type, so rendering requires no access to the
-//! binary that produced the artifacts as a property of the crate graph rather
-//! than a convention. A renderer therefore works equally on a historical run
-//! from three months ago: it reads the published artifact schema and nothing
-//! else — no network, no credentials, no filesystem access beyond the artifact
-//! it is handed.
+//! The two entry points are [`render_dot`] and [`render_mermaid`]; the
+//! run-artifact **overlay** — colouring nodes by terminal state, distinguishing
+//! originated from propagated skips, and annotating durations — is layered on top
+//! by the [`overlay`] module.
 //!
 //! # Reading an artifact
 //!
@@ -104,6 +91,25 @@ impl GraphArtifact {
     /// of the wrong type). The message names the offending field/reason.
     pub fn from_json_str(json: &str) -> Result<Self, RenderError> {
         serde_json::from_str(json).map_err(RenderError::Malformed)
+    }
+}
+
+/// The idiomatic spelling of [`GraphArtifact::from_json_str`], added
+/// **alongside** it rather than replacing it (`conv-tryfrom-fallible`,
+/// `api-from-not-into`): parsing from a string is fallible, so `TryFrom<&str>` is
+/// the conversion trait that fits, and it is what `.try_into()` and any generic
+/// bound on `TryFrom<&str>` can reach. The named inherent reader stays, so no
+/// call site changes and the parse remains greppable. Both spellings share one
+/// body, so they cannot drift.
+impl TryFrom<&str> for GraphArtifact {
+    type Error = RenderError;
+
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Malformed`] exactly as
+    /// [`GraphArtifact::from_json_str`] does — same input, same diagnostic.
+    fn try_from(json: &str) -> Result<Self, Self::Error> {
+        Self::from_json_str(json)
     }
 }
 

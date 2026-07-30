@@ -16,13 +16,20 @@
 > [`crates/cli/tests/registry_graph_validate.rs`](../crates/cli/tests/registry_graph_validate.rs) —
 > so nothing here claims a behaviour the shipped API does not have.
 
-A dagr pipeline binary usually carries exactly **one** flow: you write your tasks
-and a flow, hand it to the one-call
-[`RunnableFlow`](../crates/cli/src/run_flow.rs) seam (see the
-[README quickstart](../README.md#quickstart)), and the binary runs that flow. This
-guide covers the *other* option (arch.md **C26** "Many flows per binary"; ADR 086):
-hosting **many named flows** under one binary and selecting one per invocation by
-name — `dagr run etl` versus `dagr run analytics`, `dagr graph etl`, `dagr list`.
+A dagr pipeline binary hosts **as many named flows as you declare**, and selects one
+per invocation by name — `dagr run etl` versus `dagr run analytics`, `dagr graph etl`,
+`dagr list` (arch.md **C26** "Many flows per binary"; ADR 086, auto-discovered since
+ADR 092). The simplest binary declares exactly one and lets the name be omitted; that
+is a special case of the same mechanism, not a different one.
+
+There are two ways to populate that set, and they produce identical behaviour.
+`#[dag]` auto-discovery is the ergonomic path and is covered in the
+[cookbook](cookbook.md#declaring-dags-with-dag-and-running-them-with-one-line). **This
+guide covers the explicit `FlowRegistry`** you hand-wire in `main` when you want the
+set spelled out — a computed flow set, a non-`#[dag]` factory, or no `inventory`
+dependency. For the single-flow one-call path, see
+[`RunnableFlow`](../crates/cli/src/run_flow.rs) and the
+[README quickstart](../README.md#quickstart).
 
 It is **name-based selection over the existing single-run engine** — each
 `dagr run <flow>` is still its own independent run with its own run identity and

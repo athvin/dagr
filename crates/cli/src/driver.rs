@@ -1000,7 +1000,7 @@ impl AttemptEventSink for BufferingSink {
 /// or a task runtime that could not be built); a sink fault is absorbed and
 /// surfaced through the returned report's outcome, never a panic.
 #[must_use]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "the driver is one linear bootstrap-then-drive sequence (mint identity, \
               open the stream, record the run-started header, run the assembly/bootstrap \
@@ -1368,8 +1368,14 @@ struct AdmitCtx<'a> {
 /// nothing is in flight, then waits the bounded grace period for zombie candidates
 /// (blocking timeouts) and emits a `zombie-at-exit` event for each. Returns the
 /// overall outcome and the per-node terminal states.
-#[allow(clippy::too_many_arguments)]
-#[allow(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the loop threads the whole run's mutable bookkeeping explicitly \
+              (pending queue, live set, in-flight count, terminal states, zombie \
+              candidates, cancellation flags) rather than hiding it in shared state a \
+              helper could mutate out of order"
+)]
+#[expect(
     clippy::too_many_lines,
     reason = "the readiness-driven execution loop is one cohesive state machine (admit → \
               await → feed back → drain-on-cancel → post-drain → bounded zombie wait); \
@@ -2003,7 +2009,13 @@ fn abandon_leftover<S, C>(
 /// (firing contingencies still run, in-flight completes naturally), so a
 /// non-cancelled stop run is byte-for-byte an ordinary stop run — the core only
 /// adds the token flip and the recorded origin.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cancellation entry mutates seven distinct pieces of the loop's own \
+              bookkeeping (origin, draining/stopping flags, drain deadline, pending \
+              queue, terminal states); they are borrowed individually so the borrow \
+              checker still separates them, which a bundling struct would give up"
+)]
 fn enter_cancellation(
     ctx: &AdmitCtx,
     origin: Option<CancellationOrigin>,
@@ -2425,7 +2437,12 @@ where
 /// — and its cascade is already folded into the tracker, so its own dependents'
 /// decisions are handled recursively here. Admitted nodes are counted into
 /// `in_flight` by [`offer_or_pend`].
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the readiness tracker's decisions are applied against six independently \
+              borrowed pieces of loop state; passing them separately is what lets one \
+              call mutate the terminal-state map and the pending queue at once"
+)]
 fn apply_decisions<S, C>(
     ctx: &AdmitCtx,
     decisions: &[Decision],
@@ -2557,7 +2574,13 @@ fn partition_teardown_runners(pipeline: &Pipeline, runners: RunnerMap) -> (Runne
 /// Teardowns run in deterministic name order on a small bounded runtime, one at a
 /// time (a teardown consumes nothing and holds no capacity, so there is nothing to
 /// parallelize and serial order keeps the stream deterministic).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the teardown phase needs the full run identity, the covered terminal \
+              states, both directory roots, the deadline, and the writer — the same \
+              orthogonal set the main drive loop holds, handed over rather than \
+              rebuilt"
+)]
 fn run_teardown_phase<S, C>(
     pipeline: &Pipeline,
     run_id: &str,

@@ -46,4 +46,4 @@ None. (Producer/consumer edges are known from the graph (C3/C11/C4) and the rehy
 - Projecting `outputs[]`/`inputs[]` into the metastore and the optional `asset` identity table — **T91**.
 - Any asset-identity row in this ticket (produced records reference a `uri` by value only).
 - Scheduling or data-triggered runs off asset events (Airflow's asset *scheduler* cluster) — permanently out of scope (no scheduler).
-- Scope boundary restated: lineage is per-run provenance data, not coordination; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: lineage is per-run provenance data, not coordination; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

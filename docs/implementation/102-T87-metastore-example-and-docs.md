@@ -45,4 +45,4 @@ None. (Native-access-only is decided in ADR 097; this ticket documents the shipp
 - A `turso`-CLI or `sqld` **server** setup guide — future work behind the seam; this ticket documents embedded local access only.
 - Any Postgres-wire/BI-tool guidance — rejected by ADR 097.
 - Lineage/asset queries — **M8**.
-- Scope boundary restated: querying a local index is non-coordinating; dagr remains not a scheduler, distributed system, coordinating metadata store, web interface, DSL, or backfill orchestrator.
+- Scope boundary restated: querying a local index is non-coordinating; dagr remains not a scheduler, distributed execution system, coordinating metadata store, web interface, DSL, or backfill orchestrator.

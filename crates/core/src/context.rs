@@ -305,7 +305,13 @@ pub enum CancellationOrigin {
 /// context. The **subscriber integration** — structured-vs-human output,
 /// third-party line capture, secret scrubbing on framework paths — is handled by
 /// the logging integration.
-#[derive(Debug, Clone)]
+/// A span **is** its identity triple, so it compares and hashes as one: two
+/// spans naming the same run, node, and attempt are the same span. That is what
+/// lets a subscriber or a test key a map on a span rather than on a reassembled
+/// string. `Copy` is deliberately absent — [`RunId`] is `String`-backed, so a
+/// span owns a heap allocation and copying it would hide that cost
+/// (`own-clone-explicit`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LogSpan {
     run: RunId,
     node: NodeId,
@@ -368,8 +374,11 @@ impl LogSpan {
 ///     .build();
 ///
 /// // Authorized code exposes it deliberately; the framework never can via Debug.
-/// let token = registry.get::<ApiToken>().unwrap();
+/// let token = registry
+///     .get::<ApiToken>()
+///     .ok_or("ApiToken was registered above")?;
 /// assert_eq!(token.0.expose(), "s3cr3t");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct Secret<T> {
     inner: T,
@@ -393,10 +402,6 @@ impl<T> Secret<T> {
     /// it controls — the redaction hook emits it in place of the value. It is a
     /// fixed marker that contains none of the secret's bytes.
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        reason = "the redaction marker is a property of the secret wrapper, invoked on an instance"
-    )]
     pub fn redacted(&self) -> &'static str {
         "<redacted secret>"
     }
@@ -477,8 +482,11 @@ impl std::error::Error for RegistryError {}
 ///     .expect("AnalyticsClient is a distinct type despite the shared inner type")
 ///     .build();
 ///
-/// assert_eq!(registry.get::<BillingClient>().unwrap().0.base_url, "https://billing");
-/// assert_eq!(registry.get::<AnalyticsClient>().unwrap().0.base_url, "https://analytics");
+/// let billing = registry.get::<BillingClient>().ok_or("registered above")?;
+/// let analytics = registry.get::<AnalyticsClient>().ok_or("registered above")?;
+/// assert_eq!(billing.0.base_url, "https://billing");
+/// assert_eq!(analytics.0.base_url, "https://analytics");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 ///
 /// # Thread-safety bound and the owning-worker escape hatch
@@ -763,10 +771,6 @@ impl BootstrapFailure {
     /// surprise). The run also never hangs: this is a synchronous, terminating
     /// check.
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        reason = "zero-attempts is a property of the bootstrap-failure artifact instance"
-    )]
     pub fn attempts_recorded(&self) -> usize {
         0
     }

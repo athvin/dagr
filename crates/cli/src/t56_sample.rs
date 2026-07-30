@@ -617,7 +617,13 @@ fn fold_dispatch<W: Write>(flags: &Flags, out: &mut W) -> ExitCode {
 // ===========================================================================
 
 /// `run`: the real driver, after library bootstrap validation.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the sample binary's `run` verb is one linear bootstrap-then-dispatch \
+              narrative (reserved-flag collision check, parameter parse, store \
+              resolution, drive, exit-code mapping); it exists to be READ end to end \
+              as the reference a pipeline author copies"
+)]
 fn run_dispatch<W: Write>(sample: &Sample, flags: &Flags, out: &mut W) -> ExitCode {
     // --- Reserved-flag collision check (a hard, named bootstrap error). `--collide`
     // opts a colliding pipeline parameter in, so one binary demonstrates both.
