@@ -23,6 +23,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "Renders a dagr graph artifact, optionally overlaid with a run artifact, as Graphviz DOT or Mermaid diagram source"
+documentation = "https://docs.rs/dagr-render"
+readme = "README.md"
+keywords = ["dag", "graphviz", "mermaid", "diagram", "pipeline"]
+categories = ["visualization", "command-line-utilities", "development-tools"]
+
+# --- Publish metadata (T96) ---------------------------------------------------
+# `publish = false` is deliberately NOT set here. All six members are intended
+# for release: the publish graph is CLOSED, so it is not a per-crate choice —
+# Cargo refuses to publish a crate whose dependency (optional or build-time
+# included) is not on the registry, so `dagr-core` requires a published
+# `dagr-macros` and `dagr-cli` requires a published `dagr-metastore`. Marking
+# either unpublishable would make the crates that reach them unpublishable too,
+# i.e. the whole workspace. `scripts/check-crate-docs-and-metadata.sh` asserts
+# that closure, and that every publishable member carries the full metadata set
+# below — so the next crate added cannot skip it.
 
 [lib]
 name = "dagr_render"
@@ -48,7 +64,7 @@ path = "src/main.rs"
 schema-validation = ["dagr-artifact/schema-validation"]
 
 [dependencies]
-dagr-artifact = { path = "../artifact" }
+dagr-artifact = { path = "../artifact", version = "0.0.0" }
 
 # serde + serde_json — the T4-sanctioned (017) serialization stack, already
 # resolved in the tree via dagr-artifact (serde_json) and its schema helper

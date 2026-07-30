@@ -18,6 +18,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "The dagr pipeline binary: the run-loop driver and the command-line contract (run, graph, validate, render, resume, fold, prune)"
+documentation = "https://docs.rs/dagr-cli"
+readme = "README.md"
+keywords = ["dag", "pipeline", "workflow", "cli", "orchestration"]
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
+
+# --- Publish metadata (T96) ---------------------------------------------------
+# `publish = false` is deliberately NOT set here. All six members are intended
+# for release: the publish graph is CLOSED, so it is not a per-crate choice —
+# Cargo refuses to publish a crate whose dependency (optional or build-time
+# included) is not on the registry, so `dagr-core` requires a published
+# `dagr-macros` and `dagr-cli` requires a published `dagr-metastore`. Marking
+# either unpublishable would make the crates that reach them unpublishable too,
+# i.e. the whole workspace. `scripts/check-crate-docs-and-metadata.sh` asserts
+# that closure, and that every publishable member carries the full metadata set
+# below — so the next crate added cannot skip it.
 
 [lib]
 name = "dagr_cli"
@@ -97,9 +113,9 @@ dag = ["dep:inventory"]
 metastore = ["dep:dagr-metastore"]
 
 [dependencies]
-dagr-core = { path = "../core" }
-dagr-artifact = { path = "../artifact" }
-dagr-render = { path = "../render" }
+dagr-core = { path = "../core", version = "0.0.0" }
+dagr-artifact = { path = "../artifact", version = "0.0.0" }
+dagr-render = { path = "../render", version = "0.0.0" }
 
 # dagr-metastore — the OPTIONAL M7 run-index crate (T83, ADR 097), pulled ONLY
 # behind the default-off `metastore` feature above. `optional = true` means the
@@ -109,7 +125,7 @@ dagr-render = { path = "../render" }
 # `dag` feature confines `inventory`. It is a normal workspace member, so
 # `cargo test --workspace` still builds it directly; this edge is what the cli
 # reaches it through, and only under the feature.
-dagr-metastore = { path = "../metastore", optional = true }
+dagr-metastore = { path = "../metastore", version = "0.0.0", optional = true }
 
 # dagr-macros — the build-time-only, zero-runtime-dependency proc-macro crate (ADR
 # 082/092). dagr-cli depends on it for the M6 `#[dag]` attribute (T80), which it
@@ -123,7 +139,7 @@ dagr-metastore = { path = "../metastore", optional = true }
 # UNCONDITIONAL dependency (not behind the `dag` feature): the re-export is gated, but
 # pulling the build-time crate costs nothing at runtime, mirroring dagr-core's default-on
 # `macros` feature; a `--no-default-features` build simply drops the `pub use`.
-dagr-macros = { path = "../macros" }
+dagr-macros = { path = "../macros", version = "0.0.0" }
 
 # clap — the C26 command-line contract's argument parser (T55). The pipeline
 # declares a typed parameter surface and the library *derives* the verb/flag

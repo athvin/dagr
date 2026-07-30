@@ -139,7 +139,6 @@ impl RunArtifact {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
 
-
     /// The per-node overlay outcome, joined by node identity: for each node that
     /// has an attempt record and/or a marking, its final state and summed
     /// duration.
@@ -183,7 +182,7 @@ impl RunArtifact {
 
 /// The idiomatic spelling of [`RunArtifact::from_json_str`], added **alongside**
 /// it rather than replacing it (`conv-tryfrom-fallible`, `api-from-not-into`) —
-/// the run-artifact twin of [`GraphArtifact`](crate::GraphArtifact)'s impl, so
+/// the run-artifact twin of [`GraphArtifact`]'s impl, so
 /// the two published artifacts a renderer reads are reached the same way. Both
 /// spellings share one body, so they cannot drift.
 impl TryFrom<&str> for RunArtifact {

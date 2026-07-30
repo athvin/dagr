@@ -158,15 +158,26 @@ for dir in $members; do
   # `cargo package` refuses a path dependency with no version: "all dependencies
   # must have a version requirement specified when packaging". Pinning it to the
   # workspace version keeps the six manifests from drifting apart.
-  bare_paths=$(grep -nE '\{[^}]*path[[:space:]]*=[[:space:]]*"\.\./' "$manifest" \
-               | grep -v 'version[[:space:]]*=' || true)
+  #
+  # Only the REAL dependency sections are in scope: a dev-dependency's path is
+  # stripped at publish time (it builds this crate's own test targets, never its
+  # library), so it cannot block a release — and `dagr-macros`'s dev-deps back
+  # onto `dagr-core`/`dagr-cli` are a legal dev-only cycle that must stay
+  # version-less.
+  real_dep_paths=$(awk '
+    { line = $0; sub(/^[[:space:]]+/, "", line) }
+    line ~ /^#/ { next }
+    line ~ /^\[/ { s = line; sub(/^\[/, "", s); sub(/\][[:space:]]*$/, "", s); cur = s; next }
+    cur ~ /^(dependencies|target\..*\.dependencies|build-dependencies)$/ && line ~ /path[[:space:]]*=[[:space:]]*"\.\.\// { print FNR ":" line }
+  ' "$manifest")
+  bare_paths=$(printf '%s\n' "$real_dep_paths" | grep 'path' | grep -v 'version[[:space:]]*=' || true)
   if [ -z "$bare_paths" ]; then
     pass "publishable-deps: every intra-workspace path dependency of $name carries a version requirement"
   else
     bad "publishable-deps: $name has a path dependency with no version requirement (cargo package refuses it):"
     printf '%s\n' "$bare_paths" | sed 's/^/        /'
   fi
-  wrong_version=$(grep -nE 'path[[:space:]]*=[[:space:]]*"\.\./' "$manifest" \
+  wrong_version=$(printf '%s\n' "$real_dep_paths" \
                   | grep 'version[[:space:]]*=' \
                   | grep -v "version = \"$workspace_version\"" || true)
   if [ -z "$wrong_version" ]; then
@@ -242,16 +253,27 @@ else
 fi
 
 # --- Check: the packaging dry run does not fail for missing metadata ---------
-# The ticket's Test plan asks for a real dry run per publishable crate.
-# `--no-verify` skips the rebuild (this is a manifest check, not a build check);
-# `--allow-dirty` lets it run on a working tree mid-ticket.
+# The ticket's Test plan asks for a real dry run per publishable crate:
+# "`cargo package --list` (or an equivalent dry run) … does not fail for missing
+# required metadata."
+#
+# `--list` is the dry run that answers exactly that question OFFLINE. The fuller
+# `cargo package --no-verify` deliberately is NOT used: past the manifest stage it
+# resolves each intra-workspace dependency against the crates.io index, which for
+# a workspace that has never been published fails with "no matching package named
+# `dagr-artifact` found" — a not-yet-released fact, not a metadata defect, and a
+# network round trip in a job that should not need one. The metadata invariant
+# itself is held by the scans above, which the fixture self-check proves
+# non-vacuous; this step adds the two things only cargo can answer: the manifest
+# packages at all, and the README the manifest points at actually ships inside
+# the .crate (a `readme` naming a file cargo excludes is a blank crates.io page).
 if command -v cargo >/dev/null 2>&1; then
   pkg_failures=""
   for dir in $members; do
     [ -f "$dir/Cargo.toml" ] || continue
     [ "$(toml_value "$dir/Cargo.toml" package publish)" = "false" ] && continue
     name=$(crate_name "$dir/Cargo.toml")
-    out=$(cargo package -p "$name" --no-verify --allow-dirty --quiet 2>&1) || {
+    out=$(cargo package -p "$name" --list --allow-dirty --offline 2>&1) || {
       pkg_failures="$pkg_failures$name: $(printf '%s' "$out" | tr '\n' ' ')
 "
       continue
@@ -259,10 +281,13 @@ if command -v cargo >/dev/null 2>&1; then
     if printf '%s' "$out" | grep -q 'manifest has no'; then
       pkg_failures="$pkg_failures$name: $(printf '%s' "$out" | grep 'manifest has no' | tr '\n' ' ')
 "
+    elif ! printf '%s' "$out" | grep -qx 'README.md'; then
+      pkg_failures="$pkg_failures$name: the declared readme is not in the packaged file list
+"
     fi
   done
   if [ -z "$pkg_failures" ]; then
-    pass "package-dry-run: cargo package --no-verify succeeds for every publishable member with no missing-metadata warning"
+    pass "package-dry-run: cargo package --list succeeds for every publishable member, with no missing-metadata warning and the README inside the package"
   else
     bad "package-dry-run: cargo package reported a manifest problem:"
     printf '%s' "$pkg_failures" | sed 's/^/        /'

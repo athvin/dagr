@@ -1,15 +1,10 @@
-//! `dagr-artifact` — dagr's artifact types.
+#![doc = include_str!("../README.md")]
 //!
-//! This crate defines the serializable records a run leaves behind — the
-//! graph artifact, the run artifact, and the event-record shapes they are
-//! derived from — together with their versioned schemas.
+//! # Module index
 //!
-//! It is a deliberate boundary: a renderer consumes an artifact and nothing
-//! else, so this crate is the *only* thing the
-//! [`dagr-render`](../dagr_render/index.html) crate is allowed to depend on.
-//! Because `artifact` depends on no other workspace crate, it can never drag in
-//! the live-pipeline surface, and rendering stays "no access to the binary that
-//! produced the artifacts."
+//! The orientation above comes from the crate's `README.md`, inlined here so the
+//! crates.io landing page and this front page are one file. What follows is the
+//! map of where each piece lives.
 //!
 //! The **event-stream writer** lives in [`event_stream`]. The published
 //! versioned schemas and their validation helper live in the `schema` module —

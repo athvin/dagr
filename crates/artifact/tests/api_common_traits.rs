@@ -29,16 +29,17 @@ fn hash_of<T: Hash>(v: &T) -> u64 {
 
 #[test]
 fn fold_error_is_comparable_cloneable_and_hashable() {
+    fn assert_clone<T: Clone>() {}
+    assert_clone::<FoldError>();
+
     let a = FoldError::CorruptRecord { line: 7 };
+    // `Copy`: reading `a` into `b` leaves `a` usable, with no explicit clone.
     let b = a;
-    let c = a.clone();
     let other = FoldError::MissingRunStarted;
 
     assert_eq!(a, b, "a fold failure compares by its data, not its Display");
-    assert_eq!(a, c);
     assert_ne!(a, other);
-    assert_eq!(hash_of(&a), hash_of(&c));
-    // `Copy`: the value above is still usable after being read twice.
+    assert_eq!(hash_of(&a), hash_of(&b));
     assert_eq!(a, FoldError::CorruptRecord { line: 7 });
 }
 

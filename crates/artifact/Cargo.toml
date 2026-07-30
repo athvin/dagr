@@ -19,6 +19,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "dagr's artifact types: the event stream, graph artifact, and run artifact a pipeline run leaves behind"
+documentation = "https://docs.rs/dagr-artifact"
+readme = "README.md"
+keywords = ["dag", "pipeline", "artifact", "provenance", "jsonl"]
+categories = ["encoding", "data-structures", "development-tools"]
+
+# --- Publish metadata (T96) ---------------------------------------------------
+# `publish = false` is deliberately NOT set here. All six members are intended
+# for release: the publish graph is CLOSED, so it is not a per-crate choice —
+# Cargo refuses to publish a crate whose dependency (optional or build-time
+# included) is not on the registry, so `dagr-core` requires a published
+# `dagr-macros` and `dagr-cli` requires a published `dagr-metastore`. Marking
+# either unpublishable would make the crates that reach them unpublishable too,
+# i.e. the whole workspace. `scripts/check-crate-docs-and-metadata.sh` asserts
+# that closure, and that every publishable member carries the full metadata set
+# below — so the next crate added cannot skip it.
 
 [lib]
 name = "dagr_artifact"

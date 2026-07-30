@@ -48,12 +48,10 @@ fn graph_artifact_try_from_agrees_with_the_inherent_reader() {
 fn graph_artifact_try_from_rejects_exactly_what_the_inherent_reader_rejects() {
     let json = fixture("schema-invalid.graph.json");
 
-    let inherent = GraphArtifact::from_json_str(&json)
-        .err()
-        .expect("the schema-invalid fixture is refused");
-    let converted = GraphArtifact::try_from(json.as_str())
-        .err()
-        .expect("the conversion refuses it identically");
+    let inherent =
+        GraphArtifact::from_json_str(&json).expect_err("the schema-invalid fixture is refused");
+    let converted =
+        GraphArtifact::try_from(json.as_str()).expect_err("the conversion refuses it identically");
 
     assert_eq!(
         inherent.to_string(),
@@ -97,12 +95,9 @@ fn run_artifact_try_from_rejects_exactly_what_the_inherent_reader_rejects() {
     // An attempt missing its required `status` field.
     let json = r#"{"schema":"dagr.run@1","attempts":[{"node":"n00"}]}"#;
 
-    let inherent = RunArtifact::from_json_str(json)
-        .err()
-        .expect("a malformed run artifact is refused");
-    let converted = RunArtifact::try_from(json)
-        .err()
-        .expect("the conversion refuses it identically");
+    let inherent =
+        RunArtifact::from_json_str(json).expect_err("a malformed run artifact is refused");
+    let converted = RunArtifact::try_from(json).expect_err("the conversion refuses it identically");
 
     assert_eq!(
         inherent, converted,
