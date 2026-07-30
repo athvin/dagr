@@ -36,6 +36,35 @@ BOX_RE = re.compile(
     r"(?: — after (?P<after>.+))?$"
 )
 
+# Milestone acceptance-gate tickets state their dependency as an inclusive RANGE
+# rather than a list, e.g. `after T93–T98` (114), `T100–T111` (127),
+# `T113–T117` (133). The dash is an en dash (U+2013); a hyphen is accepted too.
+# Only all-numeric tids form a range — suffixed tids (T0.2, T54a) never do.
+RANGE_RE = re.compile(r"^T(?P<lo>\d+)\s*[–—-]\s*T(?P<hi>\d+)$")
+
+
+def expand_deps(after):
+    """Expand `Tlo–Thi` range entries into the explicit tids they stand for.
+
+    Every tid in the range must exist, so an expanded range is checked exactly
+    as strictly as a hand-written list — this widens what the selector can
+    READ, never what it will accept. A malformed or inverted range is left
+    untouched so it surfaces as `(unknown tid)` instead of silently vanishing.
+    """
+    out = []
+    for dep in after:
+        m = RANGE_RE.match(dep)
+        if not m:
+            out.append(dep)
+            continue
+        lo, hi = int(m.group("lo")), int(m.group("hi"))
+        if lo > hi:
+            out.append(dep)
+            continue
+        out.extend(f"T{i}" for i in range(lo, hi + 1))
+    return out
+
+
 # Ticket header line 4, e.g.:
 # > **Branch:** `chore/t0.0a-repo-init-and-hygiene` · **Depends on:** — · **Blocks:** T1, T7
 BRANCH_RE = re.compile(
@@ -154,6 +183,7 @@ def main() -> int:
     done = sorted(n for n, t in tickets.items() if t["checked"])
     todo = sorted(n for n, t in tickets.items() if not t["checked"])
 
+
     if sys.argv[1:2] == ["--status"]:
         print(f"VERDICT=STATUS\nTOTAL={len(tickets)}\nDONE={len(done)}\nREMAINING={len(todo)}")
         if todo:
@@ -166,7 +196,7 @@ def main() -> int:
 
     nnn = todo[0]
     unmet = []
-    for dep_tid in tickets[nnn]["after"]:
+    for dep_tid in expand_deps(tickets[nnn]["after"]):
         dep_nnn = tid_to_nnn.get(dep_tid)
         if dep_nnn is None:
             unmet.append(f"{dep_tid} (unknown tid)")
