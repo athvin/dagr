@@ -206,26 +206,38 @@ jobs:
         with:
           shared-key: workspace
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # TRIAL: cargo-nextest. `cargo test` runs dagr's 125 integration-test targets
+      # STRICTLY ONE BINARY AT A TIME, parallelising only with threads inside each;
+      # nextest runs every test in its own process from one pool spanning all of
+      # them, so a long binary overlaps the rest instead of blocking the queue.
+      # Config — including what must NOT be parallelised — is in .config/nextest.toml.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: compile-failure UI harness (T8, pinned toolchain)
-        run: cargo test -p dagr-core --test ui
+        run: cargo nextest run -p dagr-core --test ui
       # TIER 1 (Linux): the complete suite, nothing filtered.
-      - name: cargo test --workspace (Linux tier-1, full suite)
+      - name: cargo nextest run --workspace (Linux tier-1, full suite)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace
+        run: cargo nextest run --workspace
       # CORE (macOS): the same workspace suite MINUS the Linux-only C12 cgroup-
-      # DETECTION tests, excluded by an explicit named `--skip` set. The
-      # host-fallback C12 tests are NOT skipped — they are the macOS behaviour
-      # and must pass here (T70 DoD: "macOS pool sizing is exercised through the
-      # T32 host-fallback path (no cgroups), and that host-fallback test passes
-      # on macOS"). Skipping is by intent, not allow-failure: a core-test
-      # regression still reds this job.
-      - name: cargo test --workspace (macOS core suite, Linux-only cgroup detection skipped)
+      # DETECTION tests, excluded by an explicit named set. The host-fallback C12
+      # tests are NOT skipped — they are the macOS behaviour and must pass here
+      # (T70 DoD: "macOS pool sizing is exercised through the T32 host-fallback
+      # path (no cgroups), and that host-fallback test passes on macOS"). Skipping
+      # is by intent, not allow-failure: a core-test regression still reds this job.
+      #
+      # `-E 'not (test(a) or test(b) or test(c))'` is nextest's spelling of the
+      # three `--skip` flags this replaces; `test(...)` is a substring match, the
+      # same matching `--skip` did, so the excluded set is unchanged.
+      - name: cargo nextest run --workspace (macOS core suite, Linux-only cgroup detection skipped)
         if: matrix.os == 'macos-latest'
         run: |
-          cargo test --workspace -- \
-            --skip container_limits_size_the_admission_pools_from_cgroup_v2 \
-            --skip cgroup_v1_is_used_when_v2_is_absent \
-            --skip the_pinning_flag_overrides_cgroup_detection
+          cargo nextest run --workspace -E 'not (
+            test(container_limits_size_the_admission_pools_from_cgroup_v2) or
+            test(cgroup_v1_is_used_when_v2_is_absent) or
+            test(the_pinning_flag_overrides_cgroup_detection)
+          )'
       # Scale benchmark (T69, ticket 076): the Performance-envelope gate. Drives a
       # thousand-node no-op graph through the REAL T24 run-loop driver
       # (`dagr_cli::scale_bench`), measures per-node framework overhead, and FAILS
@@ -256,7 +268,7 @@ jobs:
       # are intentionally Linux-only.)
       - name: scale benchmark — Performance-envelope budget (T69)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-cli --test scale_benchmark -- --nocapture
+        run: cargo nextest run -p dagr-cli --test scale_benchmark --no-capture
       # Published-artifact-schema validation (T39, ticket 050). The validation
       # helper and its `jsonschema` dependency are gated behind the
       # `schema-validation` feature (OFF by default, so the runtime writers pull
@@ -268,7 +280,7 @@ jobs:
       # extends this into the enduring compatibility gate + scale artifact.
       - name: artifact-schema validation + fixture-corpus round-trip (T39)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-artifact --features schema-validation --test artifact_schemas
+        run: cargo nextest run -p dagr-artifact --features schema-validation --test artifact_schemas
       # C20 graph-artifact emission (T40, ticket 051): a REAL emitted artifact is
       # round-tripped against the published `schemas/graph/v1.schema.json` via the
       # same T39 helper. Gated behind cli's `schema-validation` feature (which
@@ -276,7 +288,7 @@ jobs:
       # here — the shipped binary and the bare `cargo test --workspace` never do.
       - name: graph-artifact schema round-trip (T40)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
+        run: cargo nextest run -p dagr-cli --features schema-validation --test graph_artifact_schema_roundtrip
       # C22 artifact validation + schema-compatibility gate (T48, ticket 059).
       # The enduring compatibility CI: the frozen fixture corpus parses forever
       # after (every checked-in fixture round-trips against its declared version's
@@ -292,7 +304,7 @@ jobs:
       # unpinned install), behind the `schema-validation` feature.
       - name: artifact validation + schema-compatibility gate (T48)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-artifact --features schema-validation --test compatibility_ci
+        run: cargo nextest run -p dagr-artifact --features schema-validation --test compatibility_ci
       # === M7 metastore: the feature-gated CLI suites =========================
       # The `metastore` cli feature is OFF by default (libSQL is heavy and pre-1.0),
       # so the plain `cargo test --workspace` above never pulls `libsql` through the
@@ -338,7 +350,7 @@ jobs:
         env:
           DAGR_REQUIRE_SQLITE3: "1"
         run: |
-          cargo test -p dagr-cli --features metastore \
+          cargo nextest run -p dagr-cli --features metastore \
             --test metastore_live_tee \
             --test metastore_example_and_docs \
             --test metastore_acceptance_gate
@@ -348,7 +360,7 @@ jobs:
       - name: metastore init + sync verbs (T83/T84, --features metastore)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo test -p dagr-cli --features metastore \
+          cargo nextest run -p dagr-cli --features metastore \
             --test metastore_init \
             --test metastore_sync
       # The structural gate proving the feature is truly default-off: default cli

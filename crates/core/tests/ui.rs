@@ -84,6 +84,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The environment variable that opts a run into the blessing (snapshot-update)
 /// flow. Kept out of the default test path so snapshots are never silently
@@ -285,9 +287,103 @@ fn discover_samples(ui_dir: &Path) -> Vec<PathBuf> {
     samples
 }
 
+/// Check one sample against its snapshot (or, under blessing, rewrite it).
+///
+/// Returns `Err(report)` describing the violation rather than panicking, because
+/// this runs on a worker thread: a panic there would abort that sample's thread
+/// and surface as a thread-join failure naming no sample at all. Returning the
+/// report lets [`ui`] collect every failure in the corpus and print them together,
+/// in sample order — strictly more informative than the previous behaviour, which
+/// stopped at whichever sample happened to break first.
+fn check_sample(sample: &Path, blessing: bool) -> Result<(), String> {
+    let stem = sample.file_stem().unwrap().to_string_lossy().into_owned();
+    let snapshot_path = sample.with_extension("stderr");
+
+    let (diagnostic, compiled) = compile_sample(sample);
+
+    // A compile-fail sample that unexpectedly compiles is a hard failure — a
+    // no-op case must never pass as coverage. This check runs even under
+    // blessing: we never bless a passing compile.
+    if compiled {
+        return Err(format!(
+            "UI sample {} was expected to FAIL compilation but it compiled cleanly; \
+             a compile-fail case that no longer fails cannot count as coverage",
+            sample.display()
+        ));
+    }
+
+    if blessing {
+        // Deliberate regeneration: rewrite the snapshot's substring list from
+        // the current diagnostic's type names, keeping it canonical and
+        // reviewable. Each sample writes its own `.stderr`, so the fan-out below
+        // never has two threads touching one file.
+        let names = extract_type_names(&diagnostic);
+        if names.len() < 2 {
+            return Err(format!(
+                "blessing {}: expected to extract at least two type names from the \
+                 diagnostic, found {names:?}",
+                sample.display(),
+            ));
+        }
+        let body = format!("{}{}\n", snapshot_header(&stem), names.join("\n"));
+        return fs::write(&snapshot_path, body).map_err(|e| {
+            format!(
+                "blessing {}: could not write snapshot: {e}",
+                snapshot_path.display()
+            )
+        });
+    }
+
+    // Frozen (default) run: the snapshot must exist and every substring it names
+    // must appear in the diagnostic. Both together.
+    let snapshot = fs::read_to_string(&snapshot_path).map_err(|e| {
+        format!(
+            "missing snapshot {} for sample {} ({e}); bless it with \
+             `DAGR_BLESS=1 cargo test -p dagr-core --test ui`",
+            snapshot_path.display(),
+            sample.display()
+        )
+    })?;
+    let required = required_substrings(&snapshot);
+    if required.len() < 2 {
+        return Err(format!(
+            "snapshot {} must name at least two distinct type-name substrings (found {required:?})",
+            snapshot_path.display(),
+        ));
+    }
+    for needle in &required {
+        if !diagnostic.contains(needle.as_str()) {
+            return Err(format!(
+                "snapshot {} requires the substring `{needle}`, but the diagnostic for {} \
+                 did not contain it.\n--- diagnostic ---\n{diagnostic}\n--- end ---",
+                snapshot_path.display(),
+                sample.display(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The single UI-test entry point. Runs every sample under the pinned toolchain
 /// and enforces the both-type-names contract (or, under `DAGR_BLESS`, rewrites
 /// the snapshots deliberately).
+///
+/// # Why this fans out
+///
+/// Each sample is an independent `rustc` invocation writing to its own output
+/// path and reading its own snapshot — there is no shared state between them. Run
+/// one at a time, the corpus was the single slowest test in the entire workspace
+/// (30 samples, about 4.5 s each, ~135 s in one test), and because it is ONE
+/// `#[test]` no test runner could break it up: neither `cargo test`'s threads nor
+/// a process-per-test runner can parallelise inside a single test function. The
+/// fan-out has to live here.
+///
+/// Discovery is still the directory listing, so the property the harness
+/// documentation promises holds unchanged: a new case is added by dropping a
+/// `.rs` and a `.stderr` into `tests/ui/` with no edit to this file. It also adds
+/// no dependency — `std::thread::scope` borrows `samples` directly, so the
+/// zero-dependency posture of `dagr-core` is untouched (a work-stealing crate
+/// would buy nothing here; the work is 30 subprocess spawns).
 #[test]
 fn ui() {
     let ui_dir = manifest_dir().join(UI_DIR);
@@ -300,72 +396,54 @@ fn ui() {
 
     let blessing = std::env::var_os(BLESS_ENV).is_some();
 
-    for sample in &samples {
-        let stem = sample.file_stem().unwrap().to_string_lossy().into_owned();
-        let snapshot_path = sample.with_extension("stderr");
+    // One worker per core, never more than there are samples. Each `rustc` is its
+    // own process, so the cap keeps a 30-sample corpus from spawning 30 compilers
+    // at once on a two-core CI runner and thrashing it.
+    let width = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(samples.len());
 
-        let (diagnostic, compiled) = compile_sample(sample);
+    // Workers pull the next index off a shared cursor rather than taking a fixed
+    // slice each: sample cost varies by roughly an order of magnitude (the seven
+    // standalone sketches compile far faster than the twenty-three that link the
+    // real `dagr_core` rlib), so a static split would leave workers idle behind
+    // whichever chunk drew the expensive ones.
+    let cursor = AtomicUsize::new(0);
+    let failures: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
 
-        // A compile-fail sample that unexpectedly compiles is a hard
-        // failure — a no-op case must never pass as coverage. This check runs
-        // even under blessing: we never bless a passing compile.
-        assert!(
-            !compiled,
-            "UI sample {} was expected to FAIL compilation but it compiled cleanly; \
-             a compile-fail case that no longer fails cannot count as coverage",
-            sample.display()
-        );
-
-        if blessing {
-            // Deliberate regeneration: rewrite the snapshot's substring list
-            // from the current diagnostic's type names, keeping it canonical
-            // and reviewable.
-            let names = extract_type_names(&diagnostic);
-            assert!(
-                names.len() >= 2,
-                "blessing {}: expected to extract at least two type names from the \
-                 diagnostic, found {:?}",
-                sample.display(),
-                names
-            );
-            let body = format!("{}{}\n", snapshot_header(&stem), names.join("\n"));
-            fs::write(&snapshot_path, body).unwrap_or_else(|e| {
-                panic!(
-                    "blessing {}: could not write snapshot: {e}",
-                    snapshot_path.display()
-                )
+    std::thread::scope(|scope| {
+        for _ in 0..width {
+            scope.spawn(|| {
+                loop {
+                    let index = cursor.fetch_add(1, Ordering::Relaxed);
+                    let Some(sample) = samples.get(index) else {
+                        break;
+                    };
+                    if let Err(report) = check_sample(sample, blessing) {
+                        failures.lock().unwrap().push((index, report));
+                    }
+                }
             });
-            eprintln!("blessed {}", snapshot_path.display());
-            continue;
         }
+    });
 
-        // Frozen (default) run: the snapshot must exist and every substring it
-        // names must appear in the diagnostic. Both together.
-        let snapshot = fs::read_to_string(&snapshot_path).unwrap_or_else(|e| {
-            panic!(
-                "missing snapshot {} for sample {} ({e}); bless it with \
-                 `DAGR_BLESS=1 cargo test -p dagr-core --test ui`",
-                snapshot_path.display(),
-                sample.display()
-            )
-        });
-        let required = required_substrings(&snapshot);
-        assert!(
-            required.len() >= 2,
-            "snapshot {} must name at least two distinct type-name substrings (found {:?})",
-            snapshot_path.display(),
-            required
-        );
-        for needle in &required {
-            assert!(
-                diagnostic.contains(needle.as_str()),
-                "snapshot {} requires the substring `{needle}`, but the diagnostic for {} \
-                 did not contain it.\n--- diagnostic ---\n{diagnostic}\n--- end ---",
-                snapshot_path.display(),
-                sample.display(),
-            );
-        }
-    }
+    // Sorted by sample index, so the report reads in the same order every run
+    // regardless of which worker finished when — the corpus is deterministic and
+    // its failure output should be too.
+    let mut failures = failures.into_inner().unwrap();
+    failures.sort_by_key(|(index, _)| *index);
+
+    assert!(
+        failures.is_empty(),
+        "{} of {} UI sample(s) failed:\n\n{}",
+        failures.len(),
+        samples.len(),
+        failures
+            .into_iter()
+            .map(|(_, report)| report)
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n")
+    );
 }
 
 /// The resolved toolchain equals the pin in `rust-toolchain.toml`, establishing

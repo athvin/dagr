@@ -1,0 +1,45 @@
+# cargo-nextest configuration — TRIAL (see the nextest steps in ci.yml).
+#
+# nextest runs every test in its OWN PROCESS, from one global pool spanning all
+# test binaries, where `cargo test` runs each binary to completion in turn and
+# parallelises only with threads inside it. That is the whole reason to want it
+# here — dagr has 125 integration-test targets, and the long ones block the queue
+# — but it is also a change in how the suite executes, so the two places where
+# dagr's tests depend on NOT being run that way are pinned down here rather than
+# left to luck.
+
+[profile.default]
+# A test that fails once under a process-per-test model is a real finding, not
+# something to retry away. Explicit so nobody adds retries to quiet a flake.
+retries = 0
+# The gate must fail on the whole picture, not stop at the first casualty: a
+# parallelism-induced failure usually shows up as a cluster, and one truncated
+# run per attempt would hide the shape of it.
+fail-fast = false
+
+# The scale benchmark is a WALL-CLOCK gate: it drives a thousand-node graph and
+# asserts per-node framework overhead against a 16 ms/node budget. Under the
+# default pool it would be measured while ~140 other test processes compete for a
+# 4-core runner, so it would be timing the contention rather than dagr's
+# overhead. Reserving the full pool makes the measurement a property of the code
+# again, which is the only thing the budget is allowed to be about.
+[[profile.default.overrides]]
+filter = 'binary(scale_benchmark)'
+threads-required = 'num-test-threads'
+
+# The compile-fail / UI suites each shell out to a nested `cargo`, and they share
+# one `target/tests/trybuild` scratch directory. Run concurrently they race on it,
+# and the failure surfaces as a corrupted snapshot rather than as the lock
+# contention it is.
+#
+# A TEST GROUP, not `threads-required`. The distinction is the whole point: this
+# serialises these binaries AGAINST EACH OTHER while the other ~1000 tests keep
+# running alongside them. `threads-required = 'num-test-threads'` would instead
+# have each of them seize the entire pool and idle every other test for its
+# duration — which is exactly the serialisation nextest is here to remove.
+[test-groups]
+nested-cargo = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(ui) or binary(trybuild) or binary(flow_builder_compile_fail) or binary(dag_auto_discovery)'
+test-group = 'nested-cargo'
