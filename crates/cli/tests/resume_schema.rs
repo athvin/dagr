@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use dagr_artifact::schema::{validate_value, ArtifactKind};
-use dagr_cli::contract::{resume_verb, ResumeOptions, ResumeOutcome};
+use dagr_artifact::schema::{ArtifactKind, validate_value};
+use dagr_cli::contract::{ResumeOptions, ResumeOutcome, resume_verb};
 use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::resume::ReferenceExistence;

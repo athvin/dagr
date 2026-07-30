@@ -14,13 +14,13 @@
 //! needs no async runtime and no framework machinery (the real runner and run
 //! context are referenced here only by shape).
 
-use dagr_core::task::{ExecutionClass, RunContext, Task};
 use dagr_core::TaskError;
+use dagr_core::task::{ExecutionClass, RunContext, Task};
 
 use std::future::Future;
 use std::pin::pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 /// Drive a future to completion on the current thread with no runtime. The task

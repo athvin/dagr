@@ -307,51 +307,62 @@ pub mod test_kit;
 
 pub use assembly::{
     AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableReferenceMeta,
-    DurableWitness, EffectivePolicy, FingerprintSlot, NodePolicy, Problem, ProblemKind, Warning,
-    FINGERPRINT_ALGORITHM_VERSION,
+    DurableWitness, EffectivePolicy, FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, NodePolicy,
+    Problem, ProblemKind, Warning,
 };
 pub use binding::{
-    BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, NodeBinding, OrderingEdge, OrderingHandle,
-    ReceiveMode, RegisteredNode, Shared, TriggerRule, MAX_INPUT_ARITY,
+    BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, MAX_INPUT_ARITY, NodeBinding, OrderingEdge,
+    OrderingHandle, ReceiveMode, RegisteredNode, Shared, TriggerRule,
 };
 pub use context::{
-    surface_requirements, BootstrapFailure, BootstrapOutcome, CancellationOrigin,
-    CancellationSignal, CancellationSource, CoveredNodeStates, DataInterval, LogSpan,
-    MissingResourceError, PipelineId, RegistryError, ResourceRegistry, ResourceRegistryBuilder,
-    ResourceRequirement, ResourceRequirements, RunContext, RunContextBuilder, RunId, ScratchError,
-    ScratchStore, Secret, TerminalState,
+    BootstrapFailure, BootstrapOutcome, CancellationOrigin, CancellationSignal, CancellationSource,
+    CoveredNodeStates, DataInterval, LogSpan, MissingResourceError, PipelineId, RegistryError,
+    ResourceRegistry, ResourceRegistryBuilder, ResourceRequirement, ResourceRequirements,
+    RunContext, RunContextBuilder, RunId, ScratchError, ScratchStore, Secret, TerminalState,
+    surface_requirements,
 };
 pub use error::{RehydrateClass, RehydrateError, TaskError, TaskErrorClass};
 pub use execution::{
-    check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt,
-    run_attempt_caught, run_attempt_with_timeout, run_with_retries, run_with_retries_caught,
     AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, BootstrapRefusal, Jitter,
     LateResultBarrier, NoJitter, PanicStrategy, RetryConfig, SeededJitter, TimeoutDecision,
-    ZombieObserver,
+    ZombieObserver, check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt,
+    run_attempt_caught, run_attempt_with_timeout, run_with_retries, run_with_retries_caught,
 };
 pub use flow::{FailureMode, Flow, Pipeline, PipelineNode, StableTypeNames};
 pub use handle::{Handle, NodeId};
 pub use limits::{
-    detect_capacities, CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, PinnedPools,
-    HEADROOM_DEFAULT,
+    CapacityBootstrapFailure, CapacityError, ContainerLimitProbe, HEADROOM_DEFAULT, PinnedPools,
+    detect_capacities,
 };
 pub use metrics::{
-    AttemptMetrics, AttemptScope, AttributingAllocator, MetricError, MetricValue,
-    MAX_ENCODED_BYTES, MAX_ENTRIES, METRIC_PEAK_MEMORY_BYTES, METRIC_TRUNCATED,
-    METRIC_TRUNCATED_DROPPED_BYTES, METRIC_TRUNCATED_DROPPED_ENTRIES, PERMIT_PREFIX, PHASE_PREFIX,
+    AttemptMetrics, AttemptScope, AttributingAllocator, MAX_ENCODED_BYTES, MAX_ENTRIES,
+    METRIC_PEAK_MEMORY_BYTES, METRIC_TRUNCATED, METRIC_TRUNCATED_DROPPED_BYTES,
+    METRIC_TRUNCATED_DROPPED_ENTRIES, MetricError, MetricValue, PERMIT_PREFIX, PHASE_PREFIX,
     RESERVED_PREFIX, VALUE_ENCODED_BYTES,
 };
-pub use readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
+pub use readiness::{Decision, ReadinessTracker, RuleOutcome, evaluate_rule};
 pub use resume::{
-    plan_resume, PolicyDiff, PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal,
+    PolicyDiff, PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal, plan_resume,
 };
 pub use slot::{
     ConsumerLease, DeliveryMode, FillError, RedeemError, RedemptionHandle, ResidencyLedger, Slot,
     SlotRef,
 };
-pub use stable_name::{is_well_formed, StableInputNames, StableName, UNIT_STABLE_NAME};
+pub use stable_name::{StableInputNames, StableName, UNIT_STABLE_NAME, is_well_formed};
 pub use task::{ExecutionClass, Task};
 
+/// The `#[derive(StableName)]` derive macro — the one-line ergonomic that emits the
+/// `impl StableName` the graph-emittable registrars require, so `#[task]` tasks and
+/// their payloads compose with `#[dag]` / `FlowBuilder::source` / `node` with no
+/// hand-written trait bodies. Re-exported behind the default-on `macros` feature
+/// exactly as [`macro@task`] is; `--no-default-features` drops it and the runtime
+/// dependency graph is unchanged (a proc-macro is never linked into the binary).
+///
+/// The derive (macro namespace) coexists with the [`StableName`] trait (type
+/// namespace) under this one name, the standard trait+derive pairing — `use
+/// dagr_core::StableName;` brings both into scope.
+#[cfg(feature = "macros")]
+pub use dagr_macros::StableName;
 /// The `#[task]` attribute macro — the optional ergonomic authoring layer.
 /// Re-exported from the build-time-only
 /// [`dagr-macros`](dagr_macros) proc-macro crate **behind the default-on
@@ -436,17 +447,5 @@ pub use task::{ExecutionClass, Task};
 /// ```
 #[cfg(feature = "macros")]
 pub use dagr_macros::task;
-/// The `#[derive(StableName)]` derive macro — the one-line ergonomic that emits the
-/// `impl StableName` the graph-emittable registrars require, so `#[task]` tasks and
-/// their payloads compose with `#[dag]` / `FlowBuilder::source` / `node` with no
-/// hand-written trait bodies. Re-exported behind the default-on `macros` feature
-/// exactly as [`macro@task`] is; `--no-default-features` drops it and the runtime
-/// dependency graph is unchanged (a proc-macro is never linked into the binary).
-///
-/// The derive (macro namespace) coexists with the [`StableName`] trait (type
-/// namespace) under this one name, the standard trait+derive pairing — `use
-/// dagr_core::StableName;` brings both into scope.
-#[cfg(feature = "macros")]
-pub use dagr_macros::StableName;
 #[cfg(feature = "test-kit")]
 pub use test_kit::{SingleTaskTest, TaskOutcome};

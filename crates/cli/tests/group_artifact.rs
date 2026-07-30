@@ -22,7 +22,7 @@
 //! grouped artifact; this suite covers the recording and fingerprint-neutrality
 //! halves.
 
-use dagr_cli::graph::{emit_graph, mask_generated_at, BuildProvenance};
+use dagr_cli::graph::{BuildProvenance, emit_graph, mask_generated_at};
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{RunContext, Task};
 use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};

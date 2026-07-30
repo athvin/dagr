@@ -83,9 +83,9 @@ fn metastore_init_creates_store_and_is_idempotent() {
 /// Open the store the CLI created and count how many of the five M7 tables exist,
 /// using the metastore crate directly (a small current-thread runtime).
 fn tokio_open_and_count_tables(path: &std::path::Path) -> usize {
+    use dagr_metastore::MetaStore;
     use dagr_metastore::schema::TABLES;
     use dagr_metastore::store::OpenMode;
-    use dagr_metastore::MetaStore;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

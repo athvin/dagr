@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use dagr_artifact::event_stream::{
-    record_consumed_inputs, record_durable_reference, record_durable_reference_meta,
     AttemptOutcomeRecord, ConsumedInput, DurableReferenceMeta, EventSink, EventStreamWriter,
     MonotonicClock, OutputProducedRecord, RunId, RunOutcome, RunStartedHeader, TerminalState,
+    record_consumed_inputs, record_durable_reference, record_durable_reference_meta,
 };
 use dagr_artifact::fold::fold_stream;
 

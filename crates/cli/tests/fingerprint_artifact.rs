@@ -11,11 +11,11 @@
 //! (`crates/core/tests/fingerprint.rs`); this suite is the artifact-surface half.
 
 use dagr_cli::graph::{
-    emit_graph, format_fingerprint_policy, format_fingerprint_structural, BuildProvenance,
+    BuildProvenance, emit_graph, format_fingerprint_policy, format_fingerprint_structural,
 };
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{RunContext, Task};
-use dagr_core::{Flow, NodePolicy, Pipeline, TaskError, FINGERPRINT_ALGORITHM_VERSION};
+use dagr_core::{FINGERPRINT_ALGORITHM_VERSION, Flow, NodePolicy, Pipeline, TaskError};
 use serde_json::Value;
 
 // === Fixture value + task types (author-declared stable names) =============
@@ -90,8 +90,12 @@ fn parse(json: &str) -> Value {
     serde_json::from_str(json).expect("emitted artifact is valid JSON")
 }
 
-fn header(pipeline: &Pipeline, gen: &str, prov: &BuildProvenance) -> Value {
-    let out = emit_graph(pipeline, "example-pipeline", gen, prov).expect("emits");
+// `generated_at`, matching the parameter it forwards to `emit_graph`. (It was
+// `gen`, which edition 2024 reserves as a keyword; renamed to the domain word
+// rather than escaped as `r#gen` — the escape would keep a name that says
+// nothing.)
+fn header(pipeline: &Pipeline, generated_at: &str, prov: &BuildProvenance) -> Value {
+    let out = emit_graph(pipeline, "example-pipeline", generated_at, prov).expect("emits");
     parse(&out)["header"].clone()
 }
 

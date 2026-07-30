@@ -22,13 +22,13 @@
 //! driver, no dispatch. The permit here is a test stand-in modelling the real
 //! ledger's release/hold contract, not the real ledger.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use dagr_core::context::{PipelineId, RunContext, RunId};
 use dagr_core::execution::{
-    run_attempt, run_attempt_with_timeout, AttemptEvent, AttemptEventSink, AttemptOutcome,
-    TimeoutDecision, ZombieObserver,
+    AttemptEvent, AttemptEventSink, AttemptOutcome, TimeoutDecision, ZombieObserver, run_attempt,
+    run_attempt_with_timeout,
 };
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
@@ -281,17 +281,12 @@ fn ctx_for(attempt: u32, max: u32) -> RunContext {
 /// their state is set, so a busy-poll loop drives them to completion.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
-    use std::sync::Arc as StdArc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: StdArc<Self>) {}
-        fn wake_by_ref(self: &StdArc<Self>) {}
-    }
-
-    let waker = Waker::from(StdArc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
+    // `Waker::noop()` rather than a hand-rolled `Wake` impl: the futures under
+    // test never yield, so nothing needs waking, and the stdlib no-op waker keeps
+    // this `block_on` dependency-free and allocation-free (clippy::noop_waker).
+    let mut cx = Context::from_waker(Waker::noop());
     let mut fut = pin!(fut);
     loop {
         if let Poll::Ready(out) = fut.as_mut().poll(&mut cx) {
@@ -610,14 +605,16 @@ fn exactly_one_attempt_outcome_record_for_a_timed_out_attempt() {
         "the single outcome record is a timeout"
     );
     // The per-transition companions are present: attempt-started + node-terminal.
-    assert!(sink
-        .events()
-        .iter()
-        .any(|e| matches!(e, AttemptEvent::AttemptStarted { .. })));
-    assert!(sink
-        .events()
-        .iter()
-        .any(|e| matches!(e, AttemptEvent::NodeTerminal { .. })));
+    assert!(
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, AttemptEvent::AttemptStarted { .. }))
+    );
+    assert!(
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, AttemptEvent::NodeTerminal { .. }))
+    );
 }
 
 // --- A well-behaved attempt within its timeout is unaffected ----------------

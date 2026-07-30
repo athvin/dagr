@@ -54,7 +54,7 @@ use dagr_core::assembly::NodePolicy;
 use dagr_core::binding::{BoundInput, Deps, ReceiveMode};
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{
-    run_attempt_caught, run_with_retries_caught, AttemptEventSink, NoJitter, RetryConfig,
+    AttemptEventSink, NoJitter, RetryConfig, run_attempt_caught, run_with_retries_caught,
 };
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::{Handle, NodeId};
@@ -62,8 +62,8 @@ use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::Task;
 
-use crate::driver::{drive, NodeRunner, RunConfig};
-use crate::run_store::{mint_run_id, FileSink, SystemClock};
+use crate::driver::{NodeRunner, RunConfig, drive};
+use crate::run_store::{FileSink, SystemClock, mint_run_id};
 
 /// The run's **slot registry**: node [id](NodeId) → that node's type-erased output
 /// slot (`Arc<Slot<Output>>` boxed as `Arc<dyn Any + Send + Sync>`).

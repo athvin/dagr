@@ -31,7 +31,13 @@
 # pipeline binary (C24). See the ADR for the full rationale.
 
 [workspace]
-resolver = "2"
+# resolver = "3" is the edition-2024 default and, more importantly, the
+# MSRV-AWARE resolver: it refuses to select a dependency version whose own
+# `rust-version` exceeds `[workspace.package].rust-version`, so a transitive
+# upgrade cannot silently raise dagr's declared minimum behind our back
+# (rust-skills `proj-msrv-declare`; ticket 109 / T94). Declared explicitly rather
+# than inherited from the edition so the choice is visible where the MSRV is.
+resolver = "3"
 members = [
     "crates/core",
     "crates/macros",
@@ -46,10 +52,19 @@ members = [
 # "Stability": MSRV pinned in the workspace) and MUST match the channel in
 # rust-toolchain.toml and the "MSRV" line in the README verbatim; bumping it is
 # a minor version bump that updates all three together.
+#
+# The pinned channel IS the MSRV, by design: the pin is what makes the trybuild
+# and UI-snapshot diagnostics byte-reproducible across machines, so the declared
+# minimum and the pinned toolchain cannot be different numbers. Moving the pin to
+# the newest stable therefore moves the declared minimum with it — recorded
+# deliberately by ticket 109 (T94), not a side effect.
+#
+# Six sites carry this pin; `scripts/check-edition-and-msrv-pins.sh` fails the
+# build if any of them disagrees.
 [workspace.package]
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.95.0"
+edition = "2024"
+rust-version = "1.97.1"
 license = "MIT"
 repository = "https://github.com/athvin/dagr"
 authors = ["dagr contributors"]
@@ -69,6 +84,7 @@ all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "warn"
+collapsible_if = "allow"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

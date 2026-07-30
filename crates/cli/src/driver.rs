@@ -74,9 +74,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, ConsumedInput, Event, EventSink, EventStreamWriter, MonotonicClock,
-    OutputProducedRecord, RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
-    FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, ConsumedInput, Event, EventSink, EventStreamWriter,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, OutputProducedRecord, RunOutcome,
+    RunStartedHeader, TerminalState as WireTerminalState,
 };
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
 use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};

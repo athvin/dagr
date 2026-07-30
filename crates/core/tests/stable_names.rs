@@ -7,7 +7,7 @@
 //! populate a node's [`StableTypeNames`]; the type-erased registrars leave it
 //! `None`).
 
-use dagr_core::stable_name::{is_well_formed, StableInputNames, StableName, UNIT_STABLE_NAME};
+use dagr_core::stable_name::{StableInputNames, StableName, UNIT_STABLE_NAME, is_well_formed};
 use dagr_core::task::{RunContext, Task};
 use dagr_core::{Flow, NodePolicy, TaskError};
 

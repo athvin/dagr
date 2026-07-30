@@ -35,8 +35,8 @@
 //! determinism test drives, kept in sync by review.
 
 use dagr_cli::graph::{
-    emit_graph, format_fingerprint_policy, format_fingerprint_structural, mask_generated_at,
-    BuildProvenance,
+    BuildProvenance, emit_graph, format_fingerprint_policy, format_fingerprint_structural,
+    mask_generated_at,
 };
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{RunContext, Task};

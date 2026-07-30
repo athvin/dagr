@@ -41,12 +41,12 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use dagr_artifact::event_stream::{EventSink, MonotonicClock, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::{EVENTS_FILE_NAME, EventSink, MonotonicClock};
 use dagr_artifact::fold::fold_stream;
-use dagr_cli::contract::{resume_verb, ResumeOptions, ResumeOutcome, TOOL_VERSION};
-use dagr_cli::driver::{drive, RunConfig};
+use dagr_cli::contract::{ResumeOptions, ResumeOutcome, TOOL_VERSION, resume_verb};
+use dagr_cli::driver::{RunConfig, drive};
 use dagr_cli::t63_demo::{
-    assemble, base_groups, build_runner_set, Blob, ConsumerFrom, DemoRun, PIPELINE,
+    Blob, ConsumerFrom, DemoRun, PIPELINE, assemble, base_groups, build_runner_set,
 };
 use dagr_core::assembly::DurableOutput;
 use dagr_core::context::{PipelineId, RunId as CoreRunId};

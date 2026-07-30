@@ -42,22 +42,22 @@ use std::process::ExitCode as ProcExit;
 use std::sync::Arc;
 
 use dagr_artifact::event_stream::{
-    record_durable_reference, AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock,
-    RunId as WireRunId, RunOutcome, RunStartedHeader, TerminalState as WireTerminalState,
-    EVENTS_FILE_NAME, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EVENTS_FILE_NAME, EventSink, EventStreamWriter,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId as WireRunId, RunOutcome,
+    RunStartedHeader, TerminalState as WireTerminalState, record_durable_reference,
 };
 use dagr_artifact::fold::fold_stream;
 use dagr_cli::contract::{
-    check_reserved_collision, exit_code_for_run, fold_verb, parse_cli, render_verb,
-    resume_verb_stub, single_node_refusal_check, validate_params, validate_verb, Cli, ExitCode,
-    ParamSpec, ParseOutcome, RenderFormat, Verb,
+    Cli, ExitCode, ParamSpec, ParseOutcome, RenderFormat, Verb, check_reserved_collision,
+    exit_code_for_run, fold_verb, parse_cli, render_verb, resume_verb_stub,
+    single_node_refusal_check, validate_params, validate_verb,
 };
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
-use dagr_cli::graph::{emit_graph, graph_verb, BuildProvenance};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_cli::graph::{BuildProvenance, emit_graph, graph_verb};
 use dagr_core::admission::PoolCapacities;
 use dagr_core::assembly::DurableOutput;
 use dagr_core::context::TerminalState;
-use dagr_core::execution::{run_attempt_caught, AttemptEvent, AttemptEventSink};
+use dagr_core::execution::{AttemptEvent, AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::stable_name::StableName;
@@ -450,7 +450,7 @@ impl StepClock {
 struct ClockRef<'a>(&'a StepClock);
 impl MonotonicClock for ClockRef<'_> {
     fn elapsed_ns(&self) -> u64 {
-        self.0 .0.get()
+        self.0.0.get()
     }
 }
 

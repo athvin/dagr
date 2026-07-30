@@ -76,17 +76,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
+use dagr_core::TaskError;
 use dagr_core::admission::PoolCapacities;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
-use crate::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use crate::driver::{NodeRunner, RunConfig, RunPlan, drive};
 
 /// The exact node count the benchmark exercises — the thousand-node ceiling the
 /// spec's performance envelope names (*"a thousand-node no-op graph"*). Fixed: the
@@ -436,12 +436,14 @@ mod tests {
     fn over_budget_is_none_under_and_at_the_threshold() {
         assert!(over_budget(500_000, CI_BUDGET_NS_PER_NODE, SCALE_NODE_COUNT).is_none());
         // Exactly at the threshold is under budget (<=), not a regression.
-        assert!(over_budget(
-            CI_BUDGET_NS_PER_NODE,
-            CI_BUDGET_NS_PER_NODE,
-            SCALE_NODE_COUNT
-        )
-        .is_none());
+        assert!(
+            over_budget(
+                CI_BUDGET_NS_PER_NODE,
+                CI_BUDGET_NS_PER_NODE,
+                SCALE_NODE_COUNT
+            )
+            .is_none()
+        );
     }
 
     #[test]

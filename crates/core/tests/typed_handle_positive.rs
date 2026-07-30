@@ -149,7 +149,7 @@ fn assert_sync<T: Sync>() {}
 fn passthrough<T>(handle: Handle<T>) -> Handle<T> {
     let taken = handle; // a Copy, not a move
     let reused = handle; // original still usable after a copy was taken
-                         // Both the copy and the reuse remain live — the point of Copy handles.
+    // Both the copy and the reuse remain live — the point of Copy handles.
     let _ = reused;
     taken
 }

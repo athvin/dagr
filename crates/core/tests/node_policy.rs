@@ -18,13 +18,13 @@
 
 use std::time::Duration;
 
+use dagr_core::TaskError;
 use dagr_core::assembly::{DurableOutput, EffectivePolicy, NodePolicy, ProblemKind};
 use dagr_core::binding::TriggerRule;
 use dagr_core::execution::Backoff;
 use dagr_core::flow::Flow;
 use dagr_core::handle::NodeId;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
-use dagr_core::TaskError;
 
 // --- Illustrative value + task types ----------------------------------------
 struct Rows;
@@ -584,10 +584,11 @@ fn durability_flag_arms_the_assembly_contract_check() {
         .finish()
         .assemble()
         .expect_err("durable without contract must fail");
-    assert!(err
-        .problems()
-        .iter()
-        .any(|p| p.kind() == ProblemKind::DurableWithoutContract));
+    assert!(
+        err.problems()
+            .iter()
+            .any(|p| p.kind() == ProblemKind::DurableWithoutContract)
+    );
 }
 
 // ---------------------------------------------------------------------------

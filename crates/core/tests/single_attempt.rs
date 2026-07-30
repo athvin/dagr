@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use dagr_core::context::{CancellationSource, PipelineId, RunContext, RunId};
-use dagr_core::execution::{run_attempt, AttemptEvent, AttemptEventSink, AttemptOutcome};
+use dagr_core::execution::{AttemptEvent, AttemptEventSink, AttemptOutcome, run_attempt};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
@@ -159,19 +159,12 @@ fn drive<T: Task<Input = (), Output = Report>>(
 /// the core is runtime-agnostic (this test only awaits).
 fn futures_lite_block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
-    use std::sync::Arc as StdArc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    /// A no-op waker: the test attempt futures never actually yield (the test
-    /// tasks do no real I/O), so waking is unnecessary and this busy-polls.
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: StdArc<Self>) {}
-        fn wake_by_ref(self: &StdArc<Self>) {}
-    }
-
-    let waker = Waker::from(StdArc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
+    // `Waker::noop()` rather than a hand-rolled `Wake` impl: the futures under
+    // test never yield, so nothing needs waking, and the stdlib no-op waker keeps
+    // this `block_on` dependency-free and allocation-free (clippy::noop_waker).
+    let mut cx = Context::from_waker(Waker::noop());
     let mut fut = pin!(fut);
     loop {
         // The attempt future resolves on the next poll (no real suspension), so
@@ -612,8 +605,8 @@ fn runnable_in_isolation_with_no_runtime() {
 /// it emits is attributable without correlating timestamps.
 #[test]
 fn the_span_opens_before_the_work_runs() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     // The work records whether a span carrying its node/attempt identity was
     // observable at the instant it ran.

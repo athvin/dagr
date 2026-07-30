@@ -38,7 +38,7 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
+use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, read_records};
 use dagr_cli::driver::RunConfig;
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::assembly::{DurableOutput, NodePolicy};

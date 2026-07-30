@@ -60,10 +60,10 @@
 //! records the resource types it requires at registration in a form bootstrap can
 //! validate against a registry and a graph artifact can later render.
 
-use std::any::{type_name, Any, TypeId};
+use std::any::{Any, TypeId, type_name};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::handle::NodeId;
 

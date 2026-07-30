@@ -51,12 +51,12 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
-use dagr_artifact::event_stream::{read_records, EventSink};
+use dagr_artifact::event_stream::{EventSink, read_records};
 use dagr_artifact::fold::fold_stream;
 
+use crate::MetaStore;
 use crate::mapping::sync_run_live;
 use crate::store::{OpenError, OpenMode, RetryPolicy};
-use crate::MetaStore;
 
 /// One projection request handed to the worker thread: the full raw event-stream
 /// bytes accumulated so far, and whether the stream has already carried its

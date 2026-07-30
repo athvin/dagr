@@ -20,14 +20,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock};
-use dagr_cli::contract::{exit_code_for_run, ExitCode};
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use dagr_cli::contract::{ExitCode, exit_code_for_run};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // --- injection seams --------------------------------------------------------
 

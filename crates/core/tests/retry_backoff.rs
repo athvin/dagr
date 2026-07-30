@@ -23,15 +23,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use dagr_core::TaskError;
 use dagr_core::context::{PipelineId, RunContext, RunId};
 use dagr_core::execution::{
-    run_with_retries, AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, NoJitter,
-    RetryConfig, SeededJitter,
+    AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, NoJitter, RetryConfig, SeededJitter,
+    run_with_retries,
 };
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // --- Typed value + task types ----------------------------------------------
 
@@ -193,7 +193,14 @@ impl RecordingTimer {
     }
     /// Produce the timer future for `delay`, recording it. Resolves immediately
     /// (no real sleep): the *schedule* is what the test asserts, not wall time.
-    fn timer(&self, delay: Duration) -> impl std::future::Future<Output = ()> {
+    ///
+    /// `+ use<>` captures **nothing**. Edition 2024 changed `-> impl Trait` to
+    /// capture every in-scope lifetime implicitly, which here would make the
+    /// returned future borrow `&self` for its whole life — it does not: the
+    /// recording happens eagerly, before the future is built, and the value
+    /// returned is a `Ready<()>` that holds no reference. Edition 2021's
+    /// capture-nothing behaviour is the intended one, so it is now spelled out.
+    fn timer(&self, delay: Duration) -> impl std::future::Future<Output = ()> + use<> {
         self.waited.lock().unwrap().push(delay);
         std::future::ready(())
     }
@@ -220,17 +227,12 @@ fn fresh_slot() -> Slot<Report> {
 /// a busy-poll loop drives them to completion.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
-    use std::sync::Arc as StdArc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: StdArc<Self>) {}
-        fn wake_by_ref(self: &StdArc<Self>) {}
-    }
-
-    let waker = Waker::from(StdArc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
+    // `Waker::noop()` rather than a hand-rolled `Wake` impl: the futures under
+    // test never yield, so nothing needs waking, and the stdlib no-op waker keeps
+    // this `block_on` dependency-free and allocation-free (clippy::noop_waker).
+    let mut cx = Context::from_waker(Waker::noop());
     let mut fut = pin!(fut);
     loop {
         if let Poll::Ready(out) = fut.as_mut().poll(&mut cx) {

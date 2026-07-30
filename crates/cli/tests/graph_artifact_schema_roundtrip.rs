@@ -14,8 +14,8 @@
 
 #![cfg(feature = "schema-validation")]
 
-use dagr_artifact::schema::{validate_value, ArtifactKind};
-use dagr_cli::graph::{emit_graph, graph_verb, BuildProvenance, GRAPH_SCHEMA_MAJOR};
+use dagr_artifact::schema::{ArtifactKind, validate_value};
+use dagr_cli::graph::{BuildProvenance, GRAPH_SCHEMA_MAJOR, emit_graph, graph_verb};
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
 use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};

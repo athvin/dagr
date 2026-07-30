@@ -7,7 +7,7 @@
 #
 # The job set mirrors the era-`ci` gate command list in the skill's
 # quality-gates.md §2 (and scripts/run_gate.sh ci), under the toolchain pinned
-# in rust-toolchain.toml (1.95.0):
+# in rust-toolchain.toml (1.97.1):
 #   * fmt            — cargo fmt --all --check
 #   * clippy         — cargo clippy --workspace --all-targets -- -D warnings
 #   * test           — cargo test --workspace
@@ -44,8 +44,16 @@ jobs:
   # --- Pinned-toolchain guard (arch.md "Stability" MSRV/toolchain) ------------
   # Installs the toolchain pinned in rust-toolchain.toml and asserts that rustup
   # resolves it as the active toolchain, so every other job — and T8's UI /
-  # compile-fail snapshot tests — runs deterministically on 1.95.0. Satisfies
+  # compile-fail snapshot tests — runs deterministically on 1.97.1. Satisfies
   # the Test-plan item "Pinned toolchain is honored".
+  #
+  # The second step (T94) closes the other half: rustup honouring the pin proves
+  # nothing if the pin itself has drifted out of step with the five OTHER places
+  # dagr writes it down (the manifest, rustfmt.toml, the README MSRV line, the
+  # stability gate, and the UI harness's `--edition`). A migration that updates
+  # five of six sites reviews clean and is wrong, so the agreement is asserted
+  # mechanically, tree-wide, with `docs/implementation/*.md` excluded as the
+  # historical record it is.
   toolchain:
     name: toolchain
     runs-on: ubuntu-latest
@@ -62,6 +70,8 @@ jobs:
             "${pinned}"*) echo "OK: active toolchain matches the pinned channel";;
             *) echo "MISMATCH: active '${active}' does not start with pinned '${pinned}'"; exit 1;;
           esac
+      - name: Every pin site agrees, and the edition-2024 surface holds
+        run: bash scripts/check-edition-and-msrv-pins.sh
 
   # --- Formatting -------------------------------------------------------------
   fmt:
@@ -109,7 +119,7 @@ jobs:
   #     source was found; the host-fallback tests (the correct macOS behaviour)
   #     stay in the run and must pass.
   #
-  # Both legs honour rust-toolchain.toml (rustup resolves the pinned 1.95.0 on
+  # Both legs honour rust-toolchain.toml (rustup resolves the pinned 1.97.1 on
   # every runner OS), so the T8 compile-fail UI snapshots are byte-stable on
   # both — DAGR_BLESS is unset, so a stale snapshot fails rather than being
   # rewritten. `cargo test --workspace` runs the UI harness
@@ -422,7 +432,7 @@ jobs:
       # Toolchain 2: a DIFFERENT channel. `+stable` overrides the pinned channel
       # for this one invocation, so the example is built and run by a second
       # rustc. (On the runner's default image `stable` differs from the pinned
-      # 1.95.0; if they ever coincide the diff still passes — equal is equal.)
+      # 1.97.1; if they ever coincide the diff still passes — equal is equal.)
       - name: Install a second toolchain (stable)
         run: rustup toolchain install stable --profile minimal
       - name: Fingerprint under the second toolchain

@@ -18,16 +18,16 @@ use std::io;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::event_stream::{
-    record_consumed_inputs, record_durable_reference, record_durable_reference_meta,
     AttemptOutcomeRecord, ConsumedInput, DurableReferenceMeta, EventSink, EventStreamWriter,
-    MonotonicClock, OutputProducedRecord, RunId, RunOutcome, RunStartedHeader, TerminalState,
-    FINGERPRINT_ALGORITHM_VERSION,
+    FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, OutputProducedRecord, RunId, RunOutcome,
+    RunStartedHeader, TerminalState, record_consumed_inputs, record_durable_reference,
+    record_durable_reference_meta,
 };
 use dagr_artifact::fold::fold_stream;
-use dagr_artifact::schema::{validate_bytes, validate_value, ArtifactKind};
+use dagr_artifact::schema::{ArtifactKind, validate_bytes, validate_value};
 
 #[derive(Clone, Default)]
 struct CaptureSink {

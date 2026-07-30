@@ -12,7 +12,7 @@ use std::process::ExitCode as ProcExit;
 mod t56_sample;
 
 use dagr_cli::contract::ParamSpec;
-use t56_sample::{dispatch_main, Sample};
+use t56_sample::{Sample, dispatch_main};
 
 fn main() -> ProcExit {
     dispatch_main(&Sample {

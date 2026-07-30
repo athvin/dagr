@@ -141,7 +141,10 @@ impl std::fmt::Display for FoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FoldError::CorruptRecord { line } => {
-                write!(f, "corrupt event-stream record at line {line} (not the tolerated trailing partial)")
+                write!(
+                    f,
+                    "corrupt event-stream record at line {line} (not the tolerated trailing partial)"
+                )
             }
             FoldError::MissingRunStarted => {
                 write!(f, "event stream has no run-started record; nothing to fold")

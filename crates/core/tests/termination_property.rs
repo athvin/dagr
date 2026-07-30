@@ -47,13 +47,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use dagr_core::TaskError;
 use dagr_core::binding::TriggerRule;
 use dagr_core::context::TerminalState;
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::{Handle, NodeId};
-use dagr_core::readiness::{evaluate_rule, Decision, ReadinessTracker, RuleOutcome};
+use dagr_core::readiness::{Decision, ReadinessTracker, RuleOutcome, evaluate_rule};
 use dagr_core::task::{RunContext, Task};
-use dagr_core::TaskError;
 
 // ===========================================================================
 // A tiny dependency-free, deterministic PRNG (SplitMix64).
@@ -561,12 +561,12 @@ fn check_case(case: &Case) -> Result<(), String> {
             None => {
                 return Err(format!(
                     "SINGLE-TERMINAL: node {name} has no terminal state"
-                ))
+                ));
             }
             Some(&state) if !is_taxonomy_state(state) => {
                 return Err(format!(
                     "SINGLE-TERMINAL: node {name} has off-taxonomy {state:?}"
-                ))
+                ));
             }
             Some(_) => {}
         }

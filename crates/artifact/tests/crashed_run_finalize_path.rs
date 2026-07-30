@@ -47,7 +47,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use dagr_artifact::event_stream::{read_records, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::{EVENTS_FILE_NAME, read_records};
 use dagr_artifact::fold::fold_stream;
 use serde_json::Value;
 

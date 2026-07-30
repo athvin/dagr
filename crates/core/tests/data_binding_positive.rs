@@ -14,10 +14,10 @@
 //! assertions inspect the recorded edges: order preserved, one edge per
 //! consumer, declared receive mode recorded verbatim, data-edge kind distinct.
 
+use dagr_core::TaskError;
 use dagr_core::binding::{DataEdge, Deps, EdgeKind, ReceiveMode, TriggerRule};
 use dagr_core::handle::Handle;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 use dagr_core::binding::test_support::register as source_and_bind;
 use dagr_core::binding::test_support::source;

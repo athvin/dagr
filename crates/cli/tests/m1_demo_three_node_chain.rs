@@ -57,18 +57,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dagr_artifact::event_stream::{read_records, EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, read_records};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{
-    run_attempt, run_with_retries_caught, AttemptEventSink, Backoff, NoJitter, RetryConfig,
+    AttemptEventSink, Backoff, NoJitter, RetryConfig, run_attempt, run_with_retries_caught,
 };
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // Injection seam: an in-memory run-store sink + a monotonic clock
@@ -989,7 +989,10 @@ fn the_walker_is_a_reusable_oracle_tolerating_a_truncated_tail() {
     let newlines: Vec<usize> = bytes
         .iter()
         .enumerate()
-        .filter(|(_, &b)| b == b'\n')
+        // `|&(_, &b)|`, not `|(_, &b)|`: edition 2024's match ergonomics reject an
+        // explicit `&` sub-pattern under an *implicitly* borrowing one, so the outer
+        // reference is matched explicitly too. Same binding, same semantics.
+        .filter(|&(_, &b)| b == b'\n')
         .map(|(i, _)| i)
         .collect();
     assert!(newlines.len() >= 2, "the stream has at least two records");

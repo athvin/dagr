@@ -46,13 +46,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use dagr_artifact::event_stream::{
-    AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId, RunOutcome,
-    RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EventSink, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION,
+    MonotonicClock, RunId, RunOutcome, RunStartedHeader, TerminalState,
 };
 use dagr_artifact::fold::fold_stream;
 use dagr_artifact::schema::{
-    assert_corpus_complete, check_corpus, corpus_versions, published_schema_versions,
-    schema_document_additive_violations, validate_value, ArtifactKind,
+    ArtifactKind, assert_corpus_complete, check_corpus, corpus_versions, published_schema_versions,
+    schema_document_additive_violations, validate_value,
 };
 
 // === helpers ===============================================================

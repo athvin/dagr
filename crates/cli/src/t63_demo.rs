@@ -46,7 +46,7 @@ use std::sync::Arc;
 
 use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt, run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};

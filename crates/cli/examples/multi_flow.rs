@@ -44,12 +44,12 @@
 
 use std::process::ExitCode;
 
-use dagr_cli::registry::{run_registry, FlowRegistry};
+use dagr_cli::registry::{FlowRegistry, run_registry};
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // --- Flow 1: `etl` — a two-node `extract -> load` pipeline. --------------------
 

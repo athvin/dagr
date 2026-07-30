@@ -36,10 +36,10 @@
 use std::collections::BTreeMap;
 
 use dagr_artifact::event_stream::RunOutcome;
-use dagr_artifact::fold::{fold_stream, PHASE_EXECUTING};
+use dagr_artifact::fold::{PHASE_EXECUTING, fold_stream};
 use dagr_cli::scale_bench::{
-    build_scale_graph, over_budget, run_scale_benchmark, CI_BUDGET_NS_PER_NODE, SCALE_NODE_COUNT,
-    SPEC_CEILING_NS_PER_NODE,
+    CI_BUDGET_NS_PER_NODE, SCALE_NODE_COUNT, SPEC_CEILING_NS_PER_NODE, build_scale_graph,
+    over_budget, run_scale_benchmark,
 };
 use dagr_core::admission::Pool;
 use dagr_core::context::TerminalState;

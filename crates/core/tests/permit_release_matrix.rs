@@ -285,7 +285,7 @@ fn permit_release_outcome_matrix_leaks_nothing_across_every_class_and_outcome() 
                     "zombie live before the closure returns"
                 );
                 assert_within_capacity(&ctrl, pinned_pools()); // capacity honoured WITH a live zombie
-                                                               // The closure finally returns → the permit drops → release now.
+                // The closure finally returns → the permit drops → release now.
                 drop(permit);
                 assert_eq!(ctrl.zombie_report().live_zombie_count, 0);
                 assert_all_pools_full(&ctrl);

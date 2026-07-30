@@ -8,12 +8,12 @@
 //! while the name stays **omittable** on the command line (`run` / `graph` /
 //! `validate` with no name dispatch the sole DAG, since it is the only flow).
 
-use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::DagRegistration;
+use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// A row-count payload with a declared stable name. This example asserts on the run
 /// outcome / store, not the produced value, so the wrapped count is unread.

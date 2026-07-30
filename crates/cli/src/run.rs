@@ -59,7 +59,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 
 use crate::contract::ExitCode;
-use crate::registry::{run_registry, FlowRegistry};
+use crate::registry::{FlowRegistry, run_registry};
 use crate::run_flow::RunnableFlow;
 
 /// A **discovered DAG registration** — the record a binary submits (one per DAG, via

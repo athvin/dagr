@@ -14,11 +14,11 @@
 //! feature and is run by CI with that feature on.
 #![cfg(feature = "schema-validation")]
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use dagr_artifact::schema::{
-    check_corpus, published_schema_versions, validate_value, ArtifactKind, SchemaValidationError,
-    CORPUS_DIR, SCHEMA_DIR,
+    ArtifactKind, CORPUS_DIR, SCHEMA_DIR, SchemaValidationError, check_corpus,
+    published_schema_versions, validate_value,
 };
 
 // === helpers ==============================================================
@@ -652,8 +652,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{
-    read_records, AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, MonotonicClock, RunId,
-    RunOutcome, RunStartedHeader, TerminalState, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, Event, EventSink, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION,
+    MonotonicClock, RunId, RunOutcome, RunStartedHeader, TerminalState, read_records,
 };
 
 /// An in-memory sink capturing every appended line in order.

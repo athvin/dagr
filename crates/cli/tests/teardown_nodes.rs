@@ -19,15 +19,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, CancelHandle, NodeRunner, RunConfig, RunPlan};
+use dagr_cli::driver::{CancelHandle, NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::Flow;
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam).

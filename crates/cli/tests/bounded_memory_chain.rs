@@ -68,14 +68,14 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{RedeemError, RedemptionHandle, ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // The test-only instrumented global allocator (allocator-level, NOT RSS)
@@ -149,9 +149,17 @@ fn alloc_guard() -> std::sync::MutexGuard<'static, ()> {
 // SAFETY: `Counting` forwards every call unchanged to the `System` allocator and
 // only updates two atomics around it; it adds no unsafety of its own beyond the
 // forwarding the `GlobalAlloc` contract already requires of `System`.
+//
+// Each method wraps its ONE forwarding call in its own `unsafe { }` block with
+// its own `// SAFETY:` note rather than leaning on the enclosing `unsafe fn` —
+// the edition-2024 posture (`unsafe_op_in_unsafe_fn` is deny-by-default), so the
+// atomic bookkeeping around each call reads as the plainly-safe code it is.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = System.alloc(layout);
+        // SAFETY: forwarding `alloc` with the caller's `layout` untouched — the
+        // non-zero-size and valid-alignment obligation the caller already owes
+        // this `unsafe fn` passes straight through to `System`.
+        let ptr = unsafe { System.alloc(layout) };
         if !ptr.is_null() {
             let now = LIVE.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
             bump_peak(now);
@@ -159,11 +167,17 @@ unsafe impl GlobalAlloc for Counting {
         ptr
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        System.dealloc(ptr, layout);
+        // SAFETY: forwarding `dealloc` with the caller's `ptr` and `layout`
+        // untouched. `ptr` is by contract a live block of exactly `layout` from
+        // *this* allocator, and since every allocating arm forwards to `System`
+        // unchanged, that is the same block set `System.dealloc` requires.
+        unsafe { System.dealloc(ptr, layout) };
         LIVE.fetch_sub(layout.size(), Ordering::SeqCst);
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let ptr = System.alloc_zeroed(layout);
+        // SAFETY: forwarding `alloc_zeroed` with the caller's `layout` untouched;
+        // the same obligation as `alloc` above, carried through unchanged.
+        let ptr = unsafe { System.alloc_zeroed(layout) };
         if !ptr.is_null() {
             let now = LIVE.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
             bump_peak(now);
@@ -171,7 +185,10 @@ unsafe impl GlobalAlloc for Counting {
         ptr
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_ptr = System.realloc(ptr, layout, new_size);
+        // SAFETY: forwarding `realloc` with the caller's `ptr`, `layout`, and
+        // `new_size` untouched. The bookkeeping below only reads the two sizes; it
+        // never dereferences either pointer.
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
         if !new_ptr.is_null() {
             if new_size >= layout.size() {
                 let now = LIVE.fetch_add(new_size - layout.size(), Ordering::SeqCst)

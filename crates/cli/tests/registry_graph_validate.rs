@@ -12,17 +12,17 @@
 //! maps its **own** `ExitCode`/error type — never through `exit_code_for_run`,
 //! which is reserved for a completed `RunReport`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dagr_cli::contract::ExitCode;
 use dagr_cli::graph::{graph_verb, mask_generated_at};
-use dagr_cli::registry::{run_registry_to, FlowRegistry};
+use dagr_cli::registry::{FlowRegistry, run_registry_to};
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // Test tasks — two distinct stable-name-aware flows named `etl` and `analytics`.

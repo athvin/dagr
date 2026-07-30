@@ -41,13 +41,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, EVENTS_FILE_NAME};
+use dagr_artifact::event_stream::{EVENTS_FILE_NAME, EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::RunConfig;
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// The pipeline identity this demo runs under (feeds the run-store path).
 const PIPELINE: &str = "run-a-flow-demo";

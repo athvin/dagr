@@ -42,13 +42,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, NodeRunner, RunConfig, RunPlan};
+use dagr_cli::driver::{NodeRunner, RunConfig, RunPlan, drive};
+use dagr_core::TaskError;
 use dagr_core::context::{RunContext, TerminalState};
-use dagr_core::execution::{run_attempt, run_attempt_caught, AttemptEventSink};
+use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // A capturing in-memory run-store sink + monotonic clock (injection seam)

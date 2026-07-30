@@ -113,6 +113,55 @@ where 2024's capture and match-ergonomics changes could alter which error the
 compiler reaches first — that is a finding to report and resolve in this ticket,
 not to absorb into the snapshot.
 
+### Resolutions recorded at implementation (2026-07-29)
+
+The migration surfaced four decisions the ticket did not pre-answer. Each is
+resolved here rather than left implicit in a diff.
+
+1. **The snapshot outcome.** Nothing was behaviour-changed and nothing needed
+   regenerating: **47** `.stderr` files exist on disk, of which **44** are the
+   tracked, reviewable corpus (30 `crates/core/tests/ui/`, 4
+   `crates/cli/tests/ui/flow_builder/fail/`, 10
+   `crates/macros/tests/expand/fail/`) and **3** are stale, git-ignored
+   `crates/macros/wip/` trybuild scratch left by a run in July — not corpus, and
+   untouched by this ticket. All 44 pass **unchanged** under 1.97.1 / edition
+   2024: the 14 trybuild snapshots match byte-exactly (and the generated trybuild
+   project reports `edition = "2024"`, so the corpus really is exercised under the
+   new edition), and all 30 core substring snapshots are satisfied by the current
+   diagnostics. Classification: **44 reviewed / 44 wording-only-or-unchanged / 0
+   behaviour-changed.** No fixture newly compiles — both harnesses hard-assert
+   compile failure, so a lost compile-time guarantee could not pass silently.
+2. **`DAGR_BLESS` was deliberately not used on the core corpus.** Its blessing
+   path derives a snapshot's substring list from the first ``expected `` `` /
+   ``found `` `` markers in the diagnostic, which only exist for `E0308`. Run, it
+   *panics* on the first sample (a trait-bound error with no such markers) rather
+   than writing anything — confirmed, no file changed. For this corpus
+   "regenerate" is not a meaningful operation: the substring lists are
+   hand-curated, blessing would narrow them, and the frozen check is the real
+   gate. The frozen check passes.
+3. **`scripts/check-stability-and-criteria.sh` could not take the new literal.**
+   Its MSRV assertion is scoped to the ADR embedded in ticket 005 — a historical
+   record this ticket's DoD forbids rewriting — so a new hardcoded version would
+   have forced that rewrite. The assertion is now *structural* (the ADR names
+   exactly **one** concrete version, which is what T0.10's test plan asked:
+   "stated and singular"), plus two new assertions on the **live** pin read from
+   `rust-toolchain.toml`. No version literal remains in the script to go stale.
+4. **`clippy::collapsible_if` is moved to `allow`.** Under edition 2024 its fix
+   for `if let A { if let B { … } }` *is* a let-chain, so denying it would force
+   let-chain adoption at 25 sites — precisely what Out of scope defers. Recorded
+   in `lints.toml`, the manifest, and `docs/lint-policy.md`'s exception table;
+   re-denying that one lint is how the adopting ticket finds its work list. Chosen
+   over 25 scattered `#[allow]`s (one reviewable decision, not ~125 lines of
+   boilerplate) and over adopting let-chains (out of scope).
+
+Two smaller findings, for the record: the ticket names "two test allocators", but
+`crates/core/tests/node_metrics.rs` has no `unsafe fn` of its own — it installs
+`dagr-core`'s allocator, so the only two `GlobalAlloc` impls needing migration are
+in `crates/core/src/metrics.rs` and `crates/cli/tests/bounded_memory_chain.rs`.
+And the unsafe surface was **larger** than the ticket anticipated: edition 2024
+also makes `std::env::set_var`/`remove_var` `unsafe fn`s, adding 44 call sites
+across four files.
+
 ## Out of scope
 
 - Adopting let-chains, `unsafe extern` blocks, or `#[unsafe(no_mangle)]` at call

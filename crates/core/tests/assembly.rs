@@ -11,11 +11,11 @@
 //! Capacity/cost-fit and the actual capture of allowlisted environment values
 //! are **bootstrap** concerns, deliberately NOT here.
 
+use dagr_core::TaskError;
 use dagr_core::assembly::{AssemblyArtifact, DurableOutput, NodePolicy, ProblemKind};
 use dagr_core::flow::Flow;
 use dagr_core::handle::NodeId;
 use dagr_core::task::{ExecutionClass, RunContext, Task};
-use dagr_core::TaskError;
 
 // --- Illustrative value + task types ----------------------------------------
 struct Rows;
@@ -161,10 +161,11 @@ fn empty_pipeline_is_rejected() {
         .finish()
         .assemble()
         .expect_err("empty pipeline must fail assembly");
-    assert!(err
-        .problems()
-        .iter()
-        .any(|p| p.kind() == ProblemKind::EmptyPipeline));
+    assert!(
+        err.problems()
+            .iter()
+            .any(|p| p.kind() == ProblemKind::EmptyPipeline)
+    );
 }
 
 // ---------------------------------------------------------------------------

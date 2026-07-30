@@ -216,7 +216,9 @@ fn the_docs_claim_nothing_unshipped() {
     let cs = normalize_ws(&cookbook).to_lowercase();
     if cs.contains("server") {
         assert!(
-            cs.contains("no server") || cs.contains("not a server") || cs.contains("without a server"),
+            cs.contains("no server")
+                || cs.contains("not a server")
+                || cs.contains("without a server"),
             "if the cookbook mentions a server it must be to say there is none (embedded local access only)"
         );
     }

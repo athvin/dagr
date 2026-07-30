@@ -31,16 +31,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::driver::{drive, CancelHandle, NodeRunner, RunConfig, RunPlan, ShutdownExit};
-use dagr_cli::signals::{route_signal, SignalRouter};
+use dagr_cli::driver::{CancelHandle, NodeRunner, RunConfig, RunPlan, ShutdownExit, drive};
+use dagr_cli::signals::{SignalRouter, route_signal};
 use dagr_cli::temp::{
     cleanup_temp_dir, create_temp_dir, per_run_temp_dir, reclaim_leftover_temp_dirs,
 };
+use dagr_core::TaskError;
 use dagr_core::context::{CancellationOrigin, RunContext, TerminalState};
 use dagr_core::execution::AttemptEventSink;
 use dagr_core::flow::Flow;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // In-memory + faulting sinks and a deterministic clock (the injection seam).
@@ -424,6 +424,11 @@ impl Task for RaiseThenWait {
                       prove the installed handler catches it; safe because the \
                       handler is installed first so the signal is caught, not fatal"
         )]
+        // SAFETY: `libc::raise` is an FFI call with no pointer arguments and no
+        // memory obligations — `self.sig` is one of the SIGTERM/SIGINT constants
+        // this fixture is constructed with, so the signal number is valid. The
+        // handler under test is installed *before* the task runs, so the signal is
+        // caught rather than taking the default fatal action.
         unsafe {
             libc::raise(self.sig);
         }

@@ -22,9 +22,9 @@ use std::time::Duration;
 
 use dagr_core::context::{PipelineId, RunContext, RunId};
 use dagr_core::execution::{
+    AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, NoJitter, PanicStrategy, RetryConfig,
     check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt_caught,
-    run_with_retries_caught, AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, NoJitter,
-    PanicStrategy, RetryConfig,
+    run_with_retries_caught,
 };
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot};
@@ -140,16 +140,12 @@ fn ctx_for(node: &str, attempt: u32, max: u32) -> RunContext {
 /// no runtime.
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
-    use std::sync::Arc as StdArc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: StdArc<Self>) {}
-        fn wake_by_ref(self: &StdArc<Self>) {}
-    }
-    let waker = Waker::from(StdArc::new(NoopWaker));
-    let mut cx = Context::from_waker(&waker);
+    // `Waker::noop()` rather than a hand-rolled `Wake` impl: the futures under
+    // test never yield, so nothing needs waking, and the stdlib no-op waker keeps
+    // this `block_on` dependency-free and allocation-free (clippy::noop_waker).
+    let mut cx = Context::from_waker(Waker::noop());
     let mut fut = pin!(fut);
     loop {
         if let Poll::Ready(out) = fut.as_mut().poll(&mut cx) {

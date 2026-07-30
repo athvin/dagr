@@ -36,11 +36,11 @@
 use std::path::{Path, PathBuf};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
-use dagr_artifact::fold::{fold_stream, AttemptRecord, ProducedOutput, RunArtifact};
+use dagr_artifact::fold::{AttemptRecord, ProducedOutput, RunArtifact, fold_stream};
 use serde_json::Value;
 
-use crate::store::WriteError;
 use crate::MetaStore;
+use crate::store::WriteError;
 
 /// The outcome of a [`sync_run_store`] pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

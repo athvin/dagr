@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use dagr_cli::graph::BuildProvenance;
 use dagr_cli::structure_snapshot::{
-    assert_structure, bless_structure, StructureAssertError, StructureSnapshot,
+    StructureAssertError, StructureSnapshot, assert_structure, bless_structure,
 };
 use dagr_core::stable_name::StableName;
 use dagr_core::task::{ExecutionClass, RunContext, Task};

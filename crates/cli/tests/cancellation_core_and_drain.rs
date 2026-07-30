@@ -22,16 +22,16 @@ use std::time::{Duration, Instant};
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::{
-    drive, shutdown_budget, CancelHandle, NodeRunner, RunConfig, RunPlan, DEFAULT_FINAL_FLUSH,
-    DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE,
+    CancelHandle, DEFAULT_FINAL_FLUSH, DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE, NodeRunner,
+    RunConfig, RunPlan, drive, shutdown_budget,
 };
+use dagr_core::TaskError;
 use dagr_core::assembly::NodePolicy;
 use dagr_core::binding::TriggerRule;
 use dagr_core::context::{CancellationOrigin, RunContext, TerminalState};
 use dagr_core::execution::AttemptEventSink;
 use dagr_core::flow::{FailureMode, Flow};
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam).

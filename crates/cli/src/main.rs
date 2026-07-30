@@ -20,15 +20,15 @@ use std::io::{self, Read};
 use std::process::ExitCode as ProcExit;
 
 use dagr_cli::contract::{
-    banner_suppressed_by_env, fold_verb, parse_cli, print_banner, render_verb, resume_verb_stub,
-    split_banner_flag, ExitCode, ParseOutcome, RenderFormat, Verb,
+    ExitCode, ParseOutcome, RenderFormat, Verb, banner_suppressed_by_env, fold_verb, parse_cli,
+    print_banner, render_verb, resume_verb_stub, split_banner_flag,
 };
-use dagr_cli::registry::{run_registry, FlowRegistry};
+use dagr_cli::registry::{FlowRegistry, run_registry};
 use dagr_cli::run_flow::RunnableFlow;
+use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
-use dagr_core::TaskError;
 
 /// The reference driver's trivial single-node flow — a consume-nothing source that
 /// succeeds. It carries no real pipeline (that is a pipeline crate's job), but a

@@ -33,7 +33,7 @@
 //! # Pinned toolchain
 //!
 //! Snapshots are pinned to the single workspace toolchain
-//! (`rust-toolchain.toml`, currently 1.95.0). The harness compiles each sample
+//! (`rust-toolchain.toml`, currently 1.97.1). The harness compiles each sample
 //! with the `rustc` that sits beside the `cargo` running the test (`$CARGO`),
 //! which under this workspace is exactly the pinned toolchain — so diagnostic
 //! output is deterministic. Multi-toolchain or multi-platform snapshot matrices
@@ -182,8 +182,12 @@ fn compile_sample(sample: &Path) -> (String, bool) {
     ));
 
     let mut cmd = Command::new(pinned_rustc());
+    // Must track `[workspace.package].edition` in the root Cargo.toml: the
+    // samples exist to pin the diagnostics dagr's *shipped* edition produces, so
+    // a lagging value here would quietly check the whole corpus under an edition
+    // nothing is built with (asserted by scripts/check-edition-and-msrv-pins.sh).
     cmd.arg("--edition")
-        .arg("2021")
+        .arg("2024")
         .arg("--crate-type")
         .arg("bin")
         .arg("--color")

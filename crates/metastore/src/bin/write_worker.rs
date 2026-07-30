@@ -64,8 +64,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dagr_metastore::store::{OpenMode, RetryPolicy, WriteError};
 use dagr_metastore::MetaStore;
+use dagr_metastore::store::{OpenMode, RetryPolicy, WriteError};
 
 /// Exit code meaning "a write exhausted the bounded `SQLITE_BUSY` retry cap and
 /// surfaced a hard error" — a *visible wedge*, distinct from any other failure.

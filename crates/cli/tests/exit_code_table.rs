@@ -12,7 +12,7 @@
 //! diff — the table is documented in one place and never changes within a major
 //! version.
 
-use dagr_cli::contract::{exit_code_for_run, ExitCode};
+use dagr_cli::contract::{ExitCode, exit_code_for_run};
 use dagr_cli::driver::{OverallOutcome, RunReport, ShutdownExit};
 use dagr_core::context::{CancellationOrigin, TerminalState};
 

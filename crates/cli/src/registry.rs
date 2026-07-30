@@ -63,7 +63,7 @@ use dagr_artifact::event_stream::EVENTS_FILE_NAME;
 use dagr_core::flow::Pipeline;
 
 use crate::contract::{
-    exit_code_for_run, parse_cli, split_banner_flag, validate_verb, ExitCode, ParseOutcome, Verb,
+    ExitCode, ParseOutcome, Verb, exit_code_for_run, parse_cli, split_banner_flag, validate_verb,
 };
 use crate::graph::graph_verb;
 use crate::run_flow::RunnableFlow;
@@ -74,7 +74,7 @@ use crate::run_flow::RunnableFlow;
 // its streams stay byte-identical.
 #[cfg(not(feature = "metastore"))]
 use crate::run_store::FileSink;
-use crate::run_store::{mint_run_id, TickClock, DEFAULT_STORE_BASE};
+use crate::run_store::{DEFAULT_STORE_BASE, TickClock, mint_run_id};
 
 /// The library-owned flag naming the run-store base for a `run <flow>` invocation
 /// (the reserved `--store`, [`reserved_flag_names`](crate::contract::reserved_flag_names)).

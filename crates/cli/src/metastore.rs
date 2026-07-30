@@ -23,9 +23,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dagr_metastore::mapping::{sync_run_store, SyncSummary};
-use dagr_metastore::store::OpenMode;
 use dagr_metastore::MetaStore;
+use dagr_metastore::mapping::{SyncSummary, sync_run_store};
+use dagr_metastore::store::OpenMode;
 
 use crate::contract::ExitCode;
 

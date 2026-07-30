@@ -54,9 +54,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dagr_artifact::event_stream::{
-    read_records, AttemptOutcomeRecord, EventSink, EventStreamWriter, MonotonicClock, RunId,
-    RunOutcome, RunStartedHeader, SinkFault, TerminalState, EVENTS_FILE_NAME,
-    EVENT_STREAM_SCHEMA_VERSION, EVENT_STREAM_UNWRITABLE, FINGERPRINT_ALGORITHM_VERSION,
+    AttemptOutcomeRecord, EVENT_STREAM_SCHEMA_VERSION, EVENT_STREAM_UNWRITABLE, EVENTS_FILE_NAME,
+    EventSink, EventStreamWriter, FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId, RunOutcome,
+    RunStartedHeader, SinkFault, TerminalState, read_records,
 };
 
 // ===========================================================================
