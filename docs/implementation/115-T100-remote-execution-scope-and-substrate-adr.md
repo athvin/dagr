@@ -206,10 +206,30 @@ authoring and then made true.
   012 and 014 — the operator **accepted on 2026-07-29** ("ya I accept those"). The
   ADR is `Accepted`; the loop may ship it without halting. No other contested
   decisions.
-- **Milestone ordering.** M9 (tickets 110–114 / T95–T99) is unfinished at the time
-  of writing. Ticket numbering must stay a valid topological order; M10 numbering
-  starts at 115 and does not collide, but whether M10 work begins before M9 lands
-  is the operator's call, recorded in-PR.
+- **Milestone ordering — RESOLVED, moot (recorded per §5).** M9 (tickets 110–114 /
+  T95–T99) was unfinished when this ticket was written, so it asked whether M10
+  should begin before M9 landed. It did not have to: **all five M9 tickets merged
+  first**, T99's acceptance gate (ticket 114) last, and T100 opened only afterwards.
+  No reordering was exercised, no operator call was needed, and ticket numbering
+  stayed a valid topological order — every dependency of 115 has a strictly lower
+  NNN and is checked off. The question is recorded closed rather than deleted,
+  because the *rule* it protects (numbering is a topological order) is what a later
+  M10 ticket inherits.
+- **Where the amendment actually landed — RESOLVED, recorded (per §5).** The
+  artifacts this ticket is chartered to produce — the embedded ADR below, the
+  `arch.md` amendment and its changelog entry, the two partial-supersession notes on
+  ADRs 012 and 014, the `README.md` / `CONTRIBUTING.md` de-staling, the SL7 matrix
+  rewording, the three process gates, and the additive `@1.3` event-stream schema
+  revision — were authored and **merged ahead of this branch**, in PR #116 (ticket
+  111 · T96, commit `126cdcb`), alongside the M10/M11 ticket set they belong to.
+  Nothing was re-decided or rewritten here: this branch adds only the mechanical
+  **pinning check** the Test plan describes
+  (`scripts/check-remote-execution-scope-adr.sh`, wired into CI's "ADR content
+  contracts" job), which asserts every one of those artifacts still says what this
+  ADR decided — and, load-bearingly, that the carve-out has not widened. Recorded
+  here because the ticket's own "the diff touches only …" line assumes the amendment
+  lands *on this branch*, and a reader comparing the two would otherwise conclude
+  the work was skipped; see `docs/implementation/DEVIATIONS.md`.
 
 ## Out of scope
 

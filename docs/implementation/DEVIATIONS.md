@@ -309,3 +309,92 @@ makes the rule explicit: *"If the behavioural-identity comparison finds a
 difference, the gate fails and the difference is investigated — it is not
 reclassified as an accepted change at gate time."* That rule is preserved intact;
 only the capture mechanism differs from the sentence's assumed sequencing.
+
+---
+
+## 2026-07-30 · 115 (T100) — the ADR's pinning check lives in `scripts/`, outside the DoD's path list
+
+**Quoted DoD line.** *"The diff touches only `docs/**`, `README.md`,
+`CONTRIBUTING.md`, and `schemas/event-stream/v1.schema.json` — **no `crates/**`,
+no `Cargo.lock**`."*
+
+**Deviation.** This branch also adds `scripts/check-remote-execution-scope-adr.sh`
+and one `bash scripts/…` run line in `.github/workflows/ci.yml`. Neither path is in
+the list the DoD line enumerates.
+
+**Rationale.** The line's *subject* is production code, and that half is honoured
+exactly: no `crates/**` file and no `Cargo.lock` entry changes, and the decision
+ships no remote-execution code (T101+ owns all of it). What the enumeration cannot
+be read literally to forbid is the ticket's own Test plan, which opens *"the 'tests'
+are mechanical file/content assertions"* and then lists nine of them — ADR
+completeness, exclusions intact, supersession recorded, the additive `@1.3` schema
+shape, criterion 7 still `[machine]`-classed, the matrices' row counts, the
+de-staled non-goals sentence. The repo keeps assertions of exactly that shape in
+`scripts/check-*-adr.sh`; twelve already exist and CI runs them in one step. The
+same line's siblings also fall outside its own list (it requires edits to
+`.claude/skills/…/SKILL.md`, `references/ticket-conventions.md`,
+`.github/pull_request_template.md`, `crates/core/README.md`, and
+`crates/cli/examples/quickstart.rs`), so the enumeration is a no-production-code
+statement rather than an exhaustive path allowlist. The `ci.yml` line is not
+optional: `crates/cli/tests/ci_and_test_hygiene.rs` fails any `scripts/check-*.sh`
+the workflow does not invoke, precisely so a checker cannot rot into a comment.
+
+**Operator decision.** Traces to the standing instruction for this ticket — *"this
+ticket ships a decision and its pinning checks only"* — and to the ADR's own
+premise that a moved *permanent* boundary must be held by something that fails when
+it widens, which is also what T112's boundary proof will do for shipped code
+(`docs/implementation/127-T112-m10-acceptance-gate.md`: *"the only thing keeping
+that carve-out narrow is a test that fails when it widens"*). Scope is respected in
+the other direction too: T112 keeps every *structural* invariant over code (no
+listener, no metastore link in a pod, zero-dep core, no HTTP/TLS stack in a default
+build); this checker asserts only the decision's text.
+
+---
+
+## 2026-07-30 · 115 (T100) — the ADR body, the arch.md amendment, the supersessions and the `@1.3` schema landed in PR #116, ahead of this branch
+
+**Quoted DoD lines (the artifact-producing ones, abbreviated).** *"This file
+contains an ADR with **Status / Context / Decision / Consequences / Rejected
+alternatives** sections …"*; *"`arch.md`'s permanent-non-goals sentence is amended
+to permit a single orchestrator placing attempts on remote compute for one run …"*;
+*"`arch.md`'s 'Amendment changelog' carries an entry for this decision."*; *"ADR 012
+is marked 'Superseded (in part) by ADR 115' … ADR 014 likewise …"*;
+*"`schemas/event-stream/v1.schema.json` adds the `attempt-submitted` kind and its
+conditional payload as `@1.3` …"*; *"`README.md` and `CONTRIBUTING.md` carry the
+amended non-goals sentence."*; *"System-level criterion 7 is amended in place …"*;
+*"The three process gates … name both carve-outs …"* — together with the framing
+line *"The diff touches only `docs/**`, `README.md`, `CONTRIBUTING.md`, and
+`schemas/event-stream/v1.schema.json`"*, which assumes those edits land **here**.
+
+**Deviation.** Every one of those artifacts already exists on `main`. They were
+authored and merged **ahead of this branch**, in **PR #116** (ticket 111 · T96,
+commit `126cdcb`), alongside the M10/M11 ticket set they belong to: the embedded ADR
+in this ticket file, the `arch.md` permanent-non-goals amendment and its dated
+Amendment-changelog entry, the criterion-7 in-place amendment, the two partial
+supersessions on ADRs 012 and 014, the `README.md` / `CONTRIBUTING.md` de-staling,
+the SL7 matrix rewording, the three process gates, and the additive `@1.3`
+event-stream schema revision. This branch therefore adds **none** of them. What it
+adds is the mechanical pinning check the Test plan describes —
+`scripts/check-remote-execution-scope-adr.sh`, wired into CI's "ADR content
+contracts" job — which asserts that every one of those artifacts still says what the
+ADR decided, and, load-bearingly, that the carve-out has not widened.
+
+**Rationale.** Nothing was re-decided, re-authored, or rewritten here, which is the
+outcome ticket-conventions §10 wants: merged decision text is never rewritten, so
+re-emitting the ADR body on this branch would have been the *worse* option. The
+substance of each DoD line is satisfied on `main` and is now, for the first time,
+**enforced** rather than merely present — the checker fails if the permanent-non-goals
+sentence loses an exclusion, if either supersession note is dropped or an older
+ADR-097 note is overwritten, if criterion 7 loses its `[machine]` class or its
+unconditional "no dagr server" half, if a pre-`@1.3` event kind leaves the enum, or if
+a Rejected-alternatives bullet is flipped from "Still rejected, unchanged" to
+permitted. Recorded here because a reader diffing this branch against the DoD would
+otherwise conclude the chartered work was skipped.
+
+**Operator decision.** Traces to this ticket's own §Open questions, third bullet
+("Where the amendment actually landed — RESOLVED, recorded (per §5)"), which points
+at this file, and to the operator's dated acceptance of the boundary amendment
+itself on 2026-07-29 recorded in the ADR's §Status. The sequencing — M10/M11 ticket
+authorship landing before the decision ticket that formalises it — was the
+orchestrator's, under the same standing autonomous-loop split recorded in the 002
+entry above.

@@ -856,6 +856,17 @@ jobs:
           bash scripts/check-error-taxonomy-adr.sh
           bash scripts/check-artifact-serialization-format-adr.sh
           bash scripts/check-typed-handle-encoding-adr.sh
+      # The boundary amendments. ADR 115 (T100) MOVED a non-goal arch.md calls
+      # permanent, and a carve-out is only as narrow as the thing that fails when
+      # it widens. This checker pins both halves: the permitted shape (ONE
+      # orchestrator, one graph, one event stream, one run) and — the load-bearing
+      # half — the list of things that are still a violation (cooperating
+      # orchestrators, work-stealing, cross-run queues, a control plane outliving a
+      # run, an inbound listener, a served database, a pod touching the run index,
+      # runtime graph expansion). It also holds the substrate decisions T101–T112
+      # inherit, so a later ticket cannot re-decide one of them in passing.
+      - name: ADR content contracts (boundary amendments)
+        run: bash scripts/check-remote-execution-scope-adr.sh
 
   # --- The SYSTEM ACCEPTANCE GATE (system-level acceptance, T65) --------------
   # The terminal required gate. It is RED unless every constituent is green: the
