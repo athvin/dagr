@@ -243,11 +243,85 @@ fi
 # has to say something true.
 #
 # The DESIGN invariant behind it is the durable one, and it is stronger: the ADR
-# places tokio in the crate that owns the run loop and never in `dagr-core`,
-# whose runtime dependency set is empty by architectural commitment (arch.md
-# "Stability"; ADR 081/082). So the scan is re-pointed at that boundary — a
-# tokio edge on core is now the failure, and the absence of one anywhere is too,
-# because a decision nothing implements is not a decision.
+# places tokio in the crate that owns the run loop, and every other crate must
+# justify an edge or not have one. So the scan is re-pointed at that boundary and
+# expressed as an ALLOWLIST over every workspace member, not as a scan narrowed
+# to one crate. Narrowing it to `crates/core` would defend the zero-dependency
+# guarantee and nothing else — a tokio edge appearing on `render`, `artifact` or
+# `macros` would pass unremarked, which is the ADR's placement decision going
+# unenforced everywhere except the one crate that was never going to break it.
+#
+# Each name on the allowlist is a decision, recorded here rather than by making
+# the scan blind:
+#   cli       — owns the run loop; this is the ADR's placement (T9/T33).
+#   metastore — the opt-in embedded run index. `libsql`'s API is async, so the
+#               crate needs a runtime to drive it; the whole crate is behind the
+#               default-off `metastore` feature (ADR 097 §5), so a default build
+#               resolves no tokio through it.
+# Anything else is a violation, including `dagr-core`, whose runtime dependency
+# set is empty by architectural commitment (arch.md "Stability"; ADR 081/082).
+tokio_allowed="cli metastore"
+
+# Emits one line per tokio edge outside the allowlist, scanning every
+# `<root>/<crate>/Cargo.toml`. Emits the sentinel `__NO_MANIFESTS__` when the
+# glob matched nothing, so "no output" can never be read as "no violations".
+# This function IS the predicate, and the probe below drives it rather than
+# re-deriving it — a probe that re-implements the rule cannot fail when the rule
+# is broken, which is the failure mode this whole repair is about.
+scan_tokio_edges() {
+  _root=$1
+  _n=0
+  for _manifest in "$_root"/*/Cargo.toml; do
+    [ -f "$_manifest" ] || continue
+    _n=$((_n + 1))
+    _crate=${_manifest%/Cargo.toml}
+    _crate=${_crate##*/}
+    grep -qiE '^[[:space:]]*tokio[[:space:]]*=' "$_manifest" || continue
+    case " $tokio_allowed " in
+      *" $_crate "*) ;;
+      *) printf '%s (%s)\n' "$_crate" "$_manifest";;
+    esac
+  done
+  [ "$_n" -eq 0 ] && printf '__NO_MANIFESTS__\n'
+  return 0
+}
+
+offending=$(scan_tokio_edges crates)
+case "$offending" in
+  __NO_MANIFESTS__*)
+    bad "scope: no crates/*/Cargo.toml was scanned — the tokio-placement check is vacuous";;
+  "")
+    pass "scope: tokio appears only in {$tokio_allowed} across every workspace crate (ADR placement)";;
+  *)
+    bad "scope: tokio edge on a crate the ADR does not place a runtime in (allowed: $tokio_allowed):"
+    printf '%s\n' "$offending" | sed 's/^/        /';;
+esac
+
+# The scan is non-vacuous, proved by running it against a synthetic tree rather
+# than by inspecting the real one: a disallowed crate carrying tokio must be
+# flagged, and an allowlisted one must not. Nothing in the working tree is
+# touched.
+probe=$(mktemp -d 2>/dev/null) || probe=""
+if [ -n "$probe" ]; then
+  mkdir -p "$probe/render" "$probe/cli"
+  printf '[dependencies]\ntokio = "1"\n' >"$probe/render/Cargo.toml"
+  printf '[dependencies]\ntokio = "1"\n' >"$probe/cli/Cargo.toml"
+  verdict=$(scan_tokio_edges "$probe")
+  rm -rf "$probe"
+  if printf '%s\n' "$verdict" | grep -q '^render '; then
+    pass "scope: the scan flags a tokio edge planted on a crate outside the allowlist (non-vacuous)"
+  else
+    bad "scope: the scan missed a tokio edge planted on a disallowed crate — it is vacuous"
+  fi
+  if printf '%s\n' "$verdict" | grep -q '^cli '; then
+    bad "scope: the scan flags the allowlisted dagr-cli — the allowlist is not being honored"
+  else
+    pass "scope: the scan leaves the allowlisted crate alone (it names the legitimate edges, not blindness)"
+  fi
+fi
+# Called out separately from the allowlist because the message carries the
+# commitment: core's failure here is not a misplacement, it is the end of the
+# zero-runtime-dependency guarantee.
 if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/core/Cargo.toml 2>/dev/null; then
   bad "scope: dagr-core must NOT depend on tokio — its runtime dependency set is empty (ADR 081/082)"
 else
