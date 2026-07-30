@@ -262,6 +262,101 @@ fi
 #   rayon      -> cli (the CPU-permit pool the ADR sizes)
 # Anything else is a violation, `dagr-core` emphatically included.
 #
+# Does <manifest> declare a dependency on the crate <name>?
+#
+# The allowlist above claims that every crate other than the named ones must
+# justify a runtime edge, and a grep for `^[[:space:]]*<dep>[[:space:]]*=` does not
+# make that claim true — it sees only the INLINE spelling under the dependency
+# key's own name. Cargo accepts several others, and each is a real edge:
+#
+#   [dependencies.tokio]              # detail-table form, at any depth
+#   [dev-dependencies.tokio]          # …and the dev / build tables
+#   [build-dependencies.tokio]
+#   [target.'cfg(unix)'.dependencies] # …and the target-specific prefix of each,
+#   tokio = "1"                       #    inline or as `….dependencies.tokio`
+#   tokio.workspace = true            # dotted-key form
+#   tokio_util = { package = "tokio-util", version = "0.7" }
+#                                     # RENAMED: the table key is not the crate
+#                                     # name, so keying off it reads `tokio_util`
+#                                     # and the tokio-util edge goes unseen
+#
+# All of them resolve the crate into the build. So the predicate parses the
+# manifest's table structure instead of pattern-matching one line shape: it tracks
+# which table it is in, treats a `[…dependencies]`-suffixed header as a dependency
+# table and a `[…dependencies.<name>]` header as one dependency, and reads the real
+# crate name off the `package` key wherever a rename supplies one. `-` and `_` are
+# folded together, since the two spellings name the same crate.
+#
+# TOML comments are stripped first — these manifests carry long prose comments
+# that mention tokio and rayon by name, and a `#` in a string is not a comment,
+# so the stripper tracks strings rather than cutting at the first `#`. Exit 0 = the
+# manifest declares the dependency.
+manifest_declares_dep() {
+  awk -v want="$2" '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    function norm(s) { gsub(/_/, "-", s); return tolower(s) }
+    function uncomment(s,   out, i, c, n, basic, literal, sq) {
+      sq = "\047"; out = ""; n = length(s); basic = 0; literal = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (basic) {
+          if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
+          if (c == "\"") basic = 0
+        } else if (literal) {
+          if (c == sq) literal = 0
+        } else {
+          if (c == "#") break
+          if (c == "\"") basic = 1; else if (c == sq) literal = 1
+        }
+        out = out c
+      }
+      return out
+    }
+    function pkg_rename(s,   p) {
+      if (!match(s, /package[[:space:]]*=[[:space:]]*("[^"]*"|\047[^\047]*\047)/)) return ""
+      p = substr(s, RSTART, RLENGTH)
+      sub(/^package[[:space:]]*=[[:space:]]*/, "", p)
+      gsub(/["\047]/, "", p)
+      return p
+    }
+    BEGIN { hit = 0; deptable = 0; detail = 0; wantn = norm(want) }
+    {
+      line = trim(uncomment($0))
+      if (line == "") next
+      if (substr(line, 1, 2) == "[[") { deptable = 0; detail = 0; next }
+      if (substr(line, 1, 1) == "[") {
+        h = line; sub(/^\[/, "", h); sub(/\][[:space:]]*$/, "", h); h = trim(h)
+        deptable = 0; detail = 0
+        if (h ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)$/) {
+          deptable = 1
+        } else if (h ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)\.[^.]+$/) {
+          detail = 1
+          name = h; sub(/^.*\./, "", name); gsub(/["\047]/, "", name)
+          if (norm(name) == wantn) { hit = 1; exit }
+        }
+        next
+      }
+      if (!deptable && !detail) next
+      if (line !~ /=/) next
+      key = line; sub(/=.*/, "", key); key = trim(key); gsub(/["\047]/, "", key)
+      val = line; sub(/^[^=]*=/, "", val)
+      if (deptable) {
+        head = key; sub(/\..*/, "", head)
+        if (norm(head) == wantn) { hit = 1; exit }
+        if (norm(pkg_rename(val)) == wantn) { hit = 1; exit }
+        if (key ~ /\.package$/) {
+          p = val; gsub(/[[:space:]"\047]/, "", p)
+          if (norm(p) == wantn) { hit = 1; exit }
+        }
+      } else if (key == "package") {
+        p = val; gsub(/[[:space:]"\047]/, "", p)
+        if (norm(p) == wantn) { hit = 1; exit }
+      }
+    }
+    END { exit(hit ? 0 : 1) }
+  ' "$1" 2>/dev/null
+}
+
 # Emits one line per edge outside its allowlist, scanning every
 # `<root>/<crate>/Cargo.toml`. Emits the sentinel `__NO_MANIFESTS__` when the
 # glob matched nothing, so "no output" can never be read as "no violations".
@@ -276,7 +371,7 @@ scan_runtime_edges() {
     _crate=${_manifest%/Cargo.toml}
     _crate=${_crate##*/}
     for _dep in tokio tokio-util rayon; do
-      grep -qiE "^[[:space:]]*$_dep[[:space:]]*=" "$_manifest" || continue
+      manifest_declares_dep "$_manifest" "$_dep" || continue
       case "$_dep" in
         tokio) _allowed="cli metastore";;
         *)     _allowed="cli";;
@@ -305,23 +400,46 @@ esac
 # The scan is non-vacuous, proved by running it against a synthetic tree: each
 # dependency planted on a crate its own allowlist excludes must be flagged, and
 # the allowlisted placements must not be. Nothing in the working tree is touched.
+#
+# EVERY spelling of a dependency edge gets a planted crate, because parsing the
+# table structure only earns its keep if these are all covered: the inline key, the
+# detail table, the dev and build tables, the target-specific prefix, and the two
+# renames that hide the crate name behind a `package` key. A crate that merely
+# TALKS about rayon in a comment is planted too — a predicate that flags prose
+# would fail the real manifests for the wrong reason and get loosened again.
 probe=$(mktemp -d 2>/dev/null) || probe=""
 if [ -n "$probe" ]; then
-  mkdir -p "$probe/artifact" "$probe/render" "$probe/metastore" "$probe/cli"
-  printf '[dependencies]\nrayon = "1"\n' >"$probe/artifact/Cargo.toml"
-  printf '[dependencies]\ntokio-util = "0.7"\n' >"$probe/render/Cargo.toml"
+  mkdir -p "$probe/artifact" "$probe/render" "$probe/detail" "$probe/devtable" \
+           "$probe/buildtable" "$probe/targeted" "$probe/renamed" "$probe/renamedtable" \
+           "$probe/prose" "$probe/metastore" "$probe/cli"
+  printf '[dependencies]\nrayon = "1"\n'                                  >"$probe/artifact/Cargo.toml"
+  printf '[dependencies]\ntokio-util = "0.7"\n'                           >"$probe/render/Cargo.toml"
+  printf '[dependencies.rayon]\nversion = "1"\n'                          >"$probe/detail/Cargo.toml"
+  printf '[dev-dependencies.tokio]\nversion = "1"\n'                      >"$probe/devtable/Cargo.toml"
+  printf '[build-dependencies.rayon]\nversion = "1"\n'                    >"$probe/buildtable/Cargo.toml"
+  printf "[target.'cfg(unix)'.dependencies.tokio]\nversion = \"1\"\n"     >"$probe/targeted/Cargo.toml"
+  # The rename in both spellings: inline table, and a detail table whose own name
+  # is innocent. Keyed off the table name, neither reads as a tokio-util edge.
+  printf '[dependencies]\ntokio_util = { package = "tokio-util", version = "0.7" }\n' \
+                                                                          >"$probe/renamed/Cargo.toml"
+  printf '[dependencies.cancel]\npackage = "tokio-util"\nversion = "0.7"\n' \
+                                                                          >"$probe/renamedtable/Cargo.toml"
+  printf '[dependencies]\n# rayon = "1" is discussed here, not declared\nserde = "1"\n' \
+                                                                          >"$probe/prose/Cargo.toml"
   # metastore may carry tokio but not rayon — the allowlist is per dependency.
   printf '[dependencies]\ntokio = "1"\nrayon = "1"\n' >"$probe/metastore/Cargo.toml"
   printf '[dependencies]\ntokio = "1"\nrayon = "1"\ntokio-util = "0.7"\n' >"$probe/cli/Cargo.toml"
   verdict=$(scan_runtime_edges "$probe")
   rm -rf "$probe"
   missed=""
-  for expected in "rayon on artifact" "tokio-util on render" "rayon on metastore"; do
+  for expected in "rayon on artifact" "tokio-util on render" "rayon on detail" \
+                  "tokio on devtable" "rayon on buildtable" "tokio on targeted" \
+                  "tokio-util on renamed" "tokio-util on renamedtable" "rayon on metastore"; do
     printf '%s\n' "$verdict" | grep -q "^$expected " || missed="$missed$expected
 "
   done
   if [ -z "$missed" ]; then
-    pass "scope: the scan flags each dependency planted outside its own allowlist (non-vacuous)"
+    pass "scope: the scan flags a planted edge in every spelling Cargo accepts — inline, detail table, dev/build tables, target-specific, and renamed via \`package\`"
   else
     bad "scope: the scan missed planted violations — it is vacuous for:"
     printf '%s' "$missed" | sed 's/^/        /'
@@ -331,19 +449,49 @@ if [ -n "$probe" ]; then
   else
     pass "scope: the scan leaves the allowlisted placements alone (legitimate edges are named, not hidden)"
   fi
+  if printf '%s\n' "$verdict" | grep -q ' on prose '; then
+    bad "scope: the scan flags a crate that only MENTIONS a runtime dep in a comment — it reads prose, not dependencies"
+  else
+    pass "scope: the scan ignores a commented-out/discussed dependency (it reads the dependency tables, not the prose)"
+  fi
+fi
+# The checks below call the predicate DIRECTLY rather than through the scan, so
+# the direct call shape gets its own probe: a manifest carrying rayon only behind a
+# renamed detail table must read as a dependency, and one whose `[package] name` is
+# rayon must not. Without this the core guard could go blind while the scan's own
+# probes stayed green.
+dprobe=$(mktemp -d 2>/dev/null) || dprobe=""
+if [ -n "$dprobe" ]; then
+  printf '[package]\nname = "x"\n\n[dependencies.pool]\npackage = "rayon"\nversion = "1"\n' >"$dprobe/yes.toml"
+  printf '[package]\nname = "rayon"\n\n[dependencies]\nserde = "1"\n'                       >"$dprobe/no.toml"
+  if manifest_declares_dep "$dprobe/yes.toml" rayon; then
+    pass "scope: the zero-dependency guard's predicate sees a renamed detail-table rayon edge"
+  else
+    bad "scope: the zero-dependency guard's predicate misses a renamed detail-table edge — the guard is blind"
+  fi
+  if manifest_declares_dep "$dprobe/no.toml" rayon; then
+    bad "scope: the zero-dependency guard's predicate fires on a crate merely NAMED rayon"
+  else
+    pass "scope: the zero-dependency guard's predicate distinguishes a dependency from a package name"
+  fi
+  rm -rf "$dprobe"
 fi
 # Called out separately from the allowlist because the message carries the
 # commitment: core's failure here ends the zero-runtime-dependency guarantee.
-if grep -qiE '^[[:space:]]*(tokio|rayon|tokio-util)[[:space:]]*=' crates/core/Cargo.toml 2>/dev/null; then
-  bad "scope: dagr-core must NOT depend on tokio/rayon/tokio-util — its runtime dependency set is empty (ADR 081/082)"
+core_edges=""
+for dep in tokio rayon tokio-util; do
+  manifest_declares_dep crates/core/Cargo.toml "$dep" && core_edges="$core_edges $dep"
+done
+if [ -n "$core_edges" ]; then
+  bad "scope: dagr-core must NOT depend on tokio/rayon/tokio-util — its runtime dependency set is empty (ADR 081/082); found:$core_edges"
 else
   pass "scope: dagr-core carries no tokio/rayon/tokio-util edge (zero-runtime-dependency guarantee)"
 fi
 # The compensating positive half, which this checker lacked: a decision nothing
 # implements is not a decision, so the machinery must actually be wired into the
 # crate the ADR places it in.
-if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/cli/Cargo.toml 2>/dev/null \
-   && grep -qiE '^[[:space:]]*rayon[[:space:]]*=' crates/cli/Cargo.toml 2>/dev/null; then
+if manifest_declares_dep crates/cli/Cargo.toml tokio \
+   && manifest_declares_dep crates/cli/Cargo.toml rayon; then
   pass "scope: tokio and rayon are both wired into dagr-cli, the crate the ADR places them in"
 else
   bad "scope: dagr-cli does not wire both tokio and rayon — the ADR's timeout/permit machinery is unimplemented"

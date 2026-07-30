@@ -262,6 +262,98 @@ fi
 # set is empty by architectural commitment (arch.md "Stability"; ADR 081/082).
 tokio_allowed="cli metastore"
 
+# Does <manifest> declare a dependency on the crate <name>?
+#
+# The allowlist above claims that every crate other than the named ones must
+# justify a tokio edge, and a grep for `^[[:space:]]*tokio[[:space:]]*=` does not
+# make that claim true — it sees only the INLINE spelling. Cargo accepts several
+# others, and each one is a real edge the ADR's placement decision covers:
+#
+#   [dependencies.tokio]              # detail-table form, at any depth
+#   [dev-dependencies.tokio]          # …and the dev / build tables
+#   [build-dependencies.tokio]
+#   [target.'cfg(unix)'.dependencies] # …and the target-specific prefix of each,
+#   tokio = "1"                       #    inline or as `….dependencies.tokio`
+#   tokio.workspace = true            # dotted-key form
+#   tok = { package = "tokio", … }    # renamed: the KEY is not the crate name
+#
+# All of them resolve tokio into the crate. So the predicate parses the manifest's
+# table structure instead of pattern-matching one line shape: it tracks which
+# table it is in, treats a `[…dependencies]`-suffixed header as a dependency table
+# and a `[…dependencies.<name>]` header as one dependency, and reads the real
+# crate name off the `package` key wherever a rename supplies one. `-` and `_` are
+# folded together, since the two spellings name the same crate.
+#
+# TOML comments are stripped first — these manifests carry long prose comments
+# that mention tokio by name, and a `#` inside a quoted string is not a comment,
+# so the stripper tracks strings rather than cutting at the first `#`. Exit 0 = the
+# manifest declares the dependency.
+manifest_declares_dep() {
+  awk -v want="$2" '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    function norm(s) { gsub(/_/, "-", s); return tolower(s) }
+    function uncomment(s,   out, i, c, n, basic, literal, sq) {
+      sq = "\047"; out = ""; n = length(s); basic = 0; literal = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (basic) {
+          if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
+          if (c == "\"") basic = 0
+        } else if (literal) {
+          if (c == sq) literal = 0
+        } else {
+          if (c == "#") break
+          if (c == "\"") basic = 1; else if (c == sq) literal = 1
+        }
+        out = out c
+      }
+      return out
+    }
+    function pkg_rename(s,   p) {
+      if (!match(s, /package[[:space:]]*=[[:space:]]*("[^"]*"|\047[^\047]*\047)/)) return ""
+      p = substr(s, RSTART, RLENGTH)
+      sub(/^package[[:space:]]*=[[:space:]]*/, "", p)
+      gsub(/["\047]/, "", p)
+      return p
+    }
+    BEGIN { hit = 0; deptable = 0; detail = 0; wantn = norm(want) }
+    {
+      line = trim(uncomment($0))
+      if (line == "") next
+      if (substr(line, 1, 2) == "[[") { deptable = 0; detail = 0; next }
+      if (substr(line, 1, 1) == "[") {
+        h = line; sub(/^\[/, "", h); sub(/\][[:space:]]*$/, "", h); h = trim(h)
+        deptable = 0; detail = 0
+        if (h ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)$/) {
+          deptable = 1
+        } else if (h ~ /(^|\.)(dependencies|dev-dependencies|build-dependencies)\.[^.]+$/) {
+          detail = 1
+          name = h; sub(/^.*\./, "", name); gsub(/["\047]/, "", name)
+          if (norm(name) == wantn) { hit = 1; exit }
+        }
+        next
+      }
+      if (!deptable && !detail) next
+      if (line !~ /=/) next
+      key = line; sub(/=.*/, "", key); key = trim(key); gsub(/["\047]/, "", key)
+      val = line; sub(/^[^=]*=/, "", val)
+      if (deptable) {
+        head = key; sub(/\..*/, "", head)
+        if (norm(head) == wantn) { hit = 1; exit }
+        if (norm(pkg_rename(val)) == wantn) { hit = 1; exit }
+        if (key ~ /\.package$/) {
+          p = val; gsub(/[[:space:]"\047]/, "", p)
+          if (norm(p) == wantn) { hit = 1; exit }
+        }
+      } else if (key == "package") {
+        p = val; gsub(/[[:space:]"\047]/, "", p)
+        if (norm(p) == wantn) { hit = 1; exit }
+      }
+    }
+    END { exit(hit ? 0 : 1) }
+  ' "$1" 2>/dev/null
+}
+
 # Emits one line per tokio edge outside the allowlist, scanning every
 # `<root>/<crate>/Cargo.toml`. Emits the sentinel `__NO_MANIFESTS__` when the
 # glob matched nothing, so "no output" can never be read as "no violations".
@@ -276,7 +368,7 @@ scan_tokio_edges() {
     _n=$((_n + 1))
     _crate=${_manifest%/Cargo.toml}
     _crate=${_crate##*/}
-    grep -qiE '^[[:space:]]*tokio[[:space:]]*=' "$_manifest" || continue
+    manifest_declares_dep "$_manifest" tokio || continue
     case " $tokio_allowed " in
       *" $_crate "*) ;;
       *) printf '%s (%s)\n' "$_crate" "$_manifest";;
@@ -301,33 +393,79 @@ esac
 # than by inspecting the real one: a disallowed crate carrying tokio must be
 # flagged, and an allowlisted one must not. Nothing in the working tree is
 # touched.
+#
+# EVERY spelling of a dependency edge gets its own planted crate, because the
+# whole point of parsing the table structure is that these are not one pattern:
+# an inline key, a detail table, the dev and build tables, the target-specific
+# prefix, and a rename that hides the crate name behind the `package` key. A
+# manifest that only TALKS about tokio in a comment is planted too — a predicate
+# that flags prose would fail these manifests for the wrong reason and would have
+# to be loosened again.
 probe=$(mktemp -d 2>/dev/null) || probe=""
 if [ -n "$probe" ]; then
-  mkdir -p "$probe/render" "$probe/cli"
-  printf '[dependencies]\ntokio = "1"\n' >"$probe/render/Cargo.toml"
-  printf '[dependencies]\ntokio = "1"\n' >"$probe/cli/Cargo.toml"
+  mkdir -p "$probe/render" "$probe/detail" "$probe/devtable" "$probe/buildtable" \
+           "$probe/targeted" "$probe/renamed" "$probe/prose" "$probe/cli"
+  printf '[dependencies]\ntokio = "1"\n'                                  >"$probe/render/Cargo.toml"
+  printf '[dependencies.tokio]\nversion = "1"\n'                          >"$probe/detail/Cargo.toml"
+  printf '[dev-dependencies.tokio]\nversion = "1"\n'                      >"$probe/devtable/Cargo.toml"
+  printf '[build-dependencies.tokio]\nversion = "1"\n'                    >"$probe/buildtable/Cargo.toml"
+  printf "[target.'cfg(unix)'.dependencies.tokio]\nversion = \"1\"\n"     >"$probe/targeted/Cargo.toml"
+  printf '[dependencies]\nrt = { package = "tokio", version = "1" }\n'    >"$probe/renamed/Cargo.toml"
+  printf '[dependencies]\n# tokio = "1" is discussed here, not declared\nserde = "1"\n' \
+                                                                          >"$probe/prose/Cargo.toml"
+  printf '[dependencies]\ntokio = "1"\n'                                  >"$probe/cli/Cargo.toml"
   verdict=$(scan_tokio_edges "$probe")
   rm -rf "$probe"
-  if printf '%s\n' "$verdict" | grep -q '^render '; then
-    pass "scope: the scan flags a tokio edge planted on a crate outside the allowlist (non-vacuous)"
+  missed=""
+  for expected in render detail devtable buildtable targeted renamed; do
+    printf '%s\n' "$verdict" | grep -q "^$expected " || missed="$missed $expected"
+  done
+  if [ -z "$missed" ]; then
+    pass "scope: the scan flags a tokio edge in every dependency spelling Cargo accepts (inline, detail table, dev/build tables, target-specific, renamed)"
   else
-    bad "scope: the scan missed a tokio edge planted on a disallowed crate — it is vacuous"
+    bad "scope: the scan missed a planted tokio edge — it is vacuous for these spellings:$missed"
   fi
   if printf '%s\n' "$verdict" | grep -q '^cli '; then
     bad "scope: the scan flags the allowlisted dagr-cli — the allowlist is not being honored"
   else
     pass "scope: the scan leaves the allowlisted crate alone (it names the legitimate edges, not blindness)"
   fi
+  if printf '%s\n' "$verdict" | grep -q '^prose '; then
+    bad "scope: the scan flags a crate that only MENTIONS tokio in a comment — it reads prose, not dependencies"
+  else
+    pass "scope: the scan ignores a commented-out/discussed tokio (it reads the dependency tables, not the prose)"
+  fi
+fi
+# The two checks below call the predicate DIRECTLY rather than through the scan,
+# so the direct call shape gets its own probe: a manifest carrying tokio only in a
+# detail table must read as a dependency, and one carrying only a `[package] name`
+# of tokio must not. Without this, the core guard could go blind while the scan's
+# probes stayed green.
+dprobe=$(mktemp -d 2>/dev/null) || dprobe=""
+if [ -n "$dprobe" ]; then
+  printf '[package]\nname = "x"\n\n[dependencies.tokio]\nversion = "1"\n' >"$dprobe/yes.toml"
+  printf '[package]\nname = "tokio"\n\n[dependencies]\nserde = "1"\n'     >"$dprobe/no.toml"
+  if manifest_declares_dep "$dprobe/yes.toml" tokio; then
+    pass "scope: the zero-dependency guard's predicate sees a detail-table tokio edge"
+  else
+    bad "scope: the zero-dependency guard's predicate misses a detail-table tokio edge — the guard is blind"
+  fi
+  if manifest_declares_dep "$dprobe/no.toml" tokio; then
+    bad "scope: the zero-dependency guard's predicate fires on a crate merely NAMED tokio"
+  else
+    pass "scope: the zero-dependency guard's predicate distinguishes a dependency from a package name"
+  fi
+  rm -rf "$dprobe"
 fi
 # Called out separately from the allowlist because the message carries the
 # commitment: core's failure here is not a misplacement, it is the end of the
 # zero-runtime-dependency guarantee.
-if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/core/Cargo.toml 2>/dev/null; then
+if manifest_declares_dep crates/core/Cargo.toml tokio; then
   bad "scope: dagr-core must NOT depend on tokio — its runtime dependency set is empty (ADR 081/082)"
 else
   pass "scope: dagr-core carries no tokio edge (zero-runtime-dependency guarantee)"
 fi
-if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/cli/Cargo.toml 2>/dev/null; then
+if manifest_declares_dep crates/cli/Cargo.toml tokio; then
   pass "scope: tokio is wired into dagr-cli, the crate the ADR places the runtime in"
 else
   bad "scope: no crate wires tokio — the ADR's chosen runtime is unimplemented"

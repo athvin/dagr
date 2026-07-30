@@ -220,13 +220,77 @@ fi
 # admits `./crates/core/spike/Cargo.toml` — precisely the quarantined-spike case
 # above — and an undeclared `./crates/rogue/Cargo.toml` besides. Exact matching
 # is the only form of this predicate that means what the paragraph above says.
-members=$(awk '
-  /^[[:space:]]*members[[:space:]]*=/ {inblk=1}
-  inblk {print}
-  inblk && /\]/                       {exit}
-' Cargo.toml 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')
+#
+# Reading that allowlist is itself a place the check can be silently widened, so
+# the parse is a function and TOML COMMENTS ARE STRIPPED BEFORE the quoted paths
+# are harvested. Harvesting `"…"` straight out of the array body also harvests
+# the quoted text inside a comment, so a members-block line like
+#     "crates/cli",   # keep "crates/spike" out
+# would add `crates/spike` to the allowlist and the scan would wave through
+# precisely the leaked spike it exists to catch. A `#` inside a string is not a
+# comment, so the stripper tracks basic (`"`) and literal (`'`) strings instead of
+# cutting at the first `#`; the array terminator is looked for in the STRIPPED
+# line too, so a `]` inside a comment cannot truncate the member list early.
+parse_members() {
+  awk '
+    function uncomment(s,   out, i, c, n, basic, literal, sq) {
+      sq = "\047"; out = ""; n = length(s); basic = 0; literal = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (basic) {
+          if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
+          if (c == "\"") basic = 0
+        } else if (literal) {
+          if (c == sq) literal = 0
+        } else {
+          if (c == "#") break
+          if (c == "\"") basic = 1; else if (c == sq) literal = 1
+        }
+        out = out c
+      }
+      return out
+    }
+    {
+      line = uncomment($0)
+      if (line ~ /^[[:space:]]*members[[:space:]]*=/) inblk = 1
+      if (!inblk) next
+      print line
+      if (line ~ /\]/) exit
+    }
+  ' "$1" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"'
+}
+
+members=$(parse_members Cargo.toml)
 if [ -z "$members" ]; then
   bad "test8: no [workspace] members could be read from Cargo.toml — the scan would be vacuous"
+fi
+
+# The comment blindness above is closed, and this probe proves it by RUNNING THE
+# PARSER against a synthetic manifest rather than by re-deriving the rule. Two
+# assertions, because a stripper that ate the whole array would satisfy the first
+# one on its own: the commented-out path must NOT reach the allowlist, and every
+# real member still must.
+mprobe=$(mktemp -d 2>/dev/null) || mprobe=""
+if [ -n "$mprobe" ]; then
+  printf '[workspace]\nmembers = [\n    "crates/core",\n    "crates/cli",   # keep "crates/spike" out\n]\n' \
+    >"$mprobe/Cargo.toml"
+  parsed=" $(parse_members "$mprobe/Cargo.toml" | tr '\n' ' ')"
+  rm -rf "$mprobe"
+  case "$parsed" in
+    *" crates/spike "*)
+      bad "test8: the members parser harvests quoted paths out of TOML comments — a comment can widen the allowlist";;
+    *)
+      pass "test8: the members parser ignores quoted paths inside comments (a comment cannot widen the allowlist)";;
+  esac
+  mmissing=""
+  for want in crates/core crates/cli; do
+    case "$parsed" in *" $want "*) ;; *) mmissing="$mmissing $want";; esac
+  done
+  if [ -z "$mmissing" ]; then
+    pass "test8: the members parser still reads every real member (the comment strip is not eating the array)"
+  else
+    bad "test8: the members parser dropped a real member from the synthetic manifest:$mmissing"
+  fi
 fi
 allowed_files="./Cargo.toml
 ./Cargo.lock"
