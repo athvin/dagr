@@ -206,48 +206,97 @@ fi
 # `[workspace] members` — all three are exactly what this catches. So the scan is
 # re-pointed at that, rather than deleted or weakened into a pass.
 #
-# Rust sources may live only under `crates/`; manifests only at the root and at
-# `crates/<member>/Cargo.toml`. `target/` is build output, not source.
-leaked=""
-while IFS= read -r f; do
-  case "$f" in
-    ./Cargo.toml|./crates/*/Cargo.toml) ;;
-    *) leaked="$leaked$f
-";;
-  esac
-done <<EOF
-$(find . -path ./.git -prune -o -path ./target -prune -o -name Cargo.toml -print)
+# The DECLARED workspace is read from the root manifest, never assumed: the
+# allowlist is exactly `[workspace] members`, so `crates/<x>` is permitted only
+# when `x` is a declared member. A manifest is permitted at the root and at
+# `<member>/Cargo.toml` — nowhere else, at no depth. There is exactly one
+# lockfile, the workspace's, at the root; a nested `Cargo.lock` is the signature
+# of a crate that resolves on its own, i.e. one outside the workspace. Rust
+# sources may live only under a declared member's directory. `target/` is build
+# output, not source.
+#
+# Matching is by EXACT PATH against that allowlist rather than by glob. A shell
+# `case` glob matches `/`, so a pattern like `./crates/*/Cargo.toml` silently
+# admits `./crates/core/spike/Cargo.toml` — precisely the quarantined-spike case
+# above — and an undeclared `./crates/rogue/Cargo.toml` besides. Exact matching
+# is the only form of this predicate that means what the paragraph above says.
+members=$(awk '
+  /^[[:space:]]*members[[:space:]]*=/ {inblk=1}
+  inblk {print}
+  inblk && /\]/                       {exit}
+' Cargo.toml 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')
+if [ -z "$members" ]; then
+  bad "test8: no [workspace] members could be read from Cargo.toml — the scan would be vacuous"
+fi
+allowed_files="./Cargo.toml
+./Cargo.lock"
+allowed_dirs=""
+for m in $members; do
+  allowed_files="$allowed_files
+./$m/Cargo.toml"
+  allowed_dirs="$allowed_dirs ./$m/"
+done
+
+# Emits one line per crate artifact that is not where the declared workspace
+# says it may be. This function IS the predicate; the probe below drives it.
+scan_for_leaked_artifacts() {
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    printf '%s\n' "$allowed_files" | grep -qxF "$f" || printf '%s\n' "$f"
+  done <<EOF
+$(find . -path ./.git -prune -o -path ./target -prune \
+       -o \( -name Cargo.toml -o -name Cargo.lock \) -print)
 EOF
-while IFS= read -r f; do
-  [ -z "$f" ] && continue
-  case "$f" in
-    ./crates/*) ;;
-    *) leaked="$leaked$f
-";;
-  esac
-done <<EOF
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    inside=0
+    for d in $allowed_dirs; do
+      case "$f" in "$d"*) inside=1; break;; esac
+    done
+    [ "$inside" -eq 1 ] || printf '%s\n' "$f"
+  done <<EOF
 $(find . -path ./.git -prune -o -path ./target -prune -o -name '*.rs' -print)
 EOF
+}
+
+leaked=$(scan_for_leaked_artifacts)
 if [ -z "$leaked" ]; then
-  pass "test8: every Cargo.toml / *.rs lives inside the declared workspace (no leaked crate)"
+  pass "test8: every Cargo.toml / Cargo.lock / *.rs lives inside the declared workspace (no leaked crate)"
 else
   bad "test8: crate artifact outside the declared workspace:"
-  printf '%s' "$leaked" | sed 's/^/        /'
+  printf '%s\n' "$leaked" | sed 's/^/        /'
 fi
 
-# The scan is non-vacuous: a manifest planted outside the workspace is caught.
-probe=$(mktemp -d "./.hygiene-probe.XXXXXX") || probe=""
-if [ -n "$probe" ]; then
-  : >"$probe/Cargo.toml"
-  planted=$(find . -path ./.git -prune -o -path ./target -prune -o -name Cargo.toml -print \
-            | grep -v -e '^\./Cargo\.toml$' -e '^\./crates/[^/]*/Cargo\.toml$' || true)
-  rm -rf "$probe"
-  if [ -n "$planted" ]; then
-    pass "test8: the scan rejects a manifest planted outside the workspace (non-vacuous)"
-  else
-    bad "test8: the scan did not notice a planted out-of-workspace manifest — it is vacuous"
+# The scan is non-vacuous — and this probe proves it by RUNNING THE SCAN, not by
+# re-deriving the predicate. A probe that re-implements the check cannot fail
+# when the check is broken, which is worse than having no probe at all: the
+# earlier version of this block re-derived the rule as a stricter grep and so
+# reported the scan healthy in exactly the two runs where the scan was blind.
+#
+# Three shapes are planted, one at a time, because they fail differently: a
+# manifest outside the workspace tree, a nested manifest under a real member
+# (the leaked-spike case), and an undeclared directory under `crates/` (the
+# forgotten-member case).
+probe_root="./.hygiene-probe.$$"
+cleanup_probe() { rm -rf "$probe_root" "crates/.hygiene-probe-$$" "crates/core/.hygiene-probe-$$"; }
+trap cleanup_probe EXIT INT TERM
+for plant in "$probe_root" "crates/.hygiene-probe-$$" "crates/core/.hygiene-probe-$$"; do
+  if [ -e "$plant" ]; then
+    bad "test8: probe path '$plant' already exists — refusing to plant over it"
+    continue
   fi
-fi
+  mkdir -p "$plant" 2>/dev/null || { bad "test8: could not plant probe at '$plant'"; continue; }
+  : >"$plant/Cargo.toml"
+  caught=$(scan_for_leaked_artifacts | grep -F "$plant/Cargo.toml" || true)
+  rm -rf "$plant"
+  if [ -n "$caught" ]; then
+    pass "test8: the scan rejects a manifest planted at '$plant/Cargo.toml' (non-vacuous)"
+  else
+    bad "test8: the scan did not notice the manifest planted at '$plant/Cargo.toml' — it is vacuous there"
+  fi
+done
+cleanup_probe
+trap - EXIT INT TERM
 
 echo "---"
 if [ "$fail" -eq 0 ]; then
