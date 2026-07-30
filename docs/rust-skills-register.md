@@ -65,7 +65,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | own-arc-shared | own | satisfied | — | `Arc` is the sharing primitive throughout: slot inners, the resource registry, the admission ledger |
 | own-borrow-over-clone | own | adopt | T97 | mostly satisfied via denied pedantic lints; T97 removes the two argued `resume.rs` clones |
 | own-clone-explicit | own | satisfied | — | every `Clone` on a heap-owning type is explicit; no `Copy` is derived to hide a cost |
-| own-copy-small | own | adopt | T96 | broadly satisfied on ids and small enums; T96 adds the traits `LogSpan` and friends freely allow |
+| own-copy-small | own | adopt | T96 | T96 added the traits each type's fields freely allow: `LogSpan`/`ScratchStore` gained `PartialEq + Eq + Hash`, `ContainerLimitProbe` `PartialEq` only (an `f64` field), `FoldError` `Copy` as well. `LogSpan` is deliberately NOT `Copy` — `RunId` is `String`-backed, so copying would hide an allocation |
 | own-cow-conditional | own | n-a | — | zero `Cow` in the workspace and no conditional-ownership site: values are either borrowed for a read or moved into an attempt |
 | own-lifetime-elision | own | satisfied | — | explicit lifetimes appear only where the borrow checker requires them, chiefly the HRTB store callbacks |
 | own-move-large | own | satisfied | — | task outputs move into slots; large enum variants are boxed where clippy's perf group requires |
@@ -82,7 +82,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | err-anyhow-app | err | n-a | — | M9 adds no runtime dependency; the CLI already returns typed errors mapped to a `ExitCode`, which is stronger than an opaque `anyhow` chain |
 | err-context-chain | err | adopt | T95 | T95 restored the chain on all six types: `GraphVerbError`, `StructureAssertError`, `OpenError`, `WriteError` override `source()`; `RenderError` and `ReadError` now carry the real `serde_json::Error` instead of a string of it |
 | err-custom-type | err | satisfied | — | 29 domain error types implement `std::error::Error`; no `String` or `Box<dyn Error>` is returned as an API error |
-| err-doc-errors | err | adopt | T96 | clippy reports zero missing `# Errors` today; T96 promotes the lint from warn to deny so it stays that way |
+| err-doc-errors | err | adopt | T96 | done: `clippy::missing_errors_doc` is `deny` in both `lints.toml` and `[workspace.lints]`, and `scripts/check-lint-parity.sh` fails the build if either drops back to `warn`. It cost nothing — T95's audit had already found zero missing sections |
 | err-expect-bugs-only | err | adopt | T95 | T95 classified all of them: the provable-invariant sites are recorded clean below, and the four runtime-builder `expect`s are recorded as an accepted, named bootstrap-panic surface |
 | err-from-impl | err | satisfied | — | six `From` impls target error types and are used through `?` at their call sites |
 | err-lowercase-msg | err | adopt | T95 | T95 reconciled them as a **deliberate exception**: operator-facing refusal text is terminal prose, not a chain fragment — see "Refusal messages are prose" below |
@@ -132,10 +132,10 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | api-builder-must-use | api | satisfied | — | every `-> Self` builder method carries `#[must_use]`; `clippy::must_use_candidate` is denied via pedantic |
 | api-builder-pattern | api | satisfied | — | `RunContextBuilder`, `ResourceRegistryBuilder`, `FlowBuilder`, and `NodeBuilder` are the authoring surface |
-| api-common-traits | api | adopt | T96 | `Handle<T>` and the four slot capability types implement no `Debug` at all; T96 fills that and the freely-derivable gaps |
+| api-common-traits | api | adopt | T96 | done: `Handle<T>`, `Slot<T>`, `SlotRef<T>`, `ConsumerLease<T>`, `RedemptionHandle<T>` hand-write `Debug` on the `Permit`/`ResidencyLease` `finish_non_exhaustive()` precedent — unconditional impls, because a derive would emit `impl<T: Debug>` and drop a non-`Debug` output out of every diagnostic. `ReadError` stays underived on purpose: it carries a real `serde_json::Error` (see "`ReadError` trades its derives for its cause" below) |
 | api-default-impl | api | satisfied | — | every no-argument `new()` pairs with a `Default`; `clippy::new_without_default` is denied and clean |
 | api-extension-trait | api | n-a | — | dagr adds no methods to foreign types; its traits are its own abstractions, not extensions |
-| api-from-not-into | api | adopt | T96 | satisfied where conversions exist; T96 adds the two `From`/`TryFrom` impls that parallel existing inherent constructors |
+| api-from-not-into | api | adopt | T96 | done: `From<CostVector> for PoolCost` plus `TryFrom<&str>` for `GraphArtifact` and `RunArtifact`, each delegating to the inherent constructor it parallels — additive, so no call site changed, and asserted against one shared fixture on both the success and the rejection path. `NodeId::from_name` is a recorded DECLINE, not an oversight (see below) |
 | api-impl-asref | api | declined | — | zero `AsRef` impls, and none is wanted: the authoring API takes `impl Into<String>` where flexibility matters and concrete types elsewhere |
 | api-impl-fromiterator | api | n-a | — | dagr exposes no collection type; `Pipeline`/`Flow` are assembled through typed registrars, not collected into |
 | api-impl-into | api | satisfied | — | `impl Into<String>` is the accepted-input form on ids, node names, and reference metadata |
@@ -242,7 +242,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 |---|---|---|---|---|
 | conv-asmut-mutable | conv | n-a | — | zero `AsMut` impls and no site wanting one; the mutable seams take concrete `&mut` receivers |
 | conv-fromstr-parsing | conv | satisfied | — | `FromStr` is implemented for the three env-config newtypes, enabling `str::parse` at the config boundary |
-| conv-tryfrom-fallible | conv | adopt | T96 | zero `TryFrom` impls today; T96 adds them alongside the two `from_json_str` artifact readers, additively |
+| conv-tryfrom-fallible | conv | adopt | T96 | done: `TryFrom<&str>` on both artifact readers, alongside (never replacing) `from_json_str`, so `.try_into()` and any generic `TryFrom<&str>` bound now reach the published-artifact parse |
 
 ## 13 · Const & Compile-Time (`const-`, 4)
 
@@ -323,7 +323,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | name-iter-method | name | satisfied | — | `iter()` is used consistently; no `iter_mut`/`into_iter` is needed on the current surface |
 | name-iter-type-match | name | n-a | — | no named iterator type is exposed; the iterator methods return `impl Iterator` |
 | name-lifetime-short | name | satisfied | — | lifetimes are `'a`/`'b` and the conventional `'de`-style short forms |
-| name-no-get-prefix | name | adopt | T96 | the workspace's only naming violation: four `get_`-prefixed accessors on `DurableReferenceMeta`, forced by a name collision with its builder setters |
+| name-no-get-prefix | name | adopt | T96 | done: the four became `recorded_content_hash` / `recorded_size_bytes` / `recorded_scheme` / `recorded_produced_at_offset_ns`. The collision with the consuming builder setters is real and unavoidable, so the getters take a qualifier — the same resolution `NodePolicy` (`is_durable`, `retry_count`, `backoff_shape`) and `PoolCost` (`working_memory_bytes`) already use. Zero `get_`-prefixed accessors remain |
 | name-to-expensive | name | satisfied | — | `to_*` marks the allocating conversions; the cheap ones are `as_*` |
 | name-type-param-single | name | satisfied | — | type parameters are `T`, `E`, `S`, `C`, `V`, and the descriptive `Inputs` where a tuple is meant |
 | name-types-camel | name | satisfied | — | enforced mechanically by rustc's `non_camel_case_types` under `warnings = "deny"` |
@@ -337,7 +337,7 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 | test-cfg-test-module | test | satisfied | — | unit tests sit in `#[cfg(test)] mod tests`; the bulk are integration tests, which is the right level for a run engine |
 | test-criterion-bench | test | declined | — | the 1000-node per-node budget is a deterministic `cargo test` asserting a wall-clock ceiling; criterion's statistical sampling would add a dependency and a flakier signal for a regression gate |
 | test-descriptive-names | test | satisfied | — | across ~1060 tests the shortest names are `ui` and `determinism`; there is no `test1`/`works`/`smoke` anywhere |
-| test-doctest-examples | test | adopt | T96 | 8 of 9 `dagr-cli` doc examples are `no_run` or `ignore`, so they never execute; T96 makes them run or at least compile |
+| test-doctest-examples | test | adopt | T96 | done: executed `dagr-cli` doctests went 1 → 6 of 9, `ignore`d 2 → 0, and zero `ignore` fences remain anywhere in the workspace. The three that stay `no_run` state the reason at the fence (two are `fn main` one-liners; one writes a golden fixture). `dagr-metastore` gained its first example |
 | test-fixture-raii | test | adopt | T98 | `dagr-core`'s scratch tests already use a unique-temp-dir helper; T98 promotes it so `dagr-cli`'s tests stop sharing literal `/tmp` paths |
 | test-integration-dir | test | satisfied | — | 117 integration test files across the six crates' `tests/` directories |
 | test-loom-concurrency | test | declined | — | a genuine fit for the hand-rolled admission controller, but adopting it means porting the type to loom's primitives under `cfg(loom)` — a design change, not hardening. Recommended as its own follow-up |
@@ -353,17 +353,17 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
-| doc-all-public | doc | adopt | T96 | clean today under `warnings = "deny"`; T96 promotes `missing_docs` to an explicit `deny` so the intent is readable at the setting |
-| doc-cargo-metadata | doc | adopt | T96 | no crate declares `description`, so all six would be rejected by crates.io as configured |
-| doc-crate-readme | doc | adopt | T96 | no per-crate README and no `include_str!` unification exists yet |
-| doc-errors-section | doc | adopt | T96 | zero missing today; T96 promotes `clippy::missing_errors_doc` from warn to deny, retiring a stale deferral in `docs/lint-policy.md` |
-| doc-examples-section | doc | adopt | T96 | scoped to the primary public entry points rather than a blanket sweep, since the nine `crates/cli/examples/` programs already cover each layer |
+| doc-all-public | doc | adopt | T96 | done: `missing_docs` is an explicit `deny` in both files. A DECLARATIVE ratchet, not a bug fix — `warnings = "deny"` was already promoting it, and no suppression was added to keep clippy green |
+| doc-cargo-metadata | doc | adopt | T96 | done: all six declare `description`, `documentation`, `readme`, `keywords`, `categories`, and every intra-workspace path dependency carries a version requirement (without which `cargo package` refuses the manifest). `scripts/check-crate-docs-and-metadata.sh` holds it for every future member |
+| doc-crate-readme | doc | adopt | T96 | done: six `README.md`s, each inlined with `#![doc = include_str!("../README.md")]` and reconciled with the existing `//!` header rather than duplicating it — the README carries the crates.io orientation, the header keeps the module index |
+| doc-errors-section | doc | adopt | T96 | done, together with `err-doc-errors`: the lint is `deny`, and `docs/lint-policy.md`'s deferral to T3 ("revisited then" — T3 shipped long ago) is rewritten to the current reason |
+| doc-examples-section | doc | adopt | T96 | PARTIALLY adopted, deliberately: T96 covered the primary public entry points (`FlowBuilder` wiring, `FlowRegistry`/`run_registry` dispatch, `DagRegistration`, `MetaStore::open`) rather than sweeping every public item, because arch.md's "runnable examples covering each layer" is already served by the nine programs in `crates/cli/examples/`. A blanket sweep is not scheduled |
 | doc-hidden-setup | doc | satisfied | — | the doc examples use `#`-hidden setup lines to keep the visible snippet to the point |
 | doc-intra-links | doc | satisfied | — | intra-doc links are used throughout and `rustdoc::broken_intra_doc_links` is denied in CI |
 | doc-link-types | doc | satisfied | — | same enforcement: a broken type link fails the rustdoc job |
 | doc-module-inner | doc | satisfied | — | every one of the production `.rs` files opens with a `//!` module doc; zero exceptions |
 | doc-panics-section | doc | adopt | T95 | verified by T95: clippy reports none missing and the slot state-machine's panicking readers (`read`, `clone_value`, `ConsumerLease::read`/`take`) each already carry a `# Panics` section naming the framework defect |
-| doc-question-mark | doc | adopt | T96 | four executed doctests use `.unwrap()`; T96 converts them to `?` |
+| doc-question-mark | doc | adopt | T96 | done: all five `.unwrap()`s in doc examples became `?` (four executed, one `no_run`), and the metadata check fails the build on a new one — an example is read as a template, so it models the propagation a caller should copy |
 | doc-safety-section | doc | satisfied | — | the one production `unsafe impl` carries its safety argument, and `unsafe_code` is surfaced for review by lint |
 
 ## 22 · Observability (`obs-`, 7)
@@ -419,11 +419,11 @@ T92–T99. The rule total is derived from the rules directory, never written dow
 
 | Rule | Category | Disposition | Ticket | Reason |
 |---|---|---|---|---|
-| lint-cargo-metadata | lint | adopt | T96 | `clippy::cargo` needs the package metadata T96 adds; enabling it before that would only report the missing fields |
+| lint-cargo-metadata | lint | adopt | T96 | the metadata half is done (see `doc-cargo-metadata`), enforced by a dedicated shell check rather than by enabling the `clippy::cargo` GROUP — see "`clippy::cargo` is not enabled as a group" below for why the group is declined and what replaces it |
 | lint-cfg-check | lint | adopt | T98 | no `check-cfg` declaration exists. Harmless today (no custom cfgs) but unguarded against a future feature-name typo compiling into dead code |
 | lint-clippy-nursery-selected | lint | declined | — | the nursery lints that would matter here are already covered by the denied `pedantic` group; enabling more selectively is churn without a named defect to catch |
 | lint-deny-correctness | lint | satisfied | — | `clippy::all` is denied at group level, which subsumes `correctness` |
-| lint-missing-docs | lint | adopt | T96 | at `warn` today, effectively denied by `warnings = "deny"`; T96 makes the intent explicit and retires the stale deferral note |
+| lint-missing-docs | lint | adopt | T96 | done: `deny` in both files, the T1-era deferral note retired, and `scripts/check-lint-parity.sh` asserts the two files agree field for field so the pair cannot drift |
 | lint-pedantic-selective | lint | satisfied | — | `pedantic` is denied wholesale with exactly two documented exceptions, each justified in `docs/lint-policy.md`'s table — `module_name_repetitions` (the C-numbered module names read fine repeated) and `collapsible_if` (added by T94: its edition-2024 fix *is* a let-chain, and adopting let-chains at call sites is deferred, so denying it would demand a change this milestone declined). Still stricter than selective adoption |
 | lint-rustfmt-check | lint | satisfied | — | `cargo fmt --all --check` runs as its own CI job |
 | lint-unsafe-doc | lint | adopt | T95 | T95 enabled `clippy::undocumented_unsafe_blocks` workspace-wide; it cost exactly one new `// SAFETY:` (on the `unsafe impl GlobalAlloc`), because T94 had already commented every block |
@@ -536,7 +536,58 @@ quietly stale:
 - **zero** missing `# Errors` / `# Panics` sections (clippy's `missing_errors_doc`
   and `missing_panics_doc` both report none);
 - every production `Mutex` lock site states its poisoning policy and reason;
-- every `#[allow(clippy::cast_*)]` carries a `reason`.
+- every `#[expect(clippy::cast_*)]` carries a `reason` (T96 converted these from
+  `#[allow]`; see below).
+
+---
+
+## Decisions T96 recorded
+
+### `clippy::cargo` is not enabled as a group
+
+`lint-cargo-metadata` asks for `[lints.clippy] cargo = "warn"`. T96 supplied what
+that group exists to enforce — every member now declares the full crates.io
+metadata set — but enabled the group **no**, for two reasons, and replaced it with
+something stricter for the part that matters:
+
+- `multiple_crate_versions` is the loudest lint in the group and is about
+  *transitive* dependency resolution, not about dagr's own manifests. It fires on
+  duplicates a workspace does not control (libSQL's build toolchain alone brings
+  several), so under `warnings = "deny"` it would be a build failure caused by
+  somebody else's version bump.
+- `cargo_common_metadata` only *warns* about missing fields.
+  `scripts/check-crate-docs-and-metadata.sh` **fails** on them, checks fields the
+  lint does not (`readme` pointing at a file that actually ships inside the
+  `.crate`, the `include_str!` unification, the version requirement on every
+  intra-workspace path dependency), and asserts the publish graph is closed —
+  which no lint does. It also proves its own scans non-vacuous against a fixture.
+
+If a future ticket wants the group, the honest form is `cargo = "warn"` with
+`multiple_crate_versions = "allow"` and a stated reason — not a bare group deny.
+
+### `ReadError` trades its derives for its cause
+
+T96's brief listed `ReadError` among the plain-data types that should gain the
+traits their fields freely allow. T95 landed first and made it carry the real
+`serde_json::Error` rather than a string copy of it, so its fields now freely
+allow **nothing**: that type implements no `Clone`, `PartialEq`, `Eq`, or `Hash`.
+This is the same structural split the brief itself names for `Box<dyn Error>`- and
+`io::Error`-carrying types, arrived at from the other direction, and it is the
+right trade — the line and column an operator needs to fix a truncated artifact
+are worth more than a derive. `RenderError` is in the identical position for the
+identical reason. `crates/artifact/tests/api_common_traits.rs` pins what
+`ReadError` *does* offer, so a future change that drops the carried cause to
+regain a derive is visible rather than silent.
+
+### `NodeId::from_name` declines its `From` impl, correctly
+
+`conv-fromstr-parsing` / `api-from-not-into` would nominally want
+`impl From<&str> for NodeId` beside `NodeId::from_name`. It is deliberately absent
+and stays absent: identity minting must not read as an implicit drive-by
+conversion. `from_name` is the single registration seam where a node's identity is
+derived from its author-declared name, and a `.into()` at a call site would make
+that look incidental. The function's own doc comment already argues this; recorded
+here so it reads as a decision rather than an oversight.
 
 ---
 

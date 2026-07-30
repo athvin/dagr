@@ -160,11 +160,46 @@ cause becomes visible instead of accumulating silently.
 
 ## Open questions
 
-Whether `dagr-macros` and `dagr-metastore` should be `publish = false`. Both are
-reachable only through feature-gated edges and neither is independently useful,
-but a published `dagr-core` with the `macros` feature on requires a published
-`dagr-macros`. Decide in the PR and record the reasoning; the answer changes only
-which crates need the full metadata set.
+**Resolved. Whether `dagr-macros` and `dagr-metastore` should be `publish = false`
+— no; nothing carries `publish = false`, and each manifest states why at the
+setting.**
+
+The question turns out not to be a per-crate judgement call. The publish graph is
+**closed**: Cargo refuses to publish a crate whose dependency is absent from the
+registry, and an *optional* dependency (`dagr-cli → dagr-metastore`, behind the
+default-off `metastore` feature) and a *build-time* one (`dagr-core →
+dagr-macros`, behind the default-on `macros` feature) are both still dependencies
+for this purpose. So marking either unpublishable would make `dagr-cli` and
+`dagr-core` unpublishable too — i.e. the whole workspace — which defeats the point
+of the ticket. The ticket's own framing ("a published `dagr-core` with the
+`macros` feature on requires a published `dagr-macros`") is the general case, and
+it applies to `dagr-metastore` for exactly the same reason.
+
+All six are therefore intended for release and all six carry the full metadata
+set. The closure is asserted mechanically rather than left to the comment:
+`scripts/check-crate-docs-and-metadata.sh` fails if a publishable member ever
+gains a dependency on a `publish = false` one, so the decision cannot be
+half-reversed later.
+
+**`docs/tasks.md` carries no `T96` entry** (it stops at the original 80 tasks), so
+there are no `Q:` items beyond the section above.
+
+Three further decisions the work forced, recorded where the reasoning lives:
+
+- **The `get_` rename collides with the builder setters.** `content_hash()` and
+  friends are already taken by the consuming setters, so the read accessors take
+  a qualifier — `recorded_content_hash()` etc. — which is the resolution
+  `NodePolicy` (`is_durable`, `retry_count`, `backoff_shape`, `timeout_budget`)
+  and `PoolCost` (`working_memory_bytes`, `blocking_thread_count`) already use in
+  the same files. Recorded at the type's doc comment.
+- **`ReadError` cannot derive what the ticket expected**, because T95 (merged
+  first) made it carry a real `serde_json::Error`. That puts it in the ticket's
+  own "correctly cannot derive" bucket, arrived at from the other direction.
+  Recorded in `docs/rust-skills-register.md`.
+- **`clippy::cargo` is not enabled as a group** (`lint-cargo-metadata`); the
+  dedicated shell check enforces strictly more, without importing
+  `multiple_crate_versions`, which fires on transitive resolution a workspace does
+  not control. Recorded in `docs/rust-skills-register.md`.
 
 ## Out of scope
 
