@@ -151,5 +151,28 @@ strip = false
 # (crates/cli/tests/scale_benchmark.rs) runs under `cargo test`, i.e. this profile,
 # so it now measures dagr's scheduling overhead over an optimized tokio instead of
 # a debug-mode one.
+#
+# MEASURED, because this setting is expensive and the claim above deserved a
+# number rather than an argument. A clean `cargo test --workspace --no-run` of the
+# whole workspace, same machine, with and without this block:
+#
+#                          build wall   build CPU   benchmark (two samples)
+#   with    opt-level = 3        83 s       516 s   349,747 / 348,502 ns/node
+#   without (cargo default)      66 s       226 s   653,544 / 568,866 ns/node
+#
+# It costs +26% wall and +128% CPU on a cold build. It buys a benchmark number
+# that is 43% lower and, more importantly, STABLE: 0.4% spread between samples
+# against 15% without. The spec ceiling this gate polices is 1 ms/node, so the
+# difference is 2.9x margin versus 1.5x-and-noisy — unoptimized, the benchmark
+# spends most of its budget measuring debug-mode tokio and would drift toward
+# flapping on the very ceiling it exists to defend.
+#
+# So this is load-bearing, not tuning, and the cold-build cost is the right trade:
+# CI pays it only when Cargo.lock changes on `main` (pull requests restore that
+# build rather than producing it — see the cache scheme in
+# .github/workflows/ci.yml). Narrowing `"*"` to a hand-listed set of hot crates
+# was considered and rejected: it would recover some of the cold-build cost while
+# silently leaving the NEXT hot-path dependency unoptimized, and `"*"` needs no
+# maintenance to stay correct.
 [profile.dev.package."*"]
 opt-level = 3
