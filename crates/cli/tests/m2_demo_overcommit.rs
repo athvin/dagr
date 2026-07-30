@@ -87,6 +87,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use dagr_core::{TaskError, detect_capacities};
 
 // ===========================================================================
@@ -318,30 +319,6 @@ fn slot_for(name: &str) -> Arc<Slot<u64>> {
     ))
 }
 
-/// A **collision-proof, per-invocation** run-store base under the OS temp dir.
-///
-/// Determinism (CI fs race): this binary runs concurrently with its sibling
-/// `m2_demo_clean_stop` under `--test-threads>1`, and each `drive_*` here spawns the
-/// driver's detached next-invocation reclamation sweep over its pipeline directory.
-/// This file makes **no** temp-cleanup-timing assertion (it never reads back the temp
-/// dir), so a shared fixed `/tmp` base is not itself a flake source here — but giving
-/// every drive a private, disjoint base removes all cross-drive contention on a shared
-/// pipeline subtree outright, mirroring the `temp_base()` fix in
-/// `os_signals_flush_and_cleanup.rs` and `m2_demo_clean_stop.rs`. No production change.
-fn temp_base() -> std::path::PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir().join(format!(
-        "dagr-t38-overcommit-{}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        unique
-    ))
-}
-
 // ===========================================================================
 // Stream helpers
 // ===========================================================================
@@ -408,6 +385,7 @@ struct Overcommit {
 /// with the memory pool **pinned to `M`** via the capacity-pinning flag. Every node
 /// shares one [`Concurrency`] meter so the peak concurrent admission is observable.
 fn drive_overcommit() -> Overcommit {
+    let temp_base = TempBase::new("base");
     let meter = Arc::new(Concurrency::default());
 
     let mut flow = Flow::new();
@@ -427,11 +405,10 @@ fn drive_overcommit() -> Overcommit {
         );
     }
 
-    let base = temp_base();
+    let base = temp_base.as_str();
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new(base.to_str().expect("temp base is valid UTF-8"))
-            .capacities(PoolCapacities::new().memory(M)),
+        &RunConfig::new(base).capacities(PoolCapacities::new().memory(M)),
         "m2-overcommit",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -566,6 +543,7 @@ fn capacity_is_binding_at_least_one_admission_serialized() {
 /// bootstrap-failed run-finished).
 #[test]
 fn a_single_oversized_node_fails_fast_at_bootstrap() {
+    let temp_base = TempBase::new("base");
     // One node demands `M + 1` (strictly over the pinned pool total → can never
     // fit); a sibling fits normally. The bootstrap check rejects the run before the
     // loop, so neither node executes.
@@ -609,10 +587,10 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
         TrivialRunner::boxed("fits", slot_for("fits")),
     );
 
-    let base = temp_base();
+    let base = temp_base.as_str();
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new(base.to_str().expect("temp base is valid UTF-8")).capacities(capacities),
+        &RunConfig::new(base).capacities(capacities),
         "m2-oversized",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

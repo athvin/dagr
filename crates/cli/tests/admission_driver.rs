@@ -27,6 +27,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam)
@@ -205,11 +206,12 @@ fn over_demand_plan(over: u64, ok: u64) -> (Pipeline, RunPlan) {
 /// node is admitted is gated on capacity.
 #[test]
 fn a_pinned_pool_admits_one_node_at_a_time_and_the_run_still_completes() {
+    let temp_base = TempBase::new("admission");
     // Each node declares 600 bytes; the pool holds 1000 → only one fits at a time.
     let (_pipeline, plan) = two_source_plan(600);
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-admission").capacities(PoolCapacities::new().memory(1_000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1_000)),
         "admission-demo",
         Ok(plan),
         &[],
@@ -253,10 +255,11 @@ fn a_pinned_pool_admits_one_node_at_a_time_and_the_run_still_completes() {
 /// unless a pool is pinned.
 #[test]
 fn an_unconstrained_pool_admits_every_ready_node_at_once() {
+    let temp_base = TempBase::new("admission");
     let (_pipeline, plan) = two_source_plan(1_000_000);
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-admission"), // default: unconstrained pools
+        &RunConfig::new(temp_base.as_str()), // default: unconstrained pools
         "admission-demo",
         Ok(plan),
         &[],
@@ -292,12 +295,13 @@ fn an_unconstrained_pool_admits_every_ready_node_at_once() {
 /// `crates/cli/tests/container_limits_driver.rs`.
 #[test]
 fn an_over_demand_node_is_rejected_at_bootstrap_not_silently_stranded() {
+    let temp_base = TempBase::new("admission");
     // Pool holds 1000 bytes total. "toobig" demands 5000 (> total → can never fit);
     // "fits" demands 400. The bootstrap check rejects the run before the loop.
     let (_pipeline, plan) = over_demand_plan(5_000, 400);
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-admission").capacities(PoolCapacities::new().memory(1_000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1_000)),
         "admission-overdemand",
         Ok(plan),
         &[],

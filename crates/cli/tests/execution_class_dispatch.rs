@@ -41,6 +41,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::Flow;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::{ExecutionClass, Task};
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam)
@@ -310,6 +311,7 @@ fn slot_for<T: Send + Sync + 'static>(name: &str, consumers: u32) -> Arc<Slot<T>
 /// attempt succeeds.
 #[test]
 fn await_bound_node_runs_on_the_async_runtime() {
+    let temp_base = TempBase::new("t33");
     let probe = SurfaceProbe::default();
     let mut flow = Flow::new();
     let _h = flow.register_source(
@@ -337,7 +339,7 @@ fn await_bound_node_runs_on_the_async_runtime() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -362,6 +364,7 @@ fn await_bound_node_runs_on_the_async_runtime() {
 /// concurrently.
 #[test]
 fn blocking_node_runs_on_the_blocking_pool_and_async_makes_progress() {
+    let temp_base = TempBase::new("t33");
     let probe = SurfaceProbe::default();
     let mut flow = Flow::new();
     let _b = flow.register_source(
@@ -407,7 +410,7 @@ fn blocking_node_runs_on_the_blocking_pool_and_async_makes_progress() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -432,6 +435,7 @@ fn blocking_node_runs_on_the_blocking_pool_and_async_makes_progress() {
 /// compute (rayon) pool.
 #[test]
 fn compute_node_runs_on_the_compute_pool() {
+    let temp_base = TempBase::new("t33");
     let probe = SurfaceProbe::default();
     let mut flow = Flow::new();
     let _h = flow.register_source(
@@ -459,7 +463,7 @@ fn compute_node_runs_on_the_compute_pool() {
     let sink = MemorySink::default();
     let report = drive(
         // Pin the compute pool so the surface is deterministic regardless of host.
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(2)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(2)),
         "dispatch",
         Ok(plan),
         &[],
@@ -484,6 +488,7 @@ fn compute_node_runs_on_the_compute_pool() {
 /// on the compute pool, i.e. the override wins over the task default.
 #[test]
 fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
+    let temp_base = TempBase::new("t33");
     let probe = SurfaceProbe::default();
     let mut flow = Flow::new();
     // Declared Blocking, but overridden to Compute by the node policy.
@@ -517,7 +522,7 @@ fn policy_override_moves_a_blocking_task_onto_the_compute_pool() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(2)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(2)),
         "dispatch",
         Ok(plan),
         &[],
@@ -585,6 +590,7 @@ impl Task for AwaitFast {
 
 #[test]
 fn long_blocking_task_does_not_delay_unrelated_await_bound_work() {
+    let temp_base = TempBase::new("t33");
     let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let await_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
@@ -630,7 +636,7 @@ fn long_blocking_task_does_not_delay_unrelated_await_bound_work() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33"),
+        &RunConfig::new(temp_base.as_str()),
         "dispatch",
         Ok(plan),
         &[],
@@ -658,6 +664,7 @@ fn long_blocking_task_does_not_delay_unrelated_await_bound_work() {
 /// concurrently executing compute attempts never exceeds N.
 #[test]
 fn compute_pool_concurrency_is_bounded_by_pool_size() {
+    let temp_base = TempBase::new("t33");
     const N: u32 = 2;
     const NODES: usize = 6;
     let live = Arc::new(AtomicUsize::new(0));
@@ -691,7 +698,7 @@ fn compute_pool_concurrency_is_bounded_by_pool_size() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(N)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(N)),
         "dispatch",
         Ok(plan),
         &[],
@@ -712,6 +719,7 @@ fn compute_pool_concurrency_is_bounded_by_pool_size() {
 /// capacity is zero.
 #[test]
 fn compute_pool_has_a_floor_of_one_thread() {
+    let temp_base = TempBase::new("t33");
     let probe = SurfaceProbe::default();
     let mut flow = Flow::new();
     let _ = flow.register_source(
@@ -739,7 +747,7 @@ fn compute_pool_has_a_floor_of_one_thread() {
     let sink = MemorySink::default();
     let report = drive(
         // Pin compute to zero: the floor-of-one still gives it a live thread.
-        &RunConfig::new("/tmp/dagr-t33").capacities(PoolCapacities::new().compute_threads(0)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().compute_threads(0)),
         "dispatch",
         Ok(plan),
         &[],
@@ -804,6 +812,7 @@ impl NodeRunner for TimedBlockingRunner {
 
 #[test]
 fn safety_machinery_survives_a_fully_blocked_task_fleet() {
+    let temp_base = TempBase::new("t33");
     let mut flow = Flow::new();
     let _ = flow.register_source("hung", &BlocksForever);
     let pipeline = flow.finish();
@@ -821,7 +830,7 @@ fn safety_machinery_survives_a_fully_blocked_task_fleet() {
     let sink = MemorySink::default();
     let report = drive(
         // A tiny grace period so the run does not sit for the default 10s.
-        &RunConfig::new("/tmp/dagr-t33").grace(std::time::Duration::from_millis(10)),
+        &RunConfig::new(temp_base.as_str()).grace(std::time::Duration::from_millis(10)),
         "dispatch",
         Ok(plan),
         &[],
@@ -871,6 +880,7 @@ impl Task for BarrierCompute {
 
 #[test]
 fn compute_pool_admits_up_to_pool_size_concurrently() {
+    let temp_base = TempBase::new("t33");
     const N: usize = 3;
     let barrier = Arc::new(Barrier::new(N));
     let peak = Arc::new(AtomicUsize::new(0));
@@ -906,7 +916,7 @@ fn compute_pool_admits_up_to_pool_size_concurrently() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t33")
+        &RunConfig::new(temp_base.as_str())
             .capacities(PoolCapacities::new().compute_threads(u32::try_from(N).unwrap())),
         "dispatch",
         Ok(plan),

@@ -17,36 +17,37 @@
 //! and the too-big-node bootstrap rejection with its `bootstrap-failed` artifact.
 
 use std::fs;
-use std::path::PathBuf;
 
 use dagr_core::BootstrapOutcome;
 use dagr_core::admission::{Pool, PoolCost};
 use dagr_core::limits::{
     CapacityError, ContainerLimitProbe, HEADROOM_DEFAULT, PinnedPools, detect_capacities,
 };
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Fixture cgroup / proc trees under a temp probe root
 // ===========================================================================
 
-/// A throwaway probe root under the crate's target dir, wiped and recreated per
-/// call so each test starts from a clean tree. Deterministic and host-independent:
-/// nothing under the real `/sys` or `/proc` is ever touched.
+/// A throwaway probe root, private to the call and removed with everything beneath
+/// it when it drops, so each test starts from a clean tree. Deterministic and
+/// host-independent: nothing under the real `/sys` or `/proc` is ever touched. The
+/// uniqueness comes from the shared `TempBase` helper, so two concurrent tests (or
+/// two runs of the suite) cannot land on one probe root.
 struct FixtureRoot {
-    root: PathBuf,
+    base: TempBase,
 }
 
 impl FixtureRoot {
     fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("dagr-t32-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("create probe root");
-        Self { root }
+        Self {
+            base: TempBase::new(&format!("t32-{tag}")),
+        }
     }
 
     /// Write `contents` to `rel` under the probe root, creating parent dirs.
     fn write(&self, rel: &str, contents: &str) {
-        let p = self.root.join(rel);
+        let p = self.base.path().join(rel);
         fs::create_dir_all(p.parent().expect("has parent")).expect("mkdir");
         fs::write(&p, contents).expect("write fixture file");
     }
@@ -83,11 +84,11 @@ impl FixtureRoot {
     /// from the seeded `host_cores` file (or 1 when absent), so no test depends on
     /// the CI runner's real parallelism.
     fn probe(&self) -> ContainerLimitProbe {
-        let cores = fs::read_to_string(self.root.join("host_cores"))
+        let cores = fs::read_to_string(self.base.path().join("host_cores"))
             .ok()
             .and_then(|s| s.trim().parse::<u32>().ok())
             .unwrap_or(1);
-        ContainerLimitProbe::from_root(&self.root).with_host_cores(cores)
+        ContainerLimitProbe::from_root(self.base.path()).with_host_cores(cores)
     }
 }
 

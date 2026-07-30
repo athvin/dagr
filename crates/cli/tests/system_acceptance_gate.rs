@@ -52,6 +52,7 @@ use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use dagr_core::{Flow, NodePolicy, Pipeline, TaskError};
 
 // ===========================================================================
@@ -667,6 +668,7 @@ impl Task for Double {
 /// is the covering test for `SL7`.
 #[test]
 fn no_server_database_or_scheduler_is_required() {
+    let temp_base = TempBase::new("t65-no-server");
     let mut flow = RunnableFlow::new();
     let value = flow.register_source("make", MakeValue);
     let doubled = flow.register::<Double, _>("double", Double, value);
@@ -678,7 +680,7 @@ fn no_server_database_or_scheduler_is_required() {
     let report = flow
         .run(
             "t65-no-server",
-            &dagr_cli::driver::RunConfig::new("/tmp/dagr-t65-no-server"),
+            &dagr_cli::driver::RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )

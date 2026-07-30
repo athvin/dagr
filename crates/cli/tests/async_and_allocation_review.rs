@@ -42,40 +42,11 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Scaffolding: a private temp base, an in-memory sink, a counter clock.
 // ===========================================================================
-
-/// A private per-test temp directory, removed on drop. Each test gets its own run
-/// store so the suite is collision-proof under CI parallelism.
-struct TempBase {
-    path: PathBuf,
-}
-
-impl TempBase {
-    fn new(tag: &str) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let path =
-            std::env::temp_dir().join(format!("dagr-t97-{tag}-{}-{nanos}-{n}", std::process::id()));
-        std::fs::create_dir_all(&path).expect("create temp base");
-        Self { path }
-    }
-
-    fn as_str(&self) -> &str {
-        self.path.to_str().expect("temp base path is utf-8")
-    }
-}
-
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
 
 #[derive(Clone, Default)]
 struct MemorySink {

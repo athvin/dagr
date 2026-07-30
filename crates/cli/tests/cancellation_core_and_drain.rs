@@ -295,6 +295,7 @@ impl Task for Succeeds {
 
 use dagr_core::execution::run_attempt_caught;
 use dagr_core::slot::{ResidencyLedger, Slot};
+use dagr_core::test_kit::TempBase;
 
 struct SourceRunner<T: Task<Input = ()>> {
     name: String,
@@ -416,13 +417,14 @@ fn child_cancel_does_not_touch_siblings_or_parent() {
 /// filling no slot. The run drains and terminates with a complete stream.
 #[test]
 fn prompt_cooperative_observer_is_cancelled() {
+    let temp_base = TempBase::new("t35");
     let mut flow = Flow::new();
     let _t = flow.register_source("trigger", &Succeeds);
     let _w = flow.register_source("waiter", &Succeeds);
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35").grace(SHORT_GRACE);
+    let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
@@ -477,6 +479,7 @@ fn prompt_cooperative_observer_is_cancelled() {
 /// the abandonment is observed, proving the driver did not wait for the closure.
 #[test]
 fn non_returning_work_is_abandoned_after_grace_and_run_terminates() {
+    let temp_base = TempBase::new("t35");
     let release = Arc::new(Mutex::new(false));
 
     let mut flow = Flow::new();
@@ -485,7 +488,7 @@ fn non_returning_work_is_abandoned_after_grace_and_run_terminates() {
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35").grace(SHORT_GRACE);
+    let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
@@ -570,6 +573,7 @@ fn non_returning_work_is_abandoned_after_grace_and_run_terminates() {
 /// their `cancelled`/`abandoned` terminals require. No wall clock, no sleep.
 #[test]
 fn cancelled_abandoned_and_failed_are_distinct() {
+    let temp_base = TempBase::new("t35");
     use dagr_core::admission::PoolCapacities;
 
     let release = Arc::new(Mutex::new(false));
@@ -585,7 +589,7 @@ fn cancelled_abandoned_and_failed_are_distinct() {
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35")
+    let cfg = RunConfig::new(temp_base.as_str())
         .grace(SHORT_GRACE)
         .capacities(PoolCapacities::new().memory(10));
     let handle = cfg.cancel_handle();
@@ -656,6 +660,7 @@ fn cancelled_abandoned_and_failed_are_distinct() {
 /// when the trigger fires.
 #[test]
 fn no_new_admission_after_cancellation() {
+    let temp_base = TempBase::new("t35");
     use dagr_core::admission::PoolCapacities;
 
     let costed = || NodePolicy::new().working_memory(10);
@@ -671,7 +676,7 @@ fn no_new_admission_after_cancellation() {
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35")
+    let cfg = RunConfig::new(temp_base.as_str())
         .grace(SHORT_GRACE)
         .capacities(PoolCapacities::new().memory(10));
     let handle = cfg.cancel_handle();
@@ -728,6 +733,7 @@ fn no_new_admission_after_cancellation() {
 /// failure-under-stop, so later exit-code logic can prefer run failure.
 #[test]
 fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() {
+    let temp_base = TempBase::new("t35");
     use dagr_core::admission::PoolCapacities;
 
     let costed = || NodePolicy::new().working_memory(10);
@@ -752,7 +758,7 @@ fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() 
     let pipeline = flow.finish();
     pipeline.assemble().expect("assembles");
 
-    let cfg = RunConfig::new("/tmp/dagr-t35")
+    let cfg = RunConfig::new(temp_base.as_str())
         .failure_mode(FailureMode::StopOnFirstFailure)
         .capacities(PoolCapacities::new().memory(10));
 
@@ -822,10 +828,11 @@ fn stop_on_first_failure_routes_through_cancellation_core_with_failure_origin() 
 /// short grace and terminate quickly.)
 #[test]
 fn grace_default_is_ten_seconds_and_override_is_honoured() {
+    let temp_base = TempBase::new("t35");
     assert_eq!(DEFAULT_GRACE, Duration::from_secs(10));
-    let default_cfg = RunConfig::new("/tmp/dagr-t35");
+    let default_cfg = RunConfig::new(temp_base.as_str());
     assert_eq!(default_cfg.effective_grace(), Duration::from_secs(10));
-    let overridden = RunConfig::new("/tmp/dagr-t35").grace(Duration::from_secs(3));
+    let overridden = RunConfig::new(temp_base.as_str()).grace(Duration::from_secs(3));
     assert_eq!(overridden.effective_grace(), Duration::from_secs(3));
 }
 
@@ -882,6 +889,7 @@ fn shutdown_budget_is_grace_plus_teardown_plus_flush_and_reflects_flags() {
 /// cancellation core does not alter a non-cancelled run.
 #[test]
 fn non_cancelled_run_is_unchanged() {
+    let temp_base = TempBase::new("t35");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let _b = flow.register_source("b", &Succeeds);
@@ -900,7 +908,7 @@ fn non_cancelled_run_is_unchanged() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t35"),
+        &RunConfig::new(temp_base.as_str()),
         "normal",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

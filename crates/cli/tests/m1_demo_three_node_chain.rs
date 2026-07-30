@@ -69,6 +69,7 @@ use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Injection seam: an in-memory run-store sink + a monotonic clock
@@ -421,6 +422,7 @@ impl Task for BoundOnce {
 ///
 /// Returns the recorded event-stream bytes and the driver's overall outcome.
 fn run_demo() -> (Vec<u8>, RunOutcome) {
+    let temp_base = TempBase::new("m1-demo");
     let pipeline = build_demo_pipeline();
     // Assemble through the public assembly pass — an end user's `assemble()`.
     pipeline.assemble().expect("the demo pipeline assembles");
@@ -455,7 +457,7 @@ fn run_demo() -> (Vec<u8>, RunOutcome) {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-m1-demo"),
+        &RunConfig::new(temp_base.as_str()),
         "m1-three-node-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -1025,6 +1027,7 @@ fn the_walker_is_a_reusable_oracle_tolerating_a_truncated_tail() {
 /// real result, not a stale or partial one.
 #[test]
 fn the_retried_value_flows_through_the_chain() {
+    let temp_base = TempBase::new("m1-demo");
     // Re-run the demo but capture the sink's produced value by re-wiring the sink
     // slot so the test can read it after the run.
     let pipeline = build_demo_pipeline();
@@ -1061,7 +1064,7 @@ fn the_retried_value_flows_through_the_chain() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-m1-demo"),
+        &RunConfig::new(temp_base.as_str()),
         "m1-three-node-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

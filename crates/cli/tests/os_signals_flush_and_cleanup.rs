@@ -244,6 +244,7 @@ impl Task for Succeeds {
 
 use dagr_core::execution::run_attempt_caught;
 use dagr_core::slot::{ResidencyLedger, Slot};
+use dagr_core::test_kit::TempBase;
 
 struct SourceRunner<T: Task<Input = ()>> {
     name: String,
@@ -333,7 +334,8 @@ fn temp_base() -> PathBuf {
 /// path are the same seam.
 #[test]
 fn a_signal_routes_to_the_cancel_handle_seam() {
-    let cfg = RunConfig::new("/tmp/dagr-t36");
+    let temp_base = TempBase::new("t36");
+    let cfg = RunConfig::new(temp_base.as_str());
     let handle = cfg.cancel_handle();
     let router = SignalRouter::new(handle);
     assert!(!router.was_fired(), "no signal yet");
@@ -450,6 +452,7 @@ static REAL_SIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(unix)]
 fn real_signal_end_to_end(sig: libc::c_int) {
+    let temp_base = TempBase::new("t36-e2e");
     use dagr_cli::signals::install_signal_handlers;
 
     let _serial = REAL_SIGNAL_LOCK
@@ -460,7 +463,7 @@ fn real_signal_end_to_end(sig: libc::c_int) {
     let _w = flow.register_source("waiter", &Succeeds);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36-e2e").grace(SHORT_GRACE);
+    let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
     // Install the REAL OS-signal handlers wiring SIGTERM/SIGINT -> this handle. From
     // here on the signal is CAUGHT, so raising it does not terminate the runner.
@@ -527,12 +530,13 @@ impl Task for CoopUntilCancelled {
 /// and the stream is complete + parseable (fsync at cancellation/run end).
 #[test]
 fn complete_fsyncd_stream_on_cancellation() {
+    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _t = flow.register_source("trigger", &Succeeds);
     let _w = flow.register_source("waiter", &Succeeds);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36").grace(SHORT_GRACE);
+    let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
 
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
@@ -575,11 +579,12 @@ fn complete_fsyncd_stream_on_cancellation() {
 /// flush is the same single fsync boundary, and the exit is a clean success.
 #[test]
 fn complete_fsyncd_stream_on_normal_end() {
+    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36");
+    let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "a".into(),
@@ -613,11 +618,12 @@ fn complete_fsyncd_stream_on_normal_end() {
 /// final-flush window.
 #[test]
 fn unwritable_sink_at_shutdown_yields_bounded_wait_and_sink_failure_code() {
+    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36");
+    let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "a".into(),
@@ -662,11 +668,12 @@ fn unwritable_sink_at_shutdown_yields_bounded_wait_and_sink_failure_code() {
 /// sink-failure selection — distinct from a node ending `failed`/`timed-out`.
 #[test]
 fn sink_failure_at_shutdown_is_not_a_run_failure() {
+    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36");
+    let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "a".into(),
@@ -700,6 +707,7 @@ fn sink_failure_at_shutdown_is_not_a_run_failure() {
 /// if the sink also could not flush — a run failure is the highest-precedence code.
 #[test]
 fn run_failure_wins_over_sink_failure_precedence() {
+    let temp_base = TempBase::new("t36");
     struct Fails;
     impl Task for Fails {
         type Input = ();
@@ -713,7 +721,7 @@ fn run_failure_wins_over_sink_failure_precedence() {
     let _a = flow.register_source("a", &Fails);
     let pipeline = flow.finish();
 
-    let cfg = RunConfig::new("/tmp/dagr-t36");
+    let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
         "a".into(),

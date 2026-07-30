@@ -76,6 +76,7 @@ use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::NodeId;
 use dagr_core::slot::{RedeemError, RedemptionHandle, ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // The test-only instrumented global allocator (allocator-level, NOT RSS)
@@ -220,37 +221,6 @@ const SHORT: usize = 4;
 
 /// The long chain length — the "synthetic hundred-node chain" authority.
 const LONG: usize = 100;
-
-/// A per-invocation **collision-proof** run-store base under the OS temp dir.
-///
-/// Determinism (CI fs race): the driver reclaims leftover per-run temp dirs at run
-/// end by `remove_dir_all`-ing every sibling run-dir under `<base>/<pipeline>/`
-/// other than its own. Under `--test-threads>1` several `drive_chain` /
-/// `drive_leaky_chain` runs execute concurrently; on a single **fixed shared** base
-/// (`/tmp/dagr-t26`) with the same pipeline name they share `<base>/<pipeline>/`, so
-/// one run's terminal reclaim wipes another concurrent run's freshly-created run-dir
-/// mid-run. A base keyed on `process::id()` + a wall-clock timestamp is not unique
-/// either (the clock's effective resolution is coarse on CI). The fix is causal, not
-/// a sleep: a process-monotonic `AtomicU64` counter makes every base provably
-/// disjoint, so no two concurrent runs ever share — or delete — the same subtree.
-/// Mirrors `temp_base()` in `os_signals_flush_and_cleanup.rs` /
-/// `m2_demo_clean_stop.rs`. No production change.
-fn temp_base() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir()
-        .join(format!(
-            "dagr-t26-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            unique
-        ))
-        .to_string_lossy()
-        .into_owned()
-}
 
 // ===========================================================================
 // A capturing in-memory sink + monotonic clock (the injection seam)
@@ -550,6 +520,7 @@ struct ChainRun {
 /// non-retained chain end at zero counted residency, exactly as the release rule
 /// promises when every value is consumed and nothing is retained.
 fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
+    let temp_base = TempBase::new("base");
     assert!(len >= 2, "a chain needs at least a source and one link");
     let ledger = ResidencyLedger::new();
 
@@ -605,7 +576,7 @@ fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
     // run's high-water mark, then drive to completion through the real driver.
     reset_peak();
     let report = drive(
-        &RunConfig::new(temp_base()),
+        &RunConfig::new(temp_base.as_str()),
         "bounded-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -955,6 +926,7 @@ fn ledger_peak_is_deterministic_across_repetitions() {
 /// ledger peak. This is the injected regression (release-on-last-read / a forgotten
 /// drop) the non-vacuity proof drives.
 fn drive_leaky_chain(len: usize) -> u64 {
+    let temp_base = TempBase::new("base");
     let ledger = ResidencyLedger::new();
 
     let mut flow = Flow::new();
@@ -989,7 +961,7 @@ fn drive_leaky_chain(len: usize) -> u64 {
     }
 
     let _ = drive(
-        &RunConfig::new(temp_base()),
+        &RunConfig::new(temp_base.as_str()),
         "leaky-chain",
         Ok(RunPlan::new(pipeline, runners)),
         &[],

@@ -19,6 +19,7 @@
 //! the T81-owned run-end-to-end, graph-through-the-sugar, and docs-truthfulness
 //! guards.
 
+use dagr_core::test_kit::TempBase;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -66,20 +67,6 @@ fn run_example(example: &str, args: &[&str]) -> Run {
     }
 }
 
-/// A unique run-store base under the OS temp dir, so concurrent test binaries never
-/// collide and each test's stores are inspectable in isolation.
-fn temp_base(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!(
-        "dagr-t81-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
-    dir.to_string_lossy().into_owned()
-}
-
 /// Whether the run store under `<base>/<pipeline>/` holds at least one
 /// `<run-id>/events.jsonl` — i.e. the selected DAG really ran and wrote its stream.
 fn run_store_has_a_stream(base: &str, pipeline: &str) -> bool {
@@ -107,7 +94,8 @@ fn read_doc(rel: &str) -> String {
 /// store under the DAG name, so the stream lives at `<base>/alpha/<run-id>/`.
 #[test]
 fn many_dags_run_writes_an_on_disk_event_stream() {
-    let base = temp_base("run");
+    let temp_base = TempBase::new("run");
+    let base = temp_base.as_str();
     let run = run_example("many_dags", &["run", "alpha", "--store", &base]);
     assert_eq!(
         run.code, 0,

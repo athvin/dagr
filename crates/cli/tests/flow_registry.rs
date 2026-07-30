@@ -20,6 +20,7 @@ use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Test tasks — two trivial single-node flows named `etl` and `nightly`.
@@ -51,20 +52,6 @@ fn build_nightly() -> RunnableFlow {
     flow
 }
 
-/// A unique run-store base under the OS temp dir, so concurrent test binaries
-/// never collide and each test's stores are inspectable in isolation.
-fn temp_base(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!(
-        "dagr-t74-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
-    dir.to_string_lossy().into_owned()
-}
-
 // ===========================================================================
 // Registry & selection
 // ===========================================================================
@@ -74,7 +61,10 @@ fn temp_base(tag: &str) -> String {
 /// single-source run exits `Success`).
 #[test]
 fn run_named_flow_selects_and_drives_it() {
+    let temp_base = TempBase::new("select");
     // The parse half: the first positional after `run` becomes the flow name.
+    // TEMP-BASE-EXEMPT: argument parsing only — `parse_cli` never touches the
+    // filesystem, so this string is a token, not a directory.
     match parse_cli(["dagr", "run", "etl", "--store", "/tmp/x"]) {
         ParseOutcome::Parsed(Cli {
             verb: Verb::Run,
@@ -84,11 +74,11 @@ fn run_named_flow_selects_and_drives_it() {
     }
 
     // The dispatch half: `run etl` builds and drives the etl flow.
-    let base = temp_base("select");
+    let base = temp_base.as_str();
     let registry = FlowRegistry::new()
         .add("etl", build_etl)
         .add("nightly", build_nightly);
-    let code = run_registry(&registry, ["dagr", "run", "etl", "--store", base.as_str()]);
+    let code = run_registry(&registry, ["dagr", "run", "etl", "--store", base]);
     assert_eq!(
         code,
         ExitCode::Success,
@@ -105,9 +95,10 @@ fn run_named_flow_selects_and_drives_it() {
 /// `run` with **no** name — the ergonomic default for the common one-flow binary.
 #[test]
 fn single_flow_registry_runs_with_no_name() {
-    let base = temp_base("single");
+    let temp_base = TempBase::new("single");
+    let base = temp_base.as_str();
     let registry = FlowRegistry::single_flow(build_etl);
-    let code = run_registry(&registry, ["dagr", "run", "--store", base.as_str()]);
+    let code = run_registry(&registry, ["dagr", "run", "--store", base]);
     assert_eq!(
         code,
         ExitCode::Success,
@@ -188,7 +179,8 @@ fn list_prints_the_registered_names() {
 /// its own run identity + its own store directory — no shared state.
 #[test]
 fn each_run_re_invokes_the_factory_with_its_own_identity() {
-    let base = temp_base("independence");
+    let temp_base = TempBase::new("independence");
+    let base = temp_base.as_str();
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_factory = Arc::clone(&calls);
     // A factory closure that records each call, proving re-invocation (not reuse of
@@ -199,8 +191,8 @@ fn each_run_re_invokes_the_factory_with_its_own_identity() {
         build_etl()
     });
 
-    let c1 = run_registry(&registry, ["dagr", "run", "etl", "--store", base.as_str()]);
-    let c2 = run_registry(&registry, ["dagr", "run", "etl", "--store", base.as_str()]);
+    let c1 = run_registry(&registry, ["dagr", "run", "etl", "--store", base]);
+    let c2 = run_registry(&registry, ["dagr", "run", "etl", "--store", base]);
     assert_eq!(c1, ExitCode::Success);
     assert_eq!(c2, ExitCode::Success);
     assert_eq!(
@@ -252,6 +244,8 @@ fn existing_verbs_parse_with_flow_name_none() {
 /// (a leading `--flag` is never mistaken for a positional flow name).
 #[test]
 fn a_flag_is_not_mistaken_for_a_flow_name() {
+    // TEMP-BASE-EXEMPT: argument parsing only — `parse_cli` never touches the
+    // filesystem, so this string is a token, not a directory.
     match parse_cli(["dagr", "run", "--store", "/tmp/x"]) {
         ParseOutcome::Parsed(Cli {
             verb: Verb::Run,

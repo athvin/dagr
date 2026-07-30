@@ -297,6 +297,7 @@ fn src<T: Task<Input = ()>>(name: &str, task: T) -> Box<dyn NodeRunner> {
 }
 
 use dagr_core::execution::run_attempt;
+use dagr_core::test_kit::TempBase;
 
 /// A `u64 -> u64` consumer runner over the real attempt path, for the deterministic
 /// backward-compat chain. The upstream value is a fixed constant (the chain only
@@ -357,8 +358,8 @@ impl Task for Bound {
     }
 }
 
-fn cfg() -> RunConfig {
-    RunConfig::new("/tmp/dagr-t52-test")
+fn cfg(base: &str) -> RunConfig {
+    RunConfig::new(base)
 }
 
 // ===========================================================================
@@ -370,6 +371,7 @@ fn cfg() -> RunConfig {
 /// teardown and leaves it with exactly one terminal.
 #[test]
 fn teardown_runs_after_every_covered_terminal_class() {
+    let temp_base = TempBase::new("t52-test");
     // (covered task builder, expected covered terminal). `upstream-failed` is
     // produced by a data-dependent node whose upstream fails.
     for (label, covered_state) in [
@@ -402,7 +404,7 @@ fn teardown_runs_after_every_covered_terminal_class() {
 
         let sink = MemorySink::default();
         let _ = drive(
-            &cfg(),
+            &cfg(temp_base.as_str()),
             "t52",
             Ok(RunPlan::new(pipeline, runners)),
             &[],
@@ -438,6 +440,7 @@ fn teardown_runs_after_every_covered_terminal_class() {
 /// because setup never ran" path is exercised when a covered node did not succeed).
 #[test]
 fn teardown_context_exposes_covered_terminal_states() {
+    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let setup = flow.register_source("setup", &Succeeds);
     let declined = flow.register_source("declined", &Skips);
@@ -470,7 +473,7 @@ fn teardown_context_exposes_covered_terminal_states() {
 
     let sink = MemorySink::default();
     let _ = drive(
-        &cfg(),
+        &cfg(temp_base.as_str()),
         "t52",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -502,6 +505,7 @@ fn teardown_context_exposes_covered_terminal_states() {
 /// `succeeded` (run failure is determined only by non-teardown nodes).
 #[test]
 fn failing_teardown_does_not_change_run_outcome() {
+    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let work = flow.register_source("work", &Succeeds);
     let _t = flow.register_teardown("cleanup", &UnitTask, &[work.ordering()]);
@@ -517,7 +521,7 @@ fn failing_teardown_does_not_change_run_outcome() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &cfg(),
+        &cfg(temp_base.as_str()),
         "t52",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -545,6 +549,7 @@ fn failing_teardown_does_not_change_run_outcome() {
 /// the first and third complete normally regardless of the second's failure.
 #[test]
 fn one_failing_teardown_does_not_block_others() {
+    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let work = flow.register_source("work", &Succeeds);
     let ran1 = Arc::new(AtomicBool::new(false));
@@ -569,7 +574,7 @@ fn one_failing_teardown_does_not_block_others() {
 
     let sink = MemorySink::default();
     let report = drive(
-        &cfg(),
+        &cfg(temp_base.as_str()),
         "t52",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -600,7 +605,8 @@ fn one_failing_teardown_does_not_block_others() {
 /// observes its signal as uncancelled and completes.
 #[test]
 fn teardown_runs_under_cancellation_with_a_fresh_signal() {
-    let config = cfg().grace(Duration::from_millis(150));
+    let temp_base = TempBase::new("t52-test");
+    let config = cfg(temp_base.as_str()).grace(Duration::from_millis(150));
     let handle = config.cancel_handle();
 
     let mut flow = Flow::new();
@@ -669,10 +675,14 @@ fn teardown_runs_under_cancellation_with_a_fresh_signal() {
 /// terminal rather than hanging. The default deadline is 15 s when unset.
 #[test]
 fn teardown_deadline_bounds_a_runaway_teardown() {
+    let temp_base = TempBase::new("t52-test");
     // Default is 15s when the flag is unset.
-    assert_eq!(cfg().effective_teardown_deadline(), Duration::from_secs(15));
+    assert_eq!(
+        cfg(temp_base.as_str()).effective_teardown_deadline(),
+        Duration::from_secs(15)
+    );
 
-    let config = cfg().teardown_deadline(Duration::from_millis(120));
+    let config = cfg(temp_base.as_str()).teardown_deadline(Duration::from_millis(120));
     let mut flow = Flow::new();
     let work = flow.register_source("work", &Succeeds);
     let _t = flow.register_teardown("cleanup", &UnitTask, &[work.ordering()]);
@@ -722,6 +732,7 @@ fn teardown_deadline_bounds_a_runaway_teardown() {
 /// pool capacity (it never appears in the admission ledger / never blocks).
 #[test]
 fn teardown_bypasses_admission_under_a_saturated_pool() {
+    let temp_base = TempBase::new("t52-test");
     use dagr_core::admission::PoolCapacities;
 
     let mut flow = Flow::new();
@@ -748,7 +759,7 @@ fn teardown_bypasses_admission_under_a_saturated_pool() {
         UnitRunner::boxed("cleanup", TeardownSucceeds { ran: ran.clone() }),
     );
 
-    let config = cfg().capacities(PoolCapacities::new().memory(10));
+    let config = cfg(temp_base.as_str()).capacities(PoolCapacities::new().memory(10));
     let sink = MemorySink::default();
     let report = drive(
         &config,
@@ -804,6 +815,7 @@ fn stream_shape(bytes: &[u8]) -> Vec<serde_json::Value> {
 /// teardown effect.
 #[test]
 fn no_teardown_pipeline_is_byte_identical() {
+    let temp_base = TempBase::new("t52-test");
     let build = || {
         let mut flow = Flow::new();
         let a = flow.register_source("a", &Succeeds);
@@ -828,7 +840,7 @@ fn no_teardown_pipeline_is_byte_identical() {
         let (pipeline, runners) = build();
         let sink = MemorySink::default();
         let report = drive(
-            &cfg().run_id("fixed-run-id"),
+            &cfg(temp_base.as_str()).run_id("fixed-run-id"),
             "t52",
             Ok(RunPlan::new(pipeline, runners)),
             &[],

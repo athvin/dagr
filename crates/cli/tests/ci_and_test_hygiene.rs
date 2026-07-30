@@ -202,10 +202,30 @@ fn the_no_default_leg_asserts_the_resolved_dependency_graph() {
 // Test isolation: one shared unique-temp-base helper, no literal paths
 // ===========================================================================
 
-/// A literal path in a test file may be exempted, but only in the open: the line
-/// above it says `TEMP-BASE-EXEMPT:` and states why. The same idiom
-/// `scripts/check-lint-parity.sh` uses for its `EXPECT-EXEMPT:` suppressions.
+/// A literal path in a test file may be exempted, but only in the open: a comment
+/// within the three lines above it says `TEMP-BASE-EXEMPT:` and states why. The same
+/// idiom `scripts/check-lint-parity.sh` uses for its `EXPECT-EXEMPT:` suppressions.
 const EXEMPT_MARKER: &str = "TEMP-BASE-EXEMPT:";
+
+/// How far above a literal the exemption marker may sit. Three lines is enough for a
+/// two-line reason plus the marker itself, and short enough that the exemption is
+/// still visibly attached to what it exempts.
+const EXEMPT_LOOKBACK: usize = 3;
+
+/// This file is the scanner. Its own source names the patterns it looks for — in the
+/// scan itself and in the failure messages — so scanning it would report the guard as
+/// its own first violation.
+const SCANNER: &str = "ci_and_test_hygiene.rs";
+
+/// Every `*.rs` test file the isolation scans cover: `crates/{cli,core}/tests/`, minus
+/// this file.
+fn scanned_test_files() -> Vec<PathBuf> {
+    ["cli", "core"]
+        .into_iter()
+        .flat_map(test_files)
+        .filter(|p| p.file_name().is_none_or(|n| n != SCANNER))
+        .collect()
+}
 
 /// **Test-plan scenario: no two tests share a filesystem path — by construction.**
 /// No test file names a literal `/tmp/...` base. Isolation cannot rest on every test
@@ -214,21 +234,28 @@ const EXEMPT_MARKER: &str = "TEMP-BASE-EXEMPT:";
 #[test]
 fn no_cli_test_hardcodes_a_shared_temp_path() {
     let mut offenders: Vec<String> = Vec::new();
-    for krate in ["cli", "core"] {
-        for path in test_files(krate) {
-            let text = std::fs::read_to_string(&path).expect("test file is readable");
-            let lines: Vec<&str> = text.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                if !line.contains("\"/tmp/") {
-                    continue;
-                }
-                let exempt = i > 0 && lines[i - 1].contains(EXEMPT_MARKER);
-                if !exempt {
-                    offenders.push(format!("{}:{}: {}", rel(&path), i + 1, line.trim()));
-                }
+    let mut scanned = 0usize;
+    for path in scanned_test_files() {
+        scanned += 1;
+        let text = std::fs::read_to_string(&path).expect("test file is readable");
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.contains("\"/tmp/") {
+                continue;
+            }
+            let exempt = lines[i.saturating_sub(EXEMPT_LOOKBACK)..i]
+                .iter()
+                .any(|l| l.contains(EXEMPT_MARKER));
+            if !exempt {
+                offenders.push(format!("{}:{}: {}", rel(&path), i + 1, line.trim()));
             }
         }
     }
+    assert!(
+        scanned > 50,
+        "the scan covered only {scanned} test files — it is not looking where it \
+         should be"
+    );
     assert!(
         offenders.is_empty(),
         "these tests hardcode a shared literal temp path instead of using the \
@@ -240,18 +267,19 @@ fn no_cli_test_hardcodes_a_shared_temp_path() {
 }
 
 /// The helper is *shared*, not copy-pasted: a local `struct TempBase` in a test file
-/// is the duplication this ticket promotes away. Six files carried their own copy.
+/// is the duplication this ticket promotes away. Seven files carried their own copy.
 #[test]
 fn no_test_file_redefines_the_temp_base_helper() {
-    let mut offenders: Vec<String> = Vec::new();
-    for krate in ["cli", "core"] {
-        for path in test_files(krate) {
-            let text = std::fs::read_to_string(&path).expect("test file is readable");
-            if text.contains("struct TempBase") {
-                offenders.push(rel(&path));
-            }
-        }
-    }
+    let needle = concat!("struct ", "TempBase");
+    let offenders: Vec<String> = scanned_test_files()
+        .into_iter()
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .expect("test file is readable")
+                .contains(needle)
+        })
+        .map(|p| rel(&p))
+        .collect();
     assert!(
         offenders.is_empty(),
         "these test files define their own `TempBase` instead of using the shared \

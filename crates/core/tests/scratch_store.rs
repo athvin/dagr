@@ -7,48 +7,13 @@
 //! has bitten this repo's CI). The base is removed on drop. No runtime, no
 //! admission, no event stream — the hand-built single-task path.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use dagr_core::context::{PipelineId, RunContext, RunId};
 use dagr_core::error::TaskError;
 use dagr_core::handle::NodeId;
 use dagr_core::scratch::{ScratchError, ScratchStore};
-
-/// A **private** temp base unique to one test, removed on drop. The name blends
-/// the pid, a per-process monotonic counter, and a nanosecond stamp so two tests
-/// running concurrently — or two runs of the suite — never collide on a path.
-struct TempBase {
-    path: PathBuf,
-}
-
-impl TempBase {
-    fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let unique = format!(
-            "dagr-scratch-test-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed),
-            nanos,
-        );
-        let path = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&path).expect("create private temp base");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
+use dagr_core::test_kit::TempBase;
 
 /// Build a store for one node directly under a base (no context needed).
 fn store_for(base: &Path, pipeline: &str, run: &str, node: &str) -> ScratchStore {
@@ -66,7 +31,7 @@ fn store_for(base: &Path, pipeline: &str, run: &str, node: &str) -> ScratchStore
 
 #[test]
 fn write_then_read_returns_exact_bytes() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
 
     store
@@ -82,7 +47,7 @@ fn write_then_read_returns_exact_bytes() {
 
 #[test]
 fn opaque_bytes_round_trip_including_non_utf8_and_empty() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
 
     // Non-UTF-8 value and a key with bytes that are hostile as a path.
@@ -105,7 +70,7 @@ fn opaque_bytes_round_trip_including_non_utf8_and_empty() {
 
 #[test]
 fn absent_key_is_ok_none_not_an_error() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
 
     let got = store.get(b"never-written");
@@ -121,7 +86,7 @@ fn absent_key_is_ok_none_not_an_error() {
 
 #[test]
 fn value_written_on_attempt_one_readable_on_attempt_two_via_context() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
 
     // Attempt 1: reach scratch through a hand-built context configured at attempt 1.
     let attempt1 = RunContext::builder(
@@ -164,7 +129,7 @@ fn value_written_on_attempt_one_readable_on_attempt_two_via_context() {
 
 #[test]
 fn two_nodes_same_key_do_not_collide() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let node_a = store_for(base.path(), "pipe", "run-1", "node-a");
     let node_b = store_for(base.path(), "pipe", "run-1", "node-b");
 
@@ -187,7 +152,7 @@ fn two_nodes_same_key_do_not_collide() {
 
 #[test]
 fn same_node_different_runs_do_not_collide() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let run1 = store_for(base.path(), "pipe", "run-1", "node-a");
     let run2 = store_for(base.path(), "pipe", "run-2", "node-a");
 
@@ -204,7 +169,7 @@ fn same_node_different_runs_do_not_collide() {
 
 #[test]
 fn cross_node_read_yields_absent_never_the_other_nodes_bytes() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let node_a = store_for(base.path(), "pipe", "run-1", "node-a");
     let node_b = store_for(base.path(), "pipe", "run-1", "node-b");
 
@@ -232,7 +197,7 @@ fn cross_node_read_yields_absent_never_the_other_nodes_bytes() {
 
 #[test]
 fn succeeded_node_scratch_is_deleted_by_the_hook() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
 
     store.put(b"k1", b"v1").expect("write");
@@ -258,7 +223,7 @@ fn succeeded_node_scratch_is_deleted_by_the_hook() {
 
 #[test]
 fn non_succeeded_node_scratch_is_retained_after_run_end() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let succeeded = store_for(base.path(), "pipe", "run-1", "node-x");
     let retained = store_for(base.path(), "pipe", "run-1", "node-y");
 
@@ -292,7 +257,7 @@ fn non_succeeded_node_scratch_is_retained_after_run_end() {
 
 #[test]
 fn write_failure_is_retry_eligible_task_failure_not_permanent_or_panic() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     // Make the run directory a FILE where the scratch subtree needs to be, so
     // creating the namespace directory fails deterministically (a file cannot be a
     // parent directory). This is a deterministic fault, no wall-clock race.
@@ -328,7 +293,7 @@ fn write_failure_is_retry_eligible_task_failure_not_permanent_or_panic() {
 
 #[test]
 fn read_failure_is_retry_eligible_and_distinct_from_absent() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
     store.put(b"k", b"v").expect("write an existing value");
 
@@ -372,7 +337,7 @@ fn encoded_key(key: &[u8]) -> String {
 
 #[test]
 fn physical_layout_is_under_run_dir_and_per_node_namespaced() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "the-pipeline", "the-run", "node-a");
     store
         .put(b"k", b"v")
@@ -405,7 +370,7 @@ fn physical_layout_is_under_run_dir_and_per_node_namespaced() {
 
 #[test]
 fn hand_constructed_context_reaches_scratch_with_no_runtime() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     // A context built entirely by hand — no runtime, admission, or event stream.
     let ctx = RunContext::builder(
         RunId::new("solo-run"),
@@ -454,7 +419,7 @@ fn no_run_store_context_has_honestly_unwired_scratch() {
 
 #[test]
 fn second_write_overwrites_first() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
     store.put(b"k", b"first").expect("write 1");
     store.put(b"k", b"second-longer-value").expect("write 2");
@@ -471,7 +436,7 @@ fn second_write_overwrites_first() {
 
 #[test]
 fn remove_deletes_one_key_and_is_idempotent() {
-    let base = TempBase::new();
+    let base = TempBase::new("scratch-store");
     let store = store_for(base.path(), "pipe", "run-1", "node-a");
     store.put(b"k", b"v").expect("write");
     store.remove(b"k").expect("remove present key");

@@ -39,6 +39,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Causal chains
@@ -165,13 +166,14 @@ fn assert_structure_mismatch() -> StructureAssertError {
 /// that underflowed would wrap and never end at all.
 #[test]
 fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
+    let temp_base = TempBase::new("outcome-classes");
     let nodes = [
         ("won", TerminalState::Succeeded),
         ("lost", TerminalState::Failed),
         ("declined", TerminalState::Skipped),
         ("expired", TerminalState::TimedOut),
     ];
-    let report = drive_scripted(&nodes, &RunConfig::new(temp_base("outcome-classes")));
+    let report = drive_scripted(&nodes, &RunConfig::new(temp_base.as_str()));
     assert_every_node_terminal(&report, &nodes);
 }
 
@@ -180,6 +182,7 @@ fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
 /// by a later release — a different increment site from the initial frontier's.
 #[test]
 fn the_capacity_pending_path_leaves_the_counter_balanced() {
+    let temp_base = TempBase::new("capacity-pending");
     let nodes = [
         ("first", TerminalState::Succeeded),
         ("second", TerminalState::Succeeded),
@@ -188,8 +191,7 @@ fn the_capacity_pending_path_leaves_the_counter_balanced() {
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        &RunConfig::new(temp_base("capacity-pending"))
-            .capacities(PoolCapacities::new().memory(1000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1000)),
     );
     assert_every_node_terminal(&report, &nodes);
 }
@@ -201,6 +203,7 @@ fn the_capacity_pending_path_leaves_the_counter_balanced() {
 /// leave the loop spinning.
 #[test]
 fn the_cancel_pending_path_leaves_the_counter_balanced() {
+    let temp_base = TempBase::new("stop-cancel");
     // 600 bytes each against a 1000-byte pool: exactly one node in flight at a
     // time, so the alphabetically-first (failing) node runs while the other two
     // wait — and the stop it triggers settles both waiters.
@@ -212,7 +215,7 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
     let report = drive_scripted_with_cost(
         &nodes,
         600,
-        &RunConfig::new(temp_base("stop-cancel"))
+        &RunConfig::new(temp_base.as_str())
             .capacities(PoolCapacities::new().memory(1000))
             .failure_mode(dagr_core::flow::FailureMode::StopOnFirstFailure),
     );
@@ -231,7 +234,8 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
 /// decrement. Every node must still end with exactly one terminal state.
 #[test]
 fn an_external_interrupt_leaves_the_counter_balanced() {
-    let config = RunConfig::new(temp_base("interrupt"))
+    let temp_base = TempBase::new("interrupt");
+    let config = RunConfig::new(temp_base.as_str())
         .grace(std::time::Duration::from_millis(200))
         .capacities(PoolCapacities::new().memory(1000));
     let handle = config.cancel_handle();
@@ -281,6 +285,7 @@ fn an_external_interrupt_leaves_the_counter_balanced() {
 /// teardown alike — is terminal.
 #[test]
 fn teardown_runs_after_the_loop_drains_and_every_node_is_terminal() {
+    let temp_base = TempBase::new("teardown");
     let mut flow = Flow::new();
     let covered = flow.register_source("work", &Alpha);
     let _ = flow.register_teardown("cleanup", &Alpha, &[covered.ordering()]);
@@ -298,7 +303,7 @@ fn teardown_runs_after_the_loop_drains_and_every_node_is_terminal() {
     );
 
     let report = drive(
-        &RunConfig::new(temp_base("teardown")),
+        &RunConfig::new(temp_base.as_str()),
         "hardening",
         Ok(RunPlan::new(pipeline, runners)),
         &[],
@@ -592,15 +597,6 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
-}
-
-// ===========================================================================
-// Driver harness
-// ===========================================================================
-
-/// A private per-test run-store base, so parallel tests never share a directory.
-fn temp_base(tag: &str) -> String {
-    temp_dir(tag).to_string_lossy().into_owned()
 }
 
 fn temp_dir(tag: &str) -> PathBuf {

@@ -28,6 +28,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // --- injection seams --------------------------------------------------------
 
@@ -158,6 +159,7 @@ fn run_and_exit(
 /// arrives exits with the run-failure code.
 #[test]
 fn a_failed_node_exits_run_failure() {
+    let temp_base = TempBase::new("t55-run");
     let mut flow = Flow::new();
     let _h = flow.register_source("boom", &Fails);
     let pipeline = flow.finish();
@@ -167,7 +169,7 @@ fn a_failed_node_exits_run_failure() {
         SourceRunner::boxed("boom", Fails, slot_for::<u64>("boom")),
     );
 
-    let exit = run_and_exit(&RunConfig::new("/tmp/dagr-t55-run"), pipeline, runners);
+    let exit = run_and_exit(&RunConfig::new(temp_base.as_str()), pipeline, runners);
     assert_eq!(
         exit,
         ExitCode::RunFailure,
@@ -181,6 +183,7 @@ fn a_failed_node_exits_run_failure() {
 /// precedence assertion.)
 #[test]
 fn stop_on_first_failure_still_exits_run_failure() {
+    let temp_base = TempBase::new("t55-run");
     // Two independent sources: one fails, one succeeds. Under stop-on-first-failure
     // the failure routes through the cancellation core with a FailureUnderStop
     // origin; the exit-code table must still choose run-failure.
@@ -198,7 +201,7 @@ fn stop_on_first_failure_still_exits_run_failure() {
         SourceRunner::boxed("other", Succeeds, slot_for::<u64>("other")),
     );
 
-    let config = RunConfig::new("/tmp/dagr-t55-run").failure_mode(FailureMode::StopOnFirstFailure);
+    let config = RunConfig::new(temp_base.as_str()).failure_mode(FailureMode::StopOnFirstFailure);
     let exit = run_and_exit(&config, pipeline, runners);
     assert_eq!(
         exit,
@@ -211,6 +214,7 @@ fn stop_on_first_failure_still_exits_run_failure() {
 /// exits with the success code.
 #[test]
 fn a_skip_only_run_exits_success() {
+    let temp_base = TempBase::new("t55-run");
     let mut flow = Flow::new();
     let _h = flow.register_source("skip", &Skips);
     let pipeline = flow.finish();
@@ -220,7 +224,7 @@ fn a_skip_only_run_exits_success() {
         SourceRunner::boxed("skip", Skips, slot_for::<u64>("skip")),
     );
 
-    let exit = run_and_exit(&RunConfig::new("/tmp/dagr-t55-run"), pipeline, runners);
+    let exit = run_and_exit(&RunConfig::new(temp_base.as_str()), pipeline, runners);
     assert_eq!(
         exit,
         ExitCode::Success,

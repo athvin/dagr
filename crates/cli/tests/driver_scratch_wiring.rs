@@ -22,7 +22,7 @@
 //! `/tmp`. No wall-clock sleep; the run drives to completion synchronously.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -36,39 +36,11 @@ use dagr_core::handle::NodeId;
 use dagr_core::scratch::ScratchStore;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // Private per-test run-store base (never shared /tmp; removed on drop).
 // ===========================================================================
-
-struct TempBase {
-    path: PathBuf,
-}
-impl TempBase {
-    fn new(tag: &str) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let unique = format!(
-            "dagr-t63-scratch-{tag}-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed),
-            nanos,
-        );
-        let path = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&path).expect("create private temp base");
-        Self { path }
-    }
-    fn base(&self) -> &Path {
-        &self.path
-    }
-}
-impl Drop for TempBase {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
 
 // ===========================================================================
 // A deterministic clock + capturing sink (the injection seam).
@@ -245,7 +217,7 @@ fn a_task_reaches_its_scratch_store_in_a_real_drive_run() {
         ),
     );
 
-    let cfg = RunConfig::new(base.base().to_str().unwrap()).run_id(run_id);
+    let cfg = RunConfig::new(base.path().to_str().unwrap()).run_id(run_id);
     let report = drive(
         &cfg,
         PIPE,
@@ -258,7 +230,7 @@ fn a_task_reaches_its_scratch_store_in_a_real_drive_run() {
 
     // The value the task wrote through its context is readable from the run's real
     // per-node scratch namespace — the driver threaded the run-store base in.
-    let observed = store_for(base.base(), run_id, "writer")
+    let observed = store_for(base.path(), run_id, "writer")
         .get(key)
         .expect("scratch read");
     assert_eq!(
@@ -292,7 +264,7 @@ fn a_no_scratch_run_is_byte_identical() {
             SourceRunner::boxed("a", Plain, slot_for::<u64>("a")),
         );
         let sink = MemorySink::default();
-        let cfg = RunConfig::new(base.base().to_str().unwrap()).run_id("fixed-run");
+        let cfg = RunConfig::new(base.path().to_str().unwrap()).run_id("fixed-run");
         let report = drive(
             &cfg,
             PIPE,
@@ -320,7 +292,7 @@ fn a_no_scratch_run_is_byte_identical() {
         "a no-scratch run's event stream is byte-identical (the scratch wiring is invisible)"
     );
     // And the no-scratch run left no scratch subtree behind.
-    let scratch_dir = base.base().join(PIPE).join("fixed-run").join("scratch");
+    let scratch_dir = base.path().join(PIPE).join("fixed-run").join("scratch");
     assert!(
         !scratch_dir.exists(),
         "a run that writes no scratch creates no scratch namespace"

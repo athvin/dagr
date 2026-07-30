@@ -48,6 +48,7 @@ use dagr_core::flow::{FailureMode, Flow, Pipeline};
 use dagr_core::limits::ContainerLimitProbe;
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 /// The process-global lock every env-mutating test takes, so setting the real
 /// `DAGR_*` names never races across parallel tests.
@@ -117,8 +118,9 @@ fn with_clean_env<T>(body: impl FnOnce() -> T) -> T {
 
 #[test]
 fn grace_flag_beats_env() {
+    let temp_base = TempBase::new("t77");
     let cfg = with_env(&[(DAGR_GRACE, "30s")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .grace_from_env(Some(Duration::from_secs(5)))
             .expect("valid flag path never errors")
     });
@@ -131,8 +133,9 @@ fn grace_flag_beats_env() {
 
 #[test]
 fn grace_env_used_when_no_flag() {
+    let temp_base = TempBase::new("t77");
     let cfg = with_env(&[(DAGR_GRACE, "30s")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .grace_from_env(None)
             .expect("a valid DAGR_GRACE parses")
     });
@@ -145,8 +148,9 @@ fn grace_env_used_when_no_flag() {
 
 #[test]
 fn grace_default_when_neither() {
+    let temp_base = TempBase::new("t77");
     let cfg = with_clean_env(|| {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .grace_from_env(None)
             .expect("the default path never errors")
     });
@@ -159,9 +163,10 @@ fn grace_default_when_neither() {
 
 #[test]
 fn teardown_deadline_precedence() {
+    let temp_base = TempBase::new("t77");
     // flag beats env
     let cfg = with_env(&[(DAGR_TEARDOWN_DEADLINE, "40s")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .teardown_deadline_from_env(Some(Duration::from_secs(7)))
             .expect("flag path")
     });
@@ -169,7 +174,7 @@ fn teardown_deadline_precedence() {
 
     // env used when no flag
     let cfg = with_env(&[(DAGR_TEARDOWN_DEADLINE, "40s")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .teardown_deadline_from_env(None)
             .expect("env path")
     });
@@ -177,7 +182,7 @@ fn teardown_deadline_precedence() {
 
     // default when neither
     let cfg = with_clean_env(|| {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .teardown_deadline_from_env(None)
             .expect("default path")
     });
@@ -186,9 +191,10 @@ fn teardown_deadline_precedence() {
 
 #[test]
 fn failure_mode_precedence() {
+    let temp_base = TempBase::new("t77");
     // flag beats env
     let cfg = with_env(&[(DAGR_FAILURE_MODE, "stop-on-first-failure")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .failure_mode_from_env(Some(FailureMode::ContinueIndependent))
             .expect("flag path")
     });
@@ -199,7 +205,7 @@ fn failure_mode_precedence() {
 
     // env used when no flag
     let cfg = with_env(&[(DAGR_FAILURE_MODE, "stop-on-first-failure")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .failure_mode_from_env(None)
             .expect("env path")
     });
@@ -210,7 +216,7 @@ fn failure_mode_precedence() {
 
     // default when neither (continue-independent)
     let cfg = with_clean_env(|| {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .failure_mode_from_env(None)
             .expect("default path")
     });
@@ -373,8 +379,9 @@ fn headroom_out_of_range_env_is_bootstrap_failure_naming_the_variable() {
 
 #[test]
 fn unparseable_grace_env_is_invalid_usage_naming_the_variable() {
+    let temp_base = TempBase::new("t77");
     let err = with_env(&[(DAGR_GRACE, "notaduration")], || {
-        RunConfig::new("/tmp/dagr-t77")
+        RunConfig::new(temp_base.as_str())
             .grace_from_env(None)
             .expect_err("a bad DAGR_GRACE must fail loudly")
     });
@@ -507,9 +514,9 @@ impl MonotonicClock for TickClock {
 }
 
 /// Build the run config for the **env** path: several `DAGR_*` set, no flags.
-fn config_via_env() -> RunConfig {
+fn config_via_env(base: &str) -> RunConfig {
     let pins = resolve_pool_pins(PoolPinFlags::default()).expect("pool env parses");
-    RunConfig::new("/tmp/dagr-t77-e2e")
+    RunConfig::new(base)
         .run_id("t77-env")
         .grace_from_env(None)
         .expect("grace env")
@@ -519,8 +526,8 @@ fn config_via_env() -> RunConfig {
 }
 
 /// Build the run config for the **flag** path: the equivalent flags, no env.
-fn config_via_flags() -> RunConfig {
-    RunConfig::new("/tmp/dagr-t77-e2e")
+fn config_via_flags(base: &str) -> RunConfig {
+    RunConfig::new(base)
         .run_id("t77-flag")
         .grace_from_env(Some(Duration::from_secs(20)))
         .expect("grace flag")
@@ -531,6 +538,7 @@ fn config_via_flags() -> RunConfig {
 
 #[test]
 fn env_configured_run_reflects_env_values() {
+    let temp_base = TempBase::new("t77-e2e");
     let (_p, plan) = two_source_plan();
     let sink = MemorySink::default();
     let report = with_env(
@@ -540,7 +548,7 @@ fn env_configured_run_reflects_env_values() {
             (DAGR_POOL_MEMORY, "1000000"),
         ],
         || {
-            let config = config_via_env();
+            let config = config_via_env(temp_base.as_str());
             // The effective knobs observed by the run reflect the env values.
             assert_eq!(config.effective_grace(), Duration::from_secs(20));
             assert_eq!(
@@ -570,6 +578,7 @@ fn env_configured_run_reflects_env_values() {
 
 #[test]
 fn env_path_and_flag_path_are_behaviourally_identical() {
+    let temp_base = TempBase::new("t77-e2e");
     // Same pipeline, once with knobs via DAGR_*, once via the equivalent flags:
     // the terminal states and the overall outcome match.
     let (_p1, plan_env) = two_source_plan();
@@ -581,7 +590,7 @@ fn env_path_and_flag_path_are_behaviourally_identical() {
             (DAGR_POOL_MEMORY, "1000000"),
         ],
         || {
-            let config = config_via_env();
+            let config = config_via_env(temp_base.as_str());
             drive(
                 &config,
                 "t77",
@@ -596,7 +605,7 @@ fn env_path_and_flag_path_are_behaviourally_identical() {
     let (_p2, plan_flag) = two_source_plan();
     let sink_flag = MemorySink::default();
     let flag_report = with_clean_env(|| {
-        let config = config_via_flags();
+        let config = config_via_flags(temp_base.as_str());
         drive(
             &config,
             "t77",

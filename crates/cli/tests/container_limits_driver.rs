@@ -27,6 +27,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // In-memory sink + clock (the injection seam)
@@ -192,11 +193,12 @@ fn too_big_plan(over: u64, ok: u64) -> (Pipeline, RunPlan) {
 /// (never hangs).
 #[test]
 fn a_too_big_node_fails_the_run_at_bootstrap_before_any_node_executes() {
+    let temp_base = TempBase::new("t32");
     // Pool pinned to 1000 bytes; "hog" demands 5000 (> total → too big).
     let (_pipeline, plan) = too_big_plan(5_000, 400);
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t32").capacities(PoolCapacities::new().memory(1_000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1_000)),
         "t32-too-big",
         Ok(plan),
         &[],
@@ -236,10 +238,11 @@ fn a_too_big_node_fails_the_run_at_bootstrap_before_any_node_executes() {
 /// normally to success — the rejection is strictly for too-big nodes.
 #[test]
 fn a_run_within_pinned_capacity_passes_bootstrap_and_succeeds() {
+    let temp_base = TempBase::new("t32");
     let (_pipeline, plan) = too_big_plan(400, 300); // both fit a 1000-byte pool
     let sink = MemorySink::default();
     let report = drive(
-        &RunConfig::new("/tmp/dagr-t32").capacities(PoolCapacities::new().memory(1_000)),
+        &RunConfig::new(temp_base.as_str()).capacities(PoolCapacities::new().memory(1_000)),
         "t32-fits",
         Ok(plan),
         &[],

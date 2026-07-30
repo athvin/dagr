@@ -46,6 +46,7 @@ use dagr_core::context::RunContext;
 use dagr_core::error::RehydrateError;
 use dagr_core::task;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use dagr_core::{Flow, TaskError};
 
 // ===========================================================================
@@ -95,20 +96,6 @@ fn terminal_of(bytes: &[u8], node: &str) -> String {
         })
         .and_then(|r| r.get("state").and_then(|v| v.as_str()).map(str::to_string))
         .unwrap_or_else(|| panic!("no node-terminal for `{node}`"))
-}
-
-/// A private per-test run-store base under the temp dir.
-fn temp_base(tag: &str) -> String {
-    let dir = std::env::temp_dir().join(format!(
-        "dagr-cookbook-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.to_string_lossy().into_owned()
 }
 
 // ===========================================================================
@@ -168,6 +155,7 @@ impl Task for FanOutInsideOneNode {
 
 #[test]
 fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
+    let temp_base = TempBase::new("fan-out");
     let mut flow = RunnableFlow::new();
     let count = flow.register_source("how-many", HowMany { items: 100 });
     // The declared cost (compute threads) is the honest budget for this node's
@@ -184,7 +172,7 @@ fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
     let report = flow
         .run(
             "cookbook-fan-out",
-            &RunConfig::new(temp_base("fan-out")),
+            &RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -305,6 +293,7 @@ impl Task for RenderCountAndLabel {
 
 #[test]
 fn fan_in_via_aggregate_struct_runs_through_the_one_call_seam() {
+    let temp_base = TempBase::new("fan-in");
     let mut flow = RunnableFlow::new();
     let aggregate = flow.register_source("aggregate", MakeCountAndLabel);
     let rendered =
@@ -314,7 +303,7 @@ fn fan_in_via_aggregate_struct_runs_through_the_one_call_seam() {
     let report = flow
         .run(
             "cookbook-fan-in",
-            &RunConfig::new(temp_base("fan-in")),
+            &RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -370,6 +359,7 @@ impl Task for ConsumeValue {
 
 #[test]
 fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
+    let temp_base = TempBase::new("self-skip");
     // A self-skipping branch: the downstream, under the default `all-succeeded`
     // rule, is marked `upstream-skipped` and never runs — a skip-only run is still
     // a *successful* run.
@@ -381,7 +371,7 @@ fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
     let report = flow
         .run(
             "cookbook-self-skip",
-            &RunConfig::new(temp_base("self-skip")),
+            &RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -406,6 +396,7 @@ fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
 
 #[test]
 fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
+    let temp_base = TempBase::new("succeed-empty");
     // The succeed-with-empty branch keeps the join alive: it produces `None`, so
     // the join runs and sees an explicit empty value instead of being skipped.
     let mut flow = RunnableFlow::new();
@@ -416,7 +407,7 @@ fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
     let report = flow
         .run(
             "cookbook-succeed-empty",
-            &RunConfig::new(temp_base("succeed-empty")),
+            &RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )
@@ -474,11 +465,12 @@ fn advance_cursor(scratch: &dagr_core::context::ScratchStore) -> Result<u64, Tas
 
 #[test]
 fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
+    let temp_base = TempBase::new("cursor");
     use dagr_core::context::{PipelineId, RunId, ScratchStore};
     use dagr_core::handle::NodeId;
 
     // A real on-disk run store, one per test. Scratch lives under it.
-    let base = temp_base("cursor");
+    let base = temp_base.as_str();
     let base_path = std::path::Path::new(&base);
     let (pipeline, run, node) = (
         PipelineId::new("cookbook-cursor"),
@@ -718,6 +710,7 @@ impl SumAll {
 
 #[test]
 fn common_task_mistakes_have_compiling_fixes() {
+    let temp_base = TempBase::new("common-mistakes");
     let mut flow = RunnableFlow::new();
 
     // FIX 1 + FIX 2: a `#[task]` returning `Result<_, TaskError>` and capturing an
@@ -740,7 +733,7 @@ fn common_task_mistakes_have_compiling_fixes() {
     let report = flow
         .run(
             "cookbook-common-mistakes",
-            &RunConfig::new(temp_base("common-mistakes")),
+            &RunConfig::new(temp_base.as_str()),
             mem.clone(),
             TickClock::default(),
         )

@@ -30,6 +30,7 @@ use dagr_core::execution::AttemptEventSink;
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::Handle;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -371,6 +372,7 @@ fn is_taxonomy(state: TerminalState) -> bool {
 /// every node records exactly one taxonomy terminal state (driven for real).
 #[test]
 fn generated_runs_terminate_through_the_real_driver() {
+    let temp_base = TempBase::new("termination");
     const BASE_SEED: u64 = 0x5EED_10AD_D46C_11E5;
     // A modest, deterministic budget — each case spins two tokio runtimes, so this
     // is the "quick" companion to the tracker suite's high-volume sweep.
@@ -389,7 +391,7 @@ fn generated_runs_terminate_through_the_real_driver() {
         // hang (caught by the harness timeout) — returning at all is half the
         // property. A short grace keeps any timed-out zombie wait bounded.
         let report = drive(
-            &RunConfig::new("/tmp/dagr-termination").grace(std::time::Duration::from_millis(50)),
+            &RunConfig::new(temp_base.as_str()).grace(std::time::Duration::from_millis(50)),
             "termination",
             Ok(plan),
             &[],
