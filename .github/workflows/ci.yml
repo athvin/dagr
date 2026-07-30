@@ -6,10 +6,14 @@
 # the `paths-ignore` note on the trigger). Because pull_request events run the
 # workflow file from the PR head, THIS workflow gates its own PR.
 #
-# The CHECK set mirrors the era-`ci` gate command list in the skill's
-# quality-gates.md §2 (and scripts/run_gate.sh ci), under the toolchain pinned
-# in rust-toolchain.toml (1.97.1). Checks are not one-to-one with jobs — several
-# share a job where they share a build:
+# The CHECK set mirrors the era-`ci` gate command list in the ticket-loop skill's
+# `.claude/skills/shipping-dagr-tickets/references/quality-gates.md` §2 (run
+# locally by `.claude/skills/shipping-dagr-tickets/scripts/run_gate.sh ci`), under
+# the toolchain pinned in rust-toolchain.toml (1.97.1). Both paths are written out
+# in full because neither artifact lives in THIS repository: an earlier revision
+# cited them by bare filename, which read as repository-relative paths and resolved
+# to nothing (fixed by T98). Checks are not one-to-one with jobs — several share a
+# job where they share a build:
 #   * fmt            — cargo fmt --all --check
 #   * clippy         — cargo clippy --workspace --all-targets -- -D warnings
 #   * test           — cargo test --workspace
@@ -724,6 +728,129 @@ jobs:
           fi
           echo "OK: masked graph artifact + fingerprints are byte-identical across toolchains (SL4a)"
 
+  # --- The feature matrix (T98) ------------------------------------------------
+  # dagr's features are not conveniences: THREE architectural guarantees are
+  # implemented as feature boundaries — `dagr-core` stays zero-runtime-dependency
+  # under `--no-default-features` (ADR 081/082), `metastore` is default-off (ADR
+  # 097 §5), and `dag` confines the runtime `inventory` dependency to `dagr-cli`
+  # (ADR 092). Until this job, NO job built either end of that matrix; the only
+  # coverage was inside two metastore-scoped shell scripts, and a feature
+  # combination could break with nothing noticing.
+  #
+  # Three legs, and the order is deliberate — cheapest failure first:
+  #
+  #   1. `--no-default-features` across the workspace. This is the standing proof
+  #      of the zero-dependency guarantee, and it is the one leg where a BUILD IS
+  #      NOT THE PROOF: compilation succeeds just as happily with an unwanted edge
+  #      present. `scripts/check-feature-matrix.sh` therefore asserts the RESOLVED
+  #      GRAPH (`cargo tree -e normal`) — dagr-core alone, no dagr-macros /
+  #      inventory / libsql / dagr-metastore — and proves that query non-vacuous by
+  #      requiring the DEFAULT resolution to show the edge the no-default one drops.
+  #   2. `--all-features` across the workspace: the adversarial resolution, every
+  #      optional edge in the workspace on at once.
+  #   3. `cargo test --workspace --all-features`: the metastore + schema-validation
+  #      + dag combination, which no job ran before. Deliberately `cargo test`
+  #      rather than nextest — this leg exists to exercise a feature RESOLUTION, and
+  #      keeping the runner plain removes the runner itself as a variable.
+  #
+  # It is its own job rather than steps on `test` because `--all-features` builds an
+  # entirely different dependency graph (libsql, jsonschema); folding it into `test`
+  # would make that job's cache entry — the one every reader job restores — carry
+  # artifacts no other job wants.
+  feature-matrix:
+    name: feature-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # WRITER for its own key: the feature set is hashed into the cache key, so
+      # this job cannot share the `workspace` readers' entry however it is named.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: feature-matrix
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build with no default features
+        run: cargo build --workspace --no-default-features
+      - name: The resolved graph proves the no-default guarantee
+        run: bash scripts/check-feature-matrix.sh
+      - name: Build with all features
+        run: cargo build --workspace --all-features
+      - name: Test with all features (metastore + schema-validation + dag)
+        run: cargo test --workspace --all-features
+
+  # --- Structural invariant checkers (T98) --------------------------------------
+  # Sixteen of the twenty-six `scripts/check-*.sh` invariant checkers were DORMANT:
+  # written as ticket-time acceptance gates, run once by their own ticket, and then
+  # never again. Three of them had already drifted into permanent failure with
+  # nobody looking — `check-hygiene.sh` asserting no crate existed anywhere (true
+  # only until T1 landed the workspace), and two ADR checkers asserting tokio/rayon
+  # were "not wired yet" (true only until T33 wired them). All three were repaired
+  # by correcting the PREDICATE to the durable invariant behind it, never by
+  # relaxing the check; each carries a `PREDICATE CORRECTED BY T98` note at the
+  # site. Nothing was retired.
+  #
+  # `crates/cli/tests/ci_and_test_hygiene.rs` asserts that every `check-*.sh` in the
+  # directory is both NAMED and INVOKED in this file, so a checker added later
+  # cannot go dormant the way these did.
+  #
+  # WHY THEY ALL RUN, INCLUDING THE ADR CONTENT CHECKS. The ticket's open question
+  # asked whether the decision-record checkers — which assert an ADR still contains
+  # its decision, consequences, and rejected alternatives — belong in every CI run,
+  # given a merged decision has no drift risk. The answer taken here is yes, for two
+  # reasons. The premise is wrong: a merged ADR is an ordinary file, editable and
+  # deletable like any other, and these checkers are the only thing standing between
+  # a decision record and a well-meaning edit that removes the alternatives someone
+  # will need in two years. And the cost of being wrong is asymmetric — the whole job
+  # is bash over markdown with no toolchain, and it is one of the fastest in the gate,
+  # whereas the failure mode of carving them out is another sixteen dormant checkers.
+  # A carve-out remains available, but it needs a stated reason, which is the
+  # standard this job exists to hold.
+  #
+  # It needs no Rust toolchain (the two cargo-graph checkers below are the
+  # exception and are grouped last), so it runs with no rust-cache step.
+  structural-checks:
+    name: structural-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Repository hygiene (T0.0a): toolchain pin, rustfmt/editorconfig policy,
+      # LICENSE, gitignore coverage, and no crate artifact outside the workspace.
+      - name: Repository hygiene
+        run: bash scripts/check-hygiene.sh
+      # The contributor process contract (T0.0b): CONTRIBUTING, CODEOWNERS, the PR
+      # template, and the merge-gate table agreeing with the workflow.
+      - name: Contributor workflow contract
+        run: bash scripts/check-contributor-workflow.sh
+      # Stability + criteria partition (T0.10): MSRV/semver/schema-evolution rules
+      # and the machine/human classification the coverage matrix is derived from.
+      - name: Stability policy and criteria partition
+        run: bash scripts/check-stability-and-criteria.sh
+      # The workspace skeleton (T1): the member list, the dependency DIRECTION
+      # (render has no edge onto core, so C24's "rendering needs no access to the
+      # pipeline binary" is structural), the standalone renderer bin, and core's
+      # zero-runtime-dependency edge set. Manifest-level facts only — the
+      # resolution-level complement is `check-feature-matrix.sh` on the
+      # `feature-matrix` job, which needs cargo and so does not belong here.
+      - name: Workspace skeleton and dependency direction
+        run: bash scripts/check-workspace-skeleton.sh
+      # The M0 decision records. Each asserts its ADR still states the decision it
+      # made, the consequences, and the alternatives it rejected — and, where the
+      # decision has since been implemented, that the implementation landed in the
+      # crate the ADR chose.
+      - name: ADR content contracts (M0 decisions)
+        run: |
+          bash scripts/check-output-ownership-adr.sh
+          bash scripts/check-timeout-and-permit-adr.sh
+          bash scripts/check-trigger-rule-and-state-tables-adr.sh
+          bash scripts/check-bootstrap-phase-and-cost-model-adr.sh
+          bash scripts/check-run-store-contract-adr.sh
+          bash scripts/check-stable-name-and-fingerprint-adr.sh
+          bash scripts/check-durable-output-contract-adr.sh
+          bash scripts/check-ordering-edge-mechanics-adr.sh
+          bash scripts/check-async-runtime-adr.sh
+          bash scripts/check-error-taxonomy-adr.sh
+          bash scripts/check-artifact-serialization-format-adr.sh
+          bash scripts/check-typed-handle-encoding-adr.sh
+
   # --- The SYSTEM ACCEPTANCE GATE (system-level acceptance, T65) --------------
   # The terminal required gate. It is RED unless every constituent is green: the
   # milestone demos (T28/T38/T49/T63) and the whole workspace suite (which
@@ -756,6 +883,8 @@ jobs:
       - rust-skills-register
       - cargo-profiles
       - crate-docs-and-metadata
+      - feature-matrix
+      - structural-checks
     steps:
       - name: All system-level acceptance constituents are green
         run: |

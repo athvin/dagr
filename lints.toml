@@ -30,6 +30,20 @@ warnings = "deny"
 # retires the "kept at warn pre-workspace so scaffolding crates in T1 are not
 # blocked" note, which stopped being true when T1 shipped.
 missing_docs = "deny"
+# Cfg-typo insurance (T98). `#[cfg(feature = "metastor")]` is not an error — it is
+# a condition that is simply never true, so the code under it compiles into
+# nothing and the feature it was meant to gate silently does not exist. dagr gates
+# three architectural guarantees on features, which makes that failure mode
+# expensive and invisible in exactly the place it can least afford to be.
+# `unexpected_cfgs` is warn-by-default and `warnings = "deny"` has been promoting
+# it all along; writing the level out makes the guarantee readable AT the setting
+# and independent of that promotion. `check-cfg` states dagr's CUSTOM cfg surface,
+# which is EMPTY — every `cfg` in the workspace is either a feature (cargo declares
+# those itself) or a well-known name (`unix`, `test`, `doc`, `panic`). It is
+# written out rather than omitted so the next custom cfg — `cfg(loom)`, say, if the
+# declined loom port is ever revisited — has to be declared HERE to compile, which
+# is the whole point of the mechanism.
+unexpected_cfgs = { level = "deny", check-cfg = [] }
 unsafe_code = "warn"       # dagr targets safe Rust; each use is reviewed (see rationale).
 
 [clippy]
