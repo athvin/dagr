@@ -109,21 +109,57 @@ else
   bad "render: no standalone bin target (ADR says renderer builds standalone)"
 fi
 
-# --- Test: core dependency set is minimal ------------------------------------
-# (Test plan: "Core dependency set is minimal" — empty or minimal, each entry
-# justified in the ADR; Stability's minimal-core commitment.)
+# --- Test: core's RUNTIME dependency set is empty ----------------------------
+# (Test plan: "Core dependency set is minimal" — Stability's minimal-core
+# commitment.)
+#
+# PREDICATE CORRECTED BY T98, and deliberately not relaxed.
+#
+# As authored this counted `[dependencies]` entries and demanded ZERO. That was
+# right while core was a skeleton and went false when ADR 082 (T71) added the
+# `#[task]` proc-macro edge — which is not a counterexample to the guarantee but
+# an instance of it: a proc-macro runs INSIDE the compiler and is never linked
+# into the shipped binary, so core's RUNTIME dependency set is still empty and
+# `--no-default-features` drops the edge outright. Counting entries could not see
+# that distinction; unwired in CI, the resulting failure went unseen.
+#
+# The corrected predicate asserts the guarantee itself and is STRICTER than a
+# count: the only entry permitted is an OPTIONAL path edge onto the in-workspace
+# proc-macro crate. Any other entry — optional or not, build-time or not — fails,
+# so this now catches the very additions the count was there to catch, and also
+# catches making the proc-macro edge mandatory (which would put it in a
+# `--no-default-features` build).
 core_manifest="crates/core/Cargo.toml"
 if [ -f "$core_manifest" ]; then
-  # Extract the [dependencies] section body and count non-comment entries.
-  deps=$(awk '
+  entries=$(awk '
     /^\[dependencies\]/     {inblk=1; next}
     /^\[/                   {inblk=0}
     inblk && /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/ {print}
-  ' "$core_manifest" | grep -vcE '^\s*#')
-  if [ "${deps:-0}" -eq 0 ]; then
-    pass "core: dependency set is empty (Stability minimal-core commitment)"
+  ' "$core_manifest" | grep -vE '^\s*#')
+  offending=""
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    name=${line%%=*}
+    name=$(printf '%s' "$name" | tr -d '[:space:]')
+    case "$name" in
+      dagr-macros)
+        case "$line" in
+          *optional*=*true*) ;;
+          *) offending="$offending$name (must be optional = true so --no-default-features drops it)
+";;
+        esac
+        ;;
+      *) offending="$offending$name (only the optional build-time dagr-macros edge is permitted)
+";;
+    esac
+  done <<EOF
+$entries
+EOF
+  if [ -z "$offending" ]; then
+    pass "core: runtime dependency set is empty; the only edge is the optional build-time dagr-macros path (ADR 081/082)"
   else
-    bad "core: has $deps direct dependencies (expected empty/minimal per ADR)"
+    bad "core: dependency set violates the zero-runtime-dependency guarantee:"
+    printf '%s' "$offending" | sed 's/^/        /'
   fi
 fi
 

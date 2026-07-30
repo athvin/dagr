@@ -231,14 +231,32 @@ else
   bad "unblocks: the ADR must state it leaves no choice open to T9 and T33"
 fi
 
-# --- No new dependency leaked into shipping crates ---------------------------
-# T2 is a doc-only decision: it names tokio but does NOT wire it into any
-# shipping crate (that is T9/T33). Guard against an accidental dependency
-# addition that would change Cargo.lock and give cargo-audit new surface.
-if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/*/Cargo.toml 2>/dev/null; then
-  bad "scope: tokio must NOT be wired into a shipping crate here (that is T9/T33)"
+# --- tokio lands where the ADR says it lands ---------------------------------
+#
+# PREDICATE CORRECTED BY T98, and deliberately not relaxed.
+#
+# As authored, this asserted that tokio was NOT yet wired into any shipping
+# crate, because at T2 the decision was doc-only and the wiring belonged to
+# T9/T33. That is a statement about the ORDER OF WORK, not about the design, and
+# it went permanently false the moment T33 shipped — after which the checker
+# could only fail. Unwired in CI, nobody saw it; T98 wires every checker, so it
+# has to say something true.
+#
+# The DESIGN invariant behind it is the durable one, and it is stronger: the ADR
+# places tokio in the crate that owns the run loop and never in `dagr-core`,
+# whose runtime dependency set is empty by architectural commitment (arch.md
+# "Stability"; ADR 081/082). So the scan is re-pointed at that boundary — a
+# tokio edge on core is now the failure, and the absence of one anywhere is too,
+# because a decision nothing implements is not a decision.
+if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/core/Cargo.toml 2>/dev/null; then
+  bad "scope: dagr-core must NOT depend on tokio — its runtime dependency set is empty (ADR 081/082)"
 else
-  pass "scope: no tokio dependency wired into a shipping crate (doc-only decision)"
+  pass "scope: dagr-core carries no tokio edge (zero-runtime-dependency guarantee)"
+fi
+if grep -qiE '^[[:space:]]*tokio[[:space:]]*=' crates/cli/Cargo.toml 2>/dev/null; then
+  pass "scope: tokio is wired into dagr-cli, the crate the ADR places the runtime in"
+else
+  bad "scope: no crate wires tokio — the ADR's chosen runtime is unimplemented"
 fi
 
 if [ "$fail" -eq 0 ]; then

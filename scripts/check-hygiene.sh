@@ -187,13 +187,66 @@ else
   pass "test7: normal source path is not ignored (negative check)"
 fi
 
-# --- Test 8: no crate leaked in ---------------------------------------------
-leaked=$(find . -path ./.git -prune -o \
-  \( -name Cargo.toml -o -name Cargo.lock -o -name '*.rs' \) -print | head -5)
+# --- Test 8: no crate artifact leaks outside the declared workspace ----------
+#
+# PREDICATE CORRECTED BY T98, and deliberately not relaxed.
+#
+# As authored, this test asserted that NO `Cargo.toml`, `Cargo.lock`, or `*.rs`
+# existed anywhere in the tree — correct for exactly as long as the repository
+# had no crate in it, which is to say until T1 landed the workspace one ticket
+# later. From that merge onwards it reported the root manifest as a leak and
+# could never pass again; being unwired in CI, nobody saw it. That is the rot a
+# dormant checker accumulates, and the reason T98 wires every checker.
+#
+# The INVARIANT the test was defending still holds and is still worth defending:
+# a crate artifact must not appear where the workspace does not declare one. A
+# stray manifest outside the declared members is either a leaked spike (which
+# ticket-conventions §4 requires be quarantined outside the workspace or deleted
+# before the PR), a vendored copy, or a member somebody forgot to add to
+# `[workspace] members` — all three are exactly what this catches. So the scan is
+# re-pointed at that, rather than deleted or weakened into a pass.
+#
+# Rust sources may live only under `crates/`; manifests only at the root and at
+# `crates/<member>/Cargo.toml`. `target/` is build output, not source.
+leaked=""
+while IFS= read -r f; do
+  case "$f" in
+    ./Cargo.toml|./crates/*/Cargo.toml) ;;
+    *) leaked="$leaked$f
+";;
+  esac
+done <<EOF
+$(find . -path ./.git -prune -o -path ./target -prune -o -name Cargo.toml -print)
+EOF
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    ./crates/*) ;;
+    *) leaked="$leaked$f
+";;
+  esac
+done <<EOF
+$(find . -path ./.git -prune -o -path ./target -prune -o -name '*.rs' -print)
+EOF
 if [ -z "$leaked" ]; then
-  pass "test8: no Cargo.toml / Cargo.lock / *.rs present (workspace is T1)"
+  pass "test8: every Cargo.toml / *.rs lives inside the declared workspace (no leaked crate)"
 else
-  bad "test8: crate artifact leaked in: $leaked"
+  bad "test8: crate artifact outside the declared workspace:"
+  printf '%s' "$leaked" | sed 's/^/        /'
+fi
+
+# The scan is non-vacuous: a manifest planted outside the workspace is caught.
+probe=$(mktemp -d "./.hygiene-probe.XXXXXX") || probe=""
+if [ -n "$probe" ]; then
+  : >"$probe/Cargo.toml"
+  planted=$(find . -path ./.git -prune -o -path ./target -prune -o -name Cargo.toml -print \
+            | grep -v -e '^\./Cargo\.toml$' -e '^\./crates/[^/]*/Cargo\.toml$' || true)
+  rm -rf "$probe"
+  if [ -n "$planted" ]; then
+    pass "test8: the scan rejects a manifest planted outside the workspace (non-vacuous)"
+  else
+    bad "test8: the scan did not notice a planted out-of-workspace manifest — it is vacuous"
+  fi
 fi
 
 echo "---"

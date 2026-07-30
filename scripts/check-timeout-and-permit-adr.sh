@@ -235,15 +235,24 @@ else
   bad "scope: the T32 (container limit detection / sizing) scope-out is missing"
 fi
 
-# --- No new dependency leaked into shipping crates ---------------------------
-# T0.3 is a doc-only decision: the spike depends on tokio/rayon OUTSIDE the
-# workspace, but the shipping crates must NOT gain a dependency (that is
-# T21/T31/T33). Guard against an accidental dependency addition that would
-# change Cargo.lock and give cargo-audit new surface.
-if grep -qiE '^[[:space:]]*(tokio|rayon|tokio-util)[[:space:]]*=' crates/*/Cargo.toml 2>/dev/null; then
-  bad "scope: no runtime dependency may be wired into a shipping crate here (that is T21/T31/T33)"
+# --- The runtime dependencies land where the ADR says they land --------------
+#
+# PREDICATE CORRECTED BY T98, and deliberately not relaxed.
+#
+# As authored, this asserted that tokio/rayon were NOT yet wired into any
+# shipping crate, because at T0.3 the spike lived outside the workspace and the
+# wiring belonged to T21/T31/T33. That is a claim about the ORDER OF WORK, and it
+# went permanently false when T33 shipped; unwired in CI, the failure went
+# unseen. See the same repair in check-async-runtime-adr.sh.
+#
+# The DESIGN invariant behind it survives and is re-asserted here: the timeout
+# and permit machinery lives in the crate that owns the run loop, and
+# `dagr-core`'s runtime dependency set stays empty (arch.md "Stability"; ADR
+# 081/082).
+if grep -qiE '^[[:space:]]*(tokio|rayon|tokio-util)[[:space:]]*=' crates/core/Cargo.toml 2>/dev/null; then
+  bad "scope: dagr-core must NOT depend on tokio/rayon/tokio-util — its runtime dependency set is empty (ADR 081/082)"
 else
-  pass "scope: no tokio/rayon/tokio-util dependency wired into a shipping crate (doc-only decision)"
+  pass "scope: dagr-core carries no tokio/rayon/tokio-util edge (zero-runtime-dependency guarantee)"
 fi
 
 # --- No spike code leaked into the workspace ---------------------------------
