@@ -59,9 +59,24 @@ if [ -f rustfmt.toml ] && command -v rustfmt >/dev/null 2>&1; then
   good="$tmp/good.rs"; bad_f="$tmp/bad.rs"
   printf 'fn main() {\n    let x = 1;\n    println!("{x}");\n}\n' >"$good"
   printf 'fn main(){let x=1;println!("{x}");}\n' >"$bad_f"
+  # `rustfmt` on PATH is normally rustup's shim, and on a machine that has not
+  # yet installed the pinned toolchain the first call through it installs one —
+  # writing rustup's OWN progress to the same stderr this test then reads as
+  # rustfmt's. Two things follow. Resolve the toolchain before any sample is
+  # taken; and read only rustfmt's lines, which is exact because rustup prefixes
+  # every progress line `info:` and rustfmt never does. Skipping either makes
+  # the test host-dependent rather than wrong everywhere: every Linux host
+  # triple contains the substring `unknown` (`x86_64-unknown-linux-gnu`) that
+  # the config-error needle below looks for, and `aarch64-apple-darwin` does
+  # not, so rustup's first line reads as a rustfmt config error on Linux only.
+  rustfmt --version >/dev/null 2>&1
+  fmt_diagnostics() { grep -v '^info:' "$1"; return 0; }
   # Config must be accepted (no unknown-option errors) and be live: the
   # mis-formatted snippet must be reported by --check, the tidy one accepted.
-  if rustfmt --check --config-path rustfmt.toml "$good" >/dev/null 2>"$tmp/err"; then
+  rustfmt --check --config-path rustfmt.toml "$good" >/dev/null 2>"$tmp/err.raw"
+  rc_good=$?
+  fmt_diagnostics "$tmp/err.raw" >"$tmp/err"
+  if [ "$rc_good" -eq 0 ]; then
     if grep -qi 'unknown\|error' "$tmp/err"; then
       bad "test2: rustfmt reported config errors: $(head -1 "$tmp/err")"
     else
@@ -75,7 +90,10 @@ if [ -f rustfmt.toml ] && command -v rustfmt >/dev/null 2>&1; then
       bad "test2: already-formatted snippet failed --check unexpectedly"
     fi
   fi
-  if rustfmt --check --config-path rustfmt.toml "$bad_f" >/dev/null 2>"$tmp/err2"; then
+  rustfmt --check --config-path rustfmt.toml "$bad_f" >/dev/null 2>"$tmp/err2.raw"
+  rc_bad=$?
+  fmt_diagnostics "$tmp/err2.raw" >"$tmp/err2"
+  if [ "$rc_bad" -eq 0 ]; then
     bad "test2: mis-formatted snippet unexpectedly passed --check (config inert)"
   else
     if grep -qi 'unknown\|not.*recognized' "$tmp/err2"; then
@@ -83,6 +101,36 @@ if [ -f rustfmt.toml ] && command -v rustfmt >/dev/null 2>&1; then
     else
       pass "test2: mis-formatted snippet correctly reported by --check (config live)"
     fi
+  fi
+  # Non-vacuity, end to end: an option rustfmt does not know must still trip the
+  # config-error needle through the same sampling path. Filtering rustup's
+  # chatter is only defensible if a real diagnostic still gets through, and this
+  # is what distinguishes the filter from having deleted the check.
+  { cat rustfmt.toml; printf '\nzz_hygiene_probe_option = true\n'; } >"$tmp/probe.toml"
+  rustfmt --check --config-path "$tmp/probe.toml" "$good" >/dev/null 2>"$tmp/probe.raw"
+  fmt_diagnostics "$tmp/probe.raw" >"$tmp/probe.err"
+  if grep -qi 'unknown\|error' "$tmp/probe.err"; then
+    pass "test2: an unknown rustfmt.toml option is still detected (needle non-vacuous)"
+  else
+    bad "test2: an unknown rustfmt.toml option went undetected — the config-error check is inert"
+  fi
+  # Both directions of the chatter filter, asserted on a synthetic sample so the
+  # Linux-only failure above is reproducible on any host: rustup's install
+  # progress must not read as a diagnostic, and a diagnostic printed after it
+  # must survive.
+  printf 'info: syncing channel updates for 1.97.1-x86_64-unknown-linux-gnu\n' >"$tmp/noise.raw"
+  { cat "$tmp/noise.raw"; printf 'Warning: Unknown configuration option `zz`\n'; } >"$tmp/noisy.raw"
+  fmt_diagnostics "$tmp/noise.raw" >"$tmp/noise.err"
+  fmt_diagnostics "$tmp/noisy.raw" >"$tmp/noisy.err"
+  if grep -qi 'unknown\|error' "$tmp/noise.err"; then
+    bad "test2: rustup install progress is being read as a rustfmt config error"
+  else
+    pass "test2: rustup install progress is not mistaken for a rustfmt diagnostic"
+  fi
+  if grep -qi 'unknown\|error' "$tmp/noisy.err"; then
+    pass "test2: a rustfmt diagnostic printed after rustup chatter still trips the needle"
+  else
+    bad "test2: the rustup-chatter filter swallowed a real rustfmt diagnostic"
   fi
   rm -rf "$tmp"
 elif [ ! -f rustfmt.toml ]; then
