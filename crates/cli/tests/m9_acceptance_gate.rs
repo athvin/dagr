@@ -50,7 +50,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use dagr_cli::scale_bench::{CI_BUDGET_NS_PER_NODE, SPEC_CEILING_NS_PER_NODE, SCALE_NODE_COUNT};
+use dagr_cli::scale_bench::{CI_BUDGET_NS_PER_NODE, SCALE_NODE_COUNT, SPEC_CEILING_NS_PER_NODE};
 
 // ===========================================================================
 // Repository helpers
@@ -99,7 +99,11 @@ fn production_sources() -> Vec<(String, String)> {
     let root = repo_root();
     let mut out = Vec::new();
     for member in MEMBERS {
-        walk(&root.join("crates").join(member).join("src"), &root, &mut out);
+        walk(
+            &root.join("crates").join(member).join("src"),
+            &root,
+            &mut out,
+        );
     }
     out
 }
@@ -233,8 +237,12 @@ fn gate_table(register: &str, heading: &str, columns: usize) -> Vec<Vec<String>>
 /// never a number written down.
 fn rule_ids_on_disk() -> BTreeSet<String> {
     let dir = repo_root().join(RULES_DIR);
-    let entries = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read {}: {e} — the rules directory is the authority", dir.display()));
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| {
+        panic!(
+            "read {}: {e} — the rules directory is the authority",
+            dir.display()
+        )
+    });
     entries
         .flatten()
         .map(|e| e.path())
@@ -255,7 +263,10 @@ fn rule_ids_on_disk() -> BTreeSet<String> {
 #[test]
 fn the_register_verifier_and_its_self_tests_pass() {
     let (ok, out) = run_script("scripts/check-rust-skills-adoption.sh", &[]);
-    assert!(ok, "the rust-skills adoption register verifier passes\n{out}");
+    assert!(
+        ok,
+        "the rust-skills adoption register verifier passes\n{out}"
+    );
     assert!(
         out.contains("REGISTER=PASS"),
         "the verifier printed its PASS verdict\n{out}"
@@ -290,7 +301,11 @@ fn every_rule_id_is_dispositioned_exactly_once_against_the_rules_directory() {
     for row in &rows {
         *seen.entry(row.rule.as_str()).or_default() += 1;
     }
-    let duplicated: Vec<&&str> = seen.iter().filter(|(_, n)| **n > 1).map(|(r, _)| r).collect();
+    let duplicated: Vec<&&str> = seen
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(r, _)| r)
+        .collect();
     assert!(
         duplicated.is_empty(),
         "these rule ids are dispositioned more than once: {duplicated:?}"
@@ -298,7 +313,10 @@ fn every_rule_id_is_dispositioned_exactly_once_against_the_rules_directory() {
 
     let dispositioned: BTreeSet<String> = seen.keys().map(|s| (*s).to_owned()).collect();
     let absent: Vec<&String> = on_disk.difference(&dispositioned).collect();
-    assert!(absent.is_empty(), "these rule ids are not dispositioned: {absent:?}");
+    assert!(
+        absent.is_empty(),
+        "these rule ids are not dispositioned: {absent:?}"
+    );
     let dangling: Vec<&String> = dispositioned.difference(&on_disk).collect();
     assert!(
         dangling.is_empty(),
@@ -380,10 +398,7 @@ fn every_adopt_row_is_traced_to_a_shipped_ticket_item() {
         .map(|cells| (cells[0].trim_matches('`').to_owned(), cells.clone()))
         .collect();
 
-    let missing: Vec<&String> = adopt
-        .keys()
-        .filter(|r| !traced.contains_key(*r))
-        .collect();
+    let missing: Vec<&String> = adopt.keys().filter(|r| !traced.contains_key(*r)).collect();
     assert!(
         missing.is_empty(),
         "these `adopt` rows are not traced to a shipped item: {missing:?}"
@@ -417,7 +432,10 @@ fn every_adopt_row_is_traced_to_a_shipped_ticket_item() {
         );
 
         let Some((path, token)) = parse_evidence(&cells[3]) else {
-            broken.push(format!("{rule}: evidence cell is not `path` :: `token`: {}", cells[3]));
+            broken.push(format!(
+                "{rule}: evidence cell is not `path` :: `token`: {}",
+                cells[3]
+            ));
             continue;
         };
         match evidence_present(&path, &token) {
@@ -480,16 +498,33 @@ const SPOT_CHECKS: [&str; 12] = [
 ];
 
 /// Re-derive one sampled `satisfied` claim from the tree. `Ok(evidence)` when the
-/// claim holds; `Err(reason)` when it does not.
+/// claim holds; `Err(reason)` when it does not. Split in two only so each half
+/// stays inside the workspace's denied `clippy::too_many_lines`: the source
+/// scanners read `crates/*/src`, the layout scanners read manifests and
+/// directories.
 fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String> {
-    let root = repo_root();
+    match scan_sources(rule, sources) {
+        Err(reason) if reason == UNHANDLED => scan_layout(rule),
+        verdict => verdict,
+    }
+}
+
+/// The sentinel a scanner returns for a rule it does not handle, so `spot_check`
+/// can fall through to the other half without either half knowing the whole set.
+const UNHANDLED: &str = "<unhandled by this scanner>";
+
+/// The sampled claims that are re-derived by scanning production source.
+fn scan_sources(rule: &str, sources: &[(String, String)]) -> Result<String, String> {
     match rule {
         "own-slice-over-vec" => {
             let hits = production_line_hits(sources, &[": &Vec<", ": &String", ": &Box<"]);
             if hits.is_empty() {
                 Ok("zero `&Vec<T>` / `&String` / `&Box<T>` parameters in production".into())
             } else {
-                Err(format!("{} borrowed-container parameter(s): {hits:?}", hits.len()))
+                Err(format!(
+                    "{} borrowed-container parameter(s): {hits:?}",
+                    hits.len()
+                ))
             }
         }
         "conc-thread-local" => {
@@ -505,44 +540,7 @@ fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String
                 "{locals} `thread_local!` declarations and zero `static mut` in production"
             ))
         }
-        "unsafe-safety-comment" => {
-            let mut uncommented = Vec::new();
-            let mut blocks = 0usize;
-            for (rel, text) in sources {
-                let lines: Vec<&str> = text.lines().collect();
-                for (i, line) in lines.iter().enumerate() {
-                    let code = line.trim_start();
-                    // Prose that *mentions* an unsafe block is not one.
-                    if code.starts_with("//") || code.starts_with('*') {
-                        continue;
-                    }
-                    let is_block = code.contains("unsafe {") || code.starts_with("unsafe impl");
-                    if !is_block {
-                        continue;
-                    }
-                    blocks += 1;
-                    // The justification sits in the run of comments and attributes
-                    // introducing the block.
-                    let commented = lines[i.saturating_sub(8)..i]
-                        .iter()
-                        .any(|l| l.contains("// SAFETY:"));
-                    if !commented {
-                        uncommented.push(format!("{rel}:{}", i + 1));
-                    }
-                }
-            }
-            if blocks == 0 {
-                return Err("no `unsafe` block found at all — the scan is misdirected".into());
-            }
-            if uncommented.is_empty() {
-                Ok(format!(
-                    "all {blocks} production `unsafe` blocks/impls carry a `// SAFETY:` \
-                     comment"
-                ))
-            } else {
-                Err(format!("`unsafe` without `// SAFETY:`: {uncommented:?}"))
-            }
-        }
+        "unsafe-safety-comment" => scan_safety_comments(sources),
         "coll-map-choice" => {
             let hash_set = production_line_hits(sources, &["HashSet"]);
             let btree = production_occurrences(sources, "BTreeMap")
@@ -570,19 +568,14 @@ fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String
                 Err(format!("only {n} `#[must_use]` attributes"))
             }
         }
-        "api-serde-optional" => {
-            let manifest = read_repo_file("crates/core/Cargo.toml");
-            let offending: Vec<&str> = manifest
-                .lines()
-                .filter(|l| {
-                    let l = l.trim();
-                    !l.starts_with('#') && l.contains("serde")
-                })
-                .collect();
-            if offending.is_empty() {
-                Ok("`dagr-core`'s manifest names no `serde` dependency at all".into())
+        "err-custom-type" => {
+            let n =
+                production_line_hits(sources, &["impl std::error::Error for", "impl Error for"])
+                    .len();
+            if n >= 25 {
+                Ok(format!("{n} production `impl … Error for` blocks"))
             } else {
-                Err(format!("`dagr-core` names serde: {offending:?}"))
+                Err(format!("only {n} domain error types implement `Error`"))
             }
         }
         "doc-module-inner" => {
@@ -602,7 +595,72 @@ fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String
                     sources.len()
                 ))
             } else {
-                Err(format!("{} file(s) without a `//!` header: {missing:?}", missing.len()))
+                Err(format!(
+                    "{} file(s) without a `//!` header: {missing:?}",
+                    missing.len()
+                ))
+            }
+        }
+        _ => Err(UNHANDLED.to_owned()),
+    }
+}
+
+/// `unsafe-safety-comment`: every `unsafe` block or `unsafe impl` in production
+/// carries a `// SAFETY:` comment in the run of comments and attributes that
+/// introduces it. Prose *mentioning* an unsafe block is not one, so
+/// comment-leading lines are skipped before the match.
+fn scan_safety_comments(sources: &[(String, String)]) -> Result<String, String> {
+    let mut uncommented = Vec::new();
+    let mut blocks = 0usize;
+    for (rel, text) in sources {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with('*') {
+                continue;
+            }
+            if !(code.contains("unsafe {") || code.starts_with("unsafe impl")) {
+                continue;
+            }
+            blocks += 1;
+            let commented = lines[i.saturating_sub(8)..i]
+                .iter()
+                .any(|l| l.contains("// SAFETY:"));
+            if !commented {
+                uncommented.push(format!("{rel}:{}", i + 1));
+            }
+        }
+    }
+    if blocks == 0 {
+        return Err("no `unsafe` block found at all — the scan is misdirected".into());
+    }
+    if uncommented.is_empty() {
+        Ok(format!(
+            "all {blocks} production `unsafe` blocks/impls carry a `// SAFETY:` comment"
+        ))
+    } else {
+        Err(format!("`unsafe` without `// SAFETY:`: {uncommented:?}"))
+    }
+}
+
+/// The sampled claims that are re-derived from manifests and the directory
+/// layout rather than from source text.
+fn scan_layout(rule: &str) -> Result<String, String> {
+    let root = repo_root();
+    match rule {
+        "api-serde-optional" => {
+            let manifest = read_repo_file("crates/core/Cargo.toml");
+            let offending: Vec<&str> = manifest
+                .lines()
+                .filter(|l| {
+                    let l = l.trim();
+                    !l.starts_with('#') && l.contains("serde")
+                })
+                .collect();
+            if offending.is_empty() {
+                Ok("`dagr-core`'s manifest names no `serde` dependency at all".into())
+            } else {
+                Err(format!("`dagr-core` names serde: {offending:?}"))
             }
         }
         "proj-flat-small" => {
@@ -659,27 +717,16 @@ fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String
             }
             Ok(format!("the six crates are {}", names.join(", ")))
         }
-        "err-custom-type" => {
-            let n = production_line_hits(sources, &["impl std::error::Error for", "impl Error for"])
-                .len();
-            if n >= 25 {
-                Ok(format!("{n} production `impl … Error for` blocks"))
-            } else {
-                Err(format!("only {n} domain error types implement `Error`"))
-            }
-        }
         "test-integration-dir" => {
             let mut total = 0usize;
             let mut missing = Vec::new();
             for member in MEMBERS {
                 let dir = root.join("crates").join(member).join("tests");
-                let count = std::fs::read_dir(&dir)
-                    .map(|e| {
-                        e.flatten()
-                            .filter(|x| x.path().extension().is_some_and(|s| s == "rs"))
-                            .count()
-                    })
-                    .unwrap_or(0);
+                let count = std::fs::read_dir(&dir).map_or(0, |e| {
+                    e.flatten()
+                        .filter(|x| x.path().extension().is_some_and(|s| s == "rs"))
+                        .count()
+                });
                 if count == 0 {
                     missing.push(member);
                 }
@@ -691,7 +738,9 @@ fn spot_check(rule: &str, sources: &[(String, String)]) -> Result<String, String
             if total < 100 {
                 return Err(format!("only {total} integration test files"));
             }
-            Ok(format!("{total} integration test files across all six crates"))
+            Ok(format!(
+                "{total} integration test files across all six crates"
+            ))
         }
         other => Err(format!("no spot check is implemented for `{other}`")),
     }
@@ -979,7 +1028,10 @@ fn the_snapshot_comparison_catches_a_one_byte_drift() {
         "a one-character change to the structural fingerprint must be reported — \
          the behavioural-identity check is a real comparison"
     );
-    println!("snapshot drift control: caught at line {}", diff.expect("caught").0);
+    println!(
+        "snapshot drift control: caught at line {}",
+        diff.expect("caught").0
+    );
 
     // A truncated snapshot is a divergence too, not a prefix match.
     let truncated: String = baseline.lines().take(3).collect::<Vec<_>>().join("\n");
@@ -1002,7 +1054,7 @@ fn profiles_setting_panic_abort(manifest: &str) -> Vec<String> {
     for line in manifest.lines() {
         let code = line.split('#').next().unwrap_or("").trim();
         if code.starts_with('[') && code.ends_with(']') {
-            current = code.trim_matches(['[', ']']).to_owned();
+            code.trim_matches(['[', ']']).clone_into(&mut current);
             continue;
         }
         let Some((key, value)) = code.split_once('=') else {
@@ -1053,14 +1105,19 @@ fn no_profile_anywhere_sets_panic_abort() {
 /// mention must not trip it, and a real setting must.
 #[test]
 fn the_panic_abort_scan_catches_a_planted_profile() {
-    let clean = "[profile.release]\nlto = \"fat\"\n# panic = \"abort\" is refused\npanic = \"unwind\"\n";
+    let clean =
+        "[profile.release]\nlto = \"fat\"\n# panic = \"abort\" is refused\npanic = \"unwind\"\n";
     assert!(
         profiles_setting_panic_abort(clean).is_empty(),
         "a commented explanation of why abort is refused is not the setting"
     );
     let planted = "[profile.release]\nlto = \"fat\"\npanic = \"abort\"\n";
     let hits = profiles_setting_panic_abort(planted);
-    assert_eq!(hits.len(), 1, "a planted `panic = \"abort\"` is reported: {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "a planted `panic = \"abort\"` is reported: {hits:?}"
+    );
     assert!(
         hits[0].contains("profile.release"),
         "the report names the profile it found: {hits:?}"
@@ -1091,7 +1148,10 @@ fn render_and_metastore_have_no_dependency_edge_onto_core() {
 
     // The shipped skeleton checker asserts the same direction manifest-wide.
     let (ok, out) = run_script("scripts/check-workspace-skeleton.sh", &[]);
-    assert!(ok, "the workspace-skeleton dependency-direction checker passes\n{out}");
+    assert!(
+        ok,
+        "the workspace-skeleton dependency-direction checker passes\n{out}"
+    );
 }
 
 /// The resolved runtime dependency package names of `pkg`, via `cargo tree -e
@@ -1138,7 +1198,10 @@ fn the_resolved_feature_matrix_holds_the_zero_dependency_guarantee() {
     );
 
     let cli = resolved_runtime_deps("dagr-cli", &[]);
-    assert!(cli.len() > 5, "the default dagr-cli resolution is non-trivial");
+    assert!(
+        cli.len() > 5,
+        "the default dagr-cli resolution is non-trivial"
+    );
     for banned in ["libsql", "jsonschema", "dagr-metastore"] {
         assert!(
             !cli.iter().any(|p| p == banned),
@@ -1234,7 +1297,12 @@ fn the_implementation_readme_carries_the_m9_summary_and_the_ticket_total() {
         .lines()
         .find(|l| l.contains("Applies the `.claude/skills/rust-skills` guidance"))
         .expect("the README carries M9's summary paragraph");
-    for claim in ["265 rules", "edition 2024", "register", "acceptance gate (T99)"] {
+    for claim in [
+        "265 rules",
+        "edition 2024",
+        "register",
+        "acceptance gate (T99)",
+    ] {
         assert!(
             summary.contains(claim),
             "M9's summary line states `{claim}`"
