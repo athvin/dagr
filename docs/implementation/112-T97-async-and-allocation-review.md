@@ -147,6 +147,44 @@ If `clippy::await_holding_lock` fires anywhere, that is a genuine finding and ma
 grow this ticket. Report it rather than suppressing it; a suppression on this
 particular lint would defeat the only mechanical guarantee in the ticket.
 
+### Resolved
+
+**Does `clippy::await_holding_lock` fire? No — and it was never off.** The lint
+sits in clippy's `suspicious` group, which `clippy::all` includes, and dagr denies
+`clippy::all` workspace-wide. So it has been denied for the whole life of the
+workspace and `cargo clippy --workspace --all-targets -- -D warnings` is green under
+it with **zero** findings and **zero** suppressions. The ticket's premise — that
+enabling it would turn a one-time review into a standing guarantee — was already
+true; what was missing is that the guarantee depended entirely on upstream keeping
+the lint in that group. The lint is therefore written out at `deny` at priority 0 in
+both `lints.toml` and `[workspace.lints.clippy]` (the ratchet T96 applied to
+`missing_docs`/`missing_errors_doc`, for the same reason), and
+`scripts/check-lint-parity.sh` now fails the build if either half drops below
+`deny`. The ticket did not grow.
+
+**`docs/tasks.md` carries no `Q:` items for T97.** `tasks.md` covers M0–M4 only;
+the M9 tickets (T92–T99) are described in `docs/implementation/README.md`, which
+carries no open questions for this one. Both sources of open questions are
+therefore accounted for.
+
+**One brief claim did not survive contact with the code, and was declined rather
+than forced.** The brief argues `crates/core/src/resume.rs`'s `seed.clone()` away on
+the grounds that "the sole caller never reuses `seed`". The caller does reuse it —
+`seed` is a field of the returned `ResumePlan` — so `must_run` and `seed` are two
+genuinely needed sets and taking the parameter by value would only move the same
+clone to the call site. Declined, with the reasoning recorded at the site and in
+`docs/rust-skills-register.md`. The brief's bound for the second `Vec::contains`
+loop was likewise corrected there (it is bounded by the node count, not the
+resource-type count — but the loop only executes on the bootstrap-failure path).
+
+**Scale benchmark, before and after** (same machine, dev/test profile, 1000 no-op
+nodes): **466 574 ns/node before**, **468 286 ns/node after**. Two runs inside the
+same post-change invocation reported 435 268 and 468 286 ns/node, so the run-to-run
+band is roughly ±8 % and the difference is noise. Both are far under the 1 000 000
+ns/node spec ceiling and the 16 000 000 ns/node CI budget. No allocation change in
+this ticket touches a hot path: two are one-time emitter/plan allocations, and the
+third removes work from the metastore sink, which the benchmark does not exercise.
+
 ## Out of scope
 
 - Introducing `tokio::sync::Mutex`. The std mutexes here guard synchronous
