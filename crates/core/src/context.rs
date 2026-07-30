@@ -399,10 +399,6 @@ impl<T> Secret<T> {
     /// it controls — the redaction hook emits it in place of the value. It is a
     /// fixed marker that contains none of the secret's bytes.
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        reason = "the redaction marker is a property of the secret wrapper, invoked on an instance"
-    )]
     pub fn redacted(&self) -> &'static str {
         "<redacted secret>"
     }
@@ -769,10 +765,6 @@ impl BootstrapFailure {
     /// surprise). The run also never hangs: this is a synchronous, terminating
     /// check.
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        reason = "zero-attempts is a property of the bootstrap-failure artifact instance"
-    )]
     pub fn attempts_recorded(&self) -> usize {
         0
     }

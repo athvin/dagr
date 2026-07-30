@@ -267,7 +267,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// readiness, then serve each projection request by folding the buffer and
 /// upserting it via [`sync_run_live`]. The store connection lives entirely on this
 /// thread, so its libsql/tokio resources are created and dropped here.
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "path/events_path/retry are owned for the whole thread lifetime — the \
               worker is `spawn`ed with a `move` closure and holds them until the run \

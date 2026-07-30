@@ -1027,7 +1027,7 @@ impl SeededJitter {
 }
 
 impl Jitter for SeededJitter {
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "exact by construction: `z >> 11` is a 53-bit integer (≤ f64's mantissa) and `1u64 << 53` is a power of two — the standard lossless [0,1) unit-float construction"
     )]
@@ -1316,7 +1316,7 @@ impl Default for RetryConfig {
 ///
 /// Returns the **last** attempt's classified [`AttemptOutcome`] — the one whose
 /// terminal state the node ends in.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the interim retry surface threads \
     the run/pipeline identity, slot, sink, config, jitter, and timer explicitly; \
@@ -1775,7 +1775,7 @@ where
 /// Every argument mirrors [`run_with_retries`]; see its rustdoc for the
 /// determinism (injected jitter, caller-provided timer future) and exclusivity
 /// guarantees, which are unchanged here.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "the interim retry surface threads \
     the run/pipeline identity, slot, sink, config, jitter, and timer explicitly; \

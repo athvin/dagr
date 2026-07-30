@@ -212,7 +212,7 @@ fn spawn_listener(router: std::sync::Arc<SignalRouter>, mut stream: tokio::signa
 /// Never fails on non-unix (there is nothing to register); the `Result` is kept so
 /// the signature matches the unix path.
 #[cfg(not(unix))]
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "signature parity with the unix path, which can fail to register"
 )]

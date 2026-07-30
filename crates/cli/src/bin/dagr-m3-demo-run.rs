@@ -353,7 +353,12 @@ fn metrics_json(rows_read: u64, peak_bytes: u64, executing_ns: u64) -> serde_jso
 /// Emit the full lifecycle for one node that **executed** to a terminal, at the
 /// given offsets, carrying real metrics and declared/measured cost. Offsets are
 /// set on the clock before each write so the writer stamps them.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the demo emits one node's whole lifecycle at four explicit monotonic \
+              offsets plus its metrics; the offsets are the point of the fixture, so \
+              naming them individually is what makes the emitted stream readable"
+)]
 fn emit_ran_node<S: EventSink>(
     writer: &mut EventStreamWriter<S, ClockRef<'_>>,
     clock: &StepClock,

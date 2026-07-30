@@ -76,14 +76,21 @@ authors = ["dagr contributors"]
 # place. T7 enforces it in CI (clippy -D warnings, rustdoc -D warnings).
 [workspace.lints.rust]
 warnings = "deny"
-missing_docs = "warn"
+# `deny`, not `warn` (T96). Both this and `clippy::missing_errors_doc` below are
+# allow-by-default lints that `warnings = "deny"` has been promoting all along;
+# writing the level out makes the intent readable at the setting and retires two
+# deferral notes in docs/lint-policy.md that had quietly become false (T1 and T3,
+# the tickets they deferred to, shipped long ago).
+# scripts/check-lint-parity.sh fails the build if this table and lints.toml
+# disagree, or if either lint drops back to `warn`.
+missing_docs = "deny"
 unsafe_code = "warn"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 module_name_repetitions = "allow"
-missing_errors_doc = "warn"
+missing_errors_doc = "deny"
 collapsible_if = "allow"
 # Every `unsafe` block and `unsafe impl` must carry a `// SAFETY:` comment
 # (rust-skills `lint-unsafe-doc`, adopted by T95). dagr targets safe Rust and its

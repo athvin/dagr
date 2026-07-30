@@ -196,10 +196,6 @@ impl<T> Handle<T> {
     /// and why identity flows from the name rather than from registration order.
     // Crate-private registration seam consumed by the flow builder and the
     // binding; see `NodeId::from_name`.
-    #[allow(
-        dead_code,
-        reason = "crate-private registration seam consumed by the flow builder and the binding module"
-    )]
     pub(crate) fn for_registration(name: &str) -> Self {
         Self {
             id: NodeId::from_name(name),

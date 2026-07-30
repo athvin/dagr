@@ -476,7 +476,7 @@ fn parse_meminfo_total_bytes(raw: &str) -> Option<u64> {
 /// Apply the headroom fraction to a byte count, flooring at one unit: `floor(raw *
 /// (1 - headroom))`, then `max(1)`. Every pool gets at least one unit after
 /// headroom and rounding.
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -493,13 +493,13 @@ fn apply_headroom_u64(raw: u64, headroom: f64) -> u64 {
 
 /// Apply the headroom fraction to a thread count, flooring at one thread — the
 /// compute pool has at least one thread even under a fractional CPU quota.
-#[allow(
-    clippy::cast_precision_loss,
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "the u32 twin of `apply_headroom_u64`: `f64::from(u32)` is exact, the \
-              truncation is the intended `floor`, and a headroom clamped to [0, 1) keeps \
-              the product non-negative"
+    reason = "the u32 twin of `apply_headroom_u64`: the truncation is the intended \
+              `floor`, and a headroom clamped to [0, 1) keeps the product non-negative. \
+              Unlike the u64 twin this widening loses NO precision — `f64::from(u32)` is \
+              exact — so no precision-loss suppression is carried"
 )]
 fn apply_headroom_u32(raw: u32, headroom: f64) -> u32 {
     let kept = (f64::from(raw) * (1.0 - headroom)).floor();
@@ -641,10 +641,6 @@ impl CapacityBootstrapFailure {
     /// because bootstrap fails *before any node executes* (never a mid-run
     /// surprise).
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        reason = "zero-attempts is a property of the bootstrap-failure artifact instance"
-    )]
     pub fn attempts_recorded(&self) -> usize {
         0
     }
