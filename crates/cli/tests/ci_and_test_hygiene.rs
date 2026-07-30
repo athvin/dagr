@@ -498,6 +498,13 @@ const UNSAFE_INVENTORY: &[(&str, &str)] = &[
 #[test]
 fn the_unsafe_surface_is_exactly_what_the_miri_verdict_was_taken_against() {
     let root = repo_root();
+    // Assembled at runtime: written out, the needles below would make THIS file look
+    // like it contains an unsafe block to the repository's own scanners.
+    let needles = [
+        concat!("unsafe", " {"),
+        concat!("unsafe", " impl"),
+        concat!("unsafe", " fn"),
+    ];
     let mut found: BTreeMap<String, usize> = BTreeMap::new();
     for entry in std::fs::read_dir(root.join("crates"))
         .expect("the crates directory is readable")
@@ -510,9 +517,7 @@ fn the_unsafe_surface_is_exactly_what_the_miri_verdict_was_taken_against() {
             let count = text
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))
-                .filter(|l| {
-                    l.contains("unsafe {") || l.contains("unsafe impl") || l.contains("unsafe fn")
-                })
+                .filter(|l| needles.iter().any(|n| l.contains(n)))
                 .count();
             if count > 0 {
                 found.insert(rel(&path), count);
