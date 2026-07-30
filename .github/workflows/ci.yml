@@ -2,23 +2,52 @@
 #
 # This is the gate every subsequent implementation ticket lands through
 # (arch.md "Stability", "System-level acceptance" criterion 8, "Documentation").
-# It runs on every pull request and on pushes to `main`. Because pull_request
-# events run the workflow file from the PR head, THIS workflow gates its own PR.
+# It runs on every pull request and on pushes to `main` (bar docs-only ones — see
+# the `paths-ignore` note on the trigger). Because pull_request events run the
+# workflow file from the PR head, THIS workflow gates its own PR.
 #
-# The job set mirrors the era-`ci` gate command list in the skill's
+# The CHECK set mirrors the era-`ci` gate command list in the skill's
 # quality-gates.md §2 (and scripts/run_gate.sh ci), under the toolchain pinned
-# in rust-toolchain.toml (1.97.1):
+# in rust-toolchain.toml (1.97.1). Checks are not one-to-one with jobs — several
+# share a job where they share a build:
 #   * fmt            — cargo fmt --all --check
 #   * clippy         — cargo clippy --workspace --all-targets -- -D warnings
 #   * test           — cargo test --workspace
 #   * rustdoc        — RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 #   * audit          — cargo audit
 #   * deny           — cargo deny check
-#   * coverage-matrix — scripts/check-coverage-matrix.sh (system criterion 8)
+#   * coverage-matrix — scripts/check-coverage-matrix.sh (system criterion 8);
+#                      runs on the tier-1 `test` leg, whose compiled suite it needs
 #
 # UI / compile-fail (trybuild) snapshot tests (T8) run ONLY under this pinned
 # toolchain, so their snapshot output is byte-stable; rust-toolchain.toml is the
 # single source of truth the actions-rust setup below honours.
+#
+# --- BUILD-CACHE SCHEME (read this before adding a `Swatinem/rust-cache` step) -
+# GitHub caps a repository's Actions cache at 10 GB and evicts least-recently-used
+# entries once that is exceeded. This workflow blew straight through it: every job
+# had its own cache key AND every pull request wrote a duplicate set into its own
+# `refs/pull/N/merge` scope, reaching 12.89 GB across 56 entries. Eviction then
+# decided at random which jobs came up warm, which is why identical runs took
+# either ~3 minutes or ~10: one measured run restored the Linux leg fine (34 s
+# build) while the macOS leg missed and recompiled for 4 m 01 s. The variance was
+# never in the code, it was in the cache budget. Two rules keep it inside:
+#
+#   1. `save-if: ${{ github.ref == 'refs/heads/main' }}` — pull requests RESTORE
+#      main's cache and never write one. Cache writes are therefore proportional
+#      to merges, not to open PRs.
+#   2. `shared-key: workspace` on every step, with exactly ONE designated WRITER
+#      per distinct cache key (`test`, `rustdoc`, `structural-determinism`);
+#      every other job sets `save-if: false` and is a pure reader. The shared key
+#      collapses the six Linux jobs that were each storing their own near-identical
+#      copy of the same dependency build into one entry.
+#
+#   Partitioning is automatic: rust-cache hashes the runner OS and the build
+#   environment into the key itself, so the macOS `test` leg, the `RUSTDOCFLAGS`
+#   job, and the `RUSTFLAGS: ""` determinism job land on distinct keys without
+#   anyone hand-assigning them. A single writer (rather than letting jobs race to
+#   save) means the stored entry is always the one from the job that builds the
+#   most, not whichever light job happened to finish first.
 
 name: CI
 
@@ -26,6 +55,16 @@ on:
   pull_request:
   push:
     branches: [main]
+    # The ticket loop lands a `docs: mark NNN TNN done` checkbox flip on main after
+    # every merge, and each one was triggering the entire gate a second time for a
+    # markdown edit. Nothing in CI reads `docs/implementation/**`: the pin checker
+    # excludes the directory explicitly (check-edition-and-msrv-pins.sh treats those
+    # files as the historical record), and the only other CI script that mentions the
+    # path does so in a comment. PUSH ONLY — `pull_request` stays unfiltered, because
+    # a filtered PR trigger reports no checks at all rather than passing ones, which
+    # is indistinguishable from a gate that never ran.
+    paths-ignore:
+      - 'docs/implementation/**'
 
 # Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
@@ -92,7 +131,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned toolchain (clippy)
         run: rustup component add clippy
+      # Reader (see BUILD-CACHE SCHEME above). `cargo clippy` builds DEPENDENCIES
+      # with ordinary rustc — only workspace members go through clippy-driver — so
+      # the expensive half of this job's build is exactly what `test` stores.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -137,7 +182,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # The designated WRITER for this key (see BUILD-CACHE SCHEME above). This job
+      # compiles more than any other — every target, plus the `schema-validation`
+      # and `metastore` feature builds — so the entry it stores is the one that
+      # serves the reader jobs best. Each matrix leg writes its own OS-keyed entry.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: compile-failure UI harness (T8, pinned toolchain)
         run: cargo test -p dagr-core --test ui
       # TIER 1 (Linux): the complete suite, nothing filtered.
@@ -225,68 +277,70 @@ jobs:
       - name: artifact validation + schema-compatibility gate (T48)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test -p dagr-artifact --features schema-validation --test compatibility_ci
-      # M7 run-index feature gating + the `metastore init` verb (T83, ADR 097).
+      # === M7 metastore: the feature-gated CLI suites =========================
       # The `metastore` cli feature is OFF by default (libSQL is heavy and pre-1.0),
-      # so a plain `cargo test --workspace` above never pulls `libsql` through the
-      # cli and never sees the `metastore` verb. These two steps turn the feature ON
-      # to exercise the CLI init verb, and run the structural gate proving the
-      # feature is truly default-off (default cli reaches neither libsql nor
-      # dagr-metastore; --features metastore reaches both; core reaches neither even
-      # --all-features; libsql pinned exactly). Linux tier-1 is enough — the crate
-      # graph and the verb are platform-independent.
+      # so the plain `cargo test --workspace` above never pulls `libsql` through the
+      # cli and never sees the `metastore` verb. The suites below turn it ON.
+      #
+      # They are grouped into TWO cargo invocations rather than the five they used
+      # to be. All five share one `--features metastore` build of dagr-cli, but a
+      # separate `cargo test` per test target rebuilt the fingerprint, linked, and
+      # ran strictly one target at a time; one invocation with several `--test`
+      # flags links them in parallel and pays cargo's startup once. Legibility is
+      # unaffected — a failure still names its own test and target in the output,
+      # which is what the T86/T87/T88 DoDs ask for.
+      #
+      # The split between the two is the platform tier, not the ticket:
+      #   * BOTH tiers — T86 live tee, T87 example + cookbook, T88 acceptance gate.
+      #     Their DoDs require ubuntu + macOS: the live sink runs a worker thread on
+      #     a tokio runtime, and the acceptance gate exercises multi-process live
+      #     writes, whose behaviour is platform-relevant (POSIX byte-range locks and
+      #     process-spawn timing differ on macOS).
+      #   * LINUX TIER-1 ONLY — T83 init verb and T84 sync verb, plus the two
+      #     structural scripts. Crate-graph facts and the verbs themselves are
+      #     platform-independent, so the macOS leg stays the lean core suite.
+      #
+      # T87 and T88 shell out to `sqlite3` (preinstalled on both runner images), so
+      # DAGR_REQUIRE_SQLITE3=1 makes an absent `sqlite3` a HARD failure here while a
+      # dev machine without it still skips. The variable is inert for the T86 tee,
+      # which reads it nowhere — it is set once for the group rather than split into
+      # a third invocation just to scope an unread variable.
+      #
+      # T86: the CLI driver-boundary test (byte-identical stream, the sink-failure
+      # exit on a metastore write fault, toggle default-off). The dagr-metastore
+      # MetastoreSink tests themselves are a normal workspace member and already ran
+      # above, cross-platform, for free.
+      # T87: the docs-truthfulness guards (tests/metastore_docs_claims.rs) also ran
+      # above with no libsql; THIS is the feature-gated proof — several of the
+      # example's DAGs run into one store, and the cookbook's copy-paste `sqlite3`
+      # query block is executed verbatim against the result.
+      # T88: the terminal M7 gate — (a) `metastore init` -> several DAGs run LIVE as
+      # separate processes against one store -> `sync <base>` -> a native `sqlite3`
+      # cross-run aggregate; (b) a metastore write fault surfaces as the sink-failure
+      # exit; (c) live == reconcile parity.
+      - name: metastore live tee + example/cookbook + acceptance gate (T86/T87/T88, --features metastore)
+        env:
+          DAGR_REQUIRE_SQLITE3: "1"
+        run: |
+          cargo test -p dagr-cli --features metastore \
+            --test metastore_live_tee \
+            --test metastore_example_and_docs \
+            --test metastore_acceptance_gate
+      # T83 init verb + T84 sync verb. T84's mapping crate tests build under the
+      # plain `cargo test --workspace` above (dagr-metastore is a normal member);
+      # only the CLI `sync` verb's subprocess test needs the feature ON.
+      - name: metastore init + sync verbs (T83/T84, --features metastore)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo test -p dagr-cli --features metastore \
+            --test metastore_init \
+            --test metastore_sync
+      # The structural gate proving the feature is truly default-off: default cli
+      # reaches neither libsql nor dagr-metastore; --features metastore reaches both;
+      # core reaches neither even --all-features; libsql pinned exactly.
       - name: metastore feature-gating (T83)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-metastore-feature-gating.sh
-      - name: metastore init verb (T83, --features metastore)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-cli --features metastore --test metastore_init
-      # M7 reconcile: the event→row mapping + `dagr metastore sync` (T84). The
-      # mapping crate tests build under a plain `cargo test --workspace` above
-      # (dagr-metastore is a normal member), but the CLI `sync` verb is behind the
-      # default-off feature, so its subprocess test needs the feature ON here.
-      - name: metastore sync verb (T84, --features metastore)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p dagr-cli --features metastore --test metastore_sync
-      # M7 live tee: the guaranteed live metastore tee sink (T86). The
-      # dagr-metastore MetastoreSink tests build under a plain
-      # `cargo test --workspace` above (the crate is a normal member, so its
-      # cross-platform coverage — including macOS — comes for free), but the CLI
-      # driver-boundary test (byte-identical stream, the sink-failure exit on a
-      # metastore write fault, toggle default-off) lives behind the default-off
-      # `metastore` feature, so it needs the feature ON here. Run it on BOTH tiers
-      # (the ticket DoD requires ubuntu + macOS) since the live sink exercises a
-      # worker thread + tokio runtime whose behavior is platform-relevant.
-      - name: metastore live tee (T86, --features metastore)
-        run: cargo test -p dagr-cli --features metastore --test metastore_live_tee
-      # M7 many-dags example + cookbook (T87). The docs-truthfulness guards
-      # (tests/metastore_docs_claims.rs) run in the plain `cargo test --workspace`
-      # above (no libsql, always compiled). This step is the FEATURE-gated proof:
-      # running several of the example's DAGs into one store populates a queryable
-      # metastore.db, and the cookbook's copy-paste `sqlite3` query block is executed
-      # verbatim against it. It shells out to `sqlite3` (preinstalled on both runner
-      # images), so DAGR_REQUIRE_SQLITE3=1 turns an absent `sqlite3` into a HARD
-      # failure here (a dev machine without it skips). Run on BOTH tiers — the DoD
-      # requires ubuntu + macOS, and it exercises the live tee across processes.
-      - name: metastore example + cookbook query block (T87, --features metastore)
-        env:
-          DAGR_REQUIRE_SQLITE3: "1"
-        run: cargo test -p dagr-cli --features metastore --test metastore_example_and_docs
-      # M7 ACCEPTANCE GATE (T88). The terminal M7 gate: it drives the milestone's
-      # done-when end to end from a MANY-DAGS binary and asserts M7's invariants in
-      # one place, composing merged T83–T87 behavior only (a gate adds no
-      # capability). The runtime half — (a) `metastore init` -> several DAGs run
-      # LIVE as separate processes against one store -> `sync <base>` -> a native
-      # `sqlite3` cross-run aggregate; (b) a metastore write fault surfaces as the
-      # sink-failure exit; (c) live == reconcile parity — lives behind the
-      # default-off `metastore` feature, so it needs the feature ON here, and it
-      # shells out to `sqlite3` (DAGR_REQUIRE_SQLITE3=1 makes an absent one a HARD
-      # failure). Run on BOTH tiers (the DoD requires ubuntu + macOS): it exercises
-      # the multi-process live-write path whose behaviour is platform-relevant
-      # (POSIX byte-range locks / process spawn timing differ on macOS).
-      - name: metastore acceptance gate — e2e + guarantee + parity (T88, --features metastore)
-        env:
-          DAGR_REQUIRE_SQLITE3: "1"
-        run: cargo test -p dagr-cli --features metastore --test metastore_acceptance_gate
       # The STRUCTURAL half of the T88 gate (boundary invariants d): crate-graph +
       # M6->M7-diff facts a unit test cannot reach. Default `cargo build --all` /
       # `cargo build -p dagr-cli --no-default-features` pull no libsql/dagr-metastore
@@ -297,6 +351,25 @@ jobs:
       - name: metastore acceptance boundary — crate graph + no new surface (T88)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-metastore-acceptance-boundary.sh
+      # --- Acceptance-criteria coverage matrix (system criterion 8) ------------
+      # Verifies that every machine-classed criterion in the partition is bound to
+      # an existing test (or an explicitly-deferred `unmapped` placeholder) in the
+      # checked-in coverage matrix, and (T65) that every human-classed criterion has
+      # a `[<id>]`-tagged line in the version-controlled release checklist — a human
+      # criterion in the partition with no such line fails the build.
+      #
+      # This lives on the tier-1 test leg rather than in a job of its own because it
+      # resolves mapped test ids via `cargo test --workspace -- --list`, i.e. it needs
+      # the compiled test suite this job has ALREADY built. Standalone, it spent 40
+      # seconds rebuilding that suite from a second 0.23 GB cache entry to run a
+      # listing that takes about two; the criteria are platform-independent, so
+      # tier-1 is the right and only place for it.
+      - name: Verify the coverage matrix
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-coverage-matrix.sh --checklist docs/release-checklist.md
+      - name: Self-test the coverage-matrix verifier
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-coverage-verifier-selftest.sh
 
   # --- Diagram renderer reference-tool acceptance (C24 / T46) -----------------
   # arch.md C24 line 520: "both output formats are accepted by their reference
@@ -326,11 +399,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Reader (see BUILD-CACHE SCHEME above).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
+      # Install only if the runner image does not already ship `dot`. When it does,
+      # this skips an `apt-get update` + install (~10 s) outright; when it does not,
+      # the full refresh-then-install still runs, so this cannot regress into the
+      # stale-index 404 that dropping `apt-get update` unconditionally would risk.
+      # `dot -V` runs either way — the tool's presence is still asserted, never
+      # assumed.
       - name: Install Graphviz (the `dot` reference tool)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y graphviz
+          if ! command -v dot >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y graphviz
+          fi
           dot -V
       # Install Mermaid's parser browserless: the `mermaid` library (whose
       # `mermaid.parse()` IS Mermaid's parser) + `jsdom` (a DOM so the library's
@@ -339,6 +424,12 @@ jobs:
       # LOCALLY into a scratch dir (not `-g`) because Node resolves the parse
       # helper's bare ESM imports against a co-located `node_modules`; the test
       # writes its helper into $DAGR_MERMAID_PARSE_DIR for exactly this reason.
+      #
+      # DELIBERATELY NOT CACHED. The install measures ~8 seconds; a cache entry for it
+      # would cost ~150 MB of the repository's 10 GB Actions budget — the very budget
+      # the scheme at the top of this file exists to defend — to save less time than
+      # restoring it takes. Cache what is expensive to rebuild, not what is merely
+      # repeated.
       - name: "Install Mermaid's parser (browserless: mermaid + jsdom, pinned)"
         run: |
           mkdir -p "${RUNNER_TEMP}/mermaid-parse"
@@ -377,95 +468,49 @@ jobs:
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
+      # WRITER for its own key (see BUILD-CACHE SCHEME above). `RUSTDOCFLAGS` is part
+      # of the environment rust-cache hashes, so this job lands on a distinct key from
+      # the `workspace` readers even though it declares the same shared name — which
+      # is why it has to store its own entry rather than read someone else's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
         run: cargo doc --workspace --no-deps
 
   # --- Supply-chain: advisories (cargo audit) --------------------------------
+  # The tool is fetched as a PREBUILT release binary, not built from source.
+  # `cargo install --locked cargo-audit` took 148 seconds of the job's 158 — the
+  # check itself is 5 — which made compiling a tool the longest job in the whole
+  # gate and therefore the workflow's critical path. `taiki-e/install-action`
+  # downloads the upstream release artifact for the runner and verifies its
+  # checksum, so the `cargo audit` invocation below is unchanged and the gate is
+  # exactly as strict; only the way the binary arrives is different.
   audit:
     name: audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
       - name: cargo audit
         run: cargo audit
 
   # --- Supply-chain: licenses/sources/advisories/bans (cargo deny) -----------
+  # Prebuilt for the same reason as `audit` above: the from-source install was
+  # 122 seconds of a 130-second job whose actual check takes 2.
   deny:
     name: deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: cargo deny check
         run: cargo deny check
-
-  # --- Cross-toolchain fingerprint stability (C21 / SL4a, T41) ---------------
-  # The executable form of C21's "two builds of unchanged source, on different
-  # toolchains, produce the same structural fingerprint and policy hash" (T0.7
-  # §5). Builds and runs the `fingerprint_fixture` example (a fixed pipeline whose
-  # two version-prefixed fingerprint strings it prints) under the **pinned**
-  # toolchain AND a **second** toolchain (current stable), then diffs the two
-  # outputs byte-for-byte. Any divergence fails the job — the C21 cross-toolchain
-  # guarantee is testable precisely because every hashed input is author-declared.
-  cross-toolchain-fingerprint:
-    name: cross-toolchain-fingerprint
-    runs-on: ubuntu-latest
-    # Override the workspace RUSTFLAGS='-D warnings': the second toolchain may
-    # introduce lints the code is not obligated to be clean under (clippy/fmt on
-    # the pinned toolchain are the lint gate). This job only checks fingerprint
-    # byte-equality across toolchains, not lint-cleanliness on stable.
-    env:
-      RUSTFLAGS: ""
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # Toolchain 1: the pinned channel from rust-toolchain.toml (honoured
-      # automatically by rustup on `cargo run` in the repo).
-      - name: Fingerprint under the pinned toolchain
-        run: |
-          cargo run --quiet -p dagr-cli --example fingerprint_fixture > fp-pinned.txt
-          echo "pinned toolchain fingerprints:"; cat fp-pinned.txt
-      # Toolchain 2: a DIFFERENT channel. `+stable` overrides the pinned channel
-      # for this one invocation, so the example is built and run by a second
-      # rustc. (On the runner's default image `stable` differs from the pinned
-      # 1.97.1; if they ever coincide the diff still passes — equal is equal.)
-      - name: Install a second toolchain (stable)
-        run: rustup toolchain install stable --profile minimal
-      - name: Fingerprint under the second toolchain
-        run: |
-          cargo +stable run --quiet -p dagr-cli --example fingerprint_fixture > fp-stable.txt
-          echo "second toolchain fingerprints:"; cat fp-stable.txt
-      # The load-bearing assertion: byte-identical across the two toolchains.
-      - name: Compare — the fingerprints MUST be byte-identical across toolchains
-        run: |
-          if ! diff -u fp-pinned.txt fp-stable.txt; then
-            echo "::error::C21 cross-toolchain fingerprint divergence — the two toolchains produced different fingerprints for unchanged source"
-            exit 1
-          fi
-          echo "OK: fingerprints are byte-identical across toolchains (C21 / SL4a)"
-
-  # --- Acceptance-criteria coverage matrix (system criterion 8) --------------
-  # Verifies that every machine-classed criterion in the partition is bound to
-  # an existing test (or an explicitly-deferred `unmapped` placeholder) in the
-  # checked-in coverage matrix. Needs the compiled test suite so it can resolve
-  # mapped test ids via `cargo test --workspace -- --list`.
-  coverage-matrix:
-    name: coverage-matrix
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      - name: Verify the coverage matrix
-        # T65: bind human criteria to the version-controlled release checklist —
-        # a human criterion in the partition with no `[<id>]`-tagged line in
-        # docs/release-checklist.md fails the build.
-        run: bash scripts/check-coverage-matrix.sh --checklist docs/release-checklist.md
-      - name: Self-test the coverage-matrix verifier
-        run: bash scripts/check-coverage-verifier-selftest.sh
 
   # --- rust-skills adoption register (T92) ------------------------------------
   # docs/rust-skills-register.md dispositions every rule in the
@@ -514,7 +559,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Reader (see BUILD-CACHE SCHEME above).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
       - name: Verify the Cargo build profiles
         run: bash scripts/check-cargo-profiles.sh
       - name: Panic containment holds under the release profile
@@ -545,7 +594,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Reader (see BUILD-CACHE SCHEME above).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
       - name: Verify the crate metadata, READMEs, and doc examples
         run: bash scripts/check-crate-docs-and-metadata.sh
       - name: The lint policy agrees with itself
@@ -553,16 +606,30 @@ jobs:
       - name: Doc examples compile and run
         run: cargo test --doc --workspace
 
-  # --- Cross-toolchain STRUCTURAL determinism (SL4a, T65) --------------------
-  # The executable form of system-level acceptance criterion 4(a): "two builds of
-  # the same source produce identical fingerprints AND byte-identical graph
-  # artifacts (generation time aside), on different toolchains". Builds and runs
-  # the `reference_pipeline_artifact` example — which prints the reference
-  # pipeline's MASKED graph artifact (generation-time blanked) plus both C21
-  # fingerprint strings — under the pinned toolchain AND a second toolchain
-  # (current stable), then diffs the two outputs byte-for-byte. Any divergence
-  # fails the job. This EXTENDS the fingerprint-only `cross-toolchain-fingerprint`
-  # job to the full graph artifact, closing SL4a's byte-identical-artifact half.
+  # --- Cross-toolchain determinism: C21 fingerprints + SL4a artifact (T41, T65) --
+  # TWO independent guarantees, both of the form "build the same source under two
+  # different toolchains and diff the output byte-for-byte":
+  #
+  #   * C21 / T41 — "two builds of unchanged source, on different toolchains,
+  #     produce the same structural fingerprint and policy hash" (T0.7 §5), via the
+  #     `fingerprint_fixture` example (a fixed pipeline that prints its two
+  #     version-prefixed fingerprint strings).
+  #   * SL4a / T65 — system-level acceptance criterion 4(a), which EXTENDS the
+  #     fingerprint-only check to the full artifact: "two builds of the same source
+  #     produce identical fingerprints AND byte-identical graph artifacts
+  #     (generation time aside)", via the `reference_pipeline_artifact` example
+  #     (the reference pipeline's MASKED graph artifact, generation-time blanked,
+  #     plus both C21 fingerprint strings).
+  #
+  # They live in ONE job because they are the same experiment run over two examples
+  # from the same crate: identical runner, identical `RUSTFLAGS` override, identical
+  # pair of toolchains. As two jobs they installed `stable` twice, built dagr-cli
+  # under it twice, and kept two near-identical caches — paying for the setup twice
+  # to assert two things about one build. Both examples live in dagr-cli, so a single
+  # job compiles the shared dependency graph once and each example on top of it.
+  #
+  # The two assertions remain SEPARATE steps with their own `::error::` messages, so
+  # a failure still says which guarantee broke, not merely that determinism did.
   structural-determinism:
     name: structural-determinism
     runs-on: ubuntu-latest
@@ -574,23 +641,54 @@ jobs:
       RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
+      # WRITER for its own key (see BUILD-CACHE SCHEME above). The empty `RUSTFLAGS`
+      # is hashed into the key, so this job cannot share the `workspace` readers'
+      # entry however it is named — it builds an entirely separate dependency graph.
       - uses: Swatinem/rust-cache@v2
-      # Toolchain 1: the pinned channel from rust-toolchain.toml.
-      - name: Reference artifact under the pinned toolchain
+        with:
+          shared-key: workspace
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Toolchain 1: the pinned channel from rust-toolchain.toml (honoured
+      # automatically by rustup on `cargo run` in the repo). Both examples are run
+      # under it before the second toolchain is installed.
+      - name: Fingerprint + reference artifact under the pinned toolchain
         run: |
+          cargo run --quiet -p dagr-cli --example fingerprint_fixture > fp-pinned.txt
           cargo run --quiet -p dagr-cli --example reference_pipeline_artifact > ref-pinned.txt
+          echo "pinned toolchain fingerprints:"; cat fp-pinned.txt
           echo "pinned-toolchain reference artifact + fingerprints:"; cat ref-pinned.txt
+      # Toolchain 2: a DIFFERENT channel. `+stable` overrides the pinned channel for
+      # these invocations, so the examples are built and run by a second rustc. (On
+      # the runner's default image `stable` differs from the pinned 1.97.1; if they
+      # ever coincide the diffs still pass — equal is equal.)
       - name: Install a second toolchain (stable)
         run: rustup toolchain install stable --profile minimal
-      # Toolchain 2: a DIFFERENT channel. `+stable` overrides the pinned channel
-      # for this one invocation, so the example is built and run by a second rustc.
-      - name: Reference artifact under the second toolchain
+      - name: Fingerprint + reference artifact under the second toolchain
         run: |
+          cargo +stable run --quiet -p dagr-cli --example fingerprint_fixture > fp-stable.txt
           cargo +stable run --quiet -p dagr-cli --example reference_pipeline_artifact > ref-stable.txt
+          echo "second toolchain fingerprints:"; cat fp-stable.txt
           echo "second-toolchain reference artifact + fingerprints:"; cat ref-stable.txt
-      # The load-bearing assertion: byte-identical across the two toolchains — the
-      # masked graph artifact AND both fingerprint strings.
+      # Load-bearing assertion 1 (C21 / T41): the fingerprints alone.
+      - name: Compare — the fingerprints MUST be byte-identical across toolchains
+        id: c21
+        run: |
+          if ! diff -u fp-pinned.txt fp-stable.txt; then
+            echo "::error::C21 cross-toolchain fingerprint divergence — the two toolchains produced different fingerprints for unchanged source"
+            exit 1
+          fi
+          echo "OK: fingerprints are byte-identical across toolchains (C21 / SL4a)"
+      # Load-bearing assertion 2 (SL4a / T65): the masked graph artifact AND both
+      # fingerprint strings.
+      #
+      # The condition runs this when everything so far is green OR when the ONLY
+      # thing that failed is the C21 comparison above, so a single run reports both
+      # verdicts instead of hiding the second behind the first. It deliberately does
+      # NOT use a blanket `!cancelled()`: if a `cargo run` step failed there is no
+      # `ref-*.txt` to diff, and reporting `No such file` on top of the real error
+      # would bury the cause rather than add a verdict.
       - name: Compare — the graph artifact + fingerprints MUST be byte-identical
+        if: success() || steps.c21.conclusion == 'failure'
         run: |
           if ! diff -u ref-pinned.txt ref-stable.txt; then
             echo "::error::SL4a structural-determinism divergence — the two toolchains produced a different masked graph artifact or fingerprint for unchanged source"
@@ -602,17 +700,18 @@ jobs:
   # The terminal required gate. It is RED unless every constituent is green: the
   # milestone demos (T28/T38/T49/T63) and the whole workspace suite (which
   # includes the T65 acceptance suite `crates/cli/tests/system_acceptance_gate.rs`)
-  # run under `test`; the scale benchmark (T69) and platform matrix (T70) run
-  # under `test` too; determinism runs under `structural-determinism` +
-  # `cross-toolchain-fingerprint`; the criteria-matrix + release-checklist closure
-  # runs under `coverage-matrix`. `needs` all of them, so a red constituent blocks
-  # the gate — a red demo, a red platform leg, a determinism divergence, or an
+  # run under `test`; the scale benchmark (T69), the platform matrix (T70), and the
+  # criteria-matrix + release-checklist closure run under `test` too; determinism —
+  # both the C21 fingerprint check and the SL4a artifact check — runs under
+  # `structural-determinism`. `needs` all of them, so a red constituent blocks the
+  # gate: a red demo, a red platform leg, a determinism divergence, or an
   # unmapped/uncovered criterion cannot be merged past this job.
   #
-  # This job runs no new work: it is the single required status that DEPENDS on
-  # the constituents, making "all system-level acceptance criteria hold
-  # simultaneously" a single mergeable signal. Its own step re-affirms the
-  # coverage/checklist closure locally so the gate's log states the invariant.
+  # This job runs no new work — it is the single required status that DEPENDS on the
+  # constituents, making "all system-level acceptance criteria hold simultaneously" a
+  # single mergeable signal. It therefore does NOT check out the repository: it has
+  # no file to read, and cloning one to print a paragraph is pure latency on the
+  # last job of every run.
   system-acceptance-gate:
     name: system-acceptance-gate
     runs-on: ubuntu-latest
@@ -625,14 +724,11 @@ jobs:
       - audit
       - deny
       - render-reference-tools
-      - cross-toolchain-fingerprint
       - structural-determinism
-      - coverage-matrix
       - rust-skills-register
       - cargo-profiles
       - crate-docs-and-metadata
     steps:
-      - uses: actions/checkout@v4
       - name: All system-level acceptance constituents are green
         run: |
           echo "All required constituents (demos + full suite + scale benchmark +"

@@ -20,8 +20,9 @@
 //! `structural-determinism` job). A divergence fails the job — that is the
 //! executable form of the "two builds of the same source produce identical
 //! fingerprints AND byte-identical graph artifacts (generation time aside), on
-//! different toolchains" guarantee. It extends the fingerprint-only
-//! `cross-toolchain-fingerprint` job to the full graph artifact.
+//! different toolchains" guarantee. It extends the fingerprint-only check that
+//! `fingerprint_fixture` drives — the sibling step in the same job — to the full
+//! graph artifact.
 //!
 //! Every hashed and emitted input is author-declared and the digest is pure
 //! integer arithmetic (FNV-1a), and the generation-time field — the only
