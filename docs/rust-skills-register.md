@@ -782,3 +782,157 @@ reasoning is not lost:
 - **`opt-inline-small` / `opt-cache-friendly` / `opt-pgo-profile`** — all
   unmeasured. dagr meets its per-node budget with room, and `perf-profile-first`
   is itself a rule in this skill.
+
+---
+
+## The M9 gate's verification record (T99)
+
+Ticket 114 (T99,
+[`docs/implementation/114-T99-m9-acceptance-gate.md`](implementation/114-T99-m9-acceptance-gate.md))
+is the milestone's acceptance gate. `scripts/check-rust-skills-adoption.sh`
+proves this file is *structurally* complete — every rule dispositioned exactly
+once, with a reason. It cannot prove the dispositions are *true*. A row claiming
+`satisfied` where nobody checked is worse than an empty one, because it stops the
+next person from looking, and an `adopt` row whose ticket quietly dropped the
+item is the same failure wearing a ticket number.
+
+So the gate checks the substance, and the three tables below are the data it
+checks against. They are not prose: `crates/cli/tests/m9_acceptance_gate.rs`
+parses them and fails if the traceability table does not cover exactly the
+`adopt` rows, if any evidence token has gone missing from the file that is
+supposed to carry it, if the spot-check table and the checks the suite actually
+runs are different sets, or if a recorded per-node figure is over the spec
+ceiling.
+
+### Every `adopt` row, traced to the item its ticket shipped
+
+The **Evidence** column reads `` `path` :: `token` ``: the gate opens the file
+and requires the literal token, so reverting what the ticket shipped fails the
+gate. Where the adopted item *is* a decision rather than code — 6 rows — the
+evidence is the recorded decision in this file, and the gate then holds the
+record itself against deletion. That count is not prose either: the gate counts
+the rows whose evidence path is this file and requires this sentence to agree.
+
+| Rule | Ticket | Shipped item | Evidence |
+|---|---|---|---|
+| anti-empty-catch | T95 | the write-discard convention stated once per module instead of 25 times | `crates/cli/tests/error_chain_and_panic_hardening.rs` :: `the_writeln_discard_convention_is_stated_once_per_module` |
+| anti-expect-lazy | T95 | every production `expect` classified, each lock site stating its poisoning policy | `crates/cli/tests/error_chain_and_panic_hardening.rs` :: `every_production_lock_site_states_its_poisoning_policy` |
+| anti-panic-expected | T95 | a rejected `slot.fill` is a permanent failure, not a success over a discarded value | `crates/core/src/execution.rs` :: `A rejected fill is a failure, not a success` |
+| anti-unwrap-abuse | T95 | the one unjustified production unwrap fixed, the remainder asserted clean | `crates/cli/tests/error_chain_and_panic_hardening.rs` :: `the_recorded_as_clean_findings_stay_clean` |
+| doc-panics-section | T95 | the slot state machine's panicking readers each carry a `# Panics` section | `crates/core/src/slot.rs` :: `# Panics` |
+| err-context-chain | T95 | the wrapping types carry the real cause instead of a string copy of it | `crates/artifact/tests/error_source_chain.rs` :: `source()` |
+| err-expect-bugs-only | T95 | the four runtime-builder expects recorded as an accepted bootstrap-panic surface | `docs/rust-skills-register.md` :: `The accepted bootstrap-panic surface` |
+| err-lowercase-msg | T95 | recorded as a deliberate exception — refusal text is terminal operator prose | `docs/rust-skills-register.md` :: `Refusal messages are prose, and stay prose` |
+| err-no-unwrap-prod | T95 | the unjustified unwrap fixed; promoting the lint declined, with the count behind it | `docs/rust-skills-register.md` :: `31 documented invariants` |
+| err-source-chain | T95 | every wrapping type overrides `source()`, asserted per type | `crates/render/tests/error_source_chain.rs` :: `source()` |
+| lint-unsafe-doc | T95 | `clippy::undocumented_unsafe_blocks` denied workspace-wide | `Cargo.toml` :: `undocumented_unsafe_blocks = "deny"` |
+| macro-proc-error-spans | T95 | the last internal `unreachable!` became a spanned `syn::Error` | `crates/macros/src/lib.rs` :: `#[task] internal error: the located` |
+| num-overflow-explicit | T95 | the driver's `in_flight` decrement is explicit and asserts its paired invariant | `crates/cli/tests/error_chain_and_panic_hardening.rs` :: `the_in_flight_decrement_saturates_and_asserts_its_invariant` |
+| num-saturating-clamp | T95 | the counter saturates rather than wrapping into a non-terminating loop | `crates/cli/src/driver.rs` :: `in_flight.saturating_sub(1)` |
+| obs-error-chain | T95 | a chain-walking logger reaches the libSQL diagnostic, not the wrapper summary | `crates/metastore/tests/error_source_chain.rs` :: `source()` |
+| api-common-traits | T96 | the handle and slot capability types hand-write `Debug` non-exhaustively | `crates/core/tests/api_traits_and_conversions.rs` :: `the_four_slot_capability_types_format_under_debug_non_exhaustively` |
+| api-from-not-into | T96 | `From<CostVector> for PoolCost`, delegating to the inherent constructor | `crates/core/src/admission.rs` :: `impl From<CostVector> for PoolCost` |
+| conv-tryfrom-fallible | T96 | `TryFrom<&str>` on both artifact readers, alongside `from_json_str` | `crates/render/tests/additive_conversions.rs` :: `graph_artifact_try_from_agrees_with_the_inherent_reader` |
+| doc-all-public | T96 | `missing_docs` written out at `deny` rather than implied by `warnings` | `lints.toml` :: `missing_docs = "deny"` |
+| doc-cargo-metadata | T96 | the full crates.io metadata set on all six members, held by a shell gate | `scripts/check-crate-docs-and-metadata.sh` :: `categories` |
+| doc-crate-readme | T96 | six crate READMEs, each inlined into the crate root rather than duplicated | `crates/core/src/lib.rs` :: `include_str!("../README.md")` |
+| doc-errors-section | T96 | the lint at `deny` and the stale T3 deferral in the policy rewritten | `docs/lint-policy.md` :: `missing_errors_doc` |
+| doc-examples-section | T96 | doc examples on the primary public entry points | `crates/cli/src/flow_builder.rs` :: `use dagr_cli::prelude::FlowBuilder;` |
+| doc-question-mark | T96 | doc examples propagate with `?`, and a new `.unwrap()` fails the metadata check | `scripts/check-crate-docs-and-metadata.sh` :: `unwrap` |
+| err-doc-errors | T96 | `missing_errors_doc` at `deny` in both halves, held field for field | `scripts/check-lint-parity.sh` :: `missing_errors_doc` |
+| lint-cargo-metadata | T96 | the metadata the group exists to enforce, under a stricter shell gate than the group | `docs/rust-skills-register.md` :: `is not enabled as a group` |
+| lint-missing-docs | T96 | `missing_docs` at `deny` in both halves, asserted to agree | `scripts/check-lint-parity.sh` :: `missing_docs` |
+| name-no-get-prefix | T96 | the four `get_`-prefixed accessors became `recorded_*` | `crates/core/src/assembly.rs` :: `recorded_content_hash` |
+| own-copy-small | T96 | the plain-data types gained the traits their fields freely allow | `crates/core/tests/api_traits_and_conversions.rs` :: `log_span_compares_and_hashes_by_identity` |
+| test-doctest-examples | T96 | `dagr-metastore` gained its first executed doc example | `crates/metastore/src/store.rs` :: `use dagr_metastore::{MetaStore, OpenMode};` |
+| anti-clone-excessive | T97 | the live sink's per-append whole-buffer clone removed, with the volume measured | `crates/metastore/tests/live_sink_queue_and_copy_volume.rs` :: `the_bytes_handed_to_the_worker_grow_linearly_in_the_stream_length` |
+| anti-lock-across-await | T97 | `clippy::await_holding_lock` written out at `deny` rather than implied | `Cargo.toml` :: `await_holding_lock = "deny"` |
+| anti-premature-optimize | T97 | only the complexity-argued change taken, the rest recorded rather than churned | `docs/rust-skills-register.md` :: `The one quadratic allocation, and the one that is not being fixed` |
+| async-bounded-channel | T97 | both unbounded channels pinned by a test that measures the real depth | `crates/cli/tests/async_and_allocation_review.rs` :: `the_attempt_queue_is_bounded_by_the_node_count_under_unconstrained_pools` |
+| async-no-lock-await | T97 | the lint asserted in both halves so it cannot drift out of the group | `scripts/check-lint-parity.sh` :: `await_holding_lock` |
+| async-spawn-blocking | T97 | the residual synchronous-scratch seam documented at the seam itself | `crates/cli/tests/async_and_allocation_review.rs` :: `the_scratch_seam_documents_the_blocking_fsync_gap` |
+| mem-with-capacity | T97 | the graph emitter sizes its node vector from the known pipeline length | `crates/cli/src/graph.rs` :: `Vec::with_capacity(pipeline.len())` |
+| own-borrow-over-clone | T97 | the eager producer-name clone removed; the remaining one carries its argument | `crates/core/src/resume.rs` :: `The clone is genuine, not` |
+| perf-profile-first | T97 | three argued sites, two taken and one declined on inspection | `docs/rust-skills-register.md` :: `The three argued allocation sites: two taken, one declined` |
+| lint-cfg-check | T98 | `unexpected_cfgs` with an empty `check-cfg`, proven to bite on a typo | `crates/cli/tests/ci_and_test_hygiene.rs` :: `the_unexpected_cfgs_guard_bites_on_a_deliberate_typo` |
+| proj-feature-additive | T98 | a CI job building both ends of the matrix, asserting the resolved graph | `.github/workflows/ci.yml` :: `feature-matrix` |
+| test-fixture-raii | T98 | `TempBase` promoted into the test kit and adopted across the suites | `crates/core/src/test_kit.rs` :: `pub struct TempBase` |
+| unsafe-miri-ci | T98 | the no-job verdict, pinned to the unsafe surface it was taken against | `crates/cli/tests/ci_and_test_hygiene.rs` :: `the_unsafe_surface_is_exactly_what_the_miri_verdict_was_taken_against` |
+
+### The sampled `satisfied` rows, re-derived by the gate
+
+Twelve of the 149 `satisfied` rows, one per category where the categories allow
+it, re-derived **from the tree** by
+`the_sampled_satisfied_claims_reproduce_independently` — not read back from this
+file. Each check prints its evidence on every run, and each is paired with a
+planted-violation control in `the_spot_check_runner_reports_a_broken_claim`, so
+none of them is a scan that cannot fail. The **Observed** column is the value at
+the time of the gate; the gate re-derives it rather than comparing to it, so an
+ordinary drift in a count is not a failure — a violation of the claim is.
+
+| Rule | The claim being re-derived | How the gate re-derives it | Observed at the gate |
+|---|---|---|---|
+| api-must-use | the `#[must_use]` discipline is universal, not occasional | counts `#[must_use]` across `crates/*/src`, requiring at least 600 | 616 |
+| api-serde-optional | `dagr-core` has no serde dependency at all | scans `crates/core/Cargo.toml` for an uncommented `serde` mention | none |
+| coll-map-choice | ordered maps by default, because iteration order reaches emitted artifacts | counts `BTreeMap`/`BTreeSet` against `HashMap`, and requires zero `HashSet` | 261 against 8, zero |
+| conc-thread-local | attribution uses `thread_local!`, and there is no `static mut` anywhere | requires at least one `thread_local!` and zero `static mut` | 3 and zero |
+| doc-module-inner | every production file opens with a module doc | reads the first three lines of every production source | all 66 |
+| err-custom-type | domain errors are types, not strings | counts production `impl … Error for` blocks, requiring at least 25 | 27 |
+| lint-workspace-lints | the lint policy lives in one place and every member opts in | requires `[workspace.lints.rust]` plus `[lints] workspace = true` in all six | all six |
+| name-crate-no-rs | no crate carries an `-rs` or `-rust` suffix | reads the six package names | six `dagr-*` |
+| own-slice-over-vec | no borrowed-container parameters | scans for `: &Vec<`, `: &String`, `: &Box<` in production | zero |
+| proj-flat-small | flat `foo.rs` files, no nested module directories | requires every subdirectory of a `src/` to be `bin/` | only `src/bin/` |
+| test-integration-dir | integration tests are the level a run engine is tested at | counts `tests/*.rs` per crate, requiring all six non-empty and 100 total | 129 |
+| unsafe-safety-comment | every `unsafe` block states why it is sound | requires a `// SAFETY:` within the comment run above each block | all 7 |
+
+### The performance envelope, before and after
+
+The scale benchmark, measured on one host on both trees so the M9 profile change
+(T93 added `[profile.dev.package."*"] opt-level = 3`, which is what the benchmark
+builds under) is **accounted for rather than silently absorbed**. Every figure is
+under the 1 ms/node spec ceiling with more than twice the margin, and the gate
+re-runs the benchmark live and fails over the CI budget.
+
+The honest finding is that on this host the profile change is not visible in the
+number: pre-M9 and post-M9 samples overlap. T93 measured a 43% improvement and,
+more importantly, a spread that fell from 15% to 0.4%; the run-to-run spread here
+is roughly 8% on both trees, so the samples cannot separate them. What matters
+for the gate is the direction — there is no regression to explain.
+
+| Measurement | Tree | Per-node overhead | Verdict |
+|---|---|---|---|
+| scale benchmark, sample 1 | pre-M9 (5f87d11) | 411171 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 2 | pre-M9 (5f87d11) | 434713 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 3 | pre-M9 (5f87d11) | 399750 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 4 | pre-M9 (5f87d11) | 424536 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 1 | M9 head | 442705 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 2 | M9 head | 434999 ns/node | under the 1 ms ceiling |
+| scale benchmark, sample 3 | M9 head | 433149 ns/node | under the 1 ms ceiling |
+| the gate's own live run | M9 head | 389040 ns/node | under the 1 ms ceiling |
+
+### Behaviour is unchanged, and that is checked rather than asserted
+
+The reference pipeline's masked canonical graph artifact, its structural
+fingerprint and policy hash, a scripted run's overall outcome and per-node
+terminal states, that run's folded run artifact, and every record of its event
+stream are **byte-identical** between the pre-M9 tree (`5f87d11`) and the M9
+head. Both were produced by the same probe program,
+`crates/cli/examples/m9_baseline_capture.rs`, whose digest the gate recomputes so
+the two halves cannot drift apart; the baseline and the full masking rule live in
+[`crates/cli/tests/fixtures/m9-baseline/`](../crates/cli/tests/fixtures/m9-baseline/PROVENANCE.md).
+
+The edition bump in particular altered no hashed input: `fingerprint-structural`
+and `fingerprint-policy` are the same two strings on both trees.
+
+### The open question the ticket left standing
+
+The ticket records one, and it is a rule rather than a question: *if the
+behavioural-identity comparison finds a difference, the gate fails and the
+difference is investigated — it is not reclassified as an accepted change at gate
+time.* Nothing to resolve, and nothing was reclassified: the comparison found no
+difference. The rule is now enforced by where the fixture lives — re-capturing it
+from the current head would be a tautology, so PROVENANCE.md's regeneration
+recipe only ever names the recorded pre-M9 commit.
+
+`docs/tasks.md` carries **no `Q:` items** for T99: that file is the historical
+M0–M4 breakdown and stops at T70, so M9 has no entry there at all.
