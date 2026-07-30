@@ -1522,11 +1522,19 @@ where
         // admitted (`admit`), cancelled without running (`cancel_node`), or rejected
         // as over-demand (`reject_over_demand`) — and each counted node sends
         // exactly one `AttemptDone`. So the depth never exceeds `in_flight`, which
-        // never exceeds the node count; while no cancellation is in play, only
-        // admitted attempts are counted, so the depth is further bounded by the
-        // admission controller's concurrency limit (C12) and the execution-class
-        // pools (C13). `crates/cli/tests/async_and_allocation_review.rs` measures the
-        // real occupancy against both bounds rather than trusting this paragraph.
+        // never exceeds the node count.
+        //
+        // That is the whole bound: the admission limit (C12) and the execution-class
+        // pools (C13) do **not** tighten it, however narrow they are pinned. A
+        // permit is released when the attempt returns, *before* the loop is told it
+        // finished (see `admit`), so a node stays counted in `in_flight` after its
+        // permit is gone — and the frontier and `drain_pending` walks can admit its
+        // successor, and its successor's successor, without the loop returning to
+        // the receive point in between. A one-permit pool therefore still queues one
+        // completion per node. Measured, not assumed:
+        // `crates/cli/tests/async_and_allocation_review.rs` pins the execution bound
+        // (one attempt body at a time) and the queue bound (the node count)
+        // separately, because they are separate facts.
         //
         // A **bounded** channel would not merely duplicate that invariant, it would
         // deadlock: `cancel_node` and `reject_over_demand` send from *inside* this

@@ -162,6 +162,23 @@ both `lints.toml` and `[workspace.lints.clippy]` (the ratchet T96 applied to
 `scripts/check-lint-parity.sh` now fails the build if either half drops below
 `deny`. The ticket did not grow.
 
+**The admission limit is not a bound on the completion queue — CI refuted the
+first answer.** The ticket asks for "the bound derived from the admission/pool
+limits", and the first implementation took that literally: a one-permit pool, so a
+one-message queue. It passed locally and observed a **peak of 11** on a contended
+Linux runner. The reason is a real gap between two counters, not a flake: a permit
+is released when the attempt returns, *before* the loop is told it finished, so a
+node stays counted in `in_flight` after its permit is gone — and the loop's
+frontier and `drain_pending` walks admit a successor as soon as capacity frees,
+without returning to the receive point in between. Under a one-permit pool the
+whole graph can therefore pass through admission, one body at a time, while the
+loop is still inside a single walk, leaving every completion queued. The derived
+bound is `in_flight`, hence the node count, full stop. The two properties are now
+pinned apart: a gauge over the attempt bodies asserts admission gates *execution*
+to exactly one at a time (structural — the permit spans the body), and the probe
+asserts the queue stays within the node count. The construction-site comment and
+`docs/rust-skills-register.md` state the corrected bound.
+
 **`docs/tasks.md` carries no `Q:` items for T97.** `tasks.md` covers M0–M4 only;
 the M9 tickets (T92–T99) are described in `docs/implementation/README.md`, which
 carries no open questions for this one. Both sources of open questions are

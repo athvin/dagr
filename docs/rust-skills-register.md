@@ -605,9 +605,15 @@ restating the argument.
   counts a node into `in_flight` exactly once — when it is admitted, cancelled
   without running, or rejected as over-demand — and each counted node sends exactly
   one message. So the depth never exceeds `in_flight`, hence never exceeds the node
-  count; with no cancellation in play only admitted attempts are counted, so it is
-  further bounded by the admission controller's concurrency limit and the
-  execution-class pools. A bounded channel would **deadlock**: `cancel_node` and
+  count. That is the whole bound: the admission limit does **not** tighten it,
+  however narrow the pool is pinned, because a permit is released when the attempt
+  returns — *before* the loop is told it finished — so a node stays counted in
+  flight after its permit is gone and the loop's frontier and `drain_pending` walks
+  can admit its successor before returning to the receive point. The first version
+  of the test asserted the permit count as the queue's bound and was refuted by CI
+  (a peak of 11 under a one-permit pool); admission bounds how many attempts
+  *execute* at once, which the test now pins separately with a gauge over the
+  attempt bodies. A bounded channel would **deadlock**: `cancel_node` and
   `reject_over_demand` send from *inside* the loop, so a full queue would block the
   only task that drains it — and the stop-on-first-failure transition emits one such
   message per pending node in a single synchronous burst that exceeds the permit

@@ -7,10 +7,15 @@
 //! * **Channel depth** — the run loop's `AttemptDone` queue is deliberately
 //!   `unbounded`. These tests instrument the queue's real occupancy (they read the
 //!   receiver's length; nothing is inferred from the loop's own bookkeeping) and
-//!   pin it against the bound the admission controller and the loop's in-flight
-//!   accounting already impose. See the comment at the construction site in
-//!   `crates/cli/src/driver.rs` for why bounding the channel would *duplicate* that
-//!   invariant — and deadlock.
+//!   pin it against the bound the loop's in-flight accounting imposes: one message
+//!   per node counted in flight, so never more than the node count. The admission
+//!   limit is deliberately **not** claimed as a tighter bound on the queue —
+//!   admission gates how many attempts *execute* at once, `in_flight` bounds how
+//!   many completions can *queue*, and the two differ because a permit is released
+//!   when the attempt returns, before the loop is told it finished. Both are
+//!   pinned, separately. See the comment at the construction site in
+//!   `crates/cli/src/driver.rs` for why bounding the channel would *duplicate* the
+//!   in-flight invariant — and deadlock.
 //! * **Task lifetimes** — every `tokio::spawn` / `spawn_blocking` / `JoinHandle` /
 //!   `thread::spawn` in production source is enumerated with a stated disposition,
 //!   so a new spawn site cannot land undocumented.
@@ -23,8 +28,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
 use dagr_cli::driver::{AttemptQueueProbe, NodeRunner, RunConfig, RunPlan, drive};
@@ -105,7 +111,7 @@ impl MonotonicClock for TickClock {
 // ===========================================================================
 
 /// How many independent source nodes the wide-graph runs use. Wide enough that a
-/// queue growing with the frontier would be unmistakable against a bound of one.
+/// queue growing with the frontier is unmistakable against a queue that does not.
 const WIDE: usize = 12;
 
 /// The per-node declared working memory, and a pool pinned so **exactly one** node
@@ -113,11 +119,47 @@ const WIDE: usize = 12;
 const NODE_MEMORY: u64 = 600;
 const ONE_NODE_POOL: u64 = 1_000;
 
-struct Succeeds;
+/// How long each attempt body stays open. Long enough that two overlapping bodies
+/// would be caught by the gauge below rather than passing between two adjacent
+/// instants; short enough that a whole wide run is milliseconds.
+const BODY_HOLD: Duration = Duration::from_millis(2);
+
+/// A gauge over the **attempt bodies**: how many are inside `Task::run` at the same
+/// moment, and the peak that ever reached. This measures the property admission
+/// actually guarantees — a permit is held for the whole attempt body, so the peak is
+/// structural, not a race — as distinct from the queue depth, which admission does
+/// not bound (see the first test).
+#[derive(Clone, Default)]
+struct Concurrency {
+    live: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+impl Concurrency {
+    /// The greatest number of attempt bodies ever open at once.
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+
+    /// Run one attempt body: count in, hold the body open for [`BODY_HOLD`], count
+    /// out.
+    fn hold(&self) {
+        let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(live, Ordering::SeqCst);
+        std::thread::sleep(BODY_HOLD);
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct Succeeds {
+    gauge: Concurrency,
+}
+
 impl Task for Succeeds {
     type Input = ();
     type Output = u64;
     async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<u64, TaskError> {
+        self.gauge.hold();
         Ok(1)
     }
 }
@@ -201,12 +243,14 @@ fn wide_node_name(i: usize) -> String {
 }
 
 /// `WIDE` independent zero-dependency source nodes, each declaring
-/// [`NODE_MEMORY`]. With `failing_first` the lowest-ordered node fails
-/// permanently, which is what a stop-on-first-failure run needs.
-fn wide_plan(failing_first: bool) -> RunPlan {
+/// [`NODE_MEMORY`] and each counting itself into the returned [`Concurrency`]
+/// gauge for the length of its body. With `failing_first` the lowest-ordered node
+/// fails permanently, which is what a stop-on-first-failure run needs.
+fn wide_plan(failing_first: bool) -> (RunPlan, Concurrency) {
     let mut flow = Flow::new();
     let policy = NodePolicy::new().working_memory(NODE_MEMORY);
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+    let gauge = Concurrency::default();
 
     if failing_first {
         let name = "aaa-fails".to_string();
@@ -222,11 +266,14 @@ fn wide_plan(failing_first: bool) -> RunPlan {
     }
     for i in 0..WIDE {
         let name = wide_node_name(i);
-        let _ = flow.register_source_with(&name, &Succeeds, policy);
+        let task = Succeeds {
+            gauge: gauge.clone(),
+        };
+        let _ = flow.register_source_with(&name, &task, policy);
         runners.insert(
             name.clone(),
             Box::new(SourceRunner {
-                task: Some(Succeeds),
+                task: Some(task),
                 slot: slot_for(&name),
                 name,
             }),
@@ -234,7 +281,7 @@ fn wide_plan(failing_first: bool) -> RunPlan {
     }
     let pipeline: Pipeline = flow.finish();
     pipeline.assemble().expect("the wide plan assembles");
-    RunPlan::new(pipeline, runners)
+    (RunPlan::new(pipeline, runners), gauge)
 }
 
 // ===========================================================================
@@ -242,23 +289,34 @@ fn wide_plan(failing_first: bool) -> RunPlan {
 // ===========================================================================
 
 /// **Test-plan scenario: wide graph, narrow admission.** With the memory pool
-/// pinned so exactly one node can hold a permit at a time, at most one attempt is
-/// ever in flight, so at most one `AttemptDone` can ever be queued. The observed
-/// peak is asserted **exactly**: `<= 1` is the bound derived from the admission
-/// limit, and `>= 1` proves the probe measured a real queue rather than nothing at
-/// all (a vacuous pass is the failure mode a depth assertion is most prone to).
+/// pinned so only one node's declared cost fits, admission gates **execution**: no
+/// two attempt bodies ever overlap. That is structural, not a race — the permit is
+/// held for the whole body — and the gauge measures it directly.
+///
+/// Admission does **not** gate the *queue*, and this test is where that was
+/// learned. The permit is dropped when the attempt returns, *before* the loop is
+/// told it finished, so a node stays counted in `in_flight` after its permit is
+/// gone; the loop's frontier and `drain_pending` walks can therefore admit a
+/// successor — and its successor — without ever returning to the receive point,
+/// leaving their completions queued behind it. The test originally asserted the
+/// permit count (`peak == 1`) as the queue's bound: it passed on an unloaded
+/// machine and observed a peak of **11** on a contended CI runner, which is the
+/// same invariant the next test states — one message per node counted in flight.
+/// The bound is the node count; the permit count bounds something else, asserted
+/// separately here.
 #[test]
-fn the_attempt_queue_never_exceeds_the_admission_bound_on_a_wide_graph() {
+fn a_one_node_pool_gates_execution_but_not_the_completion_queue() {
     let base = TempBase::new("queue-narrow");
     let probe = Arc::new(AttemptQueueProbe::new());
     let sink = MemorySink::default();
+    let (plan, gauge) = wide_plan(false);
 
     let report = drive(
         &RunConfig::new(base.as_str())
             .capacities(PoolCapacities::new().memory(ONE_NODE_POOL))
             .attempt_queue_probe(Arc::clone(&probe)),
         "t97-queue-narrow",
-        Ok(wide_plan(false)),
+        Ok(plan),
         &[],
         sink,
         TickClock::default(),
@@ -267,13 +325,26 @@ fn the_attempt_queue_never_exceeds_the_admission_bound_on_a_wide_graph() {
     assert_eq!(report.outcome, RunOutcome::Succeeded);
     assert_eq!(report.terminal_states.len(), WIDE);
 
-    // One permit ⇒ one in-flight attempt ⇒ one queued completion. Not "about one".
+    // What the one-node pool really guarantees: one attempt *running* at a time.
+    // Exactly one, not "about one" — the permit spans the body.
     assert_eq!(
-        probe.peak_depth(),
+        gauge.peak(),
         1,
-        "with a one-node pool the AttemptDone queue holds exactly one message at \
-         its peak; observed {}",
-        probe.peak_depth()
+        "a one-node pool admits one attempt at a time, so no two attempt bodies \
+         ever overlap; observed {} concurrent",
+        gauge.peak()
+    );
+
+    // What it does not guarantee: a one-message queue. The depth is bounded by the
+    // nodes counted in flight, and `>= 1` keeps the assertion non-vacuous (a probe
+    // that measured nothing is the failure mode a depth assertion is most prone
+    // to).
+    let peak = probe.peak_depth();
+    assert!(
+        (1..=WIDE).contains(&peak),
+        "the queue's peak depth stays within [1, {WIDE}] — one message per node \
+         counted in flight, which a released permit does not decrement; observed \
+         {peak}"
     );
 }
 
@@ -281,18 +352,19 @@ fn the_attempt_queue_never_exceeds_the_admission_bound_on_a_wide_graph() {
 /// every ready node is admitted at once, so the queue's peak rises with the
 /// frontier — but it can never exceed the node count, because the loop counts each
 /// node into `in_flight` exactly once and each counted node reports exactly once.
-/// That is the general structural bound; the admission limit is the tighter special
-/// case pinned above.
+/// That is *the* structural bound, and the test above shows it is also the bound
+/// under a narrow pool: pinning admission narrows what runs, not what queues.
 #[test]
 fn the_attempt_queue_is_bounded_by_the_node_count_under_unconstrained_pools() {
     let base = TempBase::new("queue-wide");
     let probe = Arc::new(AttemptQueueProbe::new());
     let sink = MemorySink::default();
+    let (plan, _gauge) = wide_plan(false);
 
     let report = drive(
         &RunConfig::new(base.as_str()).attempt_queue_probe(Arc::clone(&probe)),
         "t97-queue-wide",
-        Ok(wide_plan(false)),
+        Ok(plan),
         &[],
         sink,
         TickClock::default(),
@@ -309,16 +381,16 @@ fn the_attempt_queue_is_bounded_by_the_node_count_under_unconstrained_pools() {
 
 /// **The adversarial case the bound has to survive.** Under stop-on-first-failure
 /// the loop itself pushes a *burst* of `cancelled` terminals for every pending
-/// default-rule node — synchronously, from inside the loop. So the queue's peak is
-/// **not** bounded by the admission limit here (the burst exceeds it), which is
-/// precisely why the channel must stay unbounded: a bounded `send` from the loop
-/// would block the only task that drains it. The peak is still bounded by the node
-/// count, which is the invariant the construction site names.
+/// default-rule node — synchronously, from inside the loop, in one go rather than
+/// one release at a time. That is why the channel must stay unbounded: a bounded
+/// `send` from the loop would block the only task that drains it. The peak is still
+/// bounded by the node count, which is the invariant the construction site names.
 #[test]
 fn a_stop_on_first_failure_burst_exceeds_the_permit_count_but_not_the_node_count() {
     let base = TempBase::new("queue-burst");
     let probe = Arc::new(AttemptQueueProbe::new());
     let sink = MemorySink::default();
+    let (plan, _gauge) = wide_plan(true);
 
     let report = drive(
         &RunConfig::new(base.as_str())
@@ -326,7 +398,7 @@ fn a_stop_on_first_failure_burst_exceeds_the_permit_count_but_not_the_node_count
             .failure_mode(FailureMode::StopOnFirstFailure)
             .attempt_queue_probe(Arc::clone(&probe)),
         "t97-queue-burst",
-        Ok(wide_plan(true)),
+        Ok(plan),
         &[],
         sink,
         TickClock::default(),
