@@ -399,7 +399,6 @@ fn all_terminal_cleanup_fires_after_a_failure_in_both_modes() {
 /// notify node ordered after a failing source executes.
 #[test]
 fn any_failed_contingency_fires_on_a_failure() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let _f = flow.register_source("work", &Fails);
     let _n = flow.register_source_with_trigger(
@@ -422,6 +421,7 @@ fn any_failed_contingency_fires_on_a_failure() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let _ = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "notify-run",
@@ -455,7 +455,6 @@ fn any_failed_contingency_fires_on_a_failure() {
 /// without executing, and the run is a success.
 #[test]
 fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let _s = flow.register_source("work", &Succeeds);
     let _n = flow.register_source_with_trigger(
@@ -478,6 +477,7 @@ fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "notify-run",
@@ -520,7 +520,6 @@ fn any_failed_contingency_never_arose_is_skipped_and_run_succeeds() {
 /// dependency; propagated-state selection.)
 #[test]
 fn failed_data_upstream_propagates_upstream_failed() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let up = flow.register_source("up", &Fails);
     let _down = flow.register::<PassThrough, _>("down", &PassThrough, up);
@@ -544,6 +543,7 @@ fn failed_data_upstream_propagates_upstream_failed() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "prop",
@@ -571,7 +571,6 @@ fn failed_data_upstream_propagates_upstream_failed() {
 /// downstream, and the run reports overall success (only skips among non-successes).
 #[test]
 fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let up = flow.register_source("up", &Skips);
     let _down = flow.register::<PassThrough, _>("down", &PassThrough, up);
@@ -595,6 +594,7 @@ fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "prop",
@@ -623,7 +623,6 @@ fn skipped_data_upstream_propagates_upstream_skipped_and_run_succeeds() {
 /// succeed.
 #[test]
 fn continue_independent_runs_unrelated_branch() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let _bad = flow.register_source("bad", &Fails);
     let a = flow.register_source("a", &Succeeds);
@@ -652,6 +651,7 @@ fn continue_independent_runs_unrelated_branch() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "continue",
@@ -693,7 +693,6 @@ fn continue_independent_runs_unrelated_branch() {
 /// an unrelated default-rule node. No wall clock, no sleep.
 #[test]
 fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
-    let temp_base = TempBase::new("t34-test");
     use dagr_core::admission::PoolCapacities;
 
     // `keeper` and `later` each declare 10 bytes of working memory; the memory pool
@@ -740,6 +739,7 @@ fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::StopOnFirstFailure)
             .capacities(PoolCapacities::new().memory(10)),
@@ -793,7 +793,6 @@ fn stop_mode_cancels_pending_unrelated_default_and_runs_contingency() {
 /// appears with exactly one terminal state, and none appears twice.
 #[test]
 fn every_node_has_exactly_one_terminal_state() {
-    let temp_base = TempBase::new("t34-test");
     let mut flow = Flow::new();
     let f = flow.register_source("f", &Fails); // fails
     let _fd = flow.register::<PassThrough, _>("fd", &PassThrough, f); // upstream-failed
@@ -848,6 +847,7 @@ fn every_node_has_exactly_one_terminal_state() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t34-test");
     let report = drive(
         &config(temp_base.as_str(), FailureMode::ContinueIndependent),
         "mixed",

@@ -74,6 +74,20 @@ fn rel(path: &Path) -> String {
 // Dormant checkers: every scripts/check-*.sh runs in CI
 // ===========================================================================
 
+/// Every invariant checker in `scripts/`, by file name, sorted.
+fn check_scripts() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(repo_root().join("scripts"))
+        .expect("scripts/ is readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "sh"))
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
+        .filter(|n| n.starts_with("check-"))
+        .collect();
+    names.sort();
+    names
+}
+
 /// **Test-plan scenario: dormant checkers.** Every `scripts/check-*.sh` is named in
 /// the workflow. A checker that nothing runs is not a guard, it is a comment — and
 /// three of the sixteen dormant ones had already drifted into permanent failure
@@ -83,14 +97,7 @@ fn rel(path: &Path) -> String {
 /// have been discovered: a glob that silently matched nothing would otherwise pass.
 #[test]
 fn every_check_script_is_wired_into_ci() {
-    let scripts_dir = repo_root().join("scripts");
-    let mut checkers: Vec<String> = std::fs::read_dir(&scripts_dir)
-        .expect("scripts/ is readable")
-        .flatten()
-        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("check-") && n.ends_with(".sh"))
-        .collect();
-    checkers.sort();
+    let checkers = check_scripts();
 
     assert!(
         checkers.len() >= 20,
@@ -131,14 +138,7 @@ fn every_check_script_is_actually_invoked_not_merely_mentioned() {
         })
         .collect();
 
-    let scripts_dir = repo_root().join("scripts");
-    let checkers: BTreeSet<String> = std::fs::read_dir(&scripts_dir)
-        .expect("scripts/ is readable")
-        .flatten()
-        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-        .filter(|n| n.starts_with("check-") && n.ends_with(".sh"))
-        .collect();
-
+    let checkers: BTreeSet<String> = check_scripts().into_iter().collect();
     let not_invoked: Vec<&String> = checkers.difference(&invoked).collect();
     assert!(
         not_invoked.is_empty(),
@@ -266,24 +266,37 @@ fn no_cli_test_hardcodes_a_shared_temp_path() {
     );
 }
 
-/// The helper is *shared*, not copy-pasted: a local `struct TempBase` in a test file
-/// is the duplication this ticket promotes away. Seven files carried their own copy.
+/// The helper is *shared*, not copy-pasted. Two shapes of local copy had grown, one
+/// per file: a `struct TempBase` RAII guard (seven files) and a
+/// `fn temp_base(…) -> PathBuf` factory (fifteen), the latter unique by construction
+/// but leaking every directory it made. Both are gone; this keeps a third from
+/// starting.
+///
+/// `crates/metastore/tests/` is deliberately outside the scan and keeps its own
+/// copies: `dagr-metastore` has **no** dependency edge onto `dagr-core` by design
+/// (ADR 097 §5 — the same C24-style boundary `render` holds), so it structurally
+/// cannot reach the promoted helper, and adding the edge to share a test utility
+/// would trade an architectural guarantee for a de-duplication.
 #[test]
 fn no_test_file_redefines_the_temp_base_helper() {
-    let needle = concat!("struct ", "TempBase");
-    let offenders: Vec<String> = scanned_test_files()
-        .into_iter()
-        .filter(|p| {
-            std::fs::read_to_string(p)
-                .expect("test file is readable")
-                .contains(needle)
-        })
-        .map(|p| rel(&p))
-        .collect();
+    // Assembled at runtime so this file's own source does not match its own scan.
+    let struct_copy = concat!("struct ", "TempBase");
+    let fn_copy = concat!("fn ", "temp_base(");
+    let mut offenders: Vec<String> = Vec::new();
+    for path in scanned_test_files() {
+        let text = std::fs::read_to_string(&path).expect("test file is readable");
+        if text.contains(struct_copy) {
+            offenders.push(format!("{}: local `struct TempBase`", rel(&path)));
+        }
+        if text.contains(fn_copy) {
+            offenders.push(format!("{}: local `fn temp_base(…)` factory", rel(&path)));
+        }
+    }
     assert!(
         offenders.is_empty(),
-        "these test files define their own `TempBase` instead of using the shared \
-         `dagr_core::test_kit::TempBase`: {offenders:?}"
+        "these test files define their own temp-base helper instead of using the \
+         shared `dagr_core::test_kit::TempBase`:\n{}",
+        offenders.join("\n")
     );
 }
 

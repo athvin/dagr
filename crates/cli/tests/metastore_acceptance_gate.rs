@@ -57,6 +57,7 @@ use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
 
+use dagr_core::test_kit::TempBase;
 use dagr_metastore::MetaStore;
 use dagr_metastore::store::OpenMode;
 
@@ -71,19 +72,6 @@ fn repo_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("crates/cli has a two-level ancestor (the repo root)")
         .to_path_buf()
-}
-
-/// A private, disjoint temp base under the OS temp dir (pid + nanos), so concurrent
-/// test binaries never collide and each run's store is inspectable in isolation.
-fn temp_base(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "dagr-t88-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
 }
 
 /// Whether `sqlite3` is on PATH. CI installs it on every runner image; a dev machine
@@ -222,8 +210,8 @@ fn end_to_end_init_live_multiprocess_sync_and_native_query() {
     }
     prebuild();
 
-    let base = temp_base("e2e");
-    let runs = base.join("runs");
+    let base = TempBase::new("e2e");
+    let runs = base.path().join("runs");
     std::fs::create_dir_all(&runs).expect("mk run-store base");
     let store = runs.join("metastore.db");
     let store_arg = store.to_str().unwrap();
@@ -377,10 +365,10 @@ fn a_metastore_write_failure_surfaces_as_the_sink_failure_exit_code() {
     use dagr_metastore::MetastoreSink;
     use dagr_metastore::store::RetryPolicy;
 
-    let base = temp_base("fault");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("fault");
+    let base_str = base.as_str().to_owned();
     std::fs::create_dir_all(&base).expect("mk base");
-    let store_path = base.join("metastore.db");
+    let store_path = base.path().join("metastore.db");
     let run_id = "run-fault";
     let stream = stream_path(&base_str, "pipe", run_id);
 
@@ -449,8 +437,8 @@ fn live_produced_rows_equal_reconcile_produced_rows() {
     prebuild();
 
     // --- LIVE store: three DAGs with the tee on.
-    let live_base = temp_base("parity-live");
-    let live_runs = live_base.join("runs");
+    let live_base = TempBase::new("parity-live");
+    let live_runs = live_base.path().join("runs");
     std::fs::create_dir_all(&live_runs).expect("mk live base");
     let live_store = live_runs.join("metastore.db");
     for dag in DAGS {
@@ -468,8 +456,8 @@ fn live_produced_rows_equal_reconcile_produced_rows() {
 
     // --- RECONCILE store: same three DAGs, toggle OFF (plain FileSink, no libsql
     // activity), then a `sync` of the run store into a fresh index.
-    let rec_base = temp_base("parity-reconcile");
-    let rec_runs = rec_base.join("runs");
+    let rec_base = TempBase::new("parity-reconcile");
+    let rec_runs = rec_base.path().join("runs");
     std::fs::create_dir_all(&rec_runs).expect("mk reconcile base");
     let rec_store = rec_runs.join("metastore.db");
     for dag in DAGS {

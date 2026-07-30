@@ -185,11 +185,19 @@ verdict must be re-taken against new facts rather than inherited.
 Both DoD items were already satisfied on `main` when this ticket started, and are
 recorded here rather than silently skipped:
 
-- `check-coverage-matrix.sh` is **already wired**, on the tier-1 `test` leg, and
-  its runtime is already addressed there by the mechanism the ticket asks for: it
-  resolves test ids against a suite that job has *already compiled*, so it costs
-  about two seconds instead of the forty a standalone job spent rebuilding one.
-  The reasoning is at the step. No change.
+- `check-coverage-matrix.sh` is **already wired**, on the tier-1 `test` leg, which
+  is the mechanism the ticket asks for: it resolves test ids against a suite that
+  job has *already compiled*, instead of a standalone job rebuilding one. The
+  reasoning is at the step. No change — but the remaining cost was measured rather
+  than assumed, because the ticket's "over two minutes" understates it: the
+  enumeration is `cargo test --workspace -- --list`, which **spawns all ~125 test
+  binaries**, and that took **≈10 minutes** on the development machine. Placement
+  removes the *build*; the *spawn* is inherent to resolving ids against the
+  compiled suite. A source-scan resolution (grep for `fn <name>`) would be roughly
+  instant and was rejected: it would stop distinguishing a test that exists in the
+  source from one that actually compiles into the suite, which is the dangling-
+  reference case the checker exists to catch. Weakening the check to speed it up is
+  what this ticket is against.
 - `layer-c-runs/` is **absent and untracked** — it was never committed. The
   regression guard is now a test rather than an absence nobody re-checks.
 

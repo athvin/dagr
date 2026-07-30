@@ -166,13 +166,13 @@ fn assert_structure_mismatch() -> StructureAssertError {
 /// that underflowed would wrap and never end at all.
 #[test]
 fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
-    let temp_base = TempBase::new("outcome-classes");
     let nodes = [
         ("won", TerminalState::Succeeded),
         ("lost", TerminalState::Failed),
         ("declined", TerminalState::Skipped),
         ("expired", TerminalState::TimedOut),
     ];
+    let temp_base = TempBase::new("outcome-classes");
     let report = drive_scripted(&nodes, &RunConfig::new(temp_base.as_str()));
     assert_every_node_terminal(&report, &nodes);
 }
@@ -182,12 +182,12 @@ fn every_outcome_class_leaves_the_in_flight_counter_balanced() {
 /// by a later release — a different increment site from the initial frontier's.
 #[test]
 fn the_capacity_pending_path_leaves_the_counter_balanced() {
-    let temp_base = TempBase::new("capacity-pending");
     let nodes = [
         ("first", TerminalState::Succeeded),
         ("second", TerminalState::Succeeded),
         ("third", TerminalState::Succeeded),
     ];
+    let temp_base = TempBase::new("capacity-pending");
     let report = drive_scripted_with_cost(
         &nodes,
         600,
@@ -203,7 +203,6 @@ fn the_capacity_pending_path_leaves_the_counter_balanced() {
 /// leave the loop spinning.
 #[test]
 fn the_cancel_pending_path_leaves_the_counter_balanced() {
-    let temp_base = TempBase::new("stop-cancel");
     // 600 bytes each against a 1000-byte pool: exactly one node in flight at a
     // time, so the alphabetically-first (failing) node runs while the other two
     // wait — and the stop it triggers settles both waiters.
@@ -212,6 +211,7 @@ fn the_cancel_pending_path_leaves_the_counter_balanced() {
         ("zzz-one", TerminalState::Succeeded),
         ("zzz-two", TerminalState::Succeeded),
     ];
+    let temp_base = TempBase::new("stop-cancel");
     let report = drive_scripted_with_cost(
         &nodes,
         600,
@@ -285,7 +285,6 @@ fn an_external_interrupt_leaves_the_counter_balanced() {
 /// teardown alike — is terminal.
 #[test]
 fn teardown_runs_after_the_loop_drains_and_every_node_is_terminal() {
-    let temp_base = TempBase::new("teardown");
     let mut flow = Flow::new();
     let covered = flow.register_source("work", &Alpha);
     let _ = flow.register_teardown("cleanup", &Alpha, &[covered.ordering()]);
@@ -302,6 +301,7 @@ fn teardown_runs_after_the_loop_drains_and_every_node_is_terminal() {
         ScriptedRunner::boxed("cleanup", TerminalState::Succeeded),
     );
 
+    let temp_base = TempBase::new("teardown");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "hardening",

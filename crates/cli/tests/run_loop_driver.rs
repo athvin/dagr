@@ -348,9 +348,9 @@ fn single_success_plan() -> (Pipeline, RunPlan) {
 /// outcome; the call returns rather than hanging.
 #[test]
 fn happy_path_single_node_terminates() {
-    let temp_base = TempBase::new("test");
     let (_pipeline, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "demo",
@@ -397,7 +397,6 @@ fn happy_path_single_node_terminates() {
 /// run-finished is the last record.
 #[test]
 fn linear_chain_drives_dependents() {
-    let temp_base = TempBase::new("test");
     /// A one-input task that passes its input through unchanged.
     struct PassThrough;
     impl Task for PassThrough {
@@ -434,6 +433,7 @@ fn linear_chain_drives_dependents() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "chain",
@@ -467,7 +467,6 @@ fn linear_chain_drives_dependents() {
 /// node-admitted before the slow branch's node-terminal appears.
 #[test]
 fn fast_branch_not_gated_on_slow_branch() {
-    let temp_base = TempBase::new("test");
     /// A one-input task that sleeps `delay` before returning its input.
     struct Slow {
         delay: Duration,
@@ -537,6 +536,7 @@ fn fast_branch_not_gated_on_slow_branch() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "diamond",
@@ -560,9 +560,9 @@ fn fast_branch_not_gated_on_slow_branch() {
 /// it and the report exposes it.
 #[test]
 fn identity_is_a_uuidv7_minted_at_bootstrap() {
-    let temp_base = TempBase::new("test");
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "demo",
@@ -588,9 +588,9 @@ fn identity_is_a_uuidv7_minted_at_bootstrap() {
 /// Operator override replaces the minted identity everywhere.
 #[test]
 fn operator_override_replaces_the_minted_identity() {
-    let temp_base = TempBase::new("test");
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()).run_id("my-explicit-run-42"),
         "demo",
@@ -614,7 +614,6 @@ fn operator_override_replaces_the_minted_identity() {
 /// assembly-failure outcome distinct from a successful run.
 #[test]
 fn assembly_failure_still_records() {
-    let temp_base = TempBase::new("test");
     // A pipeline that fails assembly: two source nodes registered under the same
     // name (a duplicate-name assembly error).
     let mut flow = Flow::new();
@@ -630,6 +629,7 @@ fn assembly_failure_still_records() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "broken",
@@ -663,7 +663,6 @@ fn assembly_failure_still_records() {
               setting them — this is the only test in the suite that does"
 )]
 fn allowlisted_env_captured_others_not() {
-    let temp_base = TempBase::new("test");
     // The only env-mutating test in this file, and the only one that passes a
     // non-empty allowlist (so the only one whose `drive` call reads the
     // environment at all). It holds a process-global lock for its whole
@@ -685,6 +684,7 @@ fn allowlisted_env_captured_others_not() {
 
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _report = drive(
         &RunConfig::new(temp_base.as_str()),
         "demo",
@@ -747,7 +747,6 @@ fn allowlisted_env_captured_others_not() {
 /// identity, both fingerprints, parameters and data interval.
 #[test]
 fn run_started_header_carries_start_fields() {
-    let temp_base = TempBase::new("test");
     let mut flow = Flow::new();
     let _h = flow.register_source("only", &SucceedsWith(7));
     let pipeline = flow.finish();
@@ -763,6 +762,7 @@ fn run_started_header_carries_start_fields() {
     params.insert("threshold".to_string(), "5".to_string());
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
         &RunConfig::new(temp_base.as_str())
             .parameters(params)
@@ -816,7 +816,6 @@ fn run_started_header_carries_start_fields() {
 /// record and a single node-terminal event.
 #[test]
 fn every_outcome_is_fed_back() {
-    let temp_base = TempBase::new("test");
     struct PassThrough;
     impl Task for PassThrough {
         type Input = u64;
@@ -844,6 +843,7 @@ fn every_outcome_is_fed_back() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
         &RunConfig::new(temp_base.as_str()),
         "two",
@@ -879,7 +879,6 @@ fn every_outcome_is_fed_back() {
 /// the overall outcome is failed.
 #[test]
 fn failing_upstream_propagates_and_run_fails() {
-    let temp_base = TempBase::new("test");
     struct PassThrough;
     impl Task for PassThrough {
         type Input = u64;
@@ -907,6 +906,7 @@ fn failing_upstream_propagates_and_run_fails() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "mixed",
@@ -934,7 +934,6 @@ fn failing_upstream_propagates_and_run_fails() {
 /// node ends skipped, the run terminates, and the overall outcome is success.
 #[test]
 fn skip_only_run_reports_success() {
-    let temp_base = TempBase::new("test");
     let mut flow = Flow::new();
     let _h = flow.register_source("skipper", &AlwaysSkips);
     let pipeline = flow.finish();
@@ -947,6 +946,7 @@ fn skip_only_run_reports_success() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "skips",
@@ -970,9 +970,9 @@ fn skip_only_run_reports_success() {
 /// dependents; run-finished is emitted with no further admissions after it.
 #[test]
 fn run_ends_when_nothing_pending_or_in_flight() {
-    let temp_base = TempBase::new("test");
     let (_p, plan) = single_success_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let _ = drive(
         &RunConfig::new(temp_base.as_str()),
         "demo",
@@ -1006,7 +1006,6 @@ fn run_ends_when_nothing_pending_or_in_flight() {
 /// driver still reaches run-finished.
 #[test]
 fn framework_survives_a_misbehaving_task() {
-    let temp_base = TempBase::new("test");
     let mut flow = Flow::new();
     let _h = flow.register_source("blocker", &BlocksForever);
     let pipeline = flow.finish();
@@ -1021,6 +1020,7 @@ fn framework_survives_a_misbehaving_task() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()).grace(Duration::from_millis(200)),
         "blocked",
@@ -1067,7 +1067,6 @@ fn framework_survives_a_misbehaving_task() {
 /// stays timed-out.
 #[test]
 fn zombie_at_natural_run_end() {
-    let temp_base = TempBase::new("test");
     let mut flow = Flow::new();
     let _h = flow.register_source("zombie", &BlocksForever);
     let pipeline = flow.finish();
@@ -1082,6 +1081,7 @@ fn zombie_at_natural_run_end() {
     let sink = MemorySink::default();
     let start = std::time::Instant::now();
     let grace = Duration::from_millis(200);
+    let temp_base = TempBase::new("test");
     let report = drive(
         &RunConfig::new(temp_base.as_str()).grace(grace),
         "zombie-run",
@@ -1137,7 +1137,6 @@ fn two_simultaneous_runs_do_not_interfere() {
     // and still writing disjoint per-run directories. The base is still private to
     // this test (and removed when the guard drops) — what is shared is shared on
     // purpose, not by accident.
-    let temp_base = TempBase::new("test-shared");
     let run_once = |base: String, run_id: &str| {
         let (_p, plan) = single_success_plan();
         let sink = MemorySink::default();
@@ -1151,6 +1150,7 @@ fn two_simultaneous_runs_do_not_interfere() {
         );
         sink.bytes()
     };
+    let temp_base = TempBase::new("test-shared");
     let base_alpha = temp_base.as_str().to_owned();
     let h1 = std::thread::spawn(move || run_once(base_alpha, "run-alpha"));
     let h2 = {

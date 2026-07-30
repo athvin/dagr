@@ -146,7 +146,7 @@ fn duplicate_name_is_invalid_usage_naming_the_duplicate() {
 fn single_discovered_dag_runs_with_no_name() {
     let temp_base = TempBase::new("single");
     let base = temp_base.as_str();
-    let run = run_example("one_dag", &["run", "--store", &base]);
+    let run = run_example("one_dag", &["run", "--store", base]);
     assert_eq!(
         run.code, 0,
         "a single discovered DAG serves `run` with the name omitted, stderr:\n{}",
@@ -154,7 +154,7 @@ fn single_discovered_dag_runs_with_no_name() {
     );
     // The sole DAG really ran, under its own name `only` (not a synthetic `flow`).
     assert!(
-        run_store_has_a_stream(&base, "only"),
+        run_store_has_a_stream(base, "only"),
         "the sole DAG wrote an event stream under {base}/only/<run-id>/ (stdout:\n{})",
         run.stdout
     );

@@ -538,9 +538,9 @@ fn config_via_flags(base: &str) -> RunConfig {
 
 #[test]
 fn env_configured_run_reflects_env_values() {
-    let temp_base = TempBase::new("t77-e2e");
     let (_p, plan) = two_source_plan();
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t77-e2e");
     let report = with_env(
         &[
             (DAGR_GRACE, "20s"),
@@ -578,11 +578,11 @@ fn env_configured_run_reflects_env_values() {
 
 #[test]
 fn env_path_and_flag_path_are_behaviourally_identical() {
-    let temp_base = TempBase::new("t77-e2e");
     // Same pipeline, once with knobs via DAGR_*, once via the equivalent flags:
     // the terminal states and the overall outcome match.
     let (_p1, plan_env) = two_source_plan();
     let sink_env = MemorySink::default();
+    let temp_base = TempBase::new("t77-e2e");
     let env_report = with_env(
         &[
             (DAGR_GRACE, "20s"),

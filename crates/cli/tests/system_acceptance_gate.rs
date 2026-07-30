@@ -668,7 +668,6 @@ impl Task for Double {
 /// is the covering test for `SL7`.
 #[test]
 fn no_server_database_or_scheduler_is_required() {
-    let temp_base = TempBase::new("t65-no-server");
     let mut flow = RunnableFlow::new();
     let value = flow.register_source("make", MakeValue);
     let doubled = flow.register::<Double, _>("double", Double, value);
@@ -677,6 +676,7 @@ fn no_server_database_or_scheduler_is_required() {
     // in-process injected seams. No socket is opened, no DB handle constructed, no
     // scheduler spawned.
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("t65-no-server");
     let report = flow
         .run(
             "t65-no-server",

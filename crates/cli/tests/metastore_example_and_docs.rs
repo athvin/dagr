@@ -22,6 +22,7 @@
 
 #![cfg(feature = "metastore")]
 
+use dagr_core::test_kit::TempBase;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -32,19 +33,6 @@ fn repo_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("crates/cli has a two-level ancestor (the repo root)")
         .to_path_buf()
-}
-
-/// A unique run-store base under the OS temp dir, so concurrent test binaries never
-/// collide and each test's store is inspectable in isolation.
-fn temp_base(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "dagr-t87-{tag}-{}-{:?}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ))
 }
 
 /// Run the `many_dags` example (compiled **with** `--features metastore`, so the
@@ -114,10 +102,11 @@ fn sqlite3(db: &Path, sql: &str) -> String {
 /// Populate one `metastore.db` by running the example's three DAGs (`alpha`,
 /// `beta`, `gamma`) against one store base with the live tee toggled on
 /// (`--dagr.metastore`), each as its own process — the multi-process live-write
-/// path from T85/T86. Returns the store-base dir and the `metastore.db` path.
-fn populate_store(tag: &str) -> (PathBuf, PathBuf) {
-    let base = temp_base(tag);
-    let runs = base.join("runs");
+/// path from T85/T86. Returns the store-base GUARD (which reclaims the subtree when
+/// the caller drops it) and the `metastore.db` path.
+fn populate_store(tag: &str) -> (TempBase, PathBuf) {
+    let base = TempBase::new(tag);
+    let runs = base.path().join("runs");
     let store = runs.join("metastore.db");
     for dag in ["alpha", "beta", "gamma"] {
         let (code, stderr) = run_example(&[
@@ -205,8 +194,8 @@ fn running_several_dags_populates_one_queryable_store() {
 /// the example (no `--features metastore`).
 #[test]
 fn the_default_build_runs_unchanged_and_creates_no_index() {
-    let base = temp_base("default");
-    let runs = base.join("runs");
+    let base = TempBase::new("default");
+    let runs = base.path().join("runs");
     // A DEFAULT build of the example — note: no `--features metastore`.
     let out = Command::new(env!("CARGO"))
         .current_dir(repo_root())

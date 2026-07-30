@@ -385,7 +385,6 @@ struct Overcommit {
 /// with the memory pool **pinned to `M`** via the capacity-pinning flag. Every node
 /// shares one [`Concurrency`] meter so the peak concurrent admission is observable.
 fn drive_overcommit() -> Overcommit {
-    let temp_base = TempBase::new("base");
     let meter = Arc::new(Concurrency::default());
 
     let mut flow = Flow::new();
@@ -405,6 +404,7 @@ fn drive_overcommit() -> Overcommit {
         );
     }
 
+    let temp_base = TempBase::new("base");
     let base = temp_base.as_str();
     let sink = MemorySink::default();
     let report = drive(
@@ -415,9 +415,8 @@ fn drive_overcommit() -> Overcommit {
         sink.clone(),
         TickClock::default(),
     );
-    // Leave no debris under the OS temp dir (the driver's best-effort cleanup already
-    // reclaims the run's own `tmp/` subtree; this removes the whole private base).
-    let _ = std::fs::remove_dir_all(&base);
+    // The whole private base — including the run's own `tmp/` subtree — is reclaimed
+    // when `temp_base` drops at the end of this function; no explicit sweep needed.
 
     Overcommit {
         report,
@@ -543,7 +542,6 @@ fn capacity_is_binding_at_least_one_admission_serialized() {
 /// bootstrap-failed run-finished).
 #[test]
 fn a_single_oversized_node_fails_fast_at_bootstrap() {
-    let temp_base = TempBase::new("base");
     // One node demands `M + 1` (strictly over the pinned pool total → can never
     // fit); a sibling fits normally. The bootstrap check rejects the run before the
     // loop, so neither node executes.
@@ -587,6 +585,7 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
         TrivialRunner::boxed("fits", slot_for("fits")),
     );
 
+    let temp_base = TempBase::new("base");
     let base = temp_base.as_str();
     let sink = MemorySink::default();
     let report = drive(
@@ -597,8 +596,8 @@ fn a_single_oversized_node_fails_fast_at_bootstrap() {
         sink.clone(),
         TickClock::default(),
     );
-    // Leave no debris under the OS temp dir.
-    let _ = std::fs::remove_dir_all(&base);
+    // No debris under the OS temp dir: `temp_base` reclaims the whole private base
+    // when it drops at the end of this function.
 
     // The run failed at bootstrap — distinct from a mid-run failure and from
     // success. Nothing executed.

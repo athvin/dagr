@@ -520,7 +520,6 @@ struct ChainRun {
 /// non-retained chain end at zero counted residency, exactly as the release rule
 /// promises when every value is consumed and nothing is retained.
 fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
-    let temp_base = TempBase::new("base");
     assert!(len >= 2, "a chain needs at least a source and one link");
     let ledger = ResidencyLedger::new();
 
@@ -575,6 +574,7 @@ fn drive_chain(len: usize, residency: u64, retain_terminal: bool) -> ChainRun {
     // --- Reset the allocator peak to *now* so the measurement captures only the
     // run's high-water mark, then drive to completion through the real driver.
     reset_peak();
+    let temp_base = TempBase::new("base");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "bounded-chain",
@@ -926,7 +926,6 @@ fn ledger_peak_is_deterministic_across_repetitions() {
 /// ledger peak. This is the injected regression (release-on-last-read / a forgotten
 /// drop) the non-vacuity proof drives.
 fn drive_leaky_chain(len: usize) -> u64 {
-    let temp_base = TempBase::new("base");
     let ledger = ResidencyLedger::new();
 
     let mut flow = Flow::new();
@@ -960,6 +959,7 @@ fn drive_leaky_chain(len: usize) -> u64 {
         );
     }
 
+    let temp_base = TempBase::new("base");
     let _ = drive(
         &RunConfig::new(temp_base.as_str()),
         "leaky-chain",

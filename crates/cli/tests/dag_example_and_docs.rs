@@ -96,14 +96,14 @@ fn read_doc(rel: &str) -> String {
 fn many_dags_run_writes_an_on_disk_event_stream() {
     let temp_base = TempBase::new("run");
     let base = temp_base.as_str();
-    let run = run_example("many_dags", &["run", "alpha", "--store", &base]);
+    let run = run_example("many_dags", &["run", "alpha", "--store", base]);
     assert_eq!(
         run.code, 0,
         "run alpha exits with the run's own Success code, stderr:\n{}",
         run.stderr
     );
     assert!(
-        run_store_has_a_stream(&base, "alpha"),
+        run_store_has_a_stream(base, "alpha"),
         "the selected DAG wrote an event stream under {base}/alpha/<run-id>/ (stdout:\n{})",
         run.stdout
     );

@@ -155,7 +155,6 @@ impl Task for FanOutInsideOneNode {
 
 #[test]
 fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
-    let temp_base = TempBase::new("fan-out");
     let mut flow = RunnableFlow::new();
     let count = flow.register_source("how-many", HowMany { items: 100 });
     // The declared cost (compute threads) is the honest budget for this node's
@@ -169,6 +168,7 @@ fn fan_out_inside_one_node_bounds_internal_parallelism_and_stays_one_node() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("fan-out");
     let report = flow
         .run(
             "cookbook-fan-out",
@@ -293,13 +293,13 @@ impl Task for RenderCountAndLabel {
 
 #[test]
 fn fan_in_via_aggregate_struct_runs_through_the_one_call_seam() {
-    let temp_base = TempBase::new("fan-in");
     let mut flow = RunnableFlow::new();
     let aggregate = flow.register_source("aggregate", MakeCountAndLabel);
     let rendered =
         flow.register::<RenderCountAndLabel, _>("render", RenderCountAndLabel, aggregate);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("fan-in");
     let report = flow
         .run(
             "cookbook-fan-in",
@@ -359,7 +359,6 @@ impl Task for ConsumeValue {
 
 #[test]
 fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
-    let temp_base = TempBase::new("self-skip");
     // A self-skipping branch: the downstream, under the default `all-succeeded`
     // rule, is marked `upstream-skipped` and never runs — a skip-only run is still
     // a *successful* run.
@@ -368,6 +367,7 @@ fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
     let _join = flow.register::<ConsumeValue, _>("join", ConsumeValue, branch);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("self-skip");
     let report = flow
         .run(
             "cookbook-self-skip",
@@ -396,7 +396,6 @@ fn branch_in_task_self_skip_propagates_a_skip_to_the_join() {
 
 #[test]
 fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
-    let temp_base = TempBase::new("succeed-empty");
     // The succeed-with-empty branch keeps the join alive: it produces `None`, so
     // the join runs and sees an explicit empty value instead of being skipped.
     let mut flow = RunnableFlow::new();
@@ -404,6 +403,7 @@ fn branch_in_task_succeed_with_empty_keeps_the_join_alive() {
     let join = flow.register::<ConsumeOptional, _>("join", ConsumeOptional, branch);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("succeed-empty");
     let report = flow
         .run(
             "cookbook-succeed-empty",
@@ -465,10 +465,10 @@ fn advance_cursor(scratch: &dagr_core::context::ScratchStore) -> Result<u64, Tas
 
 #[test]
 fn incremental_cursor_written_on_attempt_one_is_read_on_the_next() {
-    let temp_base = TempBase::new("cursor");
     use dagr_core::context::{PipelineId, RunId, ScratchStore};
     use dagr_core::handle::NodeId;
 
+    let temp_base = TempBase::new("cursor");
     // A real on-disk run store, one per test. Scratch lives under it.
     let base = temp_base.as_str();
     let base_path = std::path::Path::new(&base);
@@ -710,7 +710,6 @@ impl SumAll {
 
 #[test]
 fn common_task_mistakes_have_compiling_fixes() {
-    let temp_base = TempBase::new("common-mistakes");
     let mut flow = RunnableFlow::new();
 
     // FIX 1 + FIX 2: a `#[task]` returning `Result<_, TaskError>` and capturing an
@@ -730,6 +729,7 @@ fn common_task_mistakes_have_compiling_fixes() {
     let summed = flow.register::<SumAll, _>("sum", SumAll, aggregate);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("common-mistakes");
     let report = flow
         .run(
             "cookbook-common-mistakes",

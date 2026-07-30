@@ -61,7 +61,6 @@ fn build_nightly() -> RunnableFlow {
 /// single-source run exits `Success`).
 #[test]
 fn run_named_flow_selects_and_drives_it() {
-    let temp_base = TempBase::new("select");
     // The parse half: the first positional after `run` becomes the flow name.
     // TEMP-BASE-EXEMPT: argument parsing only — `parse_cli` never touches the
     // filesystem, so this string is a token, not a directory.
@@ -73,6 +72,7 @@ fn run_named_flow_selects_and_drives_it() {
         other => panic!("`run etl` must parse to Run with flow_name=etl, got {other:?}"),
     }
 
+    let temp_base = TempBase::new("select");
     // The dispatch half: `run etl` builds and drives the etl flow.
     let base = temp_base.as_str();
     let registry = FlowRegistry::new()
@@ -86,7 +86,7 @@ fn run_named_flow_selects_and_drives_it() {
     );
     // The etl flow really ran: its event stream is on disk under the store.
     assert!(
-        run_store_has_a_stream(&base, "etl"),
+        run_store_has_a_stream(base, "etl"),
         "the etl flow wrote an event stream under {base}/etl/<run-id>/"
     );
 }
@@ -108,7 +108,7 @@ fn single_flow_registry_runs_with_no_name() {
     // dispatches under the synthetic `flow` identity (the operator never types a
     // name), so its stream lives under `<base>/flow/<run-id>/`.
     assert!(
-        run_store_has_a_stream(&base, "flow"),
+        run_store_has_a_stream(base, "flow"),
         "the sole flow ran (under the single-flow `flow` identity) even with no name given"
     );
 }
@@ -204,7 +204,7 @@ fn each_run_re_invokes_the_factory_with_its_own_identity() {
     // Two distinct run stores exist: each invocation minted its own run id, so the
     // two runs wrote disjoint `<base>/etl/<run-id>/` directories (concurrent-run
     // disjointness — no shared state between invocations).
-    let run_dirs = run_id_dirs(&base, "etl");
+    let run_dirs = run_id_dirs(base, "etl");
     assert_eq!(
         run_dirs, 2,
         "two invocations produced two distinct run-id directories, got {run_dirs}"

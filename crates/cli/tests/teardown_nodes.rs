@@ -371,9 +371,9 @@ fn cfg(base: &str) -> RunConfig {
 /// teardown and leaves it with exactly one terminal.
 #[test]
 fn teardown_runs_after_every_covered_terminal_class() {
-    let temp_base = TempBase::new("t52-test");
     // (covered task builder, expected covered terminal). `upstream-failed` is
     // produced by a data-dependent node whose upstream fails.
+    let temp_base = TempBase::new("t52-test");
     for (label, covered_state) in [
         ("succeeded", "succeeded"),
         ("failed", "failed"),
@@ -440,7 +440,6 @@ fn teardown_runs_after_every_covered_terminal_class() {
 /// because setup never ran" path is exercised when a covered node did not succeed).
 #[test]
 fn teardown_context_exposes_covered_terminal_states() {
-    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let setup = flow.register_source("setup", &Succeeds);
     let declined = flow.register_source("declined", &Skips);
@@ -472,6 +471,7 @@ fn teardown_context_exposes_covered_terminal_states() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t52-test");
     let _ = drive(
         &cfg(temp_base.as_str()),
         "t52",
@@ -505,7 +505,6 @@ fn teardown_context_exposes_covered_terminal_states() {
 /// `succeeded` (run failure is determined only by non-teardown nodes).
 #[test]
 fn failing_teardown_does_not_change_run_outcome() {
-    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let work = flow.register_source("work", &Succeeds);
     let _t = flow.register_teardown("cleanup", &UnitTask, &[work.ordering()]);
@@ -520,6 +519,7 @@ fn failing_teardown_does_not_change_run_outcome() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t52-test");
     let report = drive(
         &cfg(temp_base.as_str()),
         "t52",
@@ -549,7 +549,6 @@ fn failing_teardown_does_not_change_run_outcome() {
 /// the first and third complete normally regardless of the second's failure.
 #[test]
 fn one_failing_teardown_does_not_block_others() {
-    let temp_base = TempBase::new("t52-test");
     let mut flow = Flow::new();
     let work = flow.register_source("work", &Succeeds);
     let ran1 = Arc::new(AtomicBool::new(false));
@@ -573,6 +572,7 @@ fn one_failing_teardown_does_not_block_others() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t52-test");
     let report = drive(
         &cfg(temp_base.as_str()),
         "t52",
@@ -732,7 +732,6 @@ fn teardown_deadline_bounds_a_runaway_teardown() {
 /// pool capacity (it never appears in the admission ledger / never blocks).
 #[test]
 fn teardown_bypasses_admission_under_a_saturated_pool() {
-    let temp_base = TempBase::new("t52-test");
     use dagr_core::admission::PoolCapacities;
 
     let mut flow = Flow::new();
@@ -759,6 +758,7 @@ fn teardown_bypasses_admission_under_a_saturated_pool() {
         UnitRunner::boxed("cleanup", TeardownSucceeds { ran: ran.clone() }),
     );
 
+    let temp_base = TempBase::new("t52-test");
     let config = cfg(temp_base.as_str()).capacities(PoolCapacities::new().memory(10));
     let sink = MemorySink::default();
     let report = drive(
@@ -815,7 +815,6 @@ fn stream_shape(bytes: &[u8]) -> Vec<serde_json::Value> {
 /// teardown effect.
 #[test]
 fn no_teardown_pipeline_is_byte_identical() {
-    let temp_base = TempBase::new("t52-test");
     let build = || {
         let mut flow = Flow::new();
         let a = flow.register_source("a", &Succeeds);
@@ -836,6 +835,7 @@ fn no_teardown_pipeline_is_byte_identical() {
         (pipeline, runners)
     };
 
+    let temp_base = TempBase::new("t52-test");
     let run_once = || {
         let (pipeline, runners) = build();
         let sink = MemorySink::default();

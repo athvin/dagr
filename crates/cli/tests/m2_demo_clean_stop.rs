@@ -917,7 +917,6 @@ fn all_permits_released_nothing_left_charged() {
 /// current == 0 at end confirms the release.
 #[test]
 fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
-    let temp_base = TempBase::new("t38-release");
     let ledger = ResidencyLedger::new();
 
     let mut flow = Flow::new();
@@ -944,6 +943,7 @@ fn residency_ledger_charges_then_releases_to_zero_on_the_success_path() {
     );
 
     let sink = MemorySink::default();
+    let temp_base = TempBase::new("t38-release");
     let report = drive(
         &RunConfig::new(temp_base.as_str()),
         "m2-release-mechanics",

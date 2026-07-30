@@ -296,34 +296,6 @@ fn slot_for<T: Send + Sync + 'static>(name: &str, consumers: u32) -> Arc<Slot<T>
 
 const SHORT_GRACE: Duration = Duration::from_millis(150);
 
-/// A per-test **collision-proof** run-store base under the OS temp dir.
-///
-/// Determinism (CI fs race): several tests in this binary create and later
-/// `remove_dir_all` their own base concurrently under `--test-threads>1`. A base
-/// keyed only on `process::id()` + a wall-clock timestamp is **not** unique — the
-/// system clock's effective resolution is coarse (observed: ~95% of back-to-back
-/// `SystemTime::now()` reads on CI return the *same* nanosecond value), so two tests
-/// entering here at nearly the same instant get the **same** base path; one test's
-/// terminal `remove_dir_all(base)` (or `reclaim_leftover_temp_dirs`) then wipes the
-/// other's freshly-created temp dir mid-test, flaking `cleanup_removes_temp_dir`'s
-/// `assert!(temp.exists())` (and its siblings). The fix is causal, not a sleep: a
-/// process-monotonic `AtomicU64` counter makes every base provably disjoint, so no
-/// two tests ever share — or delete — the same subtree. No production change.
-fn temp_base() -> PathBuf {
-    use std::sync::atomic::AtomicU64;
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::SeqCst);
-    std::env::temp_dir().join(format!(
-        "dagr-t36-{}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        unique
-    ))
-}
-
 // ===========================================================================
 // Signal → CancelHandle wiring (via the seam / re-entry routing).
 // ===========================================================================
@@ -452,7 +424,6 @@ static REAL_SIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(unix)]
 fn real_signal_end_to_end(sig: libc::c_int) {
-    let temp_base = TempBase::new("t36-e2e");
     use dagr_cli::signals::install_signal_handlers;
 
     let _serial = REAL_SIGNAL_LOCK
@@ -463,6 +434,7 @@ fn real_signal_end_to_end(sig: libc::c_int) {
     let _w = flow.register_source("waiter", &Succeeds);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36-e2e");
     let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
     // Install the REAL OS-signal handlers wiring SIGTERM/SIGINT -> this handle. From
@@ -530,12 +502,12 @@ impl Task for CoopUntilCancelled {
 /// and the stream is complete + parseable (fsync at cancellation/run end).
 #[test]
 fn complete_fsyncd_stream_on_cancellation() {
-    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _t = flow.register_source("trigger", &Succeeds);
     let _w = flow.register_source("waiter", &Succeeds);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36");
     let cfg = RunConfig::new(temp_base.as_str()).grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
 
@@ -579,11 +551,11 @@ fn complete_fsyncd_stream_on_cancellation() {
 /// flush is the same single fsync boundary, and the exit is a clean success.
 #[test]
 fn complete_fsyncd_stream_on_normal_end() {
-    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36");
     let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
@@ -618,11 +590,11 @@ fn complete_fsyncd_stream_on_normal_end() {
 /// final-flush window.
 #[test]
 fn unwritable_sink_at_shutdown_yields_bounded_wait_and_sink_failure_code() {
-    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36");
     let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
@@ -668,11 +640,11 @@ fn unwritable_sink_at_shutdown_yields_bounded_wait_and_sink_failure_code() {
 /// sink-failure selection — distinct from a node ending `failed`/`timed-out`.
 #[test]
 fn sink_failure_at_shutdown_is_not_a_run_failure() {
-    let temp_base = TempBase::new("t36");
     let mut flow = Flow::new();
     let _a = flow.register_source("a", &Succeeds);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36");
     let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
@@ -707,7 +679,6 @@ fn sink_failure_at_shutdown_is_not_a_run_failure() {
 /// if the sink also could not flush — a run failure is the highest-precedence code.
 #[test]
 fn run_failure_wins_over_sink_failure_precedence() {
-    let temp_base = TempBase::new("t36");
     struct Fails;
     impl Task for Fails {
         type Input = ();
@@ -721,6 +692,7 @@ fn run_failure_wins_over_sink_failure_precedence() {
     let _a = flow.register_source("a", &Fails);
     let pipeline = flow.finish();
 
+    let temp_base = TempBase::new("t36");
     let cfg = RunConfig::new(temp_base.as_str());
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
     runners.insert(
@@ -755,9 +727,9 @@ fn run_failure_wins_over_sink_failure_precedence() {
 /// a temp directory (the confinement half of the convention).
 #[test]
 fn two_runs_get_disjoint_temp_directories() {
-    let base = temp_base();
-    let a = per_run_temp_dir(base.to_str().unwrap(), "pipe", "run-a");
-    let b = per_run_temp_dir(base.to_str().unwrap(), "pipe", "run-b");
+    let base = TempBase::new("base");
+    let a = per_run_temp_dir(base.as_str(), "pipe", "run-a");
+    let b = per_run_temp_dir(base.as_str(), "pipe", "run-b");
     assert_ne!(a, b, "distinct run ids yield distinct temp directories");
     assert!(
         a.starts_with(&base) && b.starts_with(&base),
@@ -773,12 +745,12 @@ fn two_runs_get_disjoint_temp_directories() {
 /// (e.g. `events.jsonl`) untouched, and does not touch the current run's own dir.
 #[test]
 fn next_invocation_reclaims_leftover_temp_dir_but_keeps_outputs() {
-    let base = temp_base();
+    let base = TempBase::new("base");
     let pipeline = "pipe";
 
     // A prior run directory with a populated temp dir AND a reserved output file.
     let prior_run = "prior-run";
-    let prior_temp = per_run_temp_dir(base.to_str().unwrap(), pipeline, prior_run);
+    let prior_temp = per_run_temp_dir(base.as_str(), pipeline, prior_run);
     create_temp_dir(&prior_temp).expect("create prior temp");
     std::fs::write(prior_temp.join("leftover.tmp"), b"debris").expect("write debris");
     let prior_events = prior_temp.parent().unwrap().join("events.jsonl");
@@ -786,12 +758,12 @@ fn next_invocation_reclaims_leftover_temp_dir_but_keeps_outputs() {
 
     // The current run's own temp dir must be untouched by reclamation.
     let current_run = "current-run";
-    let current_temp = per_run_temp_dir(base.to_str().unwrap(), pipeline, current_run);
+    let current_temp = per_run_temp_dir(base.as_str(), pipeline, current_run);
     create_temp_dir(&current_temp).expect("create current temp");
     std::fs::write(current_temp.join("keep.tmp"), b"mine").expect("write current");
 
     // The next invocation reclaims leftover per-run temp dirs, keeping the current.
-    reclaim_leftover_temp_dirs(base.to_str().unwrap(), pipeline, current_run);
+    reclaim_leftover_temp_dirs(base.as_str(), pipeline, current_run);
 
     assert!(
         !prior_temp.exists(),
@@ -813,8 +785,8 @@ fn next_invocation_reclaims_leftover_temp_dir_but_keeps_outputs() {
 /// on a clean, non-cancelled run.
 #[test]
 fn cleanup_removes_temp_dir() {
-    let base = temp_base();
-    let temp = per_run_temp_dir(base.to_str().unwrap(), "pipe", "run-x");
+    let base = TempBase::new("base");
+    let temp = per_run_temp_dir(base.as_str(), "pipe", "run-x");
     create_temp_dir(&temp).expect("create temp");
     std::fs::write(temp.join("x.tmp"), b"x").expect("write");
     assert!(temp.exists());
@@ -828,8 +800,8 @@ fn cleanup_removes_temp_dir() {
 /// must not panic; the guarantee is best-effort by design.
 #[test]
 fn cleanup_is_best_effort_on_missing_dir() {
-    let base = temp_base();
-    let temp = per_run_temp_dir(base.to_str().unwrap(), "pipe", "never-created");
+    let base = TempBase::new("base");
+    let temp = per_run_temp_dir(base.as_str(), "pipe", "never-created");
     // Never created — cleanup must be a harmless no-op.
     cleanup_temp_dir(&temp);
     assert!(!temp.exists());
@@ -846,7 +818,7 @@ fn cleanup_is_best_effort_on_missing_dir() {
 /// directory has been reclaimed by the driver.
 #[test]
 fn cooperative_task_cleans_temp_on_cancellation_and_driver_reclaims_dir() {
-    let base = temp_base();
+    let base = TempBase::new("base");
     let pipeline = "coop";
 
     let mut flow = Flow::new();
@@ -856,11 +828,11 @@ fn cooperative_task_cleans_temp_on_cancellation_and_driver_reclaims_dir() {
 
     // Configure the run store base so the driver derives the per-run temp dir under
     // it; capture the run id so the test can compute the same temp dir.
-    let cfg = RunConfig::new(base.to_str().unwrap())
+    let cfg = RunConfig::new(base.as_str())
         .run_id("fixed-run")
         .grace(SHORT_GRACE);
     let handle = cfg.cancel_handle();
-    let temp_dir = per_run_temp_dir(base.to_str().unwrap(), pipeline, "fixed-run");
+    let temp_dir = per_run_temp_dir(base.as_str(), pipeline, "fixed-run");
 
     let wrote = Arc::new(Mutex::new(None));
     let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();

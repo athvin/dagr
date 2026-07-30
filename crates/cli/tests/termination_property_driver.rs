@@ -372,7 +372,6 @@ fn is_taxonomy(state: TerminalState) -> bool {
 /// every node records exactly one taxonomy terminal state (driven for real).
 #[test]
 fn generated_runs_terminate_through_the_real_driver() {
-    let temp_base = TempBase::new("termination");
     const BASE_SEED: u64 = 0x5EED_10AD_D46C_11E5;
     // A modest, deterministic budget — each case spins two tokio runtimes, so this
     // is the "quick" companion to the tracker suite's high-volume sweep.
@@ -381,6 +380,7 @@ fn generated_runs_terminate_through_the_real_driver() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(40);
 
+    let temp_base = TempBase::new("termination");
     for idx in 0..cases {
         let seed = BASE_SEED ^ idx.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let case = generate(seed);

@@ -37,7 +37,6 @@
 //! impossible here.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
@@ -49,6 +48,7 @@ use dagr_core::execution::{AttemptEventSink, run_attempt, run_attempt_caught};
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 // ===========================================================================
 // A capturing in-memory run-store sink + monotonic clock (injection seam)
@@ -396,18 +396,6 @@ fn gated_chain_plan(barrier: Arc<Barrier>, value: u64) -> (Pipeline, RunPlan) {
     (pipeline, plan)
 }
 
-/// A per-process-unique run-store base under the system temp dir, so the test is
-/// hermetic (no reliance on a fixed path, no external services) and two test
-/// runs of the suite never collide.
-fn temp_base() -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "dagr-t67-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::SeqCst)
-    ))
-}
-
 /// The launch inputs for one concurrent run: its config, its plan, and the sink
 /// it will write into (kept so the caller can read the finished stream).
 struct RunLaunch {
@@ -466,12 +454,14 @@ fn drive_two_concurrently(
 #[test]
 fn two_concurrent_auto_minted_runs_stay_disjoint() {
     let barrier = Arc::new(Barrier::new(2));
+    let temp_base = TempBase::new("base");
     let a = RunLaunch {
-        config: RunConfig::new(temp_base().to_str().unwrap()),
+        config: RunConfig::new(temp_base.as_str()),
         sink: MemorySink::default(),
     };
+    let temp_base2 = TempBase::new("base");
     let b = RunLaunch {
-        config: RunConfig::new(temp_base().to_str().unwrap()),
+        config: RunConfig::new(temp_base2.as_str()),
         sink: MemorySink::default(),
     };
 
@@ -528,12 +518,14 @@ fn two_concurrent_auto_minted_runs_stay_disjoint() {
 #[test]
 fn concurrent_streams_concatenate_and_partition_losslessly() {
     let barrier = Arc::new(Barrier::new(2));
+    let temp_base = TempBase::new("base");
     let a = RunLaunch {
-        config: RunConfig::new(temp_base().to_str().unwrap()),
+        config: RunConfig::new(temp_base.as_str()),
         sink: MemorySink::default(),
     };
+    let temp_base2 = TempBase::new("base");
     let b = RunLaunch {
-        config: RunConfig::new(temp_base().to_str().unwrap()),
+        config: RunConfig::new(temp_base2.as_str()),
         sink: MemorySink::default(),
     };
 
@@ -595,8 +587,8 @@ fn concurrent_streams_concatenate_and_partition_losslessly() {
 /// with operator-supplied ids so it is not an artefact of `UUIDv7` monotonicity.
 #[test]
 fn concurrent_runs_write_disjoint_directories_under_a_shared_base() {
-    let base = temp_base();
-    let base_str = base.to_str().unwrap().to_string();
+    let base = TempBase::new("base");
+    let base_str = base.as_str().to_string();
     let pipeline = "concurrent-pipe";
     let barrier = Arc::new(Barrier::new(2));
 
@@ -630,7 +622,7 @@ fn concurrent_runs_write_disjoint_directories_under_a_shared_base() {
     // On disk: exactly the two per-run directories exist under <base>/<pipeline>/,
     // named by the two ids. `drive` creates each run's <run-id>/tmp/ at bootstrap,
     // so the real directories exist and can be enumerated.
-    let pipeline_dir = base.join(pipeline);
+    let pipeline_dir = base.path().join(pipeline);
     let mut run_dirs: BTreeSet<String> = BTreeSet::new();
     for entry in std::fs::read_dir(&pipeline_dir).expect("pipeline directory exists on disk") {
         let entry = entry.expect("readable dir entry");

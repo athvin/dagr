@@ -134,9 +134,29 @@ use crate::task::Task;
 /// - the **process id** — two concurrent test *processes* (nextest runs each test
 ///   in its own) cannot collide, nor can a test run alongside a live dagr process;
 /// - a **process-monotonic counter** — two calls on any thread of one process
-///   differ, including two calls in the same test;
+///   differ, including two calls in the same test. It is the load-bearing one:
+///   pid plus a wall-clock stamp is **not** sufficient, because the clock's
+///   effective resolution is coarse enough on CI runners for two calls to land on
+///   the same nanosecond. The counter makes disjointness causal rather than
+///   probabilistic;
 /// - a **nanosecond stamp** — a *later* run of the same suite cannot land on a
 ///   directory a previous run left behind if the pid is recycled.
+///
+/// # Why a shared base is not merely untidy
+///
+/// Two concrete failures, both of which this repository has already debugged and
+/// both of which a distinct-pipeline-name convention does not prevent:
+///
+/// - **The reclamation sweep deletes a live run.** At run end the driver reclaims
+///   leftover per-run temp subtrees by removing every *sibling* run directory under
+///   `<base>/<pipeline>/` other than its own. Two concurrent runs sharing a base and
+///   a pipeline name therefore share that parent, and one run's terminal sweep wipes
+///   the other's freshly created run directory mid-run.
+/// - **Cleanup races creation on the identical path.** A shared base plus a *pinned*
+///   run id makes every concurrent drive resolve to the same
+///   `<base>/<pipeline>/<run-id>/tmp`. One drive's best-effort end-of-run cleanup
+///   then races another's create — and because the cleanup swallows its error, the
+///   directory is left behind and an `assert!(!exists())` reds at random.
 ///
 /// # Cleanup
 ///
@@ -204,7 +224,7 @@ impl TempBase {
     pub fn as_str(&self) -> &str {
         self.path
             .to_str()
-            .unwrap_or_else(|| panic!("temp base path is not valid UTF-8: {:?}", self.path))
+            .unwrap_or_else(|| panic!("temp base path is not valid UTF-8: {}", self.path.display()))
     }
 }
 

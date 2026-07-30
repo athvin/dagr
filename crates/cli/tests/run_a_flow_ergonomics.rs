@@ -210,7 +210,6 @@ fn count(bytes: &[u8], kind: &str, node: &str) -> usize {
 /// runner) and run it in ONE call, returning the recorded stream + outcome +
 /// the sink's produced value.
 fn run_via_auto_adapter() -> (Vec<u8>, RunOutcome, Option<u64>) {
-    let temp_base = TempBase::new("run-a-flow");
     let mut flow = RunnableFlow::new();
     let source = flow.register_source(SOURCE, Source { value: SEED });
     let transform = flow.register_with::<FlakyTransform, _>(
@@ -222,6 +221,7 @@ fn run_via_auto_adapter() -> (Vec<u8>, RunOutcome, Option<u64>) {
     let sink_handle = flow.register::<Sink, _>(SINK, Sink, transform);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow");
     let report = flow
         .run(
             "run-a-flow-m1",
@@ -339,13 +339,13 @@ fn the_auto_adapter_path_is_deterministic() {
 /// terminal-state propagation, not a re-implementation.
 #[test]
 fn permanent_failure_propagates_downstream() {
-    let temp_base = TempBase::new("run-a-flow-fail");
     let mut flow = RunnableFlow::new();
     let source = flow.register_source(SOURCE, Source { value: SEED });
     let transform = flow.register::<AlwaysFails, _>(TRANSFORM, AlwaysFails, source);
     let _sink = flow.register::<Sink, _>(SINK, Sink, transform);
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-fail");
     let report = flow
         .run(
             "run-a-flow-fail",
@@ -433,7 +433,6 @@ fn a_scratch_touching_node_runs_through_the_adapter() {
 /// caught by the observable value at the end.
 #[test]
 fn distinct_input_and_output_types_flow_through_the_adapter() {
-    let temp_base = TempBase::new("run-a-flow-types");
     struct MakeNumber;
     impl Task for MakeNumber {
         type Input = ();
@@ -468,6 +467,7 @@ fn distinct_input_and_output_types_flow_through_the_adapter() {
     let measured = flow.register::<Measure, _>("measure", Measure, rendered.clone_on_read());
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-types");
     let report = flow
         .run(
             "run-a-flow-types",
@@ -534,7 +534,6 @@ impl Task for EmitText {
 /// `InputWiring` reader assembles `Deps::into_edges` positionally.
 #[test]
 fn two_input_node_receives_upstreams_in_declared_order() {
-    let temp_base = TempBase::new("run-a-flow-tuple-order");
     let mut flow = RunnableFlow::new();
     let left = flow.register_source("left", EmitText { text: "LEFT" });
     let right = flow.register_source("right", EmitText { text: "RIGHT" });
@@ -547,6 +546,7 @@ fn two_input_node_receives_upstreams_in_declared_order() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-order");
     let report = flow
         .run(
             "run-a-flow-tuple-order",
@@ -574,7 +574,6 @@ fn two_input_node_receives_upstreams_in_declared_order() {
 /// The receive mode comes from the registration-site binding, never the macro.
 #[test]
 fn two_input_node_honours_a_shared_edge_alongside_a_clone_on_read_edge() {
-    let temp_base = TempBase::new("run-a-flow-tuple-shared");
     let mut flow = RunnableFlow::new();
     let left = flow.register_source("left", EmitText { text: "SHARED" });
     let right = flow.register_source("right", EmitText { text: "CLONED" });
@@ -586,6 +585,7 @@ fn two_input_node_honours_a_shared_edge_alongside_a_clone_on_read_edge() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-shared");
     let report = flow
         .run(
             "run-a-flow-tuple-shared",
@@ -614,7 +614,6 @@ fn two_input_node_honours_a_shared_edge_alongside_a_clone_on_read_edge() {
 /// panic, so a clean success is the proof of deferral.
 #[test]
 fn three_input_node_reads_inside_run_after_upstreams_succeed() {
-    let temp_base = TempBase::new("run-a-flow-tuple-deferred");
     struct SumThree;
     impl Task for SumThree {
         type Input = (u64, u64, u64);
@@ -649,6 +648,7 @@ fn three_input_node_reads_inside_run_after_upstreams_succeed() {
     );
 
     let mem = MemorySink::default();
+    let temp_base = TempBase::new("run-a-flow-tuple-deferred");
     let report = flow
         .run(
             "run-a-flow-tuple-deferred",

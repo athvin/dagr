@@ -18,6 +18,7 @@ use dagr_cli::run_store::{SystemClock, TickClock};
 use dagr_core::TaskError;
 use dagr_core::context::RunContext;
 use dagr_core::task::Task;
+use dagr_core::test_kit::TempBase;
 
 /// A source producing a fixed number.
 struct Count {
@@ -41,18 +42,6 @@ impl Task for Double {
     }
 }
 
-/// A private, disjoint temp base under the OS temp dir.
-fn temp_base(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "dagr-run-to-store-{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
-}
-
 /// The count of records of a given `kind` in a parsed stream.
 fn count_kind(bytes: &[u8], kind: &str) -> usize {
     let stream = read_records(bytes).expect("the event stream parses");
@@ -65,8 +54,8 @@ fn count_kind(bytes: &[u8], kind: &str) -> usize {
 
 #[test]
 fn run_to_store_writes_a_real_event_stream_with_no_hand_written_plumbing() {
-    let base = temp_base("stream");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("stream");
+    let base_str = base.as_str().to_owned();
 
     let mut flow = RunnableFlow::new();
     let counted = flow.register_source("count", Count { up_to: 21 });
@@ -87,6 +76,7 @@ fn run_to_store_writes_a_real_event_stream_with_no_hand_written_plumbing() {
     // A real, parseable stream landed at the conventional store path, keyed by the
     // framework-minted run id (never a caller-fixed segment).
     let stream = base
+        .path()
         .join("quickstart")
         .join(report.run_id())
         .join("events.jsonl");
@@ -108,17 +98,21 @@ fn run_to_store_writes_a_real_event_stream_with_no_hand_written_plumbing() {
         2,
         "one node-terminal per node"
     );
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
 fn run_to_store_surfaces_a_store_open_failure_as_the_store_variant() {
-    // Make `base` an existing FILE, so creating `<base>/<pipeline>/<run-id>/` under it
-    // fails (a file is not a directory). The failure must surface BEFORE assembly.
-    let base_file = temp_base("blocked");
-    std::fs::write(&base_file, b"not a directory").unwrap();
-    let base_str = base_file.to_string_lossy().to_string();
+    // Point the store base at an existing FILE, so creating
+    // `<base>/<pipeline>/<run-id>/` under it fails (a file is not a directory). The
+    // failure must surface BEFORE assembly. The file lives inside a private temp
+    // base, so it is reclaimed with everything else when the guard drops.
+    let holder = TempBase::new("blocked");
+    let base_file = holder.path().join("not-a-directory");
+    std::fs::write(&base_file, b"not a directory").expect("plant the blocking file");
+    let base_str = base_file
+        .to_str()
+        .expect("temp path is valid UTF-8")
+        .to_owned();
 
     let mut flow = RunnableFlow::new();
     let _ = flow.register_source("count", Count { up_to: 1 });
@@ -128,14 +122,12 @@ fn run_to_store_surfaces_a_store_open_failure_as_the_store_variant() {
         matches!(result, Err(RunToStoreError::Store(_))),
         "an unopenable store is a Store error, not Assembly"
     );
-
-    let _ = std::fs::remove_file(&base_file);
 }
 
 #[test]
 fn run_to_store_surfaces_an_assembly_failure_as_the_assembly_variant() {
-    let base = temp_base("badflow");
-    let base_str = base.to_string_lossy().to_string();
+    let base = TempBase::new("badflow");
+    let base_str = base.as_str().to_owned();
 
     // Two nodes registered under the SAME name — a duplicate-name assembly failure.
     let mut flow = RunnableFlow::new();
@@ -147,8 +139,6 @@ fn run_to_store_surfaces_an_assembly_failure_as_the_assembly_variant() {
         matches!(result, Err(RunToStoreError::Assembly(_))),
         "a flow that does not assemble is an Assembly error"
     );
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
