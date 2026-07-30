@@ -7,7 +7,7 @@ it byte for byte.
 
     pre-m9-commit = 5f87d1143d28e4ce4acbcb313e925fa8ddd13627
     probe         = crates/cli/examples/m9_baseline_capture.rs
-    probe-fnv1a64 = ee59ad4b61216ac7
+    probe-fnv1a64 = 3180b20f849d31e2
     captured      = 2026-07-30
 
 `5f87d11` is `docs: mark 106 T91 done` — the last commit on `main` before any M9

@@ -10,7 +10,9 @@
 //! # What it prints
 //!
 //! A single deterministic snapshot of dagr's *observable* behaviour — the four
-//! surfaces the M9 gate claims are unchanged — as `key=value` lines:
+//! surfaces the M9 gate claims are unchanged, namely artifacts (graph and run),
+//! fingerprints, terminal-state transitions, and the event stream — as
+//! `key=value` lines:
 //!
 //! - `graph-artifact=` — the reference pipeline's full graph artifact, canonical
 //!   JSON, with the sole generation-time header field masked.
@@ -23,6 +25,13 @@
 //!   harness's own volatile-field masking.
 //! - `event:` — every record of that run's event stream, normalized (see
 //!   [`VOLATILE_KEYS`]) and printed one per line in stream order.
+//!
+//! Those `key=value` lines, and nothing else, are the snapshot: the gate captures
+//! this program's **stdout** only. Anything the engine writes to stderr — notably
+//! the driver's worst-case shutdown-budget arithmetic, which `driver.rs` emits
+//! with `eprintln!` at startup — is neither in the fixture nor compared by the
+//! gate. Behaviour reachable only through stderr is outside what this probe
+//! pins.
 //!
 //! # Why it is written the way it is
 //!
@@ -182,11 +191,11 @@ fn mask_volatile(value: &mut serde_json::Value) {
 
 fn main() {
     // --- 0. The scripted run, FIRST ------------------------------------------
-    // The driver prints its shutdown-budget arithmetic to stdout at startup (C16),
-    // so the run is driven before anything else is printed and that line lands at
-    // the top of the snapshot in a fixed position. It is deliberately left in: the
-    // budget arithmetic is observable behaviour the milestone also promised not to
-    // change.
+    // Driven before anything is printed, so no output the engine produces can
+    // interleave with this file's own lines. The driver's startup line — its
+    // worst-case shutdown-budget arithmetic — goes to stderr, and the gate reads
+    // stdout only, so it is absent from the snapshot and is not one of the
+    // observables this probe compares.
     //
     // A LINEAR chain: `load` succeeds, `transform` fails once and retries to
     // success, `publish` consumes it. Nothing is ever concurrent, so the event

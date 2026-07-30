@@ -808,9 +808,10 @@ ceiling.
 
 The **Evidence** column reads `` `path` :: `token` ``: the gate opens the file
 and requires the literal token, so reverting what the ticket shipped fails the
-gate. Where the adopted item *is* a decision rather than code — four rows —
-the evidence is the recorded decision in this file, and the gate then holds the
-record itself against deletion.
+gate. Where the adopted item *is* a decision rather than code — 6 rows — the
+evidence is the recorded decision in this file, and the gate then holds the
+record itself against deletion. That count is not prose either: the gate counts
+the rows whose evidence path is this file and requires this sentence to agree.
 
 | Rule | Ticket | Shipped item | Evidence |
 |---|---|---|---|
@@ -882,7 +883,7 @@ ordinary drift in a count is not a failure — a violation of the claim is.
 | own-slice-over-vec | no borrowed-container parameters | scans for `: &Vec<`, `: &String`, `: &Box<` in production | zero |
 | proj-flat-small | flat `foo.rs` files, no nested module directories | requires every subdirectory of a `src/` to be `bin/` | only `src/bin/` |
 | test-integration-dir | integration tests are the level a run engine is tested at | counts `tests/*.rs` per crate, requiring all six non-empty and 100 total | 129 |
-| unsafe-safety-comment | every `unsafe` block states why it is sound | requires a `// SAFETY:` within the comment run above each block | all 8 |
+| unsafe-safety-comment | every `unsafe` block states why it is sound | requires a `// SAFETY:` within the comment run above each block | all 7 |
 
 ### The performance envelope, before and after
 

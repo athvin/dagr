@@ -425,6 +425,21 @@ fn every_adopt_row_is_traced_to_a_shipped_ticket_item() {
         "the traceability table traces rules that are not dispositioned `adopt`: {extra:?}"
     );
 
+    // Some adopted items are decisions rather than code, so their evidence is the
+    // record in the register itself. The preamble states how many; derive it here
+    // rather than trusting the sentence, which is otherwise free to go stale.
+    let self_evidenced = traced
+        .values()
+        .filter(|cells| parse_evidence(&cells[3]).is_some_and(|(path, _)| path == REGISTER))
+        .count();
+    assert!(
+        register.contains(&format!(
+            "a decision rather than code — {self_evidenced} rows —"
+        )),
+        "{self_evidenced} traced rows cite the register itself as evidence, but the \
+         traceability preamble does not say so"
+    );
+
     let mut broken: Vec<String> = Vec::new();
     for (rule, cells) in &traced {
         let ticket = cells[1].trim_matches('`');
