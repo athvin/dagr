@@ -385,7 +385,9 @@ impl RunnableFlow {
     ///
     /// The bound is not a *requirement* on anything: ordinary registrations are
     /// unaffected, and remote eligibility — where the same bound becomes mandatory —
-    /// is a later ticket's.
+    /// is a later ticket's. Registration itself is the **type-erased** one
+    /// [`register_source`](Self::register_source) performs, with the same consequence
+    /// for graph emission described there.
     #[must_use]
     pub fn register_source_payload<T>(
         &mut self,
