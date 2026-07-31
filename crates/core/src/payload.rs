@@ -416,7 +416,7 @@ pub trait Codec: Sized {
 /// envelope belongs to the framework, so no type can quietly write a different one.
 ///
 /// ```
-/// use dagr_core::{Payload, StableName};
+/// use dagr_core::{CodecError, Payload, StableName};
 ///
 /// #[derive(Debug, PartialEq, StableName, Payload)]
 /// struct RowCount {
@@ -425,7 +425,8 @@ pub trait Codec: Sized {
 ///
 /// let mut bytes = Vec::new();
 /// RowCount { rows: 7 }.encode(&mut bytes);
-/// assert_eq!(RowCount::decode(&bytes).unwrap(), RowCount { rows: 7 });
+/// assert_eq!(RowCount::decode(&bytes)?, RowCount { rows: 7 });
+/// # Ok::<(), CodecError>(())
 /// ```
 pub trait Payload: Codec + StableName {
     /// Append this value's **self-describing** encoding — magic, format version,
