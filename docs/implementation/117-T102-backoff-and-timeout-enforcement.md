@@ -123,6 +123,70 @@ discipline, and `NodePolicy::retry_config()` are all merged, tested mechanisms; 
 ticket connects them at one call site. The timer injection point mirrors the existing
 `Jitter` injection and is recorded in-PR.
 
+### Resolution — the timer seam is `dagr_cli::run_flow::AttemptTimer`
+
+**Answer: one injected seam supplies both waits.** `AttemptTimer::sleep(Duration) ->
+impl Future` is the run-flow counterpart of the engine's `Jitter` injection: the
+engine still computes *what* to wait (the jittered exponential delay; the declared
+timeout budget) and awaits a future the seam supplies, so `dagr-core` gains no clock
+and no runtime. `RunnableFlow::with_timer` injects it; production is `SystemTimer`,
+which prefers the ambient runtime's `tokio::time::sleep` and falls back to parking
+the thread on the **compute** surface, where the rayon pool drives the attempt future
+with a park-based executor and there is no async runtime at all. Sharing one seam for
+backoff and deadline is what keeps "the emitted `BackoffStarted` delay is elapsed
+time" and "the declared timeout is a real deadline" the *same* claim about the same
+clock.
+
+### Resolution — the class decides *who* arms the deadline
+
+**Answer: the runner arms await-bound deadlines; the driver arms unkillable ones.**
+This is C14's "timeout semantics differ by class, honestly" applied to the question of
+mechanism, and it is forced, not chosen:
+
+- An **await-bound** attempt can be dropped, so its own runner races it against the
+  deadline (`TimeoutEnforcement::DropTheFuture`) and the drop *is* the cancellation.
+  The permit the driver holds around the attempt releases the moment the runner
+  returns, which is the mark.
+- A **blocking / compute** attempt cannot be dropped *or even polled* while its
+  synchronous body runs — its own future is exactly what is jammed — so its deadline
+  is armed on the **isolated framework runtime** (C13: the framework's own timers run
+  isolated from task execution, so a fully blocked task fleet cannot delay them). The
+  driver marks it through the merged `TimeoutDecision::mark_blocking_timed_out`, keeps
+  the permit inside the still-running closure (registering it as a live zombie so its
+  cost stays counted), and hands the runner the decision's `LateResultBarrier` through
+  a shared `AttemptFate`. That cell is the exactly-once arbiter: whichever of timer and
+  closure claims first decides the node, so a timeout never produces a second terminal
+  state and a mark that lost to a closure returning inside its budget is discarded
+  unwritten.
+
+### Resolution — a marked unkillable node is decided, and its late report is refused
+
+**Answer: the mark decides the node; the returning zombie's report is discarded.**
+`mark_blocking_timed_out` emits the node-terminal record at the mark — C14's "the
+event is emitted, the node's fate is decided" — so no further attempt of that node may
+run. Retry deferral is therefore enforced where it can still bite: the runner's own
+retry loop cannot start attempt *n+1* until attempt *n*'s closure returns (the
+`&mut self` exclusivity the retry loop already guarantees), and by then the fate cell
+bars it — the guarded task refuses the late value through the barrier and reports a
+permanent failure, which stops the loop. The driver drops the zombie's eventual report
+entirely: recording it would duplicate the mark and double-count the node out of
+flight.
+
+The mark names **attempt 1**, for the same reason `abandon_leftover` does: the loop
+cannot see a runner's internal attempt boundaries, and a marked node is decided, so
+no later attempt number can exist to name.
+
+### Resolution — a waiter blocked behind a zombie's held permit is bounded, not stranded
+
+**Answer: give the zombie the grace period, then fail the waiter honestly.** Holding a
+permit past its node's terminal state is new: it lets a queued node outlive the last
+in-flight attempt, which the loop previously treated as the run's end — stranding the
+waiter with no terminal state. The loop now waits up to the same bounded grace the
+zombie-at-exit wait uses; if the closure returns, the freed capacity admits the waiter
+normally, and if it does not, the waiter is failed with the honest reason through the
+strand guard the over-demand rejection already established. "Every node ends in exactly
+one terminal state" is preserved either way.
+
 ## Out of scope
 
 - Any remote or Kubernetes behaviour — **T105** onward. This ticket is local-engine
