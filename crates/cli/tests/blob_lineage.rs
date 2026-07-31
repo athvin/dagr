@@ -1,4 +1,3 @@
-#![cfg(all(feature = "blob", feature = "metastore"))]
 //! T104 acceptance test: M8 lineage rows carry the blob URI and content hash
 //! through the **existing** projection, with no mapping change.
 //!
@@ -12,6 +11,7 @@
 //! It needs BOTH default-off features (`blob` for the bridge, `metastore` for the
 //! index), so a bare `cargo test --workspace` compiles it to nothing; CI runs it
 //! under `--features blob,metastore`.
+#![cfg(all(feature = "blob", feature = "metastore"))]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

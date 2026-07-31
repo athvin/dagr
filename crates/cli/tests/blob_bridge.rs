@@ -1,4 +1,3 @@
-#![cfg(feature = "blob")]
 //! T104 acceptance tests: the blanket `DurableOutput` bridge over `Payload`.
 //!
 //! The port and its local backend are proven in `crates/blob/tests/blob_port.rs`;
@@ -17,6 +16,7 @@
 //!
 //! Written FIRST and failing before the bridge lands. Each test uses a private
 //! per-test temp root so the suite is collision-proof under CI parallelism.
+#![cfg(feature = "blob")]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -178,6 +178,21 @@ fn a_payload_produced_through_the_bridge_rehydrates_to_an_equal_value() {
         "and names the same blob"
     );
     assert_eq!(*blob, manifest(), "the produced blob derefs to its value");
+
+    // The reference is available in parsed form, and the size is the encoded
+    // length — the two facts the metadata and any later backend need.
+    assert_eq!(blob.blob_ref().backend(), "file");
+    assert_eq!(blob.blob_ref().container(), root.path().to_string_lossy());
+    assert_eq!(
+        blob.size_bytes(),
+        manifest().encode_to_vec().len() as u64,
+        "size_bytes is the encoded length"
+    );
+    assert_eq!(
+        rehydrated.into_inner(),
+        manifest(),
+        "the value can be taken back out of the blob"
+    );
 }
 
 #[test]

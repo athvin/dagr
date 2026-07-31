@@ -59,7 +59,7 @@
 
 use std::ops::Deref;
 
-use dagr_blob::{BlobError, BlobKey, BlobRef, BlobStore, LocalFsBlob};
+use dagr_blob::{BlobError, BlobRef, BlobStore, LocalFsBlob};
 use dagr_core::assembly::{DurableOutput, DurableReferenceMeta};
 use dagr_core::error::RehydrateError;
 use dagr_core::payload::Payload;
@@ -292,14 +292,4 @@ fn rehydrate_error(err: BlobError) -> RehydrateError {
     } else {
         RehydrateError::transient(message).with_source(err)
     }
-}
-
-/// The content address of a value's encoded bytes, without storing it — the key a
-/// [`put`](Blob::put) would land under.
-///
-/// Useful to an operator asking "which blob would this value be?" and to a caller
-/// that wants to check for an existing blob before encoding a second time.
-#[must_use]
-pub fn key_for<T: Payload>(value: &T) -> BlobKey {
-    BlobKey::of(&value.encode_to_vec())
 }
