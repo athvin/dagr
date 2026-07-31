@@ -1742,14 +1742,19 @@ where
         // invariant that makes that safe is stronger than any capacity would be:
         //
         //   the queue holds at most one message per node counted into `in_flight`,
-        //   plus one sentinel per cancellation request.
+        //   plus one sentinel per cancellation request, plus at most one elapsed
+        //   deadline per timeout-declaring unkillable node.
         //
         // Enforced by the pairing this loop maintains and asserts on the receive
         // side: a node is counted into `in_flight` exactly once — when it is
         // admitted (`admit`), cancelled without running (`cancel_node`), or rejected
         // as over-demand (`reject_over_demand`) — and each counted node sends
         // exactly one `AttemptDone`. So the depth never exceeds `in_flight`, which
-        // never exceeds the node count.
+        // never exceeds the node count. The deadline timers add at most one message
+        // each and are armed at most once per admitted node (`arm_unkillable_deadline`,
+        // only for a blocking/compute node whose policy declares a timeout), so the
+        // bound stays a small multiple of the node count and is still not a capacity
+        // anyone has to guess.
         //
         // That is the whole bound: the admission limit (C12) and the execution-class
         // pools (C13) do **not** tighten it, however narrow they are pinned. A
