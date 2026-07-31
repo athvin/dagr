@@ -1,0 +1,20 @@
+# T101 spike probe. `[workspace]` is an EMPTY table on purpose: it makes this
+# crate its own workspace root, so it is invisible to dagr's workspace, never
+# enters dagr's Cargo.lock, and `cargo build/clippy --workspace` at the repo
+# root cannot reach it. Deleted before the PR.
+[workspace]
+
+[package]
+name = "t101-kube-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+kube = { version = "1", default-features = false, features = ["client", "runtime", "rustls-tls"] }
+k8s-openapi = { version = "0.25", features = ["latest"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+futures = "0.3"
+serde_json = "1"
+anyhow = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }

@@ -78,10 +78,19 @@ def main() -> int:
 
     # --- Test plan: "Reproducibility. A single documented command stands up
     # the cluster and runs the three experiments." -------------------------
-    repro = re.search(
-        r"^#{2,3} .*reproduc\w*.*$(.*?)(?=^#{2,3} |\Z)", text, re.M | re.S | re.I
-    )
-    fences = re.findall(r"```[a-z]*\n(.*?)```", repro.group(1), re.S) if repro else []
+    # Split on heading LINES first; a DOTALL regex over the whole document
+    # silently spans sections and would accept an empty body.
+    repro = ""
+    heads = [
+        (m.start(), m.end(), m.group(0))
+        for m in re.finditer(r"^#{2,4} .*$", text, re.M)
+    ]
+    for idx, (_s, e, title) in enumerate(heads):
+        if re.search(r"reproduc", title, re.I):
+            nxt = heads[idx + 1][0] if idx + 1 < len(heads) else len(text)
+            repro = text[e:nxt]
+            break
+    fences = re.findall(r"```[a-z]*\n(.*?)```", repro, re.S)
     check(
         "repro-section-with-runnable-command",
         bool(repro) and any(f.strip() for f in fences),
@@ -89,10 +98,7 @@ def main() -> int:
     )
     check(
         "repro-names-the-cluster-and-all-three-experiments",
-        bool(repro)
-        and all(
-            k in repro.group(1).lower() for k in ("kind", "watch", "latency", "kill")
-        ),
+        all(k in repro.lower() for k in ("kind", "watch", "latency", "kill")),
         "the reproduction recipe must name the cluster and all three experiments",
     )
 

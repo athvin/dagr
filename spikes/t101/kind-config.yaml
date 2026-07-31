@@ -1,0 +1,12 @@
+# T101 spike cluster. One node: the spike measures an executor's view of a
+# cluster, and a single node is what a CI runner can afford (open question 1).
+# The extraMount is the stand-in for the shared blob store the pod writes its
+# shard to and the orchestrator reads it back from — no object store needed to
+# exercise the no-callback state path.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: /private/tmp/claude-503/-Users-athvin-github-com-athvin-dagr/d5984e14-2819-4332-b9c5-3ba5b7f05523/scratchpad/t101/blobs
+        containerPath: /dagr-blobs
