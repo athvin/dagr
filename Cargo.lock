@@ -249,11 +249,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dagr-blob"
+version = "0.0.0"
+
+[[package]]
 name = "dagr-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
  "dagr-artifact",
+ "dagr-blob",
  "dagr-core",
  "dagr-macros",
  "dagr-metastore",
