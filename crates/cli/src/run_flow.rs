@@ -100,7 +100,10 @@ pub trait AttemptTimer: Send + Sync {
     /// A future that resolves once `delay` has elapsed. It is polled on whichever
     /// surface the node's class routed the attempt onto, so it must not require the
     /// caller to be inside any particular runtime.
-    fn sleep(&self, delay: Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+    fn sleep(
+        &self,
+        delay: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 }
 
 /// The production [`AttemptTimer`]: a real, elapsing wait.
@@ -987,11 +990,7 @@ where
     type Input = ();
     type Output = T::Output;
     const EXECUTION_CLASS: dagr_core::task::ExecutionClass = T::EXECUTION_CLASS;
-    async fn run(
-        &mut self,
-        ctx: &RunContext,
-        _i: (),
-    ) -> Result<T::Output, dagr_core::TaskError> {
+    async fn run(&mut self, ctx: &RunContext, _i: ()) -> Result<T::Output, dagr_core::TaskError> {
         // A further attempt of this node is live: the deadline may claim it.
         self.fate.attempt_begins();
         let produced = self.inner.run(ctx, ()).await;

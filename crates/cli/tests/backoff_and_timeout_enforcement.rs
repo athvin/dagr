@@ -220,10 +220,7 @@ impl Task for RecordsStart {
     type Input = u64;
     type Output = u64;
     async fn run(&mut self, _c: &RunContext, i: u64) -> Result<u64, TaskError> {
-        *self
-            .started_after
-            .lock()
-            .expect("start cell not poisoned") = Some(self.origin.elapsed());
+        *self.started_after.lock().expect("start cell not poisoned") = Some(self.origin.elapsed());
         Ok(i)
     }
 }
@@ -349,7 +346,7 @@ fn backoff_delay_actually_elapses_between_attempts() {
     assert_eq!(starts.len(), 2, "the node made exactly two attempts");
     let gap = starts[1].duration_since(starts[0]);
     assert!(
-        gap >= base - Duration::from_millis(5),
+        gap >= base.saturating_sub(Duration::from_millis(5)),
         "attempt 2 started {gap:?} after attempt 1 — the scheduled {base:?} backoff did not elapse"
     );
     assert_eq!(terminal_of(&bytes, "retrying"), "failed");
@@ -390,9 +387,9 @@ fn injected_timer_records_the_nominal_capped_backoff_schedule() {
         assert_eq!(report.outcome(), RunOutcome::Failed);
     });
 
-    let recorded = timer.recorded();
-    assert_eq!(recorded.len(), 3, "three retries scheduled three backoffs");
-    for (n, delay) in recorded.iter().enumerate() {
+    let scheduled = timer.recorded();
+    assert_eq!(scheduled.len(), 3, "three retries scheduled three backoffs");
+    for (n, delay) in scheduled.iter().enumerate() {
         let n = u32::try_from(n).expect("a small attempt index");
         assert_eq!(
             *delay,
@@ -477,7 +474,7 @@ fn await_bound_hang_times_out_and_releases_its_permit() {
         .expect("start cell not poisoned")
         .expect("the waiter ran");
     assert!(
-        waited >= timeout - Duration::from_millis(20),
+        waited >= timeout.saturating_sub(Duration::from_millis(20)),
         "the waiter started after {waited:?}; it should have waited for the hung node's \
          permit (~{timeout:?})"
     );
@@ -626,7 +623,7 @@ fn blocking_timeout_marks_immediately_and_holds_the_permit_until_return() {
         .expect("start cell not poisoned")
         .expect("the waiter ran");
     assert!(
-        waited >= spin - Duration::from_millis(100),
+        waited >= spin.saturating_sub(Duration::from_millis(100)),
         "the waiter started after {waited:?}; the zombie's permit must be held until its \
          closure returns (~{spin:?})"
     );
@@ -682,10 +679,7 @@ fn a_live_blocking_zombie_yields_exactly_one_zombie_at_exit() {
         "the run waited for the zombie ({elapsed:?}) instead of proceeding past the mark"
     );
     assert_eq!(
-        records(&bytes)
-            .last()
-            .map(|r| kind_of(r))
-            .unwrap_or_default(),
+        records(&bytes).last().map(kind_of).unwrap_or_default(),
         "run-finished",
         "a complete stream is written even with a live zombie"
     );
@@ -780,13 +774,7 @@ fn a_node_with_no_timeout_and_no_retries_has_the_unchanged_stream_shape() {
         ("run-finished", None, None),
     ]
     .into_iter()
-    .map(|(k, n, s)| {
-        (
-            k.to_string(),
-            n.map(str::to_string),
-            s.map(str::to_string),
-        )
-    })
+    .map(|(k, n, s)| (k.to_string(), n.map(str::to_string), s.map(str::to_string)))
     .collect();
 
     assert_eq!(

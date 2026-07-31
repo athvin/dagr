@@ -398,3 +398,42 @@ itself on 2026-07-29 recorded in the ADR's §Status. The sequencing — M10/M11 
 authorship landing before the decision ticket that formalises it — was the
 orchestrator's, under the same standing autonomous-loop split recorded in the 002
 entry above.
+
+---
+
+## 2026-07-31 · 117 (T102) — the await-bound timeout is armed through the *caught* sibling of `run_attempt_with_timeout`
+
+**Affected DoD line.** *"`NodePolicy::timeout` is armed per attempt on the
+`RunnableFlow` path: await-bound via `run_attempt_with_timeout`, blocking/compute via
+the existing `TimeoutDecision` / `LateResultBarrier` path."*
+
+**Deviation.** The await-bound half is armed through
+`dagr_core::execution::run_attempt_caught_with_timeout` (single attempt) and
+`run_with_retries_caught_timed` (with retries), not through
+`run_attempt_with_timeout` itself. Both are new in this ticket and both are
+*compositions of that function's mechanism*, not a second one: the same `race`
+combinator, the same drop-the-losing-future cancellation, the same
+`AttemptOutcome::TimedOut` classification, the same emitted records, and the same
+permit-into-the-work-future discipline (the run-flow path passes `()`, because the
+driver holds the admission permit around the whole attempt). The blocking/compute half
+uses the merged `TimeoutDecision` / `LateResultBarrier` path literally, as written.
+
+**Rationale.** `run_attempt_with_timeout` installs **no** `catch_unwind` boundary —
+it is the timeout facet alone, and its own rustdoc says so ("Timeout and panic are
+independent facets"). Every attempt on the `RunnableFlow` path runs behind panic
+containment today (`run_attempt_caught` / `run_with_retries_caught`), because the
+driver dispatches attempts onto task surfaces where an escaping panic would unwind
+past the dispatch instead of failing one node — the run would then never receive that
+node's completion. Satisfying the DoD line *literally* would therefore have silently
+removed panic containment from exactly the nodes that declare a timeout, trading one
+enforced policy for another. Composing the two facets in core keeps both, keeps the
+mechanism single (the extracted `caught_body` is now the one caught-dispatch site both
+attempt paths share), and leaves `run_attempt_with_timeout` untouched for its existing
+callers. With `timeout: None` the new loop is `run_with_retries_caught` exactly, so a
+node that declares no timeout is byte-identical.
+
+**Operator decision.** Traces to arch.md C14 (panic containment and the per-attempt
+timeout are both unconditional acceptance criteria of the attempt runner, and *"a
+panicking task fails only its own node"* is not suspendable for timeout-carrying
+nodes) and to this ticket's recorded resolution "the class decides *who* arms the
+deadline", under the standing autonomous-loop split recorded in the 002 entry above.

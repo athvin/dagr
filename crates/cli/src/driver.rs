@@ -808,7 +808,8 @@ pub trait NodeRunner: Send {
 ///
 /// - the **timer** wins ⇒ the attempt is marked `timed-out` immediately, the permit
 ///   stays held until the closure actually returns, and the closure's late result is
-///   refused through the [`LateResultBarrier`] stored here — it never fills the slot;
+///   refused through the [`LateResultBarrier`](dagr_core::execution::LateResultBarrier)
+///   stored here — it never fills the slot;
 /// - the **closure** wins ⇒ it completed inside its budget, fills the slot as usual,
 ///   and the timer's mark is discarded (nothing is written).
 pub struct AttemptFate {
@@ -842,6 +843,12 @@ impl AttemptFate {
     /// Announce that a **further attempt** of the same node is now live (the runner
     /// calls this as each attempt begins). A cell already claimed by the timeout
     /// stays claimed — the node is decided and no attempt of it can undo that.
+    ///
+    /// # Panics
+    ///
+    /// Panics only on a framework defect: a poisoned fate cell (a panic left a
+    /// node's fate half-decided), which must surface rather than risk recording
+    /// two terminal states or none.
     pub fn attempt_begins(&self) {
         // Poison policy: panic — this cell decides a node's terminal state; a
         // half-decided fate could record two terminals or none.
@@ -856,6 +863,12 @@ impl AttemptFate {
     /// Returns `true` when the timeout won (the mark stands and must be recorded)
     /// and `false` when no attempt was live to claim (the closure had already
     /// returned) — in which case the mark is discarded and nothing is written.
+    ///
+    /// # Panics
+    ///
+    /// Panics only on a framework defect: a poisoned fate cell (a panic left a
+    /// node's fate half-decided), which must surface rather than risk recording
+    /// two terminal states or none.
     #[must_use]
     pub fn claim_timeout(&self, barrier: dagr_core::execution::LateResultBarrier) -> bool {
         // Poison policy: panic — as above.
@@ -873,6 +886,12 @@ impl AttemptFate {
     /// its value may reach the output slot. Returns [`None`] when the closure won
     /// (the value stands) and `Some(barrier)` when the timeout already marked the
     /// node — the caller must route the value through that barrier, which refuses it.
+    ///
+    /// # Panics
+    ///
+    /// Panics only on a framework defect: a poisoned fate cell (a panic left a
+    /// node's fate half-decided), which must surface rather than risk recording
+    /// two terminal states or none.
     #[must_use]
     pub fn claim_completion(&self) -> Option<dagr_core::execution::LateResultBarrier> {
         // Poison policy: panic — as above.
@@ -889,6 +908,12 @@ impl AttemptFate {
 
     /// Whether the deadline has claimed this node — the runner's signal that the
     /// node is already decided, so no further attempt may start.
+    ///
+    /// # Panics
+    ///
+    /// Panics only on a framework defect: a poisoned fate cell (a panic left a
+    /// node's fate half-decided), which must surface rather than risk recording
+    /// two terminal states or none.
     #[must_use]
     pub fn is_timed_out(&self) -> bool {
         matches!(
@@ -1978,6 +2003,13 @@ where
             // that had just returned yields `None` and is discarded.
             let done = match &done.kind {
                 DoneKind::TimeoutFired { permit, fate } => {
+                    // A node the loop already settled is decided: a deadline that
+                    // fires afterwards changes nothing (a terminal state is decided
+                    // exactly once). The fate cell closes the same race for a runner
+                    // that exposes one; this guard covers a runner that does not.
+                    if terminal_states.contains_key(&done.node) {
+                        continue;
+                    }
                     let Some(marked) =
                         mark_unkillable_timeout(&done.node, permit, fate.as_ref(), admission)
                     else {
@@ -2349,6 +2381,63 @@ fn attempt_number_of(events: &[AttemptEvent]) -> u32 {
         .unwrap_or(1)
 }
 
+/// Arm the per-attempt **deadline** of an *unkillable* (blocking / compute) node,
+/// returning how its admission permit is held for the attempt.
+///
+/// An await-bound attempt arms its own deadline — its future can truly be dropped,
+/// and that drop *is* the cancellation. A blocking or compute closure can be neither
+/// dropped nor even *polled* while it runs (its own future is what is jammed), so its
+/// deadline is armed **here**, on the isolated framework runtime: exactly the
+/// isolation C13 promises, so a task that jams every task/blocking/compute worker
+/// still cannot delay the timer. The timer sleeps the declared budget and sends one
+/// message to the loop's own channel, carrying the permit cell and the runner's fate
+/// so the loop can mark the attempt without touching the jammed thread.
+///
+/// A node whose policy declares no timeout (or an await-bound one) arms nothing: no
+/// timer is spawned, the permit is moved into the closure exactly as before, and the
+/// run is byte-identical.
+fn arm_unkillable_deadline(
+    actx: &AdmitCtx,
+    name: &str,
+    node_id: NodeId,
+    class: ExecutionClass,
+    runner: &dyn NodeRunner,
+    permit: Permit,
+) -> PermitHold {
+    let budget = actx
+        .pipeline
+        .node(node_id)
+        .and_then(|n| n.policy().timeout_budget())
+        .filter(|_| matches!(class, ExecutionClass::Blocking | ExecutionClass::Compute));
+    let Some(budget) = budget else {
+        return PermitHold::Owned(permit);
+    };
+
+    // The permit moves into a cell the closure owns and the loop can read: at the
+    // deadline the loop registers the still-counted cost as a live zombie without
+    // releasing it (the closure releases it when it finally returns).
+    let cell = Arc::new(Mutex::new(Some(permit)));
+    let fate = runner.timeout_fate();
+    let timer_tx = actx.tx.clone();
+    let timer_cell = Arc::clone(&cell);
+    let timer_node = name.to_string();
+    actx.framework.spawn(async move {
+        tokio::time::sleep(budget).await;
+        let _ = timer_tx.send(AttemptDone {
+            node: timer_node,
+            state: TerminalState::TimedOut,
+            events: Vec::new(),
+            durable_reference: None,
+            durable_reference_meta: None,
+            kind: DoneKind::TimeoutFired {
+                permit: timer_cell,
+                fate,
+            },
+        });
+    });
+    PermitHold::Shared(cell)
+}
+
 /// Decide an **unkillable** (blocking / compute) attempt's fate at its per-attempt
 /// deadline, and hand the loop the attempt report to record.
 ///
@@ -2393,9 +2482,8 @@ fn mark_unkillable_timeout(
     .max_attempts(1)
     .build();
     let mut sink = BufferingSink::default();
-    let decision = dagr_core::execution::TimeoutDecision::mark_blocking_timed_out(
-        node, &ctx, &mut sink,
-    );
+    let decision =
+        dagr_core::execution::TimeoutDecision::mark_blocking_timed_out(node, &ctx, &mut sink);
 
     // Exactly-once: the timer claims the node only while an attempt is live. A
     // runner that exposes no fate cell cannot race us, so the mark stands.
@@ -2819,48 +2907,9 @@ where
         .expect("live set not poisoned")
         .insert(name.to_string());
 
-    // --- Arm the per-attempt deadline for UNKILLABLE work -------------------
-    //
-    // An await-bound attempt arms its own deadline (its future can truly be
-    // dropped, which is the cancellation). A blocking or compute closure cannot be
-    // killed and, worse, cannot even be *polled* while it runs — so its deadline is
-    // armed here, on the **isolated framework runtime**, which is exactly the
-    // isolation C13 promises: a task that jams every task/blocking/compute worker
-    // still cannot delay the timer. Nothing is armed for a node whose policy
-    // declares no timeout, so an ordinary run spawns no timer and is byte-identical.
-    let timeout = actx
-        .pipeline
-        .node(node_id)
-        .and_then(|n| n.policy().timeout_budget())
-        .filter(|_| matches!(class, ExecutionClass::Blocking | ExecutionClass::Compute));
-    let permit = match timeout {
-        Some(budget) => {
-            // The permit moves into a cell the closure owns and the loop can read:
-            // at the deadline the loop registers the still-counted cost as a live
-            // zombie without releasing it (the closure releases it on its return).
-            let cell = Arc::new(Mutex::new(Some(permit)));
-            let fate = runner.timeout_fate();
-            let timer_tx = actx.tx.clone();
-            let timer_cell = Arc::clone(&cell);
-            let timer_node = name.to_string();
-            actx.framework.spawn(async move {
-                tokio::time::sleep(budget).await;
-                let _ = timer_tx.send(AttemptDone {
-                    node: timer_node,
-                    state: TerminalState::TimedOut,
-                    events: Vec::new(),
-                    durable_reference: None,
-                    durable_reference_meta: None,
-                    kind: DoneKind::TimeoutFired {
-                        permit: timer_cell,
-                        fate,
-                    },
-                });
-            });
-            PermitHold::Shared(cell)
-        }
-        None => PermitHold::Owned(permit),
-    };
+    // The per-attempt deadline of an unkillable node, armed on the isolated
+    // framework runtime; an ordinary node's permit is simply moved into its closure.
+    let permit = arm_unkillable_deadline(actx, name, node_id, class, runner.as_ref(), permit);
 
     // The per-attempt **child** cancellation signal: each attempt observes its own
     // child of the run-scoped token, so a run cancel reaches every live attempt at
