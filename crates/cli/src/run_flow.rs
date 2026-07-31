@@ -65,6 +65,7 @@
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
@@ -77,6 +78,7 @@ use dagr_core::execution::{
 };
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::{Handle, NodeId};
+use dagr_core::payload::{self, Payload};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::stable_name::{StableInputNames, StableName};
 use dagr_core::task::{ExecutionClass, Task};
@@ -256,6 +258,11 @@ pub struct RunnableFlow {
     /// The run's wait seam — the backoff and per-attempt-deadline futures every
     /// node's runner awaits. [`SystemTimer`] unless a caller injects another.
     timer: Arc<dyn AttemptTimer>,
+    /// The **local codec check** (`--dagr.force-roundtrip`, default off), shared with
+    /// every payload-bounded node this flow registers so the operator's answer can
+    /// arrive before *or* after registration — which it must, because a hosted flow
+    /// is built by a factory that never sees the invocation's argv.
+    force_roundtrip: Arc<AtomicBool>,
 }
 
 impl Default for RunnableFlow {
@@ -273,7 +280,30 @@ impl RunnableFlow {
             flow: Flow::new(),
             runners: Vec::new(),
             timer: Arc::new(SystemTimer::new()),
+            force_roundtrip: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Turn the **local codec check** on or off for this flow — the
+    /// `--dagr.force-roundtrip` operator toggle, default **off**.
+    ///
+    /// On, every handoff registered through the payload-bounded registrars
+    /// ([`register_source_payload`](Self::register_source_payload) /
+    /// [`register_payload`](Self::register_payload)) is encoded and decoded before it
+    /// reaches its slot, so a codec bug fails a node *here* instead of in a cluster
+    /// at hour three. A value that does not survive its own round trip fails the node
+    /// permanently, naming the classified codec error.
+    ///
+    /// Off — the default — is the in-memory fast path, untouched: nothing is encoded,
+    /// no codec method is called, and the event stream is byte-for-byte what it was.
+    ///
+    /// The setting may be applied **before or after** registration (it is shared with
+    /// the nodes already registered), which is what lets `dagr run <flow>` honour the
+    /// flag on a flow its factory built without ever seeing the invocation.
+    #[must_use]
+    pub fn force_roundtrip(self, on: bool) -> Self {
+        self.force_roundtrip.store(on, Ordering::Relaxed);
+        self
     }
 
     /// Run this flow's waits through an injected [`AttemptTimer`] instead of the
@@ -338,6 +368,42 @@ impl RunnableFlow {
             self.flow
                 .register_source_named::<T>(&name, &task, None::<String>, NodePolicy::new());
         self.push_source_runner(&name, task, handle);
+        handle
+    }
+
+    /// Register a **payload-bounded source** node under `name`, returning its output
+    /// [`Handle`] — the source registrar whose produced value the local codec check
+    /// can round-trip.
+    ///
+    /// It behaves exactly like [`register_source`](Self::register_source) and differs
+    /// in one bound: `T::Output` must be a [`Payload`], i.e. it has a codec and an
+    /// author-declared stable name. With
+    /// [`force_roundtrip`](Self::force_roundtrip) off (the default) the value moves
+    /// through the slot in memory with **no** encode call; with it on, the value is
+    /// encoded and decoded before it reaches the slot, and a codec defect fails the
+    /// node permanently.
+    ///
+    /// The bound is not a *requirement* on anything: ordinary registrations are
+    /// unaffected, and remote eligibility — where the same bound becomes mandatory —
+    /// is a later ticket's. Registration itself is the **type-erased** one
+    /// [`register_source`](Self::register_source) performs, with the same consequence
+    /// for graph emission described there.
+    #[must_use]
+    pub fn register_source_payload<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + Send + 'static,
+        T::Output: Payload + Send + Sync + 'static,
+    {
+        let name = name.into();
+        // The flow registration is the ordinary one: the codec check is a property of
+        // how the node RUNS, never of the graph it is part of (nothing about the
+        // pipeline, its fingerprints, or its artifact changes).
+        let handle = self.flow.register_source::<T>(&name, &task);
+        self.push_source_runner(&name, self.wrap_roundtrip(task), handle);
         handle
     }
 
@@ -463,6 +529,59 @@ impl RunnableFlow {
         handle
     }
 
+    /// Register a **payload-bounded data-dependent** node under `name`, binding
+    /// `deps`, returning its output [`Handle`] — the data registrar whose produced
+    /// value the local codec check can round-trip.
+    ///
+    /// The payload-bounded sibling of [`register`](Self::register): identical
+    /// dependency binding (`D: Deps<Inputs = T::Input>`, the exact-type / arity /
+    /// acyclicity checks) and identical run behaviour, with `T::Output: Payload`
+    /// added. See [`register_source_payload`](Self::register_source_payload) for what
+    /// the bound does and does not mean.
+    ///
+    /// A consumer reads what its producer put in the slot, so round-tripping each
+    /// produced value covers **both** ends of every handoff between two such nodes.
+    #[must_use]
+    pub fn register_payload<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        deps: D,
+    ) -> Handle<T::Output>
+    where
+        T: Task + Send + 'static,
+        T::Input: Clone + Send + 'static,
+        T::Output: Payload + Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
+        let name = name.into();
+        let policy = NodePolicy::new();
+        let handle = self
+            .flow
+            .register_with::<T, D>(&name, &task, deps.clone(), policy);
+        self.push_data_runner::<RoundTripTask<T>, D>(
+            &name,
+            self.wrap_roundtrip(task),
+            deps,
+            policy,
+            handle,
+        );
+        handle
+    }
+
+    /// Wrap `task` in the codec-check guard, sharing this flow's toggle cell — so the
+    /// operator's answer can arrive after registration and still reach every node.
+    fn wrap_roundtrip<T>(&self, task: T) -> RoundTripTask<T>
+    where
+        T: Task,
+        T::Output: Payload,
+    {
+        RoundTripTask {
+            inner: task,
+            enabled: Arc::clone(&self.force_roundtrip),
+        }
+    }
+
     /// Capture the runner factory + output-slot maker for a **data-dependent** node
     /// — the run-plumbing shared by [`register_with`](Self::register_with) and
     /// [`register_named`](Self::register_named) (which differ only in whether the
@@ -550,6 +669,9 @@ impl RunnableFlow {
             flow,
             runners,
             timer,
+            // The codec-check cell was cloned into every payload-bounded node's guard
+            // at registration; the run itself reads nothing from it.
+            force_roundtrip: _,
         } = self;
         let pipeline = flow.finish();
         // Assemble once here so we can (a) surface an assembly error to the caller
@@ -1033,6 +1155,62 @@ where
                 ))
             }
         }
+    }
+}
+
+/// The **local codec check** wrapped around a payload-bounded node's task: with the
+/// operator's toggle on, the value the task produced is encoded and decoded before it
+/// reaches the slot.
+///
+/// This is the whole of `--dagr.force-roundtrip`'s execution side, and it is
+/// deliberately a *wrapper*: with the toggle off the guard reads one relaxed atomic
+/// and hands the value straight back, so the in-memory fast path performs **no**
+/// encode, allocates nothing, and emits nothing. Ordinary registrations never carry
+/// the wrapper at all.
+///
+/// A value that does not survive its own round trip is a **codec defect**, not a
+/// transient one, so it fails the attempt permanently (retrying a deterministic
+/// encoder buys nothing) with the classified [`CodecError`](dagr_core::CodecError)
+/// named in the message and preserved as the error's source.
+struct RoundTripTask<T: Task> {
+    inner: T,
+    /// The flow's shared toggle cell — read per attempt, so the operator's answer may
+    /// arrive after the node was registered.
+    enabled: Arc<AtomicBool>,
+}
+
+impl<T> Task for RoundTripTask<T>
+where
+    T: Task + Send,
+    T::Input: Send,
+    T::Output: Payload + Send + Sync + 'static,
+{
+    type Input = T::Input;
+    type Output = T::Output;
+    const EXECUTION_CLASS: ExecutionClass = T::EXECUTION_CLASS;
+
+    async fn run(
+        &mut self,
+        ctx: &RunContext,
+        input: Self::Input,
+    ) -> Result<T::Output, dagr_core::TaskError> {
+        let produced = self.inner.run(ctx, input).await?;
+        if !self.enabled.load(Ordering::Relaxed) {
+            // The fast path: the value moves on untouched, exactly as it always has.
+            return Ok(produced);
+        }
+        payload::round_trip(&produced).map_err(|err| {
+            let detail = err.to_string();
+            dagr_core::TaskError::permanent_from(
+                format!(
+                    "--dagr.force-roundtrip: this node's `{}` output did not survive its own \
+                     codec round trip, so it could not have crossed a process boundary either: \
+                     {detail}",
+                    <T::Output as StableName>::STABLE_NAME
+                ),
+                err,
+            )
+        })
     }
 }
 

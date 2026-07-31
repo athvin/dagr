@@ -257,6 +257,26 @@
 //!   carrying its originating run identity. Pure and dependency-free; the CLI
 //!   (`dagr_cli::contract`) wires it behind the `resume` verb.
 //!
+//! The **payload codec**: how a value becomes bytes when it has to leave the
+//! process — and how bytes refuse to become the wrong value.
+//!
+//! - [`payload::Codec`] — the body codec (append this value's bytes; read them
+//!   back), implemented for the integers, `bool`, `String`, `Option`, `Vec`,
+//!   `BTreeMap`, tuples, and `()`, and emitted by `#[derive(Payload)]` for a struct
+//!   or enum over `Codec` fields.
+//! - [`payload::Payload`] — `Codec` **plus** [`StableName`], blanket-implemented, so
+//!   an encoded value carries a self-describing envelope (format version +
+//!   author-declared stable name) and a decode into the wrong type is a classified
+//!   [`payload::CodecError`] naming both names rather than a misread value.
+//!   Truncation, trailing garbage, and a version bump are distinct variants.
+//! - [`payload::round_trip`] — encode-then-decode, what the operator's
+//!   force-round-trip toggle drives on a local handoff so a codec bug is catchable
+//!   without a cluster.
+//!
+//! The encoding is dagr's own — deterministic, canonically ordered, and taking
+//! **no** dependency (arch.md "Stability": the core's dependency set stays empty).
+//! It writes bytes nowhere and requires nothing of a local pipeline.
+//!
 //! The **single-task test kit**, behind the default-on
 //! `test-kit` feature: the first of the three testing levels — a *shipped*
 //! utility downstream test code calls to exercise **one** task in isolation.
@@ -300,6 +320,7 @@ pub mod flow;
 pub mod handle;
 pub mod limits;
 pub mod metrics;
+pub mod payload;
 pub mod readiness;
 pub mod resume;
 pub mod scratch;
@@ -345,6 +366,7 @@ pub use metrics::{
     METRIC_TRUNCATED_DROPPED_ENTRIES, MetricError, MetricValue, PERMIT_PREFIX, PHASE_PREFIX,
     RESERVED_PREFIX, VALUE_ENCODED_BYTES,
 };
+pub use payload::{Codec, CodecError, Payload};
 pub use readiness::{Decision, ReadinessTracker, RuleOutcome, evaluate_rule};
 pub use resume::{
     PolicyDiff, PriorNode, PriorRun, ReferenceExistence, ResumePlan, ResumeRefusal, plan_resume,
@@ -356,6 +378,20 @@ pub use slot::{
 pub use stable_name::{StableInputNames, StableName, UNIT_STABLE_NAME, is_well_formed};
 pub use task::{ExecutionClass, Task};
 
+/// The `#[derive(Payload)]` derive macro — the one-line ergonomic that emits the
+/// [`Codec`] half of a payload type, so a struct or enum whose fields are themselves
+/// payloads gains an encoding with no hand-written codec body. Re-exported behind the
+/// default-on `macros` feature exactly as [`macro@task`] and
+/// [`derive@StableName`](macro@StableName) are; a proc-macro is never linked into the
+/// shipped binary, so the runtime dependency graph is unchanged.
+///
+/// The derive (macro namespace) coexists with the [`Payload`] trait (type namespace)
+/// under this one name — `use dagr_core::Payload;` brings both into scope. It emits
+/// the [`Codec`] impl only: [`Payload`] itself is blanket-implemented for every
+/// `Codec + StableName`, so a payload type derives **both**
+/// (`#[derive(StableName, Payload)]`) and the envelope stays the framework's.
+#[cfg(feature = "macros")]
+pub use dagr_macros::Payload;
 /// The `#[derive(StableName)]` derive macro — the one-line ergonomic that emits the
 /// `impl StableName` the graph-emittable registrars require, so `#[task]` tasks and
 /// their payloads compose with `#[dag]` / `FlowBuilder::source` / `node` with no

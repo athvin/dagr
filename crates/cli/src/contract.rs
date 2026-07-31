@@ -644,7 +644,8 @@ pub fn banner_suppressed_by_env() -> bool {
 /// that gains a `DAGR_*` env fallback has its own reserved flag a pipeline
 /// parameter can never shadow. The `dagr.metastore*` flags are always reserved (so
 /// the namespace is identical across builds), even though their wiring is behind
-/// the default-off `metastore` cargo feature.
+/// the default-off `metastore` cargo feature. The M10 local codec check
+/// `dagr.force-roundtrip` (`DAGR_FORCE_ROUNDTRIP`) is reserved on the same rule.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -661,6 +662,7 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "dagr.headroom-fraction",
         "dagr.metastore",
         "dagr.metastore-store",
+        "dagr.force-roundtrip",
         "data-interval",
         "force",
         "run",

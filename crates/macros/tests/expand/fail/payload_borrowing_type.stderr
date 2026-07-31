@@ -1,0 +1,5 @@
+error: #[derive(Payload)] cannot encode a borrowing type: decoding produces an OWNED value out of bytes the decoder does not keep, so a lifetime parameter has nothing to borrow from — hold owned data on a payload type (`String` rather than `&str`, `Vec<T>` rather than `&[T]`)
+  --> tests/expand/fail/payload_borrowing_type.rs:10:17
+   |
+10 | struct Borrowed<'a> {
+   |                 ^^

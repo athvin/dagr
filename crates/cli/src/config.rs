@@ -84,6 +84,14 @@ pub const DAGR_HEADROOM: &str = "DAGR_HEADROOM";
 /// wiring itself is behind the default-off `metastore` cargo feature.
 pub const DAGR_METASTORE: &str = "DAGR_METASTORE";
 
+/// Environment fallback for `--dagr.force-roundtrip` (the M10 local codec check,
+/// T103). A truthy value makes every `Payload`-bounded handoff on the **local**
+/// executor encode and decode, so a codec bug is catchable without a cluster; the
+/// **default is off**, which leaves the in-memory fast path untouched (no encode
+/// call at all). Resolved by the standard `flag > env > default` precedence
+/// ([`resolve_force_roundtrip`]).
+pub const DAGR_FORCE_ROUNDTRIP: &str = "DAGR_FORCE_ROUNDTRIP";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -626,6 +634,73 @@ pub fn resolve_metastore_toggle(flag: Option<bool>) -> Result<bool, EnvParseErro
     Ok(resolved.into_inner())
 }
 
+// ===========================================================================
+// The local codec check — DAGR_FORCE_ROUNDTRIP / --dagr.force-roundtrip
+// ===========================================================================
+
+/// The library-owned flag that forces the local codec round trip
+/// (`--dagr.force-roundtrip`). Reserved in [`reserved_flag_names`](crate::contract::reserved_flag_names),
+/// so a pipeline parameter can never shadow it.
+pub const FORCE_ROUNDTRIP_FLAG: &str = "--dagr.force-roundtrip";
+
+/// Resolve the **force-round-trip toggle** by `flag > env > default` (default
+/// **off**): a present `--dagr.force-roundtrip` flag wins outright (the env is never
+/// read); with no flag, [`DAGR_FORCE_ROUNDTRIP`] is read and parsed as a boolean;
+/// with neither, the toggle is off. A bad env value fails loudly (never silently
+/// treated as off).
+///
+/// On, every `Payload`-bounded handoff the run-a-Flow path drives encodes and decodes
+/// locally, so a codec defect surfaces as a failed node here rather than in a cluster.
+/// Off — the default — nothing is encoded and the in-memory fast path is exactly what
+/// it was.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_FORCE_ROUNDTRIP`] when its value is not a
+/// recognized boolean token.
+pub fn resolve_force_roundtrip(flag: Option<bool>) -> Result<bool, EnvParseError> {
+    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_FORCE_ROUNDTRIP, EnvBool(false))?;
+    Ok(resolved.into_inner())
+}
+
+/// Parse the `--dagr.force-roundtrip` flag out of a raw invocation.
+///
+/// Absent → [`None`] (fall through to the env/default); a **bare**
+/// `--dagr.force-roundtrip` → `Some(true)`; `--dagr.force-roundtrip=<bool>` or
+/// `--dagr.force-roundtrip <bool>` → the parsed boolean. This mirrors the
+/// `--dagr.metastore` toggle's grammar exactly, so the two library toggles read the
+/// same way.
+///
+/// # Errors
+/// Returns the diagnostic message when a `=<value>` form carries something that is
+/// not a boolean token — a bad toggle value fails loudly, never silently off. (A
+/// *separate* value that does not parse is treated as a different argument, so
+/// `--dagr.force-roundtrip run` is the bare form followed by a verb.)
+pub fn parse_force_roundtrip_flag(argv: &[std::ffi::OsString]) -> Result<Option<bool>, String> {
+    let eq_prefix = format!("{FORCE_ROUNDTRIP_FLAG}=");
+    let mut it = argv.iter().peekable();
+    while let Some(arg) = it.next() {
+        let Some(s) = arg.to_str() else { continue };
+        if s == FORCE_ROUNDTRIP_FLAG {
+            // A following value that parses as a bool belongs to the flag; anything
+            // else means the bare flag ("on") followed by an unrelated argument.
+            if let Some(next) = it.peek().and_then(|a| a.to_str())
+                && let Ok(parsed) = next.parse::<EnvBool>()
+            {
+                return Ok(Some(parsed.into_inner()));
+            }
+            return Ok(Some(true));
+        }
+        if let Some(value) = s.strip_prefix(&eq_prefix) {
+            return value
+                .parse::<EnvBool>()
+                .map(|b| Some(b.into_inner()))
+                .map_err(|e| format!("`{FORCE_ROUNDTRIP_FLAG}={value}` {e}"));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,6 +950,7 @@ mod tests {
         assert_eq!(DAGR_POOL_BLOCKING_THREADS, "DAGR_POOL_BLOCKING_THREADS");
         assert_eq!(DAGR_POOL_MEMORY, "DAGR_POOL_MEMORY");
         assert_eq!(DAGR_HEADROOM, "DAGR_HEADROOM");
+        assert_eq!(DAGR_FORCE_ROUNDTRIP, "DAGR_FORCE_ROUNDTRIP");
     }
 
     // --- Pool pins + headroom resolvers ----------------------------------
@@ -1011,5 +1087,82 @@ mod tests {
         unset_env(&g, DAGR_METASTORE);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(DAGR_METASTORE));
+    }
+
+    // --- The force-round-trip toggle (T103) ------------------------------
+    //
+    // The local codec check: with it on, every `Payload`-bounded handoff is
+    // encoded and decoded locally so a codec bug is catchable without a cluster.
+    // Default OFF means the in-memory fast path is untouched.
+
+    #[test]
+    fn force_roundtrip_defaults_off() {
+        let g = env_lock();
+        unset_env(&g, DAGR_FORCE_ROUNDTRIP);
+        assert!(
+            !resolve_force_roundtrip(None).expect("default off"),
+            "the toggle defaults OFF (no flag, no env) — the fast path is untouched"
+        );
+    }
+
+    #[test]
+    fn force_roundtrip_env_used_when_no_flag() {
+        let g = env_lock();
+        set_env(&g, DAGR_FORCE_ROUNDTRIP, "1");
+        let on = resolve_force_roundtrip(None).expect("env used");
+        unset_env(&g, DAGR_FORCE_ROUNDTRIP);
+        assert!(on, "with no flag, the env value turns the toggle on");
+    }
+
+    #[test]
+    fn force_roundtrip_flag_beats_env() {
+        let g = env_lock();
+        // Env says ON, flag says OFF — the flag wins outright (env never read).
+        set_env(&g, DAGR_FORCE_ROUNDTRIP, "1");
+        let resolved = resolve_force_roundtrip(Some(false)).expect("flag wins");
+        unset_env(&g, DAGR_FORCE_ROUNDTRIP);
+        assert!(!resolved, "a present flag wins outright over the env var");
+    }
+
+    #[test]
+    fn force_roundtrip_bad_env_is_invalid_usage_naming_the_variable() {
+        let g = env_lock();
+        set_env(&g, DAGR_FORCE_ROUNDTRIP, "sometimes");
+        let err = resolve_force_roundtrip(None).expect_err("a bad env value fails loudly");
+        unset_env(&g, DAGR_FORCE_ROUNDTRIP);
+        assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
+        assert!(
+            err.to_string().contains(DAGR_FORCE_ROUNDTRIP),
+            "the Display names the offending variable, got: {err}"
+        );
+    }
+
+    #[test]
+    fn force_roundtrip_flag_parses_every_accepted_form() {
+        let argv = |args: &[&str]| -> Vec<std::ffi::OsString> {
+            args.iter().map(std::ffi::OsString::from).collect()
+        };
+        assert_eq!(
+            parse_force_roundtrip_flag(&argv(&["dagr", "run", "etl"])).expect("absent"),
+            None
+        );
+        assert_eq!(
+            parse_force_roundtrip_flag(&argv(&["dagr", FORCE_ROUNDTRIP_FLAG])).expect("bare"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_force_roundtrip_flag(&argv(&["dagr", FORCE_ROUNDTRIP_FLAG, "off"]))
+                .expect("separate value"),
+            Some(false)
+        );
+        assert_eq!(
+            parse_force_roundtrip_flag(&argv(&["dagr", "--dagr.force-roundtrip=yes"]))
+                .expect("=value"),
+            Some(true)
+        );
+        assert!(
+            parse_force_roundtrip_flag(&argv(&["dagr", "--dagr.force-roundtrip=maybe"])).is_err(),
+            "a non-boolean value fails loudly, never silently off"
+        );
     }
 }

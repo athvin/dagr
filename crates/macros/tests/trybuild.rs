@@ -75,6 +75,27 @@
 //!   `impl StableName` for the same type: the ordinary `E0119`, pinned to document
 //!   that this is the only collision the design admits (never from `#[task]`).
 //!
+//! # The `#[derive(Payload)]` corpus lives here too
+//!
+//! The same directories pin the codec derive's boundary (the fourth authoring
+//! macro):
+//!
+//! - `pass/payload_derive.rs` — every accepted shape (unit / tuple / named struct,
+//!   an enum with and without data, a nested payload, the containers, and a generic
+//!   struct whose parameters gain the codec bound), each **round-tripped in
+//!   `main`**, so the fixture proves the generated code runs rather than merely
+//!   compiles.
+//! - `fail/payload_union.rs` — a `union` has no discoverable active field, so the
+//!   derive refuses it with a spanned `compile_error!` instead of generating
+//!   something subtly wrong.
+//! - `fail/payload_borrowing_type.rs` — a lifetime parameter: decoding produces an
+//!   owned value, so a borrowing type can never be decoded, and the derive says so
+//!   at the offending lifetime.
+//! - `fail/payload_field_not_payload.rs` — a field whose type has no codec. The
+//!   generated code carries the field's own span and the trait's
+//!   `#[diagnostic::on_unimplemented]` note names the fix, so the error points at
+//!   the field rather than at the derive.
+//!
 //! Duplicate DAG *names* are **not** in this corpus: they are not a compile-time
 //! error. `#[dag]` derives a collision-free factory item name from the fn ident, so
 //! two `#[dag]`s never clash at the Rust-item level; two DAGs declared under the same

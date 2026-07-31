@@ -568,6 +568,7 @@ Readable output with no manual layout is the design goal; the *criteria* are the
 | `--dagr.pool.memory` | `DAGR_POOL_MEMORY` | detected | u64 | ≥ 1 byte |
 | `--dagr.headroom-fraction` | `DAGR_HEADROOM` | 0.20 | f64 | `0.0..=1.0` |
 | `--dagr.metastore` | `DAGR_METASTORE` | off | bool | `1`/`true`/`yes`/`on` (or the `0`/`false`/`no`/`off` inverse) |
+| `--dagr.force-roundtrip` | `DAGR_FORCE_ROUNDTRIP` | off | bool | `1`/`true`/`yes`/`on` (or the `0`/`false`/`no`/`off` inverse) — the local codec check ADR 115 §8 calls for: on, every `Payload`-bounded handoff encodes and decodes locally; off, the in-memory fast path is untouched |
 | `--no-banner` | `DAGR_NO_BANNER` (or `NO_COLOR`) | banner shown | flag | present ⇒ suppress |
 | *(none)* | `DAGR_LOG_FORMAT` | structured | enum | `human` \| `structured` — **the one knob outside the strict regime below** |
 
