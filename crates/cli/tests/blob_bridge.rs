@@ -30,11 +30,9 @@ use dagr_artifact::event_stream::{
 use dagr_artifact::fold::fold_stream;
 use dagr_blob::{BlobKey, BlobStore, LocalFsBlob};
 use dagr_cli::blob_bridge::{Blob, reference_existence, wire_reference_meta};
-use dagr_core::assembly::NodePolicy;
+use dagr_core::assembly::{DurableOutput, NodePolicy};
 use dagr_core::flow::{Flow, Pipeline};
-use dagr_core::resume::{
-    PriorNode, PriorRun, ReferenceExistence, ResumeRefusal, plan_resume, DurableOutput,
-};
+use dagr_core::resume::{PriorNode, PriorRun, ReferenceExistence, ResumeRefusal, plan_resume};
 use dagr_core::task::Task;
 use dagr_core::{Payload, RunContext, StableName, TaskError, TerminalState};
 
@@ -117,11 +115,8 @@ fn manifest() -> Manifest {
 /// resume scenarios plan against.
 fn durable_chain(blob: &Blob<Manifest>) -> Pipeline {
     let mut flow = Flow::new();
-    let produce = flow.register_source_durable(
-        "produce",
-        &PublishManifest(blob.clone()),
-        NodePolicy::new(),
-    );
+    let produce =
+        flow.register_source_durable("produce", &PublishManifest(blob.clone()), NodePolicy::new());
     let _consume = flow.register("consume", &Consume, produce);
     flow.finish()
 }
@@ -137,7 +132,7 @@ fn prior_with(pipeline: &Pipeline, blob: &Blob<Manifest>) -> PriorRun {
         PriorNode {
             terminal: TerminalState::Succeeded,
             durable_reference: Some(blob.serialize_reference()),
-            durable_reference_content_hash: Some(blob.content_hash().to_string()),
+            durable_reference_content_hash: Some(blob.content_hash()),
             originating_run: "run-A".to_string(),
         },
     );
@@ -211,7 +206,7 @@ fn durable_reference_meta_carries_the_content_hash_and_the_size() {
         .expect("the bridge always supplies metadata");
     assert_eq!(
         meta.recorded_content_hash(),
-        Some(blob.content_hash()),
+        Some(blob.content_hash().as_str()),
         "the digest the store computed lands in content_hash"
     );
     let encoded_len = manifest().encode_to_vec().len() as u64;
@@ -265,7 +260,11 @@ fn the_probe_reports_present_for_an_intact_blob() {
     let blob = Blob::put(&store, manifest()).expect("put");
 
     assert_eq!(
-        reference_existence("produce", &blob.serialize_reference(), Some(blob.content_hash())),
+        reference_existence(
+            "produce",
+            &blob.serialize_reference(),
+            Some(blob.content_hash().as_str())
+        ),
         ReferenceExistence::Present
     );
 }
@@ -279,7 +278,11 @@ fn the_probe_reports_absent_for_a_deleted_blob() {
     std::fs::remove_file(store.object_path(&key)).expect("delete");
 
     assert_eq!(
-        reference_existence("produce", &blob.serialize_reference(), Some(blob.content_hash())),
+        reference_existence(
+            "produce",
+            &blob.serialize_reference(),
+            Some(blob.content_hash().as_str())
+        ),
         ReferenceExistence::Absent
     );
 }
@@ -294,7 +297,11 @@ fn the_probe_reports_changed_with_the_actual_hash_for_an_overwritten_blob() {
 
     let actual = BlobKey::of(b"overwritten out-of-band").to_string();
     assert_eq!(
-        reference_existence("produce", &blob.serialize_reference(), Some(blob.content_hash())),
+        reference_existence(
+            "produce",
+            &blob.serialize_reference(),
+            Some(blob.content_hash().as_str())
+        ),
         ReferenceExistence::Changed { actual },
         "the probe measures the referent's ACTUAL hash and reports the mismatch"
     );
@@ -407,7 +414,11 @@ fn a_resume_whose_blob_was_overwritten_refuses_with_a_mutated_reference() {
         } => {
             assert_eq!(node, "produce");
             assert_eq!(reference, blob.serialize_reference());
-            assert_eq!(expected_hash, blob.content_hash(), "names the recorded hash");
+            assert_eq!(
+                expected_hash,
+                blob.content_hash(),
+                "names the recorded hash"
+            );
             assert_eq!(
                 actual_hash,
                 BlobKey::of(b"someone else's bytes").to_string(),
@@ -505,7 +516,9 @@ fn the_attempt_outcome_record_carries_the_blob_reference_hash_and_size() {
     writer
         .node_terminal("produce", WireTerminalState::Succeeded)
         .expect("terminal");
-    writer.run_finished(RunOutcome::Succeeded).expect("finished");
+    writer
+        .run_finished(RunOutcome::Succeeded)
+        .expect("finished");
     writer.finish().expect("flush");
 
     let artifact = fold_stream(&sink.take(), &["produce".to_string()]).expect("the stream folds");
@@ -515,16 +528,31 @@ fn the_attempt_outcome_record_carries_the_blob_reference_hash_and_size() {
         .find(|a| a.node() == "produce")
         .expect("the produce attempt");
     assert_eq!(
-        attempt.durable_reference(),
+        attempt.durable_reference().and_then(|v| v.as_str()),
         Some(blob.serialize_reference().as_str()),
         "the attempt record carries the blob reference"
+    );
+    let recorded_meta = attempt
+        .durable_reference_meta()
+        .expect("the T89 metadata field is present");
+    assert_eq!(
+        recorded_meta.get("content_hash").and_then(|v| v.as_str()),
+        Some(blob.content_hash().as_str()),
+        "and its content hash, through the unchanged recording path"
+    );
+    assert_eq!(
+        recorded_meta
+            .get("size_bytes")
+            .and_then(serde_json::Value::as_u64),
+        Some(manifest().encode_to_vec().len() as u64),
+        "and its size"
     );
 
     let produced = artifact.outputs().first().expect("one produced output");
     assert_eq!(produced.uri(), blob.serialize_reference());
     assert_eq!(
         produced.content_hash(),
-        Some(blob.content_hash()),
+        Some(blob.content_hash().as_str()),
         "and the content hash, through the unchanged T89 path"
     );
     assert_eq!(

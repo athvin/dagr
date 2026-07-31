@@ -87,8 +87,7 @@ fn put_then_get_round_trips_the_bytes() {
     let fetched = store.get(&key).expect("get");
 
     assert_eq!(
-        fetched,
-        b"the payload's encoded bytes",
+        fetched, b"the payload's encoded bytes",
         "get returns exactly the bytes put"
     );
 }
@@ -199,7 +198,9 @@ fn write_temp_debris_from_an_interrupted_put_is_invisible_and_a_later_put_succee
     ));
     std::fs::write(&debris, b"interrupted b").expect("write debris");
 
-    let err = store.get(&key).expect_err("an un-renamed blob is not readable");
+    let err = store
+        .get(&key)
+        .expect_err("an un-renamed blob is not readable");
     assert!(
         err.is_absent(),
         "a reader sees ABSENT, never a partial blob: {err}"
@@ -209,7 +210,9 @@ fn write_temp_debris_from_an_interrupted_put_is_invisible_and_a_later_put_succee
         "head agrees the object is absent"
     );
 
-    let written = store.put(b"interrupted bytes").expect("a later put succeeds");
+    let written = store
+        .put(b"interrupted bytes")
+        .expect("a later put succeeds");
     assert_eq!(written, key);
     assert_eq!(
         store.get(&key).expect("readable now"),
@@ -253,7 +256,10 @@ fn a_missing_key_is_absent_from_both_get_and_head() {
 
     let get = store.get(&key).expect_err("missing key");
     assert!(get.is_absent(), "get reports absent: {get}");
-    assert!(!get.is_transient() && !get.is_corrupt(), "exactly one class");
+    assert!(
+        !get.is_transient() && !get.is_corrupt(),
+        "exactly one class"
+    );
     assert!(
         get.to_string().contains("absent"),
         "the message names the class: {get}"
@@ -279,7 +285,10 @@ fn an_io_failure_that_is_not_a_missing_object_is_transient_not_absent() {
         get.is_transient(),
         "an I/O failure that is not a missing object is TRANSIENT: {get}"
     );
-    assert!(!get.is_absent(), "a transient failure is not a dangling one");
+    assert!(
+        !get.is_absent(),
+        "a transient failure is not a dangling one"
+    );
     assert!(
         std::error::Error::source(&get).is_some(),
         "the underlying io::Error is preserved as the source"
@@ -327,7 +336,9 @@ fn head_reports_the_size_and_the_actual_current_hash() {
     // After an out-of-band overwrite `head` reports the ACTUAL hash — which is what
     // lets the resume gate say "changed", and name both hashes.
     std::fs::write(store.object_path(&key), b"different").expect("overwrite");
-    let stat = store.head(&key).expect("head still succeeds — the object exists");
+    let stat = store
+        .head(&key)
+        .expect("head still succeeds — the object exists");
     assert_ne!(
         stat.content_hash(),
         key.to_string(),
@@ -398,7 +409,9 @@ fn a_store_opened_at_the_container_a_reference_names_can_fetch_it() {
     let parsed = BlobRef::parse(&reference.to_string()).expect("parse");
     let reopened = LocalFsBlob::open(parsed.container());
     assert_eq!(
-        reopened.get(parsed.key()).expect("fetch through the reference"),
+        reopened
+            .get(parsed.key())
+            .expect("fetch through the reference"),
         b"cross-process bytes"
     );
 }
