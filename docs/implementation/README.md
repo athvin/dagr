@@ -182,7 +182,7 @@ Work in order: the ADR (T100), the spike (T101), the retry/timeout prerequisites
 - [x] **115** · [T100 — ADR: remote-execution scope carve-out and Kubernetes substrate](115-T100-remote-execution-scope-and-substrate-adr.md) · S · decision
 - [x] **116** · [T101 — spike: kube watch semantics, pod startup latency, blob round-trip](116-T101-remote-execution-spike.md) · M · decision (spike) — after T100
 - [x] **117** · [T102 — real retry backoff and per-attempt timeout on the run-flow path](117-T102-backoff-and-timeout-enforcement.md) · M · feature — after T100
-- [ ] **118** · [T103 — the `Payload` codec trait and derive](118-T103-payload-trait-and-derive.md) · M · feature — after T101
+- [x] **118** · [T103 — the `Payload` codec trait and derive](118-T103-payload-trait-and-derive.md) · M · feature — after T101
 - [ ] **119** · [T104 — the blob port, local backend, and `DurableOutput` bridge](119-T104-blob-port-and-local-backend.md) · M · feature — after T103
 - [ ] **120** · [T105 — placement policy, remote admission pool, executor selection](120-T105-placement-and-executor-selection.md) · M · feature — after T101
 - [ ] **121** · [T106 — the `exec-node` pod-side verb and attempt shard writer](121-T106-exec-node-verb-and-shard-writer.md) · L · feature — after T104, T105
