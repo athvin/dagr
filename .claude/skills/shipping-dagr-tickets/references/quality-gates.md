@@ -55,6 +55,20 @@ cargo audit        # only if cargo-audit and Cargo.lock exist, else SKIP:named-r
 cargo deny check   # only if cargo-deny and deny.toml exist, else SKIP:named-reason
 ```
 
+In era `ci` the gate additionally runs the repo's **own** `scripts/check-*.sh`
+assertions, reported as `CHECK:repo:<script-name>`. They are discovered by
+glob, never enumerated — this repo adds a check script per ADR ticket, so a
+hard-coded list would silently rot behind them. Scripts that drive cargo
+(detected by grep) are reported `SKIP:cargo-driven`: they rebuild the
+workspace under varying feature sets, and the gate's own fmt/clippy/test/doc
+steps plus real CI already cover them.
+
+This exists because CI runs these scripts and the gate did not, so an entire
+failure class — crate metadata, lint parity, ADR invariants — was invisible
+locally and could only surface as a CI fix round. Ticket 118 (T103) paid that
+cost once: a green local gate, then `crate-docs-and-metadata` failing on a
+`.unwrap()` in a doc example.
+
 **Hand-off rule:** these are defaults. Once `CONTRIBUTING.md` or the CI
 workflow defines an exact command (the rustdoc lint especially), the repo
 definition is authoritative — if `run_gate.sh` diverges from it, fix the

@@ -136,6 +136,26 @@ else
     else
       skip criteria-matrix "no matrix-verification script found"
     fi
+
+    # The repo's own scripts/check-*.sh assertions — CI runs these, so the gate
+    # must too, or a whole failure class (crate metadata, lint parity, ADR
+    # invariants) is invisible locally and only surfaces as a CI fix round.
+    # Discovered by glob, not enumerated: this repo adds a check script per ADR
+    # ticket, and a hard-coded list would silently rot behind them.
+    #
+    # Cargo-driven checks are skipped by name: they rebuild the workspace under
+    # varying feature sets (minutes each), and the gate's own fmt/clippy/test/
+    # doc steps plus real CI already cover them. The grep is the selector, so a
+    # newly-added script lands in the right bucket on its own.
+    for chk in scripts/check-*.sh; do
+      [ -e "$chk" ] || break                      # glob did not expand
+      name="repo:$(basename "$chk" .sh)"
+      if grep -qE '(^|[^a-z-])cargo (build|test|clippy|doc|check|run|metadata|tree|fmt)' "$chk"; then
+        skip "$name" "cargo-driven — covered by this gate's cargo steps and by CI"
+      else
+        run_check "$name" bash "$chk"
+      fi
+    done
   fi
 fi
 
