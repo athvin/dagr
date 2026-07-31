@@ -1365,12 +1365,7 @@ where
             // Enter a named backoff phase: compute the jittered exponential delay
             // for this (0-based) failed-attempt index, record it as a distinct
             // measurable interval, then await the caller's timer future.
-            let delay = config.backoff().delay_for(attempt - 1, jitter);
-            sink.emit(AttemptEvent::BackoffStarted {
-                node: node.into(),
-                attempt,
-                delay,
-            });
+            let delay = schedule_backoff(node, attempt, config, jitter, sink);
             // The wait: await the caller-provided timer future. The loop reads no
             // clock — the driver's future decides when the delay has elapsed.
             timer(delay).await;
@@ -1622,6 +1617,28 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+/// Run the task's body **behind the catch-unwind boundary**, with task-local node
+/// attribution set for the duration of the caught poll — the one place the caught
+/// dispatch lives, shared by the untimed
+/// ([`run_one_attempt_caught`]) and timed
+/// ([`run_one_attempt_caught_timed`]) attempt paths so the timeout facet composes
+/// with panic containment instead of forking it.
+///
+/// Returns the task's own `Result` when the body completed, or the caught panic
+/// payload when it unwound. The attribution guard restores the previous value when
+/// this future completes or is dropped (a timeout drops it mid-poll).
+async fn caught_body<T>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+) -> Result<Result<T::Output, TaskError>, Box<dyn Any + Send>>
+where
+    T: Task<Input = ()>,
+{
+    let _attribution = NodeAttribution::set(node);
+    CatchUnwindPoll::new(task.run(ctx, ())).await
+}
+
 /// Run one attempt end to end **with panic containment**, emitting its opening
 /// events plus the exactly-one attempt-outcome record, but **not** the
 /// node-terminal record — the panic-catching sibling of [`run_one_attempt`].
@@ -1655,10 +1672,7 @@ where
     // Set task-local attribution for the panic hook, then run the task future
     // behind the catch-unwind boundary. The guard restores prior attribution on
     // drop (after the poll completes or panics).
-    let caught = {
-        let _attribution = NodeAttribution::set(node);
-        CatchUnwindPoll::new(task.run(ctx, ())).await
-    };
+    let caught = caught_body(task, node, ctx).await;
 
     let (outcome, message) = match caught {
         // The task future completed without panicking — classify its Result.
@@ -1758,6 +1772,232 @@ where
     outcome
 }
 
+/// Run one attempt end to end **with panic containment, under a per-attempt
+/// timeout**, emitting its opening events plus the exactly-one attempt-outcome
+/// record but **not** the node-terminal record.
+///
+/// This is [`run_one_attempt_caught`] and [`run_attempt_with_timeout`]'s race
+/// composed at one point, not a third mechanism: the same
+/// [`caught_body`] dispatch runs behind the same [`race`] combinator
+/// [`run_attempt_with_timeout`] uses, and the same
+/// [`classify_and_fill`] / [`emit_attempt_outcome_record`] mapping records the
+/// result. The composition exists because the two facets are independent
+/// (`run_attempt_with_timeout` installs no catch boundary and
+/// `run_one_attempt_caught` arms no deadline) while every attempt on a real run
+/// path needs **both** — an uncaught panic there would unwind past the driver's
+/// dispatch instead of failing one node.
+///
+/// - **the attempt wins**: identical to [`run_one_attempt_caught`] — classify,
+///   fill the slot on success only, emit the attempt-outcome record (a caught
+///   panic emits `attempt-panicked` carrying its message).
+/// - **the deadline wins**: the attempt future is **dropped** (true cancellation
+///   for await-bound work, which is the only shape Rust can cancel), the outcome
+///   is [`AttemptOutcome::TimedOut`], the `attempt-timed-out` record is emitted,
+///   and the slot is **never** filled.
+async fn run_one_attempt_caught_timed<T, S, D>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+    deadline: D,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()> + Send,
+    T::Output: Send + Sync,
+    S: AttemptEventSink + ?Sized,
+    D: Future<Output = ()> + Send,
+{
+    let attempt = ctx.attempt();
+
+    // Opening events, identical to the untimed caught core, emitted before the
+    // work is dispatched so a dropped (timed-out) attempt still shows it started.
+    sink.emit(AttemptEvent::NodeAdmitted { node: node.into() });
+    sink.emit(AttemptEvent::AttemptStarted {
+        node: node.into(),
+        attempt,
+    });
+
+    // Race the caught body against the deadline. The loser is dropped: on the
+    // timeout branch that drop IS the cancellation (and drops whatever the work
+    // future owns, permit included).
+    let (outcome, message) = match race(caught_body(task, node, ctx), deadline).await {
+        Race::A(Ok(result)) => (classify_and_fill(result, slot), None),
+        Race::A(Err(payload)) => (AttemptOutcome::Panicked, Some(panic_message(&*payload))),
+        Race::B(()) => (AttemptOutcome::TimedOut, None),
+    };
+
+    emit_attempt_outcome_record(node, attempt, outcome, message, sink);
+    outcome
+}
+
+/// Run **one** attempt of one node **with panic containment, under a per-attempt
+/// timeout** — the caught sibling of [`run_attempt_with_timeout`].
+///
+/// Identical to [`run_attempt_caught`] except that the attempt is raced against
+/// `deadline`: an attempt that returns within its timeout behaves exactly as
+/// [`run_attempt_caught`] does (including a caught panic's `attempt-panicked`
+/// record), and an attempt that exceeds it is **dropped** and recorded
+/// [`AttemptOutcome::TimedOut`] — `attempt-timed-out` plus the `timed-out`
+/// node-terminal record, with the slot left empty.
+///
+/// `permit` is any guard whose `Drop` returns its cost to the admission ledger;
+/// it is moved **into** the raced work future, so a timeout releases it for free
+/// when the future is dropped (the ownership trick [`run_attempt_with_timeout`]
+/// documents). A caller whose permit is tracked elsewhere — the run-loop driver
+/// holds the admission permit around the whole attempt — passes `()`.
+///
+/// # Runtime-agnostic
+///
+/// No async-runtime dependency is added: the caller's runtime drives this future
+/// and supplies `deadline` (in production a timer armed on the framework's
+/// isolated runtime, so it fires even when task workers are saturated; in a test
+/// any controllable future).
+pub async fn run_attempt_caught_with_timeout<T, S, D, P>(
+    task: &mut T,
+    node: &str,
+    ctx: &RunContext,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+    deadline: D,
+    permit: P,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()> + Send,
+    T::Output: Send + Sync,
+    S: AttemptEventSink + ?Sized,
+    D: Future<Output = ()> + Send,
+    P: Send,
+{
+    let attempt = ctx.attempt();
+
+    sink.emit(AttemptEvent::NodeAdmitted { node: node.into() });
+    sink.emit(AttemptEvent::AttemptStarted {
+        node: node.into(),
+        attempt,
+    });
+
+    // The permit rides INSIDE the raced work future: dropping that future on the
+    // timeout branch drops the permit with it, releasing capacity immediately.
+    let work = async move {
+        let caught = caught_body(task, node, ctx).await;
+        drop(permit); // released on the normal terminal path (explicit for clarity)
+        caught
+    };
+
+    let (outcome, message) = match race(work, deadline).await {
+        Race::A(Ok(result)) => (classify_and_fill(result, slot), None),
+        Race::A(Err(payload)) => (AttemptOutcome::Panicked, Some(panic_message(&*payload))),
+        Race::B(()) => (AttemptOutcome::TimedOut, None),
+    };
+
+    emit_closing_events(node, attempt, outcome, message, sink);
+    outcome
+}
+
+/// Enter the **named backoff phase** between two attempts: compute the jittered
+/// exponential delay for the 0-based failed-attempt index and emit the
+/// [`AttemptEvent::BackoffStarted`] marker carrying it. Returns the delay the
+/// caller then waits by awaiting its injected timer future.
+///
+/// Both retry loops call this, so the schedule and its emitted marker have exactly
+/// one home: the timed loop cannot drift from the untimed one.
+fn schedule_backoff<S>(
+    node: &str,
+    attempt: u32,
+    config: &RetryConfig,
+    jitter: &mut (impl Jitter + ?Sized),
+    sink: &mut S,
+) -> Duration
+where
+    S: AttemptEventSink + ?Sized,
+{
+    let delay = config.backoff().delay_for(attempt - 1, jitter);
+    sink.emit(AttemptEvent::BackoffStarted {
+        node: node.into(),
+        attempt,
+        delay,
+    });
+    delay
+}
+
+/// Run a node through the **bounded retry loop with panic containment and an
+/// optional per-attempt timeout** — [`run_with_retries_caught`] with the timeout
+/// facet armed.
+///
+/// Every attempt is raced against a fresh deadline built from `timeout` through the
+/// same injected `timer` the backoff waits on, so one seam supplies both waits and
+/// `dagr-core` still reads no clock. With `timeout` [`None`] this is
+/// [`run_with_retries_caught`] exactly — same attempts, same records, same
+/// terminal.
+///
+/// A timeout is retry-eligible by default, so an attempt cut at its deadline
+/// consumes one unit of the retry budget and (with budget left) is followed by a
+/// backoff and a further attempt; the node still emits exactly **one**
+/// node-terminal record, when the loop ends. A timeout on the last permitted
+/// attempt ends the node `timed-out`.
+///
+/// Every other argument mirrors [`run_with_retries_caught`]; see its rustdoc for
+/// the determinism and exclusivity guarantees, which are unchanged here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the retry surface threads the run/pipeline identity, slot, sink, config, \
+    jitter, and timer explicitly; the timeout budget joins them as the one added \
+    policy value this loop enforces"
+)]
+pub async fn run_with_retries_caught_timed<T, S, F, Fut>(
+    mut task: T,
+    node: &str,
+    run: RunId,
+    pipeline: PipelineId,
+    slot: &Slot<T::Output>,
+    sink: &mut S,
+    config: &RetryConfig,
+    jitter: &mut (impl Jitter + ?Sized),
+    mut timer: F,
+    timeout: Option<Duration>,
+) -> AttemptOutcome
+where
+    T: Task<Input = ()> + Send,
+    T::Output: Send + Sync,
+    S: AttemptEventSink + ?Sized,
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = ()> + Send,
+{
+    let node_id = NodeId::from_name(node);
+    let max_attempts = config.max_attempts();
+
+    let mut attempt: u32 = 1;
+    loop {
+        let ctx = RunContext::builder(run.clone(), pipeline.clone(), node_id)
+            .attempt(attempt)
+            .max_attempts(max_attempts)
+            .build();
+
+        // One attempt end to end, with panic containment, under this attempt's
+        // deadline when the policy declares one.
+        let outcome = match timeout {
+            Some(budget) => {
+                run_one_attempt_caught_timed(&mut task, node, &ctx, slot, sink, timer(budget)).await
+            }
+            None => run_one_attempt_caught(&mut task, node, &ctx, slot, sink).await,
+        };
+
+        // Classification-gated, exactly as the untimed loop: a timeout is
+        // retry-eligible, a panic and a permanent failure are not.
+        let budget_left = attempt < max_attempts;
+        if outcome.is_retry_eligible() && budget_left {
+            let delay = schedule_backoff(node, attempt, config, jitter, sink);
+            timer(delay).await;
+            attempt += 1;
+            continue;
+        }
+
+        emit_node_terminal(node, outcome.terminal_state(), sink);
+        return outcome;
+    }
+}
+
 /// Run a node through the **bounded retry loop with panic containment** (retry
 /// composed with panic containment).
 ///
@@ -1817,12 +2057,7 @@ where
         // so this branch is not taken — the panic stops retrying.
         let budget_left = attempt < max_attempts;
         if outcome.is_retry_eligible() && budget_left {
-            let delay = config.backoff().delay_for(attempt - 1, jitter);
-            sink.emit(AttemptEvent::BackoffStarted {
-                node: node.into(),
-                attempt,
-                delay,
-            });
+            let delay = schedule_backoff(node, attempt, config, jitter, sink);
             timer(delay).await;
             attempt += 1;
             continue;

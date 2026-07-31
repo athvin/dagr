@@ -32,8 +32,10 @@
 //!   node reaches its real per-node durable scratch namespace (scratch wiring intact).
 //!
 //! Determinism: an injected in-memory sink + a monotonic tick clock; the one
-//! scratch test uses a PRIVATE temp dir. No wall-clock sleeps (the retry backoff
-//! resolves immediately). Portable — macOS is in CI.
+//! scratch test uses a PRIVATE temp dir. The retried node's one backoff is really
+//! waited (the run-flow path arms a real timer — T102), and the fixture keeps it to
+//! the default 100 ms base, so the suite still runs in well under a second.
+//! Portable — macOS is in CI.
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome, read_records};
 use dagr_cli::run_flow::RunnableFlow;

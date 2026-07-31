@@ -43,6 +43,24 @@
 //! [`drive`] loop, so the `scratch_root` wiring and the
 //! resume seam apply to them unchanged: a single-attempt node reaches its real
 //! per-node durable scratch namespace through the driver's per-attempt context.
+//!
+//! # The policies this path enforces
+//!
+//! A node's [`NodePolicy`] is not merely recorded here — its **retry backoff** and
+//! its **per-attempt timeout** are enforced on every run this seam drives:
+//!
+//! - the retry loop's computed backoff is really waited, through the injected
+//!   [`AttemptTimer`] (production [`SystemTimer`]), so the `BackoffStarted` delay in
+//!   the event stream is a claim about *elapsed* time;
+//! - the declared timeout is armed per attempt, by class: **await-bound** work is
+//!   raced against its deadline and the losing future is dropped (true cancellation,
+//!   permit released at the mark), while **blocking / compute** work — which cannot
+//!   be stopped, or even polled, while it runs — is marked `timed-out` by the
+//!   driver's isolated timer, its permit held until its closure returns and its late
+//!   result refused (see [`AttemptFate`]).
+//!
+//! A node that declares neither policy is unaffected: nothing is armed, no timer is
+//! spawned, and its event stream is what it was.
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -54,15 +72,16 @@ use dagr_core::assembly::NodePolicy;
 use dagr_core::binding::{BoundInput, Deps, ReceiveMode};
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{
-    AttemptEventSink, NoJitter, RetryConfig, run_attempt_caught, run_with_retries_caught,
+    AttemptEventSink, NoJitter, RetryConfig, run_attempt_caught, run_attempt_caught_with_timeout,
+    run_with_retries_caught, run_with_retries_caught_timed,
 };
 use dagr_core::flow::{Flow, Pipeline};
 use dagr_core::handle::{Handle, NodeId};
 use dagr_core::slot::{ResidencyLedger, Slot, SlotRef};
 use dagr_core::stable_name::{StableInputNames, StableName};
-use dagr_core::task::Task;
+use dagr_core::task::{ExecutionClass, Task};
 
-use crate::driver::{NodeRunner, RunConfig, drive};
+use crate::driver::{AttemptFate, NodeRunner, RunConfig, drive};
 use crate::run_store::{FileSink, SystemClock, mint_run_id};
 
 /// The run's **slot registry**: node [id](NodeId) → that node's type-erased output
@@ -77,11 +96,67 @@ use crate::run_store::{FileSink, SystemClock, mint_run_id};
 /// its upstream slot directly, with no impossible id→name reverse lookup.
 type SlotRegistry = HashMap<NodeId, Arc<dyn Any + Send + Sync>>;
 
-/// A **registration-time runner factory**: given the run's slot registry,
-/// build this node's type-erased [`NodeRunner`]. Captured where the node's
-/// concrete `Task` + input/output types are known, so it can wire the typed slots
-/// the driver only ever sees erased.
-type RunnerFactory = Box<dyn FnOnce(&SlotRegistry) -> Box<dyn NodeRunner> + Send>;
+/// A **registration-time runner factory**: given the run's slot registry and the
+/// run's [timer](AttemptTimer), build this node's type-erased [`NodeRunner`].
+/// Captured where the node's concrete `Task` + input/output types are known, so it
+/// can wire the typed slots the driver only ever sees erased.
+type RunnerFactory =
+    Box<dyn FnOnce(&SlotRegistry, &Arc<dyn AttemptTimer>) -> Box<dyn NodeRunner> + Send>;
+
+/// The **injected wait seam** every enforced policy on this path measures its time
+/// through: the retry loop's backoff and an await-bound attempt's per-attempt
+/// deadline.
+///
+/// It exists so that `dagr-core` gains **no clock** — the engine computes *what* to
+/// wait (the jittered exponential delay, the declared timeout budget) and awaits a
+/// future this seam supplies, exactly as [`Jitter`](dagr_core::execution::Jitter)
+/// injects randomness. Production passes [`SystemTimer`], whose future really
+/// elapses, so an emitted `BackoffStarted` delay is a claim about *elapsed* time and
+/// a declared timeout is a real deadline; a test passes a recording timer that
+/// resolves at once, so the scheduled sequence is assertable without sleeping.
+pub trait AttemptTimer: Send + Sync {
+    /// A future that resolves once `delay` has elapsed. It is polled on whichever
+    /// surface the node's class routed the attempt onto, so it must not require the
+    /// caller to be inside any particular runtime.
+    fn sleep(
+        &self,
+        delay: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+}
+
+/// The production [`AttemptTimer`]: a real, elapsing wait.
+///
+/// It prefers the ambient async runtime's timer (`tokio::time::sleep`) so an
+/// await-bound attempt yields its worker while it waits. On the **compute** surface
+/// there is no async runtime at all (the rayon pool drives the attempt future with a
+/// park-based executor), so it falls back to parking the thread — honest for a
+/// dedicated compute thread that is already the node's own, and it keeps the seam
+/// runtime-agnostic rather than forcing a runtime onto a pool that has none.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemTimer;
+
+impl SystemTimer {
+    /// The production timer.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl AttemptTimer for SystemTimer {
+    fn sleep(
+        &self,
+        delay: Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            Box::pin(tokio::time::sleep(delay))
+        } else {
+            // No ambient runtime (the compute pool's threads): park this thread for
+            // the delay. The attempt owns the thread, so nothing else is delayed.
+            Box::pin(async move { std::thread::sleep(delay) })
+        }
+    }
+}
 
 /// One registered node's captured build recipe: its identity, the maker for its
 /// typed output slot (so the assembler can mint it with the right `T` and consumer
@@ -175,20 +250,43 @@ impl RunReport {
 /// node, and [`register_with`](Self::register_with) for a policy-carrying (e.g.
 /// retrying) node. Each returns the node's typed [`Handle`], usable to bind
 /// downstream and to read the produced value off the [`RunReport`].
-#[derive(Default)]
 pub struct RunnableFlow {
     flow: Flow,
     runners: Vec<RegisteredRunner>,
+    /// The run's wait seam — the backoff and per-attempt-deadline futures every
+    /// node's runner awaits. [`SystemTimer`] unless a caller injects another.
+    timer: Arc<dyn AttemptTimer>,
+}
+
+impl Default for RunnableFlow {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RunnableFlow {
-    /// Begin a fresh runnable flow with no nodes registered.
+    /// Begin a fresh runnable flow with no nodes registered, waiting through the
+    /// production [`SystemTimer`].
     #[must_use]
     pub fn new() -> Self {
         Self {
             flow: Flow::new(),
             runners: Vec::new(),
+            timer: Arc::new(SystemTimer::new()),
         }
+    }
+
+    /// Run this flow's waits through an injected [`AttemptTimer`] instead of the
+    /// production [`SystemTimer`] — the seam that mirrors the engine's existing
+    /// [`Jitter`](dagr_core::execution::Jitter) injection.
+    ///
+    /// A test passes a recording timer that captures each scheduled delay and
+    /// resolves immediately, so the backoff schedule is assertable **deterministically
+    /// and without sleeping**. Production code has no reason to call this.
+    #[must_use]
+    pub fn with_timer(mut self, timer: Arc<dyn AttemptTimer>) -> Self {
+        self.timer = timer;
+        self
     }
 
     /// Register a **source** node (one whose task consumes nothing) under `name`,
@@ -252,19 +350,25 @@ impl RunnableFlow {
         T: Task<Input = ()> + Send + 'static,
         T::Output: Send + Sync + 'static,
     {
-        let retry_config = NodePolicy::new().retry_config();
+        let policy = NodePolicy::new();
+        let retry_config = policy.retry_config();
+        let enforcement = TimeoutEnforcement::for_node::<T>(&policy);
         let node_name = name.to_string();
-        let factory: RunnerFactory = Box::new(move |registry: &SlotRegistry| {
-            let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
-            Box::new(GenericNodeRunner {
-                name: node_name,
-                task: Some(task),
-                // A source consumes nothing: its input is ready without any slot read.
-                input: InputSource::Ready(Some(())),
-                slot,
-                retry_config,
-            }) as Box<dyn NodeRunner>
-        });
+        let factory: RunnerFactory = Box::new(
+            move |registry: &SlotRegistry, timer: &Arc<dyn AttemptTimer>| {
+                let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
+                Box::new(GenericNodeRunner {
+                    name: node_name,
+                    task: Some(task),
+                    // A source consumes nothing: its input is ready without any slot read.
+                    input: InputSource::Ready(Some(())),
+                    slot,
+                    retry_config,
+                    enforcement,
+                    timer: Arc::clone(timer),
+                }) as Box<dyn NodeRunner>
+            },
+        );
         self.runners.push(RegisteredRunner {
             name: name.to_string(),
             id: handle.id(),
@@ -378,25 +482,33 @@ impl RunnableFlow {
     {
         let reader = deps.input_reader();
         let retry_config = policy.retry_config();
+        // The node's declared per-attempt timeout, resolved against its effective
+        // execution class — the class decides *which* half of C14's honest timeout
+        // semantics applies (drop the future, or mark the unkillable closure).
+        let enforcement = TimeoutEnforcement::for_node::<T>(&policy);
         let node_name = name.to_string();
-        let factory: RunnerFactory = Box::new(move |registry: &SlotRegistry| {
-            let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
-            // Defer the input read to inside `run()`: by construction the driver only
-            // admits this node after every upstream has succeeded, so its upstream
-            // slots are filled THEN — reading here (at plan-assembly, before the run)
-            // would hit an empty slot. The runner keeps a cheap `Arc`-clone snapshot
-            // of the registry so it can resolve its inputs at attempt time.
-            Box::new(GenericNodeRunner {
-                name: node_name,
-                task: Some(task),
-                input: InputSource::Deferred {
-                    reader: Some(reader),
-                    registry: registry.clone(),
-                },
-                slot,
-                retry_config,
-            }) as Box<dyn NodeRunner>
-        });
+        let factory: RunnerFactory = Box::new(
+            move |registry: &SlotRegistry, timer: &Arc<dyn AttemptTimer>| {
+                let slot = downcast_slot::<T::Output>(registry, handle.id(), &node_name);
+                // Defer the input read to inside `run()`: by construction the driver only
+                // admits this node after every upstream has succeeded, so its upstream
+                // slots are filled THEN — reading here (at plan-assembly, before the run)
+                // would hit an empty slot. The runner keeps a cheap `Arc`-clone snapshot
+                // of the registry so it can resolve its inputs at attempt time.
+                Box::new(GenericNodeRunner {
+                    name: node_name,
+                    task: Some(task),
+                    input: InputSource::Deferred {
+                        reader: Some(reader),
+                        registry: registry.clone(),
+                    },
+                    slot,
+                    retry_config,
+                    enforcement,
+                    timer: Arc::clone(timer),
+                }) as Box<dyn NodeRunner>
+            },
+        );
         self.runners.push(RegisteredRunner {
             name: name.to_string(),
             id: handle.id(),
@@ -434,7 +546,11 @@ impl RunnableFlow {
         S: EventSink + 'static,
         C: MonotonicClock + 'static,
     {
-        let RunnableFlow { flow, runners } = self;
+        let RunnableFlow {
+            flow,
+            runners,
+            timer,
+        } = self;
         let pipeline = flow.finish();
         // Assemble once here so we can (a) surface an assembly error to the caller
         // eagerly and (b) read the precomputed per-node consumer counts to size each
@@ -453,7 +569,7 @@ impl RunnableFlow {
         }
         let mut node_runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
         for (name, factory) in factories {
-            node_runners.insert(name, factory(&registry));
+            node_runners.insert(name, factory(&registry, &timer));
         }
 
         let plan = crate::driver::RunPlan::new(pipeline, node_runners);
@@ -634,6 +750,48 @@ struct GenericNodeRunner<T: Task> {
     input: InputSource<T::Input>,
     slot: Arc<Slot<T::Output>>,
     retry_config: RetryConfig,
+    /// How this node's declared per-attempt timeout is enforced — decided at
+    /// registration from the policy budget and the node's effective class.
+    enforcement: TimeoutEnforcement,
+    /// The run's injected wait seam (backoff, and an await-bound deadline).
+    timer: Arc<dyn AttemptTimer>,
+}
+
+/// How a node's declared per-attempt [timeout](NodePolicy::timeout) is enforced —
+/// C14's *"timeout semantics differ by class, honestly"* resolved once, at
+/// registration, from the policy budget and the node's **effective** execution class
+/// (the policy override if set, else the class the task declared).
+#[derive(Clone)]
+enum TimeoutEnforcement {
+    /// No timeout declared: nothing is armed and the attempt path is exactly what it
+    /// was before per-attempt timeouts were enforced.
+    None,
+    /// **Await-bound** work — the one shape Rust can cancel. The attempt future is
+    /// raced against a deadline drawn from the run's timer and *dropped* when the
+    /// deadline wins, which is true cancellation and releases the permit at once.
+    DropTheFuture(Duration),
+    /// **Blocking / compute** work — an unkillable synchronous closure. The
+    /// framework cannot stop the thread, so the driver arms this node's deadline on
+    /// its isolated runtime and marks the attempt `timed-out` there; the runner's
+    /// side of the hand-off is this shared [`AttemptFate`], which brackets each
+    /// attempt and refuses the abandoned closure's late result.
+    MarkUnkillable(Arc<AttemptFate>),
+}
+
+impl TimeoutEnforcement {
+    /// Resolve the enforcement for a node from its policy and its task's declared
+    /// execution class.
+    fn for_node<T: Task>(policy: &NodePolicy) -> Self {
+        let Some(budget) = policy.timeout_budget() else {
+            return Self::None;
+        };
+        match policy.class_override().unwrap_or(T::EXECUTION_CLASS) {
+            ExecutionClass::AwaitBound => Self::DropTheFuture(budget),
+            ExecutionClass::Blocking | ExecutionClass::Compute => {
+                Self::MarkUnkillable(AttemptFate::new())
+            }
+        }
+    }
 }
 
 /// Where a node's input value comes from — [ready](InputSource::Ready) (a source
@@ -677,6 +835,13 @@ where
         &self.name
     }
 
+    fn timeout_fate(&self) -> Option<Arc<AttemptFate>> {
+        match &self.enforcement {
+            TimeoutEnforcement::MarkUnkillable(fate) => Some(Arc::clone(fate)),
+            TimeoutEnforcement::None | TimeoutEnforcement::DropTheFuture(_) => None,
+        }
+    }
+
     fn run<'a>(
         &'a mut self,
         ctx: &'a RunContext,
@@ -690,6 +855,8 @@ where
         let inputs = self.input.resolve();
         let slot = Arc::clone(&self.slot);
         let retry_config = self.retry_config;
+        let enforcement = self.enforcement.clone();
+        let timer = Arc::clone(&self.timer);
         // Adapt the arbitrary-input task to the consume-nothing shape the attempt
         // runner drives: bind the already-read input value, so the single attempt
         // consumes it once and each retry attempt sees a fresh clone of it.
@@ -698,32 +865,174 @@ where
             input: inputs,
         };
         Box::pin(async move {
-            if retry_config.max_attempts() > 1 {
-                // The REAL bounded-retry loop. It mints its own per-attempt context
-                // off the driver's run/pipeline identity; the backoff timer resolves
-                // immediately (attempt-counter-driven, no wall-clock sleep).
-                run_with_retries_caught(
-                    bound,
-                    &name,
-                    ctx.run_id().clone(),
-                    ctx.pipeline_id().clone(),
-                    &slot,
-                    sink,
-                    &retry_config,
-                    &mut NoJitter,
-                    |_delay: Duration| async {},
-                )
-                .await
-                .terminal_state()
-            } else {
-                // A single caught attempt through the REAL runner on the DRIVER's
-                // context (scratch_root / temp_dir / cancellation threaded).
-                let mut bound = bound;
-                run_attempt_caught(&mut bound, &name, ctx, &slot, sink)
-                    .await
-                    .terminal_state()
+            // The backoff wait: the loop computes the jittered exponential delay and
+            // awaits THIS future, so the delay it emits is a claim about elapsed
+            // time. `dagr-core` still reads no clock — the seam supplies the wait.
+            let backoff_timer = |delay: Duration| timer.sleep(delay);
+            let retries = retry_config.max_attempts() > 1;
+            match enforcement {
+                // No declared timeout: exactly the attempt path this node had
+                // before, save that its backoff is now really waited.
+                TimeoutEnforcement::None => {
+                    if retries {
+                        // The REAL bounded-retry loop. It mints its own per-attempt
+                        // context off the driver's run/pipeline identity.
+                        run_with_retries_caught(
+                            bound,
+                            &name,
+                            ctx.run_id().clone(),
+                            ctx.pipeline_id().clone(),
+                            &slot,
+                            sink,
+                            &retry_config,
+                            &mut NoJitter,
+                            backoff_timer,
+                        )
+                        .await
+                        .terminal_state()
+                    } else {
+                        // A single caught attempt through the REAL runner on the
+                        // DRIVER's context (scratch_root / temp_dir / cancellation
+                        // threaded).
+                        let mut bound = bound;
+                        run_attempt_caught(&mut bound, &name, ctx, &slot, sink)
+                            .await
+                            .terminal_state()
+                    }
+                }
+                // Await-bound: race each attempt against its deadline and drop the
+                // future when the deadline wins — true cancellation, so the attempt
+                // stops and the permit the driver holds around it releases at the
+                // mark.
+                TimeoutEnforcement::DropTheFuture(budget) => {
+                    if retries {
+                        run_with_retries_caught_timed(
+                            bound,
+                            &name,
+                            ctx.run_id().clone(),
+                            ctx.pipeline_id().clone(),
+                            &slot,
+                            sink,
+                            &retry_config,
+                            &mut NoJitter,
+                            backoff_timer,
+                            Some(budget),
+                        )
+                        .await
+                        .terminal_state()
+                    } else {
+                        let mut bound = bound;
+                        run_attempt_caught_with_timeout(
+                            &mut bound,
+                            &name,
+                            ctx,
+                            &slot,
+                            sink,
+                            timer.sleep(budget),
+                            // The admission permit is held by the driver around the
+                            // whole attempt (it releases when this runner returns),
+                            // so this attempt carries no permit of its own.
+                            (),
+                        )
+                        .await
+                        .terminal_state()
+                    }
+                }
+                // Blocking / compute: the closure cannot be stopped, so the driver's
+                // isolated timer marks it and this fate cell bars whatever the
+                // abandoned closure computes afterwards. The attempt path itself is
+                // unchanged — the guard wraps the task, it does not replace the
+                // runner.
+                TimeoutEnforcement::MarkUnkillable(fate) => {
+                    let guarded = FateGuardedTask {
+                        inner: bound,
+                        fate: Arc::clone(&fate),
+                        slot: Arc::clone(&slot),
+                    };
+                    let outcome = if retries {
+                        run_with_retries_caught(
+                            guarded,
+                            &name,
+                            ctx.run_id().clone(),
+                            ctx.pipeline_id().clone(),
+                            &slot,
+                            sink,
+                            &retry_config,
+                            &mut NoJitter,
+                            backoff_timer,
+                        )
+                        .await
+                    } else {
+                        let mut guarded = guarded;
+                        run_attempt_caught(&mut guarded, &name, ctx, &slot, sink).await
+                    };
+                    if fate.is_timed_out() {
+                        // The deadline decided this node while the closure ran on:
+                        // its terminal state is `timed-out` and was recorded by the
+                        // driver at the mark. Reporting it again changes nothing —
+                        // the driver refuses a zombie's late report — but reporting
+                        // it *honestly* keeps this runner's return value true.
+                        TerminalState::TimedOut
+                    } else {
+                        outcome.terminal_state()
+                    }
+                }
             }
         })
+    }
+}
+
+/// A **late-result guard** wrapped around an unkillable node's task: it brackets
+/// each attempt against the shared [`AttemptFate`] so that a closure which returns
+/// *after* its per-attempt timeout was marked can neither fill the output slot nor
+/// count as the node's outcome.
+///
+/// This is the runner's half of C14's blocking/compute timeout. The framework cannot
+/// stop the closure, so the value it eventually produces is routed through the
+/// decision's [`LateResultBarrier`](dagr_core::execution::LateResultBarrier) —
+/// which refuses it — and the attempt reports a permanent failure, which also stops
+/// the retry loop: a retry is deferred until the previous closure returns
+/// (exclusivity), and by then the node is already decided, so no further attempt of
+/// a marked node runs.
+struct FateGuardedTask<T: Task> {
+    inner: T,
+    fate: Arc<AttemptFate>,
+    slot: Arc<Slot<T::Output>>,
+}
+
+impl<T> Task for FateGuardedTask<T>
+where
+    T: Task<Input = ()> + Send,
+    T::Output: Send + Sync + 'static,
+{
+    type Input = ();
+    type Output = T::Output;
+    const EXECUTION_CLASS: dagr_core::task::ExecutionClass = T::EXECUTION_CLASS;
+    async fn run(&mut self, ctx: &RunContext, _i: ()) -> Result<T::Output, dagr_core::TaskError> {
+        // A further attempt of this node is live: the deadline may claim it.
+        self.fate.attempt_begins();
+        let produced = self.inner.run(ctx, ()).await;
+        match self.fate.claim_completion() {
+            // This attempt returned inside its budget: its result stands.
+            None => produced,
+            // The deadline already marked this attempt: whatever it produced is
+            // discarded through the barrier — a timed-out attempt never fills its
+            // slot and never writes scratch.
+            Some(barrier) => {
+                if let Ok(value) = produced {
+                    let filled = barrier.fill_slot(&self.slot, value);
+                    debug_assert!(!filled, "the late-result barrier always refuses a fill");
+                }
+                let wrote_scratch = barrier.write_scratch();
+                debug_assert!(
+                    !wrote_scratch,
+                    "the late-result barrier always refuses a scratch write"
+                );
+                Err(dagr_core::TaskError::permanent(
+                    "the attempt was marked timed-out before it returned; its late result was refused",
+                ))
+            }
+        }
     }
 }
 

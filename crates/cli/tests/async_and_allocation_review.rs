@@ -410,10 +410,15 @@ const SPAWN_INVENTORY: &[(&str, usize, &str)] = &[
     ),
     (
         "crates/cli/src/driver.rs",
-        1,
+        2,
         "the deliberately DETACHED leftover-temp-dir reclamation thread: it touches \
          only PRIOR runs' ephemeral tmp/ subtrees, never this run's state, so the \
-         guarantee is eventual reclamation by a next invocation",
+         guarantee is eventual reclamation by a next invocation; and the per-attempt \
+         deadline timer of an unkillable (blocking/compute) node, armed on the \
+         isolated framework runtime so a jammed task fleet cannot delay it — it \
+         sleeps its declared budget, sends one message to the loop's own channel, \
+         and ends, and the framework runtime it lives on is dropped when the loop \
+         returns, so it cannot outlive the run either way",
     ),
     (
         "crates/cli/src/signals.rs",
