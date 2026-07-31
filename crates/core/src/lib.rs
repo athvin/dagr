@@ -330,7 +330,8 @@ pub use execution::{
     AttemptEvent, AttemptEventSink, AttemptOutcome, Backoff, BootstrapRefusal, Jitter,
     LateResultBarrier, NoJitter, PanicStrategy, RetryConfig, SeededJitter, TimeoutDecision,
     ZombieObserver, check_panic_strategy, detect_panic_strategy, install_panic_hook, run_attempt,
-    run_attempt_caught, run_attempt_with_timeout, run_with_retries, run_with_retries_caught,
+    run_attempt_caught, run_attempt_caught_with_timeout, run_attempt_with_timeout,
+    run_with_retries, run_with_retries_caught, run_with_retries_caught_timed,
 };
 pub use flow::{FailureMode, Flow, Pipeline, PipelineNode, StableTypeNames};
 pub use handle::{Handle, NodeId};
