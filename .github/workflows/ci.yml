@@ -383,6 +383,36 @@ jobs:
       - name: metastore acceptance boundary — crate graph + no new surface (T88)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-metastore-acceptance-boundary.sh
+      # === M10 blob storage: the feature-gated bridge suites ==================
+      # The `blob` cli feature is OFF by default, so the plain
+      # `cargo test --workspace` above compiles `crates/cli/tests/blob_bridge.rs`
+      # and `blob_lineage.rs` to nothing — the port's own suite
+      # (`crates/blob/tests/blob_port.rs`) DOES run there, because `dagr-blob` is a
+      # normal workspace member with no dependencies. The steps below turn the
+      # feature on for the bridge.
+      #
+      # BOTH tiers: the bridge is filesystem code (atomic rename, fsync, digest
+      # verification) and the T104 DoD requires ubuntu + macOS — rename/fsync
+      # semantics and temp-directory behaviour are exactly the kind of thing that
+      # differs between the two.
+      - name: blob DurableOutput bridge (T104, --features blob)
+        run: cargo nextest run -p dagr-cli --features blob --test blob_bridge
+      # The lineage leg needs BOTH default-off features at once (the bridge and the
+      # run index) — it proves an M8 lineage row carries a blob URI and hash through
+      # the EXISTING projection, with `crates/metastore/src/mapping.rs` untouched.
+      # Linux tier-1: it is a projection/SQL fact, and the metastore's own
+      # cross-platform legs above already cover the libSQL substrate.
+      - name: blob lineage rows through the M8 projection (T104, --features blob,metastore)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run -p dagr-cli --features blob,metastore --test blob_lineage
+      # The structural gate proving the boundary: dagr-blob resolves to itself
+      # ALONE (no core edge, no cli edge, no third-party crate), it is absent from
+      # core's reverse-dependency tree, the default and --no-default-features cli
+      # resolutions carry no edge to it, --features blob does, and core's runtime
+      # dependency set is still empty at every feature setting.
+      - name: blob feature-gating and crate boundary (T104)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-blob-feature-gating.sh
       # --- Acceptance-criteria coverage matrix (system criterion 8) ------------
       # Verifies that every machine-classed criterion in the partition is bound to
       # an existing test (or an explicitly-deferred `unmapped` placeholder) in the

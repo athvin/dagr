@@ -175,17 +175,19 @@ topology and rationale are recorded in the ADR embedded in
 | `artifact` (`dagr-artifact`) | The serializable records a run leaves behind (graph artifact, run artifact, event records) — the boundary a renderer consumes. | *(nothing)* |
 | `render` (`dagr-render`) | Reads an artifact and emits diagram source (DOT / Mermaid). Library plus a standalone renderer binary. | `artifact` **only** |
 | `metastore` (`dagr-metastore`) | The local, embedded, **opt-in** run index (M7): a queryable libSQL/SQLite projection of the event stream. Reached from `cli` only behind a default-off `metastore` feature. | `artifact` + `libsql` + `tokio` (no `core`) |
-| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` (+ `metastore`, opt-in) |
+| `blob` (`dagr-blob`) | The **opt-in** blob port and its local filesystem backend (M10): content-addressed, atomically-written opaque bytes. Reached from `cli` only behind a default-off `blob` feature. | *(nothing at all — no `core`, no third-party crate)* |
+| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` (+ `metastore` and `blob`, opt-in) |
 
 The allowed dependency edges are `cli → {core, artifact, render}`,
 `render → artifact`, `metastore → artifact`, and `core → macros` (build-time
-only); `cli → metastore` exists only behind the default-off `metastore` feature.
-**Neither `render` nor `metastore` has a dependency edge onto `core`**, so a
-renderer (and the run index) is structurally incapable of reaching the live
-pipeline — it consumes artifacts only and needs no access to the binary that
-produced them ([`docs/arch.md`](docs/arch.md) C24 · Renderers). The standalone
-`dagr-render` binary builds without `core` or `cli`, which is that guarantee made
-concrete.
+only); `cli → metastore` and `cli → blob` exist only behind their default-off
+features. **None of `render`, `metastore`, or `blob` has a dependency edge onto
+`core`**, so a renderer (and the run index, and the blob store) is structurally
+incapable of reaching the live pipeline — it consumes artifacts, or opaque bytes,
+and needs no access to the binary that produced them
+([`docs/arch.md`](docs/arch.md) C24 · Renderers). The standalone `dagr-render`
+binary builds without `core` or `cli`, which is that guarantee made concrete; so
+is `dagr-blob` compiling with an empty dependency table.
 
 ## MSRV
 
