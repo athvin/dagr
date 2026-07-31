@@ -356,13 +356,11 @@ impl CancelTrigger {
             .expect("cancel-waker mutex not poisoned")
             .as_ref()
         {
-            let _ = tx.send(AttemptDone {
-                node: CANCEL_WAKE_SENTINEL.to_string(),
-                state: TerminalState::Cancelled,
-                events: Vec::new(),
-                durable_reference: None,
-                durable_reference_meta: None,
-            });
+            let _ = tx.send(AttemptDone::attempt(
+                CANCEL_WAKE_SENTINEL.to_string(),
+                TerminalState::Cancelled,
+                Vec::new(),
+            ));
         }
     }
 
@@ -774,6 +772,129 @@ pub trait NodeRunner: Send {
     /// contract).
     fn durable_reference_meta(&self) -> Option<dagr_artifact::event_stream::DurableReferenceMeta> {
         None
+    }
+
+    /// The **per-attempt timeout fate cell** this runner shares with the driver for
+    /// an *unkillable* (blocking / compute) node whose policy declares a timeout, or
+    /// [`None`] for every other runner.
+    ///
+    /// A blocking or compute closure cannot be killed, so the driver arms that
+    /// node's deadline on the **isolated framework runtime** (a jammed task worker
+    /// cannot delay it) and, when it fires, decides the node's fate through this
+    /// cell: it claims the timeout, marks the attempt `timed-out`, and hands the
+    /// runner the [`LateResultBarrier`](dagr_core::execution::LateResultBarrier) that
+    /// refuses the abandoned closure's late slot fill. The runner claims the cell
+    /// from the other side the moment its body returns, so **exactly one** side wins
+    /// and the node's terminal state is decided once.
+    ///
+    /// The default is [`None`]: an await-bound runner arms its own deadline (its
+    /// future can truly be dropped), and a runner whose node declares no timeout has
+    /// no deadline to arm — in both cases the driver arms no timer and the run is
+    /// byte-identical.
+    fn timeout_fate(&self) -> Option<Arc<AttemptFate>> {
+        None
+    }
+}
+
+/// The **exactly-once fate** of one unkillable (blocking / compute) attempt that
+/// runs under a per-attempt timeout — the hand-off between the driver's isolated
+/// deadline timer and the runner whose closure it cannot stop.
+///
+/// A blocking/compute closure runs on past its timeout as *abandoned-but-running*
+/// work (C14). Two parties may therefore reach the attempt's fate at nearly the same
+/// instant: the framework timer at the deadline, and the closure when it finally
+/// returns. Exactly one must win, because the node's terminal state is decided
+/// **once**:
+///
+/// - the **timer** wins ⇒ the attempt is marked `timed-out` immediately, the permit
+///   stays held until the closure actually returns, and the closure's late result is
+///   refused through the [`LateResultBarrier`] stored here — it never fills the slot;
+/// - the **closure** wins ⇒ it completed inside its budget, fills the slot as usual,
+///   and the timer's mark is discarded (nothing is written).
+pub struct AttemptFate {
+    state: Mutex<FateState>,
+}
+
+/// The three states of an [`AttemptFate`]. A node's attempts move `Running` →
+/// `Completed` → `Running` … as its retry loop turns; the first party to reach
+/// `TimedOut` ends the sequence, and the cell never leaves it.
+enum FateState {
+    /// An attempt is live: whichever party claims next decides it.
+    Running,
+    /// The live attempt's closure returned inside its budget — its result stands.
+    /// The next attempt (if the retry budget allows one) re-enters `Running`.
+    Completed,
+    /// The deadline fired while an attempt was live: the node is `timed-out`, and
+    /// the barrier refuses whatever the abandoned closure produces afterwards.
+    TimedOut(dagr_core::execution::LateResultBarrier),
+}
+
+impl AttemptFate {
+    /// A fresh fate cell with its first attempt live, shared between the runner and
+    /// the driver.
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(FateState::Running),
+        })
+    }
+
+    /// Announce that a **further attempt** of the same node is now live (the runner
+    /// calls this as each attempt begins). A cell already claimed by the timeout
+    /// stays claimed — the node is decided and no attempt of it can undo that.
+    pub fn attempt_begins(&self) {
+        // Poison policy: panic — this cell decides a node's terminal state; a
+        // half-decided fate could record two terminals or none.
+        let mut state = self.state.lock().expect("attempt fate not poisoned");
+        if matches!(*state, FateState::Completed) {
+            *state = FateState::Running;
+        }
+    }
+
+    /// The **driver's** claim, made at the deadline with the barrier minted by
+    /// [`TimeoutDecision::mark_blocking_timed_out`](dagr_core::execution::TimeoutDecision::mark_blocking_timed_out).
+    /// Returns `true` when the timeout won (the mark stands and must be recorded)
+    /// and `false` when no attempt was live to claim (the closure had already
+    /// returned) — in which case the mark is discarded and nothing is written.
+    #[must_use]
+    pub fn claim_timeout(&self, barrier: dagr_core::execution::LateResultBarrier) -> bool {
+        // Poison policy: panic — as above.
+        let mut state = self.state.lock().expect("attempt fate not poisoned");
+        match *state {
+            FateState::Running => {
+                *state = FateState::TimedOut(barrier);
+                true
+            }
+            FateState::Completed | FateState::TimedOut(_) => false,
+        }
+    }
+
+    /// The **runner's** claim, made the instant an attempt's body returns and before
+    /// its value may reach the output slot. Returns [`None`] when the closure won
+    /// (the value stands) and `Some(barrier)` when the timeout already marked the
+    /// node — the caller must route the value through that barrier, which refuses it.
+    #[must_use]
+    pub fn claim_completion(&self) -> Option<dagr_core::execution::LateResultBarrier> {
+        // Poison policy: panic — as above.
+        let mut state = self.state.lock().expect("attempt fate not poisoned");
+        match *state {
+            FateState::Running => {
+                *state = FateState::Completed;
+                None
+            }
+            FateState::Completed => None,
+            FateState::TimedOut(barrier) => Some(barrier),
+        }
+    }
+
+    /// Whether the deadline has claimed this node — the runner's signal that the
+    /// node is already decided, so no further attempt may start.
+    #[must_use]
+    pub fn is_timed_out(&self) -> bool {
+        matches!(
+            *self.state.lock().expect("attempt fate not poisoned"),
+            FateState::TimedOut(_)
+        )
     }
 }
 
@@ -1369,6 +1490,82 @@ struct AttemptDone {
     /// `durable_reference`; `None` for every non-durable node, so the stream is
     /// byte-identical.
     durable_reference_meta: Option<dagr_artifact::event_stream::DurableReferenceMeta>,
+    /// What this message *is*: a finished (or synthesized) attempt report, or the
+    /// isolated framework timer reporting an unkillable attempt's elapsed deadline.
+    kind: DoneKind,
+}
+
+impl AttemptDone {
+    /// A finished-attempt report — the shape every non-timeout message takes.
+    fn attempt(node: String, state: TerminalState, events: Vec<AttemptEvent>) -> Self {
+        Self {
+            node,
+            state,
+            events,
+            durable_reference: None,
+            durable_reference_meta: None,
+            kind: DoneKind::Attempt,
+        }
+    }
+}
+
+/// What an [`AttemptDone`] message carries.
+enum DoneKind {
+    /// A node's attempt reported its terminal state (or the loop synthesized one for
+    /// a node that never ran: a cancelled waiter, an over-demand rejection, a
+    /// missing runner).
+    Attempt,
+    /// The **per-attempt deadline** of an unkillable (blocking / compute) node
+    /// elapsed on the framework runtime. It carries what the loop needs to decide
+    /// the node without touching the jammed task thread: the still-held permit (so
+    /// the zombie's cost stays counted and is registered as a live zombie) and the
+    /// runner's [`AttemptFate`] (so exactly one of timer and closure wins).
+    TimeoutFired {
+        /// The attempt's admission permit, still held by the running closure. The
+        /// loop reads it to register the zombie; it is released only when the
+        /// closure itself takes it out of the cell and drops it.
+        permit: Arc<Mutex<Option<Permit>>>,
+        /// The runner's fate cell, or [`None`] for a runner that exposes none.
+        fate: Option<Arc<AttemptFate>>,
+    },
+}
+
+/// How an admitted attempt holds its permit for the whole attempt.
+///
+/// The permit is **moved into the dispatched closure** either way, so it is dropped
+/// exactly when the attempt returns, on whichever surface ran it. The two shapes
+/// differ only in whether the framework loop can *look at* the permit while the
+/// closure still holds it:
+///
+/// - [`Owned`](PermitHold::Owned) — the ordinary shape: the closure owns the permit
+///   outright and the run is byte-identical to before the per-attempt timeout was
+///   enforced.
+/// - [`Shared`](PermitHold::Shared) — used **only** for an unkillable node whose
+///   policy declares a timeout: the closure owns the permit through a cell the loop
+///   also holds, so at the deadline the loop can register the still-counted cost as
+///   a live zombie **without** releasing it. The closure still takes the permit out
+///   and drops it when it returns, which is what finally frees the capacity.
+enum PermitHold {
+    /// The closure owns the permit outright.
+    Owned(Permit),
+    /// The closure owns the permit through a cell the framework loop can read.
+    Shared(Arc<Mutex<Option<Permit>>>),
+}
+
+impl PermitHold {
+    /// Release the permit — its cost returns to every pool, and any live-zombie
+    /// record for the node clears (the closure has returned).
+    fn release(self) {
+        match self {
+            PermitHold::Owned(permit) => drop(permit),
+            // Poison policy: panic — the permit cell gates pool capacity; a poisoned
+            // cell would leak a permit and stall every waiter behind it.
+            PermitHold::Shared(cell) => {
+                let permit = cell.lock().expect("permit cell not poisoned").take();
+                drop(permit);
+            }
+        }
+    }
 }
 
 /// The reserved sentinel node name for a **cancellation wake** pushed through the
@@ -1419,6 +1616,11 @@ struct AdmitCtx<'a> {
     // the same), so the driver's scratch layout and a later resume's carry-forward
     // agree on `<base>/<pipeline>/…`.
     pipeline_name: &'a str,
+    // A handle to the **isolated framework runtime** — where the per-attempt
+    // deadline of an unkillable (blocking / compute) node is armed. Arming it here
+    // rather than on a task surface is what makes the timeout fire even when every
+    // task/blocking/compute worker is jammed by a synchronous busy-loop.
+    framework: &'a tokio::runtime::Handle,
 }
 
 /// The readiness-driven execution loop (the driver's half of the run-end
@@ -1590,7 +1792,16 @@ where
         // begins.
         let mut drain_deadline: Option<tokio::time::Instant> = None;
 
+        // Nodes whose fate a per-attempt timeout already decided while their
+        // unkillable closure runs on. The closure's eventual report must NOT be
+        // recorded (the terminal state is decided exactly once) and must not
+        // decrement the in-flight count a second time — it was decremented at the
+        // mark, which is what lets the run proceed past a zombie.
+        let mut timed_out_zombies: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+
         // The immutable shared context every admission/dispatch helper reads.
+        let framework_handle = tokio::runtime::Handle::current();
         let actx = AdmitCtx {
             pipeline,
             run_id,
@@ -1603,6 +1814,7 @@ where
             temp_dir,
             scratch_base,
             pipeline_name,
+            framework: &framework_handle,
         };
 
         // --- Resume pre-satisfied nodes -------------------------------------
@@ -1672,13 +1884,61 @@ where
         // cancellation request (fired even synchronously before the first wait,
         // e.g. by a source that already finished) reaches the loop as the
         // `CANCEL_WAKE_SENTINEL` message the trigger pushed onto this same channel.
-        while in_flight > 0 {
-            // Await the next channel message: a finished attempt, or a cancellation
-            // wake (a `CANCEL_WAKE_SENTINEL` `AttemptDone` the trigger pushed). Once a
+        // The bounded wait for an abandoned-but-running closure to free the capacity
+        // a waiter needs. `None` unless the loop finds itself with waiters queued but
+        // nothing in flight — which can only happen when a *timed-out*
+        // blocking/compute attempt still holds its permit (every other release
+        // re-offers the queue synchronously, so a waiter never outlives the last
+        // in-flight attempt).
+        let mut zombie_capacity_deadline: Option<tokio::time::Instant> = None;
+        loop {
+            if in_flight > 0 {
+                // Work is moving again: any capacity wait armed earlier is spent.
+                zombie_capacity_deadline = None;
+            } else {
+                // Nothing in flight. With the queue empty this is the run's end.
+                if pending.is_empty() || draining {
+                    break;
+                }
+                let now = tokio::time::Instant::now();
+                match zombie_capacity_deadline {
+                    // Give the zombie the same bounded grace the zombie-at-exit wait
+                    // gives it to return and release its permit.
+                    None => zombie_capacity_deadline = Some(now + grace),
+                    Some(deadline) if now >= deadline => {
+                        // It did not return within grace, so the capacity it pins may
+                        // never come back. A waiter left in the queue would be
+                        // stranded with no terminal state, so each is failed with the
+                        // honest reason — the same strand guard the over-demand
+                        // rejection applies to a node that can never be admitted.
+                        for name in pending.drain(..) {
+                            reject_zombie_pinned(&name, &tx, &mut in_flight);
+                        }
+                        zombie_capacity_deadline = None;
+                    }
+                    Some(_) => {}
+                }
+                if in_flight == 0 && pending.is_empty() {
+                    break;
+                }
+            }
+            // Await the next channel message: a finished attempt, an unkillable
+            // attempt's elapsed deadline, or a cancellation wake (a
+            // `CANCEL_WAKE_SENTINEL` `AttemptDone` the trigger pushed). Once a
             // full drain has begun the wait is bounded by the single grace deadline —
             // whatever has not returned by then is abandoned and the run proceeds, the
             // bound that guarantees termination even if a task ignores cancellation.
-            let Some(done) = recv_next(&mut rx, draining, drain_deadline).await else {
+            let bounded = if draining {
+                drain_deadline
+            } else {
+                zombie_capacity_deadline
+            };
+            let Some(done) = recv_next(&mut rx, bounded).await else {
+                // A bounded wait that elapsed with nothing received: re-check the
+                // capacity guard above. Anything else ends the loop.
+                if !draining && bounded.is_some() {
+                    continue;
+                }
                 break;
             };
             // Observe the queue's real occupancy at the moment of dequeue (the
@@ -1709,6 +1969,36 @@ where
                 }
                 continue;
             }
+
+            // The isolated framework timer reporting an unkillable attempt's
+            // elapsed deadline. Mark the node `timed-out` NOW — its fate is decided
+            // while its closure runs on as abandoned-but-running work whose permit
+            // stays held — and turn the mark into the ordinary attempt report the
+            // recording path below consumes. A mark that lost the race to a closure
+            // that had just returned yields `None` and is discarded.
+            let done = match &done.kind {
+                DoneKind::TimeoutFired { permit, fate } => {
+                    let Some(marked) =
+                        mark_unkillable_timeout(&done.node, permit, fate.as_ref(), admission)
+                    else {
+                        continue;
+                    };
+                    timed_out_zombies.insert(done.node.clone());
+                    marked
+                }
+                // A zombie whose fate the deadline already decided finally returned.
+                // Its report is refused: the node has its one terminal state, its
+                // records would duplicate the mark, and it was already counted out
+                // of flight. Its permit dropped as it returned, so the waiters it
+                // was blocking may now be admitted.
+                DoneKind::Attempt if timed_out_zombies.remove(&done.node) => {
+                    if !draining {
+                        drain_pending(&actx, writer, &mut pending, &mut in_flight);
+                    }
+                    continue;
+                }
+                DoneKind::Attempt => done,
+            };
 
             // A real attempt reported terminal, so the count of admitted-not-yet-
             // terminal nodes drops by one. The **paired invariant** — every
@@ -1861,21 +2151,21 @@ where
 /// that guarantees termination even if a task ignores cancellation.
 async fn recv_next(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AttemptDone>,
-    draining: bool,
-    drain_deadline: Option<tokio::time::Instant>,
+    deadline: Option<tokio::time::Instant>,
 ) -> Option<AttemptDone> {
-    if draining {
-        let deadline = drain_deadline.expect("deadline set when the drain began");
-        if tokio::time::Instant::now() >= deadline {
-            return None;
+    match deadline {
+        Some(deadline) => {
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            // `Ok(msg)` is the received message (or channel-closed `None`); `Err` is
+            // the deadline firing — both yield `None`, which the caller reads as
+            // "the bound elapsed".
+            tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .unwrap_or(None)
         }
-        // `Ok(msg)` is the received message (or channel-closed `None`); `Err` is the
-        // grace deadline firing — both stop the drain when they yield `None`.
-        tokio::time::timeout_at(deadline, rx.recv())
-            .await
-            .unwrap_or(None)
-    } else {
-        rx.recv().await
+        None => rx.recv().await,
     }
 }
 
@@ -2057,6 +2347,75 @@ fn attempt_number_of(events: &[AttemptEvent]) -> u32 {
             _ => None,
         })
         .unwrap_or(1)
+}
+
+/// Decide an **unkillable** (blocking / compute) attempt's fate at its per-attempt
+/// deadline, and hand the loop the attempt report to record.
+///
+/// This is C14's blocking/compute timeout, wired to the real run path: the attempt
+/// is *marked* `timed-out` immediately — the framework cannot stop the thread and
+/// does not pretend to — through the merged
+/// [`TimeoutDecision::mark_blocking_timed_out`](dagr_core::execution::TimeoutDecision::mark_blocking_timed_out)
+/// mechanism, which emits the `attempt-timed-out` outcome record and the `timed-out`
+/// node-terminal at the mark. Around that mark this function does exactly the three
+/// things the mark deliberately does not:
+///
+/// - **holds the permit.** The permit stays inside the still-running closure; the
+///   loop only *registers* it as a live zombie ([`AdmissionController::mark_zombie`]),
+///   so its cost stays counted (and visible in the zombie report) until the closure
+///   returns and drops it.
+/// - **bars the late result.** The [`AttemptFate`] hand-off gives the runner the
+///   decision's [`LateResultBarrier`](dagr_core::execution::LateResultBarrier), so
+///   whatever the abandoned closure computes after the mark is refused rather than
+///   filling the output slot.
+/// - **decides exactly once.** The claim is the arbiter: if the closure had already
+///   returned inside its budget, the claim fails, [`None`] is returned, and the
+///   mark's records are discarded unwritten — the attempt's own report stands.
+///
+/// The attempt number is `1`: the loop cannot see a runner's internal attempt
+/// boundaries, and a marked node is decided (no further attempt of it runs), the
+/// same "attempt 1 in the no-retry-past-abandonment model" the cancellation drain's
+/// [`abandon_leftover`] records.
+fn mark_unkillable_timeout(
+    node: &str,
+    permit: &Arc<Mutex<Option<Permit>>>,
+    fate: Option<&Arc<AttemptFate>>,
+    admission: &AdmissionController,
+) -> Option<AttemptDone> {
+    // Mint the decision into a private buffer first: if the claim below loses, the
+    // records are simply dropped and nothing reaches the stream.
+    let ctx = RunContext::builder(
+        CoreRunId::new(String::new()),
+        PipelineId::new(String::new()),
+        NodeId::from_name(node),
+    )
+    .attempt(1)
+    .max_attempts(1)
+    .build();
+    let mut sink = BufferingSink::default();
+    let decision = dagr_core::execution::TimeoutDecision::mark_blocking_timed_out(
+        node, &ctx, &mut sink,
+    );
+
+    // Exactly-once: the timer claims the node only while an attempt is live. A
+    // runner that exposes no fate cell cannot race us, so the mark stands.
+    let claimed = fate.is_none_or(|f| f.claim_timeout(decision.barrier()));
+    if !claimed {
+        return None;
+    }
+
+    // The closure runs on holding its permit: register the zombie so the cost stays
+    // counted and observable, and let the closure's own return release it.
+    // Poison policy: panic — the permit cell, as in `PermitHold::release`.
+    if let Some(held) = permit.lock().expect("permit cell not poisoned").as_ref() {
+        admission.mark_zombie(held);
+    }
+
+    Some(AttemptDone::attempt(
+        node.to_string(),
+        decision.outcome().terminal_state(),
+        sink.drain(),
+    ))
 }
 
 /// Record every attempt still in flight past the cancellation grace as
@@ -2241,16 +2600,45 @@ fn reject_over_demand(
     // Carry a `NodeTerminal` record so the failure lands in the event stream (the
     // node never ran, so no attempt records exist otherwise). The loop drains this
     // into the writer, then feeds the Failed state into the tracker to cascade.
-    let _ = tx.send(AttemptDone {
-        node: name.to_string(),
-        state: TerminalState::Failed,
-        events: vec![AttemptEvent::NodeTerminal {
+    let _ = tx.send(AttemptDone::attempt(
+        name.to_string(),
+        TerminalState::Failed,
+        vec![AttemptEvent::NodeTerminal {
             node: name.to_string(),
             state: TerminalState::Failed,
         }],
-        durable_reference: None,
-        durable_reference_meta: None,
-    });
+    ));
+}
+
+/// Fail a waiter whose capacity is **pinned by an abandoned (timed-out) closure**
+/// that did not return within the grace period — the zombie-shaped sibling of
+/// [`reject_over_demand`]'s strand guard.
+///
+/// A timed-out blocking/compute attempt holds its permit until its closure actually
+/// returns (C14), and that closure may never return. A node queued for the capacity
+/// it pins would then sit in `pending` past run end with no terminal state — a
+/// silent violation of *"every node ends in exactly one terminal state"*. It is
+/// instead failed with the honest reason and fed through the loop's normal terminal
+/// path, so it is recorded, cascaded to its dependents, and folded into the run's
+/// outcome. The caller counts it into `in_flight`.
+fn reject_zombie_pinned(
+    name: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
+    in_flight: &mut usize,
+) {
+    eprintln!(
+        "node '{name}' could not be admitted: the capacity it needs is pinned by a timed-out \
+         attempt whose closure has not returned within the grace period; failing it"
+    );
+    let _ = tx.send(AttemptDone::attempt(
+        name.to_string(),
+        TerminalState::Failed,
+        vec![AttemptEvent::NodeTerminal {
+            node: name.to_string(),
+            state: TerminalState::Failed,
+        }],
+    ));
+    *in_flight += 1;
 }
 
 /// Whether a terminal state is **failure-like** — the trigger for
@@ -2291,16 +2679,14 @@ fn cancel_node(
     tx: &tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     in_flight: &mut usize,
 ) {
-    let _ = tx.send(AttemptDone {
-        node: name.to_string(),
-        state: TerminalState::Cancelled,
-        events: vec![AttemptEvent::NodeTerminal {
+    let _ = tx.send(AttemptDone::attempt(
+        name.to_string(),
+        TerminalState::Cancelled,
+        vec![AttemptEvent::NodeTerminal {
             node: name.to_string(),
             state: TerminalState::Cancelled,
         }],
-        durable_reference: None,
-        durable_reference_meta: None,
-    });
+    ));
     *in_flight += 1;
 }
 
@@ -2416,13 +2802,11 @@ where
         // rather than hang the run. Report it as a permanent failure terminal. The
         // permit drops here, releasing its cost (the attempt never ran).
         drop(permit);
-        let _ = actx.tx.send(AttemptDone {
-            node: name.to_string(),
-            state: TerminalState::Failed,
-            events: Vec::new(),
-            durable_reference: None,
-            durable_reference_meta: None,
-        });
+        let _ = actx.tx.send(AttemptDone::attempt(
+            name.to_string(),
+            TerminalState::Failed,
+            Vec::new(),
+        ));
         return;
     };
 
@@ -2434,6 +2818,49 @@ where
         .lock()
         .expect("live set not poisoned")
         .insert(name.to_string());
+
+    // --- Arm the per-attempt deadline for UNKILLABLE work -------------------
+    //
+    // An await-bound attempt arms its own deadline (its future can truly be
+    // dropped, which is the cancellation). A blocking or compute closure cannot be
+    // killed and, worse, cannot even be *polled* while it runs — so its deadline is
+    // armed here, on the **isolated framework runtime**, which is exactly the
+    // isolation C13 promises: a task that jams every task/blocking/compute worker
+    // still cannot delay the timer. Nothing is armed for a node whose policy
+    // declares no timeout, so an ordinary run spawns no timer and is byte-identical.
+    let timeout = actx
+        .pipeline
+        .node(node_id)
+        .and_then(|n| n.policy().timeout_budget())
+        .filter(|_| matches!(class, ExecutionClass::Blocking | ExecutionClass::Compute));
+    let permit = match timeout {
+        Some(budget) => {
+            // The permit moves into a cell the closure owns and the loop can read:
+            // at the deadline the loop registers the still-counted cost as a live
+            // zombie without releasing it (the closure releases it on its return).
+            let cell = Arc::new(Mutex::new(Some(permit)));
+            let fate = runner.timeout_fate();
+            let timer_tx = actx.tx.clone();
+            let timer_cell = Arc::clone(&cell);
+            let timer_node = name.to_string();
+            actx.framework.spawn(async move {
+                tokio::time::sleep(budget).await;
+                let _ = timer_tx.send(AttemptDone {
+                    node: timer_node,
+                    state: TerminalState::TimedOut,
+                    events: Vec::new(),
+                    durable_reference: None,
+                    durable_reference_meta: None,
+                    kind: DoneKind::TimeoutFired {
+                        permit: timer_cell,
+                        fate,
+                    },
+                });
+            });
+            PermitHold::Shared(cell)
+        }
+        None => PermitHold::Owned(permit),
+    };
 
     // The per-attempt **child** cancellation signal: each attempt observes its own
     // child of the run-scoped token, so a run cancel reaches every live attempt at
@@ -2507,9 +2934,10 @@ where
         // memory + thread cost returns to the pools) BEFORE reporting done, so the
         // loop sees freed capacity when it re-offers the pending waiters. An
         // await-bound cancellation would drop the permit with the future instead;
-        // a blocking/compute-timeout zombie keeps it until its closure returns. The
-        // permit drops on whichever surface ran the attempt.
-        drop(permit);
+        // a blocking/compute-timeout zombie keeps it until its closure returns —
+        // which is *this* release, reached only when the abandoned closure finally
+        // returns. The permit drops on whichever surface ran the attempt.
+        permit.release();
         (
             name_owned,
             state,
@@ -2531,6 +2959,7 @@ where
                 events,
                 durable_reference,
                 durable_reference_meta,
+                kind: DoneKind::Attempt,
             });
         },
     );
@@ -2776,13 +3205,7 @@ fn run_teardown_phase<S, C>(
         // is suppressed in favour of the authoritative `abandoned` terminal.
         let deadline_hit = state == TerminalState::Abandoned
             && !sink_reported_terminal(&sink, TerminalState::Abandoned);
-        let done = AttemptDone {
-            node: name.clone(),
-            state,
-            events: sink.drain(),
-            durable_reference: None,
-            durable_reference_meta: None,
-        };
+        let done = AttemptDone::attempt(name.clone(), state, sink.drain());
         record_teardown_outcome(&done, deadline_hit, writer, terminal_states);
     }
 }

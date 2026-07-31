@@ -583,7 +583,9 @@ fn blocking_timeout_marks_immediately_and_holds_the_permit_until_return() {
                 "t102",
                 &RunConfig::new(temp.as_str())
                     .capacities(PoolCapacities::new().memory(4096))
-                    .grace(Duration::from_millis(50)),
+                    // The zombie returns well inside this bound, so the waiter it
+                    // blocks is admitted the moment its permit is released.
+                    .grace(spin * 2),
                 sink.clone(),
                 SystemClock::new(),
             )
