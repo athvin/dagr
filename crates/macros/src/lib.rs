@@ -626,3 +626,324 @@ fn expand_stable_name(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStre
         }
     })
 }
+
+/// Derive the payload **codec** for a struct or enum — the build-time half of
+/// `dagr_core::payload::Payload`.
+///
+/// It emits `impl dagr_core::payload::Codec`: encode every field in declaration
+/// order, decode them back in the same order. `Payload` itself is
+/// blanket-implemented for every `Codec` that also carries a `StableName`, so a
+/// payload type derives **both** — `#[derive(StableName, Payload)]`. The envelope
+/// (the format version and the author-declared stable name that make a decode into
+/// the wrong type a classified error) is written by that blanket impl, never by this
+/// derive, so no type can quietly write a different one.
+///
+/// # What it accepts
+///
+/// - **Structs** — unit, tuple, and named — over field types that are themselves
+///   `Codec`. Fields encode in declaration order and nothing else is written.
+/// - **Enums**, with any mix of data-free, tuple, and struct variants. A variant is
+///   identified by its **declaration index** as a little-endian `u32`, followed by
+///   its fields; an index outside the declared set is a classified decode error
+///   naming the type.
+/// - **Generics** — each type parameter gains a `Codec` bound in the generated
+///   `where` clause (the type's own bounds and `where` clause are reproduced).
+///
+/// # What it rejects, and where the error points
+///
+/// - A **union** has no discoverable active field, so there is nothing to encode:
+///   rejected with a spanned `compile_error!` rather than a subtly wrong impl.
+/// - A type with a **lifetime parameter** cannot be decoded at all — decoding
+///   produces an owned value from bytes the decoder does not keep — so it is
+///   rejected at the offending lifetime, with the fix named.
+/// - A **field whose type has no codec** is deliberately *not* rejected here: the
+///   generated code carries that field's own span, so the unsatisfied bound points
+///   at the field, and `Codec`'s `#[diagnostic::on_unimplemented]` note names the
+///   fix. A hand-rolled check would only duplicate it, worse.
+///
+/// (These `dagr_core` paths are plain code, not intra-doc links: this build-time
+/// proc-macro crate does not depend on `dagr_core`, so its rustdoc cannot resolve
+/// links into it.)
+#[proc_macro_derive(Payload)]
+pub fn payload(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    expand_payload(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Emit the `Codec` impl for `input`, or the spanned rejection for a shape the
+/// derive deliberately does not handle.
+fn expand_payload(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    // A decoded value is OWNED: it is built out of a byte slice the decoder does not
+    // retain, so a borrowing type can never be decoded. Say so at the lifetime.
+    if let Some(lifetime) = input.generics.lifetimes().next() {
+        return Err(syn::Error::new(
+            lifetime.lifetime.span(),
+            "#[derive(Payload)] cannot encode a borrowing type: decoding produces an OWNED \
+             value out of bytes the decoder does not keep, so a lifetime parameter has \
+             nothing to borrow from — hold owned data on a payload type (`String` rather \
+             than `&str`, `Vec<T>` rather than `&[T]`)",
+        ));
+    }
+
+    let ident = &input.ident;
+    let type_name = ident.to_string();
+    let (encode, decode) = match &input.data {
+        syn::Data::Struct(data) => (
+            encode_fields(&data.fields, FieldOwner::SelfValue),
+            decode_struct(&type_name, &data.fields),
+        ),
+        syn::Data::Enum(data) => {
+            let discriminants = variant_discriminants(&type_name, data)?;
+            (
+                encode_enum(data, &discriminants),
+                decode_enum(&type_name, data, &discriminants),
+            )
+        }
+        syn::Data::Union(_) => {
+            return Err(syn::Error::new(
+                ident.span(),
+                "#[derive(Payload)] supports structs and enums only: a union has no \
+                 discoverable active field, so there is nothing to encode and nothing to \
+                 decode into — model the alternatives as an enum, which the derive encodes \
+                 by variant",
+            ));
+        }
+    };
+
+    // Every type parameter must itself carry a codec; the type's own bounds and
+    // `where` clause are reproduced unchanged around that addition.
+    let mut generics = input.generics.clone();
+    for param in &mut generics.params {
+        if let syn::GenericParam::Type(ty) = param {
+            ty.bounds
+                .push(syn::parse_quote!(::dagr_core::payload::Codec));
+        }
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::dagr_core::payload::Codec
+            for #ident #ty_generics #where_clause
+        {
+            fn encode_body(&self, out: &mut ::std::vec::Vec<u8>) {
+                #encode
+            }
+
+            fn decode_body(
+                cursor: &mut ::dagr_core::payload::Cursor<'_>,
+            ) -> ::core::result::Result<Self, ::dagr_core::payload::CodecError> {
+                #decode
+            }
+        }
+    })
+}
+
+/// How the generated encoder reaches a field: through `self` (a struct) or through a
+/// binding introduced by a variant pattern (an enum, destructured first).
+#[derive(Clone, Copy)]
+enum FieldOwner {
+    /// `self.name` / `self.0`.
+    SelfValue,
+    /// A pattern binding — already a reference under match ergonomics.
+    Binding,
+}
+
+/// The identifier a tuple position binds to in a variant pattern or a decode `let`.
+fn positional_binding(index: usize) -> syn::Ident {
+    format_ident!("__field_{index}")
+}
+
+/// The field's name **for diagnostics**: its identifier, or its index for a tuple
+/// field.
+fn field_label(index: usize, field: &syn::Field) -> String {
+    field
+        .ident
+        .as_ref()
+        .map_or_else(|| index.to_string(), ToString::to_string)
+}
+
+/// The `u32` discriminant of each variant — its **declaration index**, validated to
+/// fit. (An enum with more variants than a `u32` can identify is not a shape the
+/// derive can encode; it is rejected here rather than wrapping silently.)
+fn variant_discriminants(type_name: &str, data: &syn::DataEnum) -> syn::Result<Vec<u32>> {
+    (0..data.variants.len())
+        .map(|index| {
+            u32::try_from(index).map_err(|_| {
+                syn::Error::new(
+                    data.variants.span(),
+                    format!(
+                        "#[derive(Payload)] cannot encode `{type_name}`: it declares more \
+                         variants than a 32-bit discriminant can identify"
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Emit the encode side for a field list: every field's body, in declaration order,
+/// and nothing else.
+///
+/// Each generated call carries the **field's own span**, so an unsatisfied `Codec`
+/// bound points at the offending field rather than at the derive.
+fn encode_fields(fields: &syn::Fields, owner: FieldOwner) -> proc_macro2::TokenStream {
+    let writes = fields.iter().enumerate().map(|(index, field)| {
+        let span = field.ty.span();
+        // Each arm yields an expression of type `&FieldType`: `self.x` needs the
+        // borrow, a pattern binding already is one.
+        let reference = match (owner, field.ident.as_ref()) {
+            (FieldOwner::SelfValue, Some(name)) => quote!(&self.#name),
+            (FieldOwner::SelfValue, None) => {
+                let index = syn::Index::from(index);
+                quote!(&self.#index)
+            }
+            (FieldOwner::Binding, Some(name)) => quote!(#name),
+            (FieldOwner::Binding, None) => {
+                let binding = positional_binding(index);
+                quote!(#binding)
+            }
+        };
+        quote::quote_spanned! {span=>
+            ::dagr_core::payload::Codec::encode_body(#reference, out);
+        }
+    });
+    quote!(#(#writes)*)
+}
+
+/// Emit one `let` per field, decoding it in declaration order and wrapping any
+/// failure in `CodecError::in_field` with the type and field names — so a nested
+/// refusal names its path without losing its cause.
+fn field_reads(type_name: &str, fields: &syn::Fields) -> proc_macro2::TokenStream {
+    let reads = fields.iter().enumerate().map(|(index, field)| {
+        let span = field.ty.span();
+        let binding = field
+            .ident
+            .clone()
+            .unwrap_or_else(|| positional_binding(index));
+        let label = field_label(index, field);
+        let ty = &field.ty;
+        quote::quote_spanned! {span=>
+            let #binding = <#ty as ::dagr_core::payload::Codec>::decode_body(cursor)
+                .map_err(|e| ::dagr_core::payload::CodecError::in_field(#type_name, #label, e))?;
+        }
+    });
+    quote!(#(#reads)*)
+}
+
+/// Build the value out of the bindings [`field_reads`] introduced, matching the
+/// shape (unit / tuple / named).
+fn construct_from_reads(
+    path: &proc_macro2::TokenStream,
+    fields: &syn::Fields,
+) -> proc_macro2::TokenStream {
+    match fields {
+        syn::Fields::Unit => quote!(#path),
+        syn::Fields::Unnamed(unnamed) => {
+            let bindings = (0..unnamed.unnamed.len()).map(positional_binding);
+            quote!(#path(#(#bindings),*))
+        }
+        syn::Fields::Named(named) => {
+            let bindings = named
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().expect("a named field has an identifier"));
+            quote!(#path { #(#bindings),* })
+        }
+    }
+}
+
+/// The decode side for a struct: its fields in declaration order, then the value.
+fn decode_struct(type_name: &str, fields: &syn::Fields) -> proc_macro2::TokenStream {
+    let reads = field_reads(type_name, fields);
+    let construct = construct_from_reads(&quote!(Self), fields);
+    quote! {
+        #reads
+        ::core::result::Result::Ok(#construct)
+    }
+}
+
+/// The pattern that destructures a variant's fields into the bindings the encoder
+/// then writes.
+fn variant_pattern(fields: &syn::Fields) -> proc_macro2::TokenStream {
+    match fields {
+        syn::Fields::Unit => quote!(),
+        syn::Fields::Unnamed(unnamed) => {
+            let bindings = (0..unnamed.unnamed.len()).map(positional_binding);
+            quote!((#(#bindings),*))
+        }
+        syn::Fields::Named(named) => {
+            let bindings = named
+                .named
+                .iter()
+                .map(|f| f.ident.as_ref().expect("a named field has an identifier"));
+            quote!({ #(#bindings),* })
+        }
+    }
+}
+
+/// The encode side for an enum: the variant's declaration index as a little-endian
+/// `u32`, then its fields.
+fn encode_enum(data: &syn::DataEnum, discriminants: &[u32]) -> proc_macro2::TokenStream {
+    let arms = data
+        .variants
+        .iter()
+        .zip(discriminants)
+        .map(|(variant, discriminant)| {
+            let name = &variant.ident;
+            let pattern = variant_pattern(&variant.fields);
+            let writes = encode_fields(&variant.fields, FieldOwner::Binding);
+            quote! {
+                Self::#name #pattern => {
+                    ::dagr_core::payload::Codec::encode_body(&#discriminant, out);
+                    #writes
+                }
+            }
+        });
+    quote! {
+        match self {
+            #(#arms)*
+        }
+    }
+}
+
+/// The decode side for an enum: read the discriminant, then that variant's fields.
+/// An index outside the declared set is a classified malformed-bytes error naming
+/// the type — never a silently-chosen variant.
+fn decode_enum(
+    type_name: &str,
+    data: &syn::DataEnum,
+    discriminants: &[u32],
+) -> proc_macro2::TokenStream {
+    let arms = data
+        .variants
+        .iter()
+        .zip(discriminants)
+        .map(|(variant, discriminant)| {
+            let name = &variant.ident;
+            let reads = field_reads(type_name, &variant.fields);
+            let construct = construct_from_reads(&quote!(Self::#name), &variant.fields);
+            quote! {
+                #discriminant => {
+                    #reads
+                    ::core::result::Result::Ok(#construct)
+                }
+            }
+        });
+    quote! {
+        let __variant = <u32 as ::dagr_core::payload::Codec>::decode_body(cursor)
+            .map_err(|e| {
+                ::dagr_core::payload::CodecError::in_field(#type_name, "<variant>", e)
+            })?;
+        match __variant {
+            #(#arms)*
+            other => ::core::result::Result::Err(
+                ::dagr_core::payload::CodecError::malformed(
+                    #type_name,
+                    ::std::format!("unknown variant index {other}"),
+                ),
+            ),
+        }
+    }
+}

@@ -481,6 +481,22 @@ fn run_selected_flow<W: Write>(
     let flow = factory();
     let base = store_base(argv);
 
+    // The local codec check (`--dagr.force-roundtrip` / `DAGR_FORCE_ROUNDTRIP`,
+    // default off). The factory built the flow without ever seeing this invocation,
+    // so the answer is applied here — the toggle cell is shared with the nodes
+    // already registered. Off, nothing about the run changes.
+    let force_roundtrip = match crate::config::parse_force_roundtrip_flag(argv)
+        .and_then(|flag| crate::config::resolve_force_roundtrip(flag).map_err(|e| e.to_string()))
+    {
+        Ok(on) => on,
+        Err(detail) => {
+            // A bad toggle value is invalid usage, never a silent "off".
+            let _ = writeln!(out, "dagr run {name}: {detail}");
+            return ExitCode::InvalidUsage;
+        }
+    };
+    let flow = flow.force_roundtrip(force_roundtrip);
+
     // The run-store event-stream path is `<base>/<pipeline>/<run-id>/events.jsonl`;
     // the run mints its own id, so the id segment is unknown until the run resolves
     // it. The driver opens the stream through the injected sink, which writes under

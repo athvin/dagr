@@ -1,0 +1,5 @@
+error: #[derive(Payload)] supports structs and enums only: a union has no discoverable active field, so there is nothing to encode and nothing to decode into — model the alternatives as an enum, which the derive encodes by variant
+ --> tests/expand/fail/payload_union.rs:9:7
+  |
+9 | union Overlapping {
+  |       ^^^^^^^^^^^

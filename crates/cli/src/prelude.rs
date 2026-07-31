@@ -48,9 +48,16 @@ pub use dagr_macros::dag;
 /// coexists with the `StableName` *trait* re-exported below (type namespace) — the
 /// standard trait+derive pairing. A proc-macro is never linked into the shipped
 /// binary, so this adds no runtime dependency.
-pub use dagr_macros::{StableName, task};
+pub use dagr_macros::{Payload, StableName, task};
 
 pub use dagr_core::TaskError;
 pub use dagr_core::context::RunContext;
+/// The **payload codec**: the [`Payload`] trait (a value that can cross a process
+/// boundary as bytes) and its classified [`CodecError`], alongside the
+/// `#[derive(Payload)]` derive re-exported above — the standard trait+derive pairing,
+/// so one authoring import declares a payload type and encodes it. [`Codec`] is the
+/// body half a derived impl provides; an author names it only when hand-writing a
+/// codec.
+pub use dagr_core::payload::{Codec, CodecError, Payload};
 pub use dagr_core::stable_name::{StableInputNames, StableName};
 pub use dagr_core::task::Task;

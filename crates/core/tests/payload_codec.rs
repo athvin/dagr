@@ -109,7 +109,10 @@ fn encoded<T: Payload>(value: &T) -> Vec<u8> {
 /// Every derived shape encodes and decodes back to an equal value.
 #[test]
 fn every_derived_shape_round_trips() {
-    assert_eq!(Marker::decode(&encoded(&Marker)).expect("unit struct"), Marker);
+    assert_eq!(
+        Marker::decode(&encoded(&Marker)).expect("unit struct"),
+        Marker
+    );
 
     let pair = Pair(42, "answer".to_string());
     assert_eq!(Pair::decode(&encoded(&pair)).expect("tuple struct"), pair);
@@ -119,7 +122,10 @@ fn every_derived_shape_round_trips() {
         label: "everything".to_string(),
         flag: false,
     };
-    assert_eq!(Named::decode(&encoded(&named)).expect("named struct"), named);
+    assert_eq!(
+        Named::decode(&encoded(&named)).expect("named struct"),
+        named
+    );
 
     for variant in [
         Shape::Empty,

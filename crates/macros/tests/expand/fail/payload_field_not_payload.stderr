@@ -1,0 +1,48 @@
+error[E0277]: `NotAPayload` has no payload codec
+  --> tests/expand/fail/payload_field_not_payload.rs:14:22
+   |
+14 | #[derive(StableName, Payload)]
+   |                      ^^^^^^^ this type cannot be encoded
+...
+17 |     opaque: NotAPayload,
+   |             ----------- required by a bound introduced by this call
+   |
+help: the trait `Codec` is not implemented for `NotAPayload`
+  --> tests/expand/fail/payload_field_not_payload.rs:10:1
+   |
+10 | struct NotAPayload {
+   | ^^^^^^^^^^^^^^^^^^
+   = note: add `#[derive(Payload)]` to `NotAPayload` (alongside `#[derive(StableName)]` if it is a payload type in its own right), or use a type that already has a codec: the integers, `bool`, `String`, `Option`, `Vec`, `BTreeMap`, tuples, and `()`
+   = help: the following other types implement trait `Codec`:
+             ()
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+             (T0, T1, T2, T3, T4, T5)
+             (T0, T1, T2, T3, T4, T5, T6)
+             (T0, T1, T2, T3, T4, T5, T6, T7)
+           and $N others
+
+error[E0277]: `NotAPayload` has no payload codec
+  --> tests/expand/fail/payload_field_not_payload.rs:17:13
+   |
+17 |     opaque: NotAPayload,
+   |             ^^^^^^^^^^^ this type cannot be encoded
+   |
+help: the trait `Codec` is not implemented for `NotAPayload`
+  --> tests/expand/fail/payload_field_not_payload.rs:10:1
+   |
+10 | struct NotAPayload {
+   | ^^^^^^^^^^^^^^^^^^
+   = note: add `#[derive(Payload)]` to `NotAPayload` (alongside `#[derive(StableName)]` if it is a payload type in its own right), or use a type that already has a codec: the integers, `bool`, `String`, `Option`, `Vec`, `BTreeMap`, tuples, and `()`
+   = help: the following other types implement trait `Codec`:
+             ()
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+             (T0, T1, T2, T3, T4, T5)
+             (T0, T1, T2, T3, T4, T5, T6)
+             (T0, T1, T2, T3, T4, T5, T6, T7)
+           and $N others

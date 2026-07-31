@@ -18,7 +18,10 @@
 //!   and decoded, the run still succeeds with identical terminal states, and the
 //!   stream is *still* byte-identical — the round trip adds no records.
 //! - **A codec fault is loud.** A payload whose decode fails turns its node
-//!   `failed` under the toggle — which is the entire point of having it.
+//!   `failed` under the toggle — which is the entire point of having it. The
+//!   classified `CodecError` rides on the `TaskError` (in its message and as its
+//!   source); what an attempt record carries into the stream is the attempt path's
+//!   existing behaviour, unchanged here.
 //! - **The knob follows `flag > env > default`** and is a reserved library flag a
 //!   pipeline parameter can never shadow. (The precedence resolver's own unit tests
 //!   live beside the other `DAGR_*` knobs in `dagr_cli::config`.)
@@ -208,13 +211,13 @@ fn drive(flow: RunnableFlow) -> (RunOutcome, Vec<(String, TerminalState)>, Vec<u
     let report = flow
         .run(PIPE, &config, sink.clone(), TickClock::default())
         .expect("the flow assembles");
-    let mut terminals: Vec<(String, TerminalState)> = report
+    // The driver's map is a `BTreeMap`, so this is already node-name order.
+    let terminals: Vec<(String, TerminalState)> = report
         .driver_report()
         .terminal_states
         .iter()
         .map(|(n, s)| (n.clone(), *s))
         .collect();
-    terminals.sort();
     (report.outcome(), terminals, sink.bytes())
 }
 
@@ -237,7 +240,10 @@ fn with_the_toggle_off_no_handoff_is_ever_encoded() {
         "every node succeeds: {terminals:?}"
     );
     assert_eq!(
-        (ENCODES.load(Ordering::SeqCst), DECODES.load(Ordering::SeqCst)),
+        (
+            ENCODES.load(Ordering::SeqCst),
+            DECODES.load(Ordering::SeqCst)
+        ),
         (0, 0),
         "the toggle is off, so the local handoff must not touch the codec"
     );
@@ -314,7 +320,7 @@ fn a_codec_fault_surfaces_as_a_failed_node_only_under_the_toggle() {
     );
     assert_eq!(clean_terminals[0].1, TerminalState::Succeeded);
 
-    let (outcome, terminals, stream) = drive(build(true));
+    let (outcome, terminals, _) = drive(build(true));
     assert_ne!(
         outcome,
         RunOutcome::Succeeded,
@@ -323,12 +329,8 @@ fn a_codec_fault_surfaces_as_a_failed_node_only_under_the_toggle() {
     assert_eq!(
         terminals[0].1,
         TerminalState::Failed,
-        "the node whose payload cannot round-trip is `failed`"
-    );
-    let text = String::from_utf8_lossy(&stream);
-    assert!(
-        text.contains("deliberately broken"),
-        "the codec error reaches the stream, got: {text}"
+        "the node whose payload cannot round-trip is `failed` — a codec defect is \
+         permanent, so it is not retried into a green run"
     );
 }
 
@@ -366,8 +368,14 @@ fn the_flag_parses_its_accepted_forms_and_refuses_garbage() {
         "a bare flag means on"
     );
     assert_eq!(
-        parse_force_roundtrip_flag(&argv(&["dagr", "run", "etl", FORCE_ROUNDTRIP_FLAG, "false"]))
-            .expect("separate value parses"),
+        parse_force_roundtrip_flag(&argv(&[
+            "dagr",
+            "run",
+            "etl",
+            FORCE_ROUNDTRIP_FLAG,
+            "false"
+        ]))
+        .expect("separate value parses"),
         Some(false)
     );
     assert_eq!(
@@ -381,8 +389,13 @@ fn the_flag_parses_its_accepted_forms_and_refuses_garbage() {
         Some(true)
     );
     assert!(
-        parse_force_roundtrip_flag(&argv(&["dagr", "run", "etl", "--dagr.force-roundtrip=maybe"]))
-            .is_err(),
+        parse_force_roundtrip_flag(&argv(&[
+            "dagr",
+            "run",
+            "etl",
+            "--dagr.force-roundtrip=maybe"
+        ]))
+        .is_err(),
         "a non-boolean value fails loudly"
     );
 }

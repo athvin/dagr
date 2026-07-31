@@ -84,6 +84,14 @@ pub const DAGR_HEADROOM: &str = "DAGR_HEADROOM";
 /// wiring itself is behind the default-off `metastore` cargo feature.
 pub const DAGR_METASTORE: &str = "DAGR_METASTORE";
 
+/// Environment fallback for `--dagr.force-roundtrip` (the M10 local codec check,
+/// T103). A truthy value makes every `Payload`-bounded handoff on the **local**
+/// executor encode and decode, so a codec bug is catchable without a cluster; the
+/// **default is off**, which leaves the in-memory fast path untouched (no encode
+/// call at all). Resolved by the standard `flag > env > default` precedence
+/// ([`resolve_force_roundtrip`]).
+pub const DAGR_FORCE_ROUNDTRIP: &str = "DAGR_FORCE_ROUNDTRIP";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -624,6 +632,73 @@ impl std::error::Error for BoolParseError {}
 pub fn resolve_metastore_toggle(flag: Option<bool>) -> Result<bool, EnvParseError> {
     let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_METASTORE, EnvBool(false))?;
     Ok(resolved.into_inner())
+}
+
+// ===========================================================================
+// The local codec check — DAGR_FORCE_ROUNDTRIP / --dagr.force-roundtrip
+// ===========================================================================
+
+/// The library-owned flag that forces the local codec round trip
+/// (`--dagr.force-roundtrip`). Reserved in [`reserved_flag_names`](crate::contract::reserved_flag_names),
+/// so a pipeline parameter can never shadow it.
+pub const FORCE_ROUNDTRIP_FLAG: &str = "--dagr.force-roundtrip";
+
+/// Resolve the **force-round-trip toggle** by `flag > env > default` (default
+/// **off**): a present `--dagr.force-roundtrip` flag wins outright (the env is never
+/// read); with no flag, [`DAGR_FORCE_ROUNDTRIP`] is read and parsed as a boolean;
+/// with neither, the toggle is off. A bad env value fails loudly (never silently
+/// treated as off).
+///
+/// On, every `Payload`-bounded handoff the run-a-Flow path drives encodes and decodes
+/// locally, so a codec defect surfaces as a failed node here rather than in a cluster.
+/// Off — the default — nothing is encoded and the in-memory fast path is exactly what
+/// it was.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_FORCE_ROUNDTRIP`] when its value is not a
+/// recognized boolean token.
+pub fn resolve_force_roundtrip(flag: Option<bool>) -> Result<bool, EnvParseError> {
+    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_FORCE_ROUNDTRIP, EnvBool(false))?;
+    Ok(resolved.into_inner())
+}
+
+/// Parse the `--dagr.force-roundtrip` flag out of a raw invocation.
+///
+/// Absent → [`None`] (fall through to the env/default); a **bare**
+/// `--dagr.force-roundtrip` → `Some(true)`; `--dagr.force-roundtrip=<bool>` or
+/// `--dagr.force-roundtrip <bool>` → the parsed boolean. This mirrors the
+/// `--dagr.metastore` toggle's grammar exactly, so the two library toggles read the
+/// same way.
+///
+/// # Errors
+/// Returns the diagnostic message when a `=<value>` form carries something that is
+/// not a boolean token — a bad toggle value fails loudly, never silently off. (A
+/// *separate* value that does not parse is treated as a different argument, so
+/// `--dagr.force-roundtrip run` is the bare form followed by a verb.)
+pub fn parse_force_roundtrip_flag(argv: &[std::ffi::OsString]) -> Result<Option<bool>, String> {
+    let eq_prefix = format!("{FORCE_ROUNDTRIP_FLAG}=");
+    let mut it = argv.iter().peekable();
+    while let Some(arg) = it.next() {
+        let Some(s) = arg.to_str() else { continue };
+        if s == FORCE_ROUNDTRIP_FLAG {
+            // A following value that parses as a bool belongs to the flag; anything
+            // else means the bare flag ("on") followed by an unrelated argument.
+            if let Some(next) = it.peek().and_then(|a| a.to_str())
+                && let Ok(parsed) = next.parse::<EnvBool>()
+            {
+                return Ok(Some(parsed.into_inner()));
+            }
+            return Ok(Some(true));
+        }
+        if let Some(value) = s.strip_prefix(&eq_prefix) {
+            return value
+                .parse::<EnvBool>()
+                .map(|b| Some(b.into_inner()))
+                .map_err(|e| format!("`{FORCE_ROUNDTRIP_FLAG}={value}` {e}"));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
