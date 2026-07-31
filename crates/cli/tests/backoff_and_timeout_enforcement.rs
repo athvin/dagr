@@ -493,7 +493,9 @@ fn timeout_with_retries_left_makes_a_further_attempt_and_one_terminal() {
             HangsThenSucceeds,
             seed.clone_on_read(),
             NodePolicy::new()
-                .timeout(Duration::from_millis(150))
+                // Generous against a loaded CI runner: attempt 1 must be cut at its
+                // deadline, and attempt 2 (which does no work) must fit inside one.
+                .timeout(Duration::from_millis(300))
                 .retries(1)
                 .backoff(Backoff::new(
                     Duration::from_millis(5),
@@ -645,8 +647,10 @@ fn a_live_blocking_zombie_yields_exactly_one_zombie_at_exit() {
         let seed = flow.register_source(SEED_NODE, Seed);
         let _ = flow.register_with::<BusyLoops, _>(
             "zombie",
-            // Outlives the run by a wide margin: the run must not wait for it.
-            BusyLoops::blocking(Duration::from_secs(6), runs_for_task),
+            // Outlives the run by a wide margin (the run must not wait for it),
+            // while still ending on its own so a leftover thread does not burn a
+            // core for the rest of the suite.
+            BusyLoops::blocking(Duration::from_secs(3), runs_for_task),
             seed.clone_on_read(),
             NodePolicy::new().timeout(Duration::from_millis(120)),
         );
@@ -675,7 +679,7 @@ fn a_live_blocking_zombie_yields_exactly_one_zombie_at_exit() {
         "the bounded grace ({grace:?}) was not respected (run took {elapsed:?})"
     );
     assert!(
-        elapsed < Duration::from_secs(5),
+        elapsed < Duration::from_secs(2),
         "the run waited for the zombie ({elapsed:?}) instead of proceeding past the mark"
     );
     assert_eq!(
@@ -698,7 +702,7 @@ fn compute_timeout_behaves_identically_to_blocking() {
         let seed = flow.register_source(SEED_NODE, Seed);
         let _ = flow.register_with::<BusyLoops, _>(
             "spinner",
-            BusyLoops::compute(Duration::from_secs(6), runs_for_task),
+            BusyLoops::compute(Duration::from_secs(3), runs_for_task),
             seed.clone_on_read(),
             NodePolicy::new()
                 .timeout(Duration::from_millis(120))

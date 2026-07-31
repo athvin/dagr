@@ -43,6 +43,24 @@
 //! [`drive`] loop, so the `scratch_root` wiring and the
 //! resume seam apply to them unchanged: a single-attempt node reaches its real
 //! per-node durable scratch namespace through the driver's per-attempt context.
+//!
+//! # The policies this path enforces
+//!
+//! A node's [`NodePolicy`] is not merely recorded here — its **retry backoff** and
+//! its **per-attempt timeout** are enforced on every run this seam drives:
+//!
+//! - the retry loop's computed backoff is really waited, through the injected
+//!   [`AttemptTimer`] (production [`SystemTimer`]), so the `BackoffStarted` delay in
+//!   the event stream is a claim about *elapsed* time;
+//! - the declared timeout is armed per attempt, by class: **await-bound** work is
+//!   raced against its deadline and the losing future is dropped (true cancellation,
+//!   permit released at the mark), while **blocking / compute** work — which cannot
+//!   be stopped, or even polled, while it runs — is marked `timed-out` by the
+//!   driver's isolated timer, its permit held until its closure returns and its late
+//!   result refused (see [`AttemptFate`]).
+//!
+//! A node that declares neither policy is unaffected: nothing is armed, no timer is
+//! spawned, and its event stream is what it was.
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
