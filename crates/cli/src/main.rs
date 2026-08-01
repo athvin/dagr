@@ -117,7 +117,7 @@ fn routes_through_registry(argv: &[std::ffi::OsString]) -> bool {
     let leading = argv.get(1).map(std::ffi::OsString::as_os_str);
     matches!(
         leading.and_then(std::ffi::OsStr::to_str),
-        Some("list" | "run" | "graph" | "validate" | "single-node" | "prune")
+        Some("list" | "run" | "graph" | "validate" | "single-node" | "exec-node" | "prune")
     )
 }
 
@@ -147,7 +147,12 @@ fn dispatch(verb: Verb) -> ExitCode {
         Verb::Resume => resume_verb_stub(&mut stdout),
         // Every flow-selecting verb routes through the registry in `main` and never
         // reaches here (recognized by [`routes_through_registry`]).
-        Verb::Run | Verb::Graph | Verb::Validate | Verb::SingleNode | Verb::Prune => {
+        Verb::Run
+        | Verb::Graph
+        | Verb::Validate
+        | Verb::SingleNode
+        | Verb::ExecNode
+        | Verb::Prune => {
             unreachable!("flow-selecting verbs route through the registry in main")
         }
     }

@@ -29,6 +29,17 @@ pub mod config;
 pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;
+/// The pod-side **`exec-node`** verb (M10, T106, ADR 115 §3): one attempt of one
+/// node, rehydrated from durable references and reported through an attempt shard.
+/// Gated behind the default-off `blob` feature, because the references it reads and
+/// the shard it writes both live in the blob store the feature provides.
+#[cfg(feature = "blob")]
+pub mod exec_node;
+/// The reference pipeline the `exec-node` suite drives as a subprocess (T106). Gated
+/// behind `test-kit` *and* `blob`: it ships in no released binary and exists to prove
+/// the pod-side verb end to end without a cluster.
+#[cfg(all(feature = "test-kit", feature = "blob"))]
+pub mod exec_node_demo;
 pub mod executor;
 pub mod flow_builder;
 #[cfg(feature = "test-kit")]
@@ -56,6 +67,11 @@ pub mod registry;
 pub mod run;
 pub mod run_flow;
 pub mod run_store;
+/// The **attempt shard** (M10, T106, ADR 115 §3): one attempt's slice of the event
+/// stream plus the outcome an orchestrator stamps from it. Gated behind the
+/// default-off `blob` feature — the shard's address is a blob-container path.
+#[cfg(feature = "blob")]
+pub mod shard;
 pub mod scale_bench;
 pub mod signals;
 pub mod structure_snapshot;
