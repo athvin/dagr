@@ -329,3 +329,37 @@ that is not this build's; `7` a shard that could not be written. The pair that m
 is `4` versus `1` — "the storage lost the input" versus "the task said no" — because
 only one of them is the pipeline's fault. A panic and a task failure share `1` and are
 distinguished in the shard, where the panic's payload is recorded and attributed.
+
+### 13. What does the demo pipeline do to T78's byte-exact `trybuild` snapshots? → **It moves them, so the harness now pins the default feature resolution only.**
+
+Found by the `feature-matrix` CI job, which is the only leg that runs `cargo test
+--workspace --all-features`. `crates/cli/tests/flow_builder_compile_fail.rs` matches
+`.stderr` byte-exactly, and one sample's diagnostic
+(`fail/source_without_stable_name.rs`) reproduces rustc's "the following other types
+implement trait `StableName`" list. That list is the set of `StableName` impls
+reachable from `dagr_cli` — a function of the crate's **feature resolution**, not of
+the boundary being pinned. rustc prints it in full up to nine candidates and truncates
+to eight plus "and N others" past that, and the default resolution sits at exactly
+nine; `exec_node_demo`'s four pipeline tasks (`Counted`, `Double`, `Combine`, `Boom`)
+take it to thirteen whenever `test-kit` **and** `blob` are both on, so the snapshot
+truncates and the bytes differ. `trybuild` reads the enabled features out of the test
+binary's own fingerprint and passes them to the project it generates, so one snapshot
+cannot be blessed for two resolutions, and `trybuild` offers no per-sample opt-out.
+
+The three answers available were: give the demo tasks no `StableName` (they are
+graph-emitted and fingerprinted, so no); move them out of the library (the suite and
+the demo binary both import them, so no); or run the snapshot harness under the one
+resolution it is blessed against. The last is the truthful one, because what the
+harness pins — `FlowBuilder`'s bounds — is not gated by any feature, so the
+`--all-features` repetition of those samples asserted nothing about the boundary and
+only re-asserted rustc's candidate-list formatting. `flow_builder_compile_fail.rs`
+therefore carries `#![cfg(not(feature = "blob"))]`, the negated form of the file-level
+gate the repo already uses (`blob_bridge.rs`, `metastore_*.rs`, the
+`schema-validation` suites), with the reasoning at the gate. The `test` job runs it on
+both platform tiers under the default resolution, which is unchanged.
+
+Nothing about T78's samples, snapshots, or bounds changed — only when the harness
+runs. The standing consequence is worth naming: the default resolution is one impl
+below rustc's truncation cliff, so the next `StableName` impl added to `dagr_cli`'s
+default surface rewrites this snapshot and must be blessed deliberately with
+`TRYBUILD=overwrite`, exactly as the harness's own documentation says.
