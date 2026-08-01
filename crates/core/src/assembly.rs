@@ -357,6 +357,131 @@ pub fn output_is_unit<T: 'static>() -> bool {
     std::any::TypeId::of::<T>() == std::any::TypeId::of::<()>()
 }
 
+/// Where a node's attempt should run — an **opaque, author-declared** placement
+/// carried on [`NodePolicy`], absent by default (absent means *here, in this
+/// process*).
+///
+/// # Why this is policy, and not an execution class
+///
+/// The execution class feeds the **structural** fingerprint, and a structural
+/// mismatch is a hard resume refusal — so expressing placement as a class variant
+/// would refuse resume for every pipeline in existence the moment it was added.
+/// Placement lives here instead, on the value that feeds the **policy hash**,
+/// where a divergence proceeds with a printed diff. The payoff is concrete: a
+/// pipeline can be run locally and resumed remotely (or the reverse), and moving a
+/// node between the two is a reviewable policy diff rather than a broken resume.
+///
+/// # Opaque strings only
+///
+/// Every field is a string this crate never parses, validates, normalizes, or
+/// interprets: `dagr-core` does not learn what a CPU request, a node selector, or
+/// a toleration *means*, exactly as it never learns where a durable referent
+/// lives. Whoever executes a placed node reads these back verbatim; nothing here
+/// names any particular orchestrator.
+///
+/// # Why `&'static str`
+///
+/// A placement is **author-declared source**, like a
+/// [`StableName`](crate::stable_name::StableName): the strings are literals in the
+/// pipeline's own code. Requiring `'static` keeps this value [`Copy`] (so
+/// [`NodePolicy`] stays `Copy`, allocating nothing on the admission path) and —
+/// more importantly — makes it *structurally impossible* to compute a placement
+/// from the environment. That matters because placement feeds the policy hash,
+/// which is guaranteed identical across machines and toolchains for unchanged
+/// source; a placement read from a variable would silently break that guarantee.
+///
+/// ```
+/// use dagr_core::assembly::{NodePolicy, Placement};
+///
+/// let policy = NodePolicy::new().placement(
+///     Placement::new()
+///         .cpu("500m")
+///         .memory("2Gi")
+///         .node_selectors(&[("nodepool", "gpu")])
+///         .tolerations(&["nvidia.com/gpu=present:NoSchedule"]),
+/// );
+/// assert_eq!(policy.placement_spec().and_then(|p| p.cpu_request()), Some("500m"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Placement {
+    cpu: Option<&'static str>,
+    memory: Option<&'static str>,
+    node_selectors: &'static [(&'static str, &'static str)],
+    tolerations: &'static [&'static str],
+}
+
+impl Placement {
+    /// An empty placement — every field unset. A node carrying this is still
+    /// *placed* (it declares "not here"); the individual requests are simply
+    /// unstated, and whoever executes it applies its own defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Declare the opaque **CPU request** string (e.g. `"500m"`, `"2"`). Never
+    /// parsed here.
+    #[must_use]
+    pub fn cpu(mut self, request: &'static str) -> Self {
+        self.cpu = Some(request);
+        self
+    }
+
+    /// Declare the opaque **memory request** string (e.g. `"2Gi"`). Never parsed
+    /// here.
+    #[must_use]
+    pub fn memory(mut self, request: &'static str) -> Self {
+        self.memory = Some(request);
+        self
+    }
+
+    /// Declare the opaque **node selectors** as `(key, value)` string pairs, in the
+    /// order written. The order is part of the declaration and therefore part of
+    /// the policy hash — reordering them is a visible policy diff, not a silent
+    /// no-op, because this crate has no map semantics to collapse them under.
+    #[must_use]
+    pub fn node_selectors(mut self, selectors: &'static [(&'static str, &'static str)]) -> Self {
+        self.node_selectors = selectors;
+        self
+    }
+
+    /// Declare the opaque **tolerations**, one string each, in the order written
+    /// (same hashing note as [`node_selectors`](Self::node_selectors)).
+    #[must_use]
+    pub fn tolerations(mut self, tolerations: &'static [&'static str]) -> Self {
+        self.tolerations = tolerations;
+        self
+    }
+
+    /// The declared CPU request, or [`None`]. (Named distinctly from the
+    /// [`cpu`](Self::cpu) builder — a setter and a getter cannot share a name in
+    /// Rust, the same convention [`NodePolicy::timeout`] /
+    /// [`timeout_budget`](NodePolicy::timeout_budget) follows.)
+    #[must_use]
+    pub fn cpu_request(&self) -> Option<&'static str> {
+        self.cpu
+    }
+
+    /// The declared memory request, or [`None`].
+    #[must_use]
+    pub fn memory_request(&self) -> Option<&'static str> {
+        self.memory
+    }
+
+    /// The declared node selectors as `(key, value)` pairs, in declared order
+    /// (empty when none were stated).
+    #[must_use]
+    pub fn node_selector_pairs(&self) -> &'static [(&'static str, &'static str)] {
+        self.node_selectors
+    }
+
+    /// The declared tolerations, in declared order (empty when none were stated).
+    #[must_use]
+    pub fn toleration_strings(&self) -> &'static [&'static str] {
+        self.tolerations
+    }
+}
+
 /// The declared **per-pool cost vector** for a node.
 ///
 /// One entry per admission pool in that pool's native unit: **bytes** for the
@@ -433,8 +558,9 @@ impl CostVector {
 /// pool (working memory / output residency / blocking / compute), the constrained
 /// execution-class [override](NodePolicy::execution_class) (default: the class the
 /// task declared), **not** [retained](NodePolicy::retained) (release the output
-/// once consumed), and **not** [durable](NodePolicy::durable). The teardown flag
-/// ([`teardown`](NodePolicy::teardown)) is carried alongside for the
+/// once consumed), **not** [durable](NodePolicy::durable), and **no**
+/// [placement](NodePolicy::placement) (the node runs here, in this process). The
+/// teardown flag ([`teardown`](NodePolicy::teardown)) is carried alongside for the
 /// nonzero-cost check.
 ///
 /// # The trigger rule and the group label live *beside* the policy value
@@ -455,10 +581,12 @@ impl CostVector {
 /// # Which hash each field feeds
 ///
 /// The policy values (retries, backoff, timeout, costs, effective class,
-/// retention, durability) feed the **policy hash**; the trigger rule feeds the
-/// **structural fingerprint**; the group label feeds **neither**. A node with no
-/// stated policy hashes **identically** to one with every default written out,
-/// because both resolve to the same effective values.
+/// retention, durability, placement) feed the **policy hash**; the trigger rule
+/// feeds the **structural fingerprint**; the group label feeds **neither**. A node
+/// with no stated policy hashes **identically** to one with every default written
+/// out, because both resolve to the same effective values — and an absent
+/// placement contributes **zero bytes**, so a pipeline that predates placement
+/// hashes exactly as it always did.
 ///
 /// Set it fluently at registration with [`Flow::register_source_with`] /
 /// [`Flow::register_with`](crate::flow::Flow::register_with); the value is
@@ -475,13 +603,15 @@ pub struct NodePolicy {
     teardown: bool,
     cost: CostVector,
     class_override: Option<ExecutionClass>,
+    placement: Option<Placement>,
 }
 
 impl Default for NodePolicy {
     /// The conservative defaults, applied uniformly: not durable, not retained,
     /// no retries, the default backoff shape (never consulted under no retries),
     /// no per-attempt timeout, not a teardown, zero cost, no class override (the
-    /// class the task declared stands).
+    /// class the task declared stands), and **no placement** (the node runs here,
+    /// in this process).
     fn default() -> Self {
         Self {
             durable: false,
@@ -492,6 +622,7 @@ impl Default for NodePolicy {
             teardown: false,
             cost: CostVector::default(),
             class_override: None,
+            placement: None,
         }
     }
 }
@@ -623,6 +754,33 @@ impl NodePolicy {
         self
     }
 
+    /// Declare where the node's attempt should run — an opaque
+    /// [`Placement`]. The default is **absent**, which means *here, in this
+    /// process*.
+    ///
+    /// Placement feeds the **policy hash** and is deliberately **out of** the
+    /// structural fingerprint, so moving a node between local and placed is a
+    /// reviewable policy diff and never a resume refusal. It is inert to this
+    /// crate: nothing here reads a placement to decide anything, and an executor
+    /// that does not honour placement runs the node in-process and charges its
+    /// ordinary declared [cost](NodePolicy::cost).
+    #[must_use]
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = Some(placement);
+        self
+    }
+
+    /// Write out the **no-placement** default explicitly: the node runs here.
+    /// Equivalent to leaving [`placement`](NodePolicy::placement) unset — a node
+    /// with the default and one with the default written out here behave
+    /// identically, including under the policy hash — and it also clears a
+    /// placement set earlier in a builder chain.
+    #[must_use]
+    pub fn placement_off(mut self) -> Self {
+        self.placement = None;
+        self
+    }
+
     /// Whether the node is marked durable.
     #[must_use]
     pub fn is_durable(&self) -> bool {
@@ -695,6 +853,14 @@ impl NodePolicy {
     pub fn class_override(&self) -> Option<ExecutionClass> {
         self.class_override
     }
+
+    /// The node's declared [`Placement`], or [`None`] for the run-here default.
+    /// Named distinctly from the [`placement`](NodePolicy::placement) builder
+    /// (which shares the fluent-setter convention with the other setters).
+    #[must_use]
+    pub fn placement_spec(&self) -> Option<Placement> {
+        self.placement
+    }
 }
 
 /// The **full effective policy** of a node — every policy field resolved to
@@ -716,7 +882,8 @@ impl NodePolicy {
 /// [cost](EffectivePolicy::cost), effective
 /// [class](EffectivePolicy::execution_class),
 /// [retention](EffectivePolicy::is_retained),
-/// [durability](EffectivePolicy::is_durable) — feed the **policy hash**; the
+/// [durability](EffectivePolicy::is_durable),
+/// [placement](EffectivePolicy::placement) — feed the **policy hash**; the
 /// [trigger rule](EffectivePolicy::trigger_rule) feeds the **structural
 /// fingerprint**; the [group](EffectivePolicy::group) feeds **neither**.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -831,6 +998,15 @@ impl EffectivePolicy {
     #[must_use]
     pub fn is_teardown(&self) -> bool {
         self.policy.is_teardown()
+    }
+
+    /// The node's declared [`Placement`], or [`None`] for the run-here default.
+    /// Feeds the **policy hash**, never the structural fingerprint — which is what
+    /// lets a locally-run pipeline resume against a placed one with a diff instead
+    /// of a refusal.
+    #[must_use]
+    pub fn placement(&self) -> Option<Placement> {
+        self.policy.placement_spec()
     }
 }
 
@@ -1674,10 +1850,10 @@ fn structural_encoding(pipeline: &Pipeline) -> Vec<u8> {
 
 /// The policy encoding: the residual effective-policy values per node — retries,
 /// backoff shape, per-attempt timeout, cost, effective class, retention,
-/// durability — ordered by node name. Group labels are excluded, as is the
-/// trigger rule (it lives in the structural half). Defaulted policy encodes
-/// identically to a written-out default because both resolve to the same
-/// effective values.
+/// durability, and (when declared) placement — ordered by node name. Group labels
+/// are excluded, as is the trigger rule (it lives in the structural half).
+/// Defaulted policy encodes identically to a written-out default because both
+/// resolve to the same effective values.
 fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
     let mut out = Vec::new();
     for node in pipeline.nodes() {
@@ -1715,7 +1891,46 @@ fn policy_encoding(pipeline: &Pipeline) -> Vec<u8> {
         // Teardown is a shape-adjacent operational flag; keep it in the policy
         // half (it is not a resume-gating topology input).
         out.push(u8::from(policy.is_teardown()));
+        // Placement, appended ONLY when the node declares one. An unplaced node
+        // contributes zero bytes here, so every pipeline that predates placement
+        // hashes to exactly the digest it always did — the same no-churn trick the
+        // ordering-edge section uses. The frame tag `L` cannot collide with the
+        // next node's `n` frame, so the encoding stays unambiguous.
+        if let Some(placement) = policy.placement_spec() {
+            push_framed(&mut out, b'L', &placement_encoding(&placement));
+        }
     }
+    out
+}
+
+/// The canonical encoding of one [`Placement`]: every opaque string, framed with a
+/// distinct tag per field so two different declarations can never serialize alike.
+///
+/// A present-but-empty string and an absent field are framed **differently** (`c`
+/// versus `C`, `m` versus `M`), so declaring `cpu("")` and declaring no CPU at all
+/// are distinct policies — as they should be, since they are distinct source. The
+/// selector and toleration lists are emitted in **declared order** and terminated
+/// by a distinct empty frame, so two different splits of the same bytes cannot
+/// collide.
+fn placement_encoding(placement: &Placement) -> Vec<u8> {
+    let mut out = Vec::new();
+    match placement.cpu_request() {
+        Some(cpu) => push_framed(&mut out, b'c', cpu.as_bytes()),
+        None => push_framed(&mut out, b'C', &[]),
+    }
+    match placement.memory_request() {
+        Some(memory) => push_framed(&mut out, b'm', memory.as_bytes()),
+        None => push_framed(&mut out, b'M', &[]),
+    }
+    for (key, value) in placement.node_selector_pairs() {
+        push_framed(&mut out, b'k', key.as_bytes());
+        push_framed(&mut out, b'v', value.as_bytes());
+    }
+    push_framed(&mut out, b'K', &[]);
+    for toleration in placement.toleration_strings() {
+        push_framed(&mut out, b'x', toleration.as_bytes());
+    }
+    push_framed(&mut out, b'X', &[]);
     out
 }
 

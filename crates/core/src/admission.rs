@@ -8,8 +8,11 @@
 //! genuinely constrained resources — a **memory** pool (native unit: bytes) and
 //! two **thread** pools (blocking and compute, native unit: a thread count) — and
 //! decides, for each ready node, whether its declared cost fits the remaining
-//! capacity of *every* pool it needs. It owns everything from acquisition through
-//! release:
+//! capacity of *every* pool it needs. A fourth pool,
+//! [`RemoteSlots`](Pool::RemoteSlots), bounds concurrently-**placed** attempts: it
+//! is not derived from this machine (a node running elsewhere consumes almost none
+//! of it) but pinned to a flat operator ceiling. It owns everything from
+//! acquisition through release:
 //!
 //! - **weighted capacity pools** — each holds a total capacity and a live
 //!   remaining capacity ([`AdmissionController::remaining`]);
@@ -84,21 +87,25 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::assembly::CostVector;
+use crate::assembly::{CostVector, NodePolicy};
 use crate::execution::ZombieObserver;
 use crate::slot::ResidencyLedger;
 
 /// The set of admission pools a node's declared cost is a vector over (the
-/// [`CostVector`] dimensions).
+/// [`CostVector`] dimensions, plus the remote slot a placed node draws).
 ///
 /// The stated minimum is a **memory** pool and **thread** pools. Memory is a
 /// single pool measured in **bytes** (the working-memory and output-residency
 /// halves of the cost both draw from it); the two thread pools are the
-/// **blocking** and **compute** pools, measured in a **thread count**.
+/// **blocking** and **compute** pools, measured in a **thread count**. Those three
+/// govern **local, in-process** work and are sized from this machine's limits.
+/// [`RemoteSlots`](Pool::RemoteSlots) is the fourth and is not: a node placed
+/// elsewhere consumes almost none of this machine's capacity, so it is bounded by
+/// its own flat operator ceiling instead.
 ///
 /// The set is **fixed at compile time and never runtime-mutable** (a permanent
 /// non-goal): this enum is the extension point, and adding a pool is a spec-driven
-/// source change, never a runtime knob. Exactly these three pools ship in v1.
+/// source change, never a runtime knob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Pool {
     /// The memory pool, in **bytes**. Both working memory (held for the attempt)
@@ -109,12 +116,48 @@ pub enum Pool {
     BlockingThreads,
     /// The compute thread pool, in a **thread count** (the dedicated pool).
     ComputeThreads,
+    /// The **remote slot** pool, in a count of concurrently-placed node attempts.
+    ///
+    /// A [placed](crate::assembly::Placement) node draws exactly one slot from it
+    /// (and near-zero local capacity) when the executor honours its placement. The
+    /// ceiling is a **flat operator limit on in-flight remote work**, not a model of
+    /// anyone's cluster: dagr does not know, and deliberately does not try to model,
+    /// the capacity on the other side. Unconstrained by default — a run that pins
+    /// nothing imposes no dagr-side ceiling, because inventing one would be
+    /// second-guessing the cluster's own accounting.
+    RemoteSlots,
 }
 
 impl Pool {
     /// Every pool, in a stable order — the iteration order for all-or-nothing
     /// acquisition and reporting.
-    pub const ALL: [Pool; 3] = [Pool::Memory, Pool::BlockingThreads, Pool::ComputeThreads];
+    pub const ALL: [Pool; 4] = [
+        Pool::Memory,
+        Pool::BlockingThreads,
+        Pool::ComputeThreads,
+        Pool::RemoteSlots,
+    ];
+}
+
+/// Whether a run's executor **honours** a node's declared
+/// [`Placement`](crate::assembly::Placement) — the one input that decides which
+/// pools a placed node draws from.
+///
+/// This is deliberately not a property of the policy: the *same* placed node costs
+/// different things under different executors, and both answers are honest.
+/// [`Honoured`](Self::Honoured) means the attempt runs somewhere else, so it draws
+/// a remote slot and near-zero local capacity. [`Ignored`](Self::Ignored) means the
+/// placement is recorded and the node runs **here** anyway — so it is charged its
+/// ordinary declared cost, because a ledger that discounted a node actually running
+/// in this process would be lying to the memory pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementHandling {
+    /// The executor places the node elsewhere: one remote slot, near-zero local
+    /// cost.
+    Honoured,
+    /// The executor runs the node in-process regardless of its placement: the
+    /// declared local cost stands, and no remote slot is drawn.
+    Ignored,
 }
 
 /// The **pinned total capacity** of each pool.
@@ -132,6 +175,7 @@ pub struct PoolCapacities {
     memory_constrained: bool,
     blocking_threads: u32,
     compute_threads: u32,
+    remote_slots: u32,
 }
 
 impl Default for PoolCapacities {
@@ -152,6 +196,7 @@ impl PoolCapacities {
             memory_constrained: false,
             blocking_threads: u32::MAX,
             compute_threads: u32::MAX,
+            remote_slots: u32::MAX,
         }
     }
 
@@ -179,13 +224,26 @@ impl PoolCapacities {
         self
     }
 
-    /// The pinned total capacity of `pool`, as a `u64` (thread counts widen).
+    /// Pin the **remote slot** pool's total capacity — the flat operator ceiling on
+    /// concurrently-placed node attempts. Unpinned it is unconstrained; pinning it
+    /// to `0` switches remote execution off, and a placed node then fails the
+    /// bootstrap over-demand check rather than waiting for capacity that can never
+    /// arrive.
+    #[must_use]
+    pub fn remote_slots(mut self, slots: u32) -> Self {
+        self.remote_slots = slots;
+        self
+    }
+
+    /// The pinned total capacity of `pool`, as a `u64` (thread and slot counts
+    /// widen).
     #[must_use]
     pub fn total(&self, pool: Pool) -> u64 {
         match pool {
             Pool::Memory => self.memory,
             Pool::BlockingThreads => u64::from(self.blocking_threads),
             Pool::ComputeThreads => u64::from(self.compute_threads),
+            Pool::RemoteSlots => u64::from(self.remote_slots),
         }
     }
 
@@ -216,6 +274,7 @@ pub struct PoolCost {
     output_residency: u64,
     blocking_threads: u32,
     compute_threads: u32,
+    remote_slots: u32,
 }
 
 impl PoolCost {
@@ -238,6 +297,44 @@ impl PoolCost {
             output_residency: cost.output_residency(),
             blocking_threads: cost.blocking_threads(),
             compute_threads: cost.compute_threads(),
+            // A cost vector describes LOCAL demand only; drawing a remote slot is a
+            // consequence of a node's placement, which only `from_policy` can see.
+            remote_slots: 0,
+        }
+    }
+
+    /// The per-pool demand a **node's whole policy** makes on this run's pools —
+    /// its declared [`CostVector`] read through the executor's answer about
+    /// [placement](crate::assembly::Placement).
+    ///
+    /// - [`Ignored`](PlacementHandling::Ignored) — the node runs **here**, so its
+    ///   declared cost stands verbatim and it draws no remote slot. This is
+    ///   identical to [`from_cost_vector`](Self::from_cost_vector) over the policy's
+    ///   cost, and it is what an unplaced node gets under either answer.
+    /// - [`Honoured`](PlacementHandling::Honoured) on a **placed** node — the
+    ///   attempt runs somewhere else, so it draws **one remote slot** and near-zero
+    ///   local capacity: no working memory, no blocking thread, no compute thread,
+    ///   because none of those are consumed in this process.
+    ///
+    /// **Output residency is deliberately preserved** across that mapping. Working
+    /// memory and threads belong to the running attempt and genuinely move away with
+    /// it; residency is the lease a *produced value* holds in its output slot, and a
+    /// local consumer downstream of a placed producer still rehydrates that value
+    /// into this process's memory. Residency is charged at production rather than at
+    /// admission, so keeping it costs a placed node nothing at admission time and
+    /// keeps the memory pool honest when the value does land locally.
+    #[must_use]
+    pub fn from_policy(policy: NodePolicy, handling: PlacementHandling) -> Self {
+        let declared = Self::from_cost_vector(policy.cost());
+        match (policy.placement_spec(), handling) {
+            (Some(_), PlacementHandling::Honoured) => Self {
+                working_memory: 0,
+                output_residency: declared.output_residency,
+                blocking_threads: 0,
+                compute_threads: 0,
+                remote_slots: 1,
+            },
+            _ => declared,
         }
     }
 
@@ -270,6 +367,16 @@ impl PoolCost {
         self
     }
 
+    /// Set the **remote-slot** demand — the number of concurrently-placed attempts
+    /// this cost occupies. One per placed node; zero for everything else. Prefer
+    /// [`from_policy`](Self::from_policy), which derives it from the node's declared
+    /// placement and the executor's answer.
+    #[must_use]
+    pub fn remote_slots(mut self, slots: u32) -> Self {
+        self.remote_slots = slots;
+        self
+    }
+
     /// The declared **working-memory** demand in bytes. (The setter and getter
     /// cannot share a name in Rust, so the getters carry a `_bytes` /
     /// `_thread_count` suffix while the builder setters mirror the cost-vector
@@ -297,19 +404,27 @@ impl PoolCost {
         self.compute_threads
     }
 
+    /// The declared **remote-slot** demand — `1` for a placed node whose executor
+    /// honours its placement, `0` for everything else.
+    #[must_use]
+    pub fn remote_slot_count(&self) -> u32 {
+        self.remote_slots
+    }
+
     /// The demand this cost makes on `pool` (as a `u64`). **Working memory** is
     /// what a permit charges the memory pool on admission (output residency is
     /// charged separately, as the slot lease, at production — not on admission).
     ///
-    /// `pub(crate)` so the [`limits`](crate::limits) bootstrap check can read a
-    /// node's per-pool demand against the derived pool totals without duplicating
-    /// the mapping.
+    /// Public so a caller can read a node's per-pool demand against the pool totals
+    /// — the [`limits`](crate::limits) bootstrap check does exactly this — without
+    /// duplicating the mapping.
     #[must_use]
-    pub(crate) fn demand_on(&self, pool: Pool) -> u64 {
+    pub fn demand_on(&self, pool: Pool) -> u64 {
         match pool {
             Pool::Memory => self.working_memory,
             Pool::BlockingThreads => u64::from(self.blocking_threads),
             Pool::ComputeThreads => u64::from(self.compute_threads),
+            Pool::RemoteSlots => u64::from(self.remote_slots),
         }
     }
 }
@@ -438,6 +553,10 @@ struct Inner {
     remaining_memory: u64,
     remaining_blocking: u32,
     remaining_compute: u32,
+    /// Live remaining capacity of the remote-slot pool — the flat operator ceiling
+    /// on concurrently-placed attempts. Charged and released exactly like a thread
+    /// count; unconstrained unless the ceiling is pinned.
+    remaining_remote: u32,
     /// The live zombies, in registration order (for a stable report).
     zombies: Vec<ZombieRecord>,
     /// The waiting queue: nodes offered but not yet admitted, oldest first (the
@@ -465,6 +584,7 @@ impl Inner {
             Pool::Memory => self.remaining_memory,
             Pool::BlockingThreads => u64::from(self.remaining_blocking),
             Pool::ComputeThreads => u64::from(self.remaining_compute),
+            Pool::RemoteSlots => u64::from(self.remaining_remote),
         }
     }
 
@@ -497,6 +617,7 @@ impl Inner {
         self.remaining_memory -= cost.working_memory;
         self.remaining_blocking -= cost.blocking_threads;
         self.remaining_compute -= cost.compute_threads;
+        self.remaining_remote -= cost.remote_slots;
     }
 
     /// Return `cost` to every pool it drew from — the permit's release. Saturating
@@ -508,6 +629,8 @@ impl Inner {
             (self.remaining_blocking + cost.blocking_threads).min(self.caps.blocking_threads);
         self.remaining_compute =
             (self.remaining_compute + cost.compute_threads).min(self.caps.compute_threads);
+        self.remaining_remote =
+            (self.remaining_remote + cost.remote_slots).min(self.caps.remote_slots);
     }
 
     /// The **counted** cost of `pool` — `total − remaining`, plus, for the memory
@@ -569,6 +692,7 @@ impl AdmissionController {
                 remaining_memory: caps.memory,
                 remaining_blocking: caps.blocking_threads,
                 remaining_compute: caps.compute_threads,
+                remaining_remote: caps.remote_slots,
                 zombies: Vec::new(),
                 waiters: VecDeque::new(),
                 residency: None,
@@ -662,6 +786,7 @@ impl AdmissionController {
                 let unit = match pool {
                     Pool::Memory => "bytes",
                     Pool::BlockingThreads | Pool::ComputeThreads => "threads",
+                    Pool::RemoteSlots => "remote slots",
                 };
                 format!(
                     "declared cost {demand} {unit} exceeds {pool:?} pool capacity {total} {unit}"

@@ -154,3 +154,98 @@ Make placement declarable and executors selectable, without any Kubernetes code.
   execution system, a coordinating metadata store, a web interface, a DSL, or a
   backfill orchestrator, and the graph's shape never changes at runtime — a placed
   node is one node.
+
+---
+
+## Open questions — resolved
+
+`docs/tasks.md` carries **no `T105` entry** (it enumerates M0–M4 only), so there are
+no `Q:` items beyond this file's own two. Both are answered below, together with the
+decisions the implementation had to make that the ticket did not name.
+
+### 1. Does `Placement` belong in the `#[task]` attribute, the registration builder, or both? → **The builder only, in this ticket.**
+
+`NodePolicy::placement(…)` is the whole surface, reached at every registration site
+that already takes a policy — plus two new registrars,
+`RunnableFlow::register_named_with` / `register_source_named_with`, because a placed
+node is precisely a node whose *policy* the graph artifact must show, and until now
+one had to choose between stable names and a stated policy.
+
+The attribute deliberately does **not** grow a convenience form. `#[task]` describes
+a *task* — its work shape and its types — while placement is a property of a *node*,
+and one task may legitimately be registered as several nodes with different
+placements. An attribute form would either be a lie for the second registration or
+would need a per-registration override anyway, which is the builder. As the ticket
+notes, the fingerprint behaviour is identical either way, so the attribute can follow
+later without re-deciding anything.
+
+### 2. Should a `Placement` under the local executor warn? → **No — recorded and silent.**
+
+Implemented as stated in the ticket, and asserted: `a_placed_pipeline_runs_locally_without_warning_about_a_cluster`
+fails if the local run's output so much as contains "cluster", "kubernetes", "k8s",
+or "warn". Warning would make the dual-mode story noisy for exactly the developer the
+local path exists for. Revisit only if it causes a real misconfiguration in T112's
+demo.
+
+### 3. What owns the strings — `String` or `&'static str`? → **`&'static str`.**
+
+`Placement` is `Copy` over `&'static str` / `&'static [(&'static str, &'static str)]`,
+so `NodePolicy` stays `Copy` (no allocation on the admission path, and no ripple
+through the ~66 `.policy()` call sites that rely on by-value copies). The stronger
+reason is the guarantee it makes structural: placement feeds the **policy hash**,
+which arch.md promises is identical across machines and toolchains for unchanged
+source. A `String` would let a placement be computed from the environment and quietly
+break that; `'static` makes it impossible, and matches the crate's existing
+convention for author-declared identity data (`StableName` is a `&'static str`
+constant). ADR 128's rule that the profiles file "cannot reach node policy or
+placement" is then true by construction rather than by discipline.
+
+### 4. What is `--dagr.max-pods`'s default? → **Unlimited (no dagr-side ceiling).**
+
+Every other pool defaults to unconstrained (`PoolCapacities::new()`), the three local
+pools are *derived from the machine* and this one has no machine to derive from, and
+ADR 115 is explicit that the cluster remains responsible for its own capacity. Any
+finite default would be dagr second-guessing an accounting it cannot see, and would
+silently serialize a wide fan-out nobody asked to serialize. `0` is meaningful and
+supported: it means *no remote capacity*, and a placed node then fails the bootstrap
+over-demand check with a named reason rather than stranding.
+
+### 5. Does the remote cost model apply under the local executor? → **No.**
+
+"Recorded and ignored" has a ledger consequence the ticket does not spell out: a
+placed node running **in this process** really does consume this machine's memory and
+threads, so charging it near-zero would be a ledger that lies — precisely what C12
+forbids. The mapping therefore takes the executor's answer
+(`PoolCost::from_policy(policy, PlacementHandling::{Honoured,Ignored})`): honoured →
+one remote slot and near-zero local cost; ignored → the declared vector verbatim. The
+driver reads it from `RunConfig::executor`, so T108 lifts the refusal and the
+admission model is already correct underneath it.
+
+**Output residency is preserved across that mapping**, deliberately. Working memory
+and threads belong to the running attempt and genuinely move away with it; residency
+is the lease a *produced value* holds in its output slot, and a local consumer
+downstream of a placed producer still rehydrates that value into this process. It is
+charged at production rather than at admission, so keeping it costs a placed node
+nothing at admission time and keeps the memory pool honest when the value does land
+locally.
+
+### 6. Where does the `k8s` refusal live? → **In the driver's bootstrap *and* the `run` verb.**
+
+Both, on purpose. The verb refuses before a run-store directory exists (an invocation
+that cannot run should not leave a run behind); the driver refuses again so a caller
+driving the engine programmatically gets the same answer. If only the verb refused, a
+`RunConfig::executor(Kubernetes)` would run every node in-process while the operator
+believed their placement was honoured — the one outcome worse than refusing. Both
+produce `bootstrap-failed` with zero attempts and exit code `4`.
+
+### 7. Can the `PolicyDiff` *name* the placement change? → **Not from resume; the structure diff does.**
+
+The test plan asks for a policy diff "naming the placement change". The run artifact
+records the two aggregate hashes and **no per-node policy**, so the resume core has
+nothing finer to report — a limitation its own docs already state. `PolicyDiff` now
+implements `Display` (both hashes, and the fact that resume proceeds), and the
+*naming* comes from the surface that has the data: the structure diff over the graph
+artifact reports the change as `policy.placement` with the declared value, which
+`a_placement_change_is_visible_in_the_structure_diff` asserts. Making the resume path
+name it would require the run artifact to carry per-node policy — a schema change no
+M10 ticket owns.

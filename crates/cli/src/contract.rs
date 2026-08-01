@@ -645,7 +645,11 @@ pub fn banner_suppressed_by_env() -> bool {
 /// parameter can never shadow. The `dagr.metastore*` flags are always reserved (so
 /// the namespace is identical across builds), even though their wiring is behind
 /// the default-off `metastore` cargo feature. The M10 local codec check
-/// `dagr.force-roundtrip` (`DAGR_FORCE_ROUNDTRIP`) is reserved on the same rule.
+/// `dagr.force-roundtrip` (`DAGR_FORCE_ROUNDTRIP`) is reserved on the same rule,
+/// as are the M10 placement knobs `dagr.executor` (`DAGR_EXECUTOR`) and
+/// `dagr.max-pods` (`DAGR_MAX_PODS`) — the latter is reserved even though its
+/// remote-slot ceiling only binds once an executor honours placement, so the
+/// namespace does not shift under a pipeline when that executor ships.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -663,6 +667,8 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "dagr.metastore",
         "dagr.metastore-store",
         "dagr.force-roundtrip",
+        "dagr.executor",
+        "dagr.max-pods",
         "data-interval",
         "force",
         "run",
