@@ -88,6 +88,14 @@ fn beta() -> Pipeline {
 /// The library verb table lists exactly the contract verbs, in a fixed order — and
 /// it is a library constant, so it is identical regardless of which pipeline hosts
 /// it (verb parity is structural).
+///
+/// `exec-node` (T106, ADR 115 §3) sits **after** `single-node`, next to the verb it
+/// is the machine-facing sibling of. It is in the table unconditionally, and that is
+/// the point of pinning it here: an operator or an orchestrator must get the same
+/// answer from every dagr binary about what a verb *is*, even from a build whose
+/// default-off `blob` feature leaves the verb's body unavailable (that build answers
+/// with a recognized stub naming the feature). Every position before it is unmoved,
+/// so no existing verb's index changed.
 #[test]
 fn the_verb_table_is_the_c26_set() {
     let names: Vec<&str> = verb_table().iter().map(|v| v.name()).collect();
@@ -99,6 +107,7 @@ fn the_verb_table_is_the_c26_set() {
             "render",
             "run",
             "single-node",
+            "exec-node",
             "resume",
             "fold",
             "prune",
