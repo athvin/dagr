@@ -421,10 +421,22 @@ const SPAWN_INVENTORY: &[(&str, usize, &str)] = &[
          returns, so it cannot outlive the run either way",
     ),
     (
-        "crates/cli/src/signals.rs",
+        "crates/cli/src/exec_node.rs",
         1,
-        "the OS-signal listener, the stated exception: it lives exactly as long as \
-         the SignalGuard's own runtime, which is dropped with the guard",
+        "the pod-side shutdown watchdog: a task that does not observe cancellation \
+         cannot be killed, so this thread enforces arch.md C16's grace budget — it \
+         wakes on the cancellation signal, waits the budget, writes a truthful \
+         `abandoned` shard, and exits the PROCESS. It cannot outlive the run \
+         because the run is the process: `exec-node` runs exactly one attempt and \
+         returns, and the thread is disarmed the moment that attempt completes",
+    ),
+    (
+        "crates/cli/src/signals.rs",
+        2,
+        "the two OS-signal listeners, the stated exception: the CancelHandle-driven \
+         one the run loop installs and the closure-driven one a single pod-side \
+         attempt installs. Each lives exactly as long as the SignalGuard's own \
+         runtime, which is dropped with the guard",
     ),
     (
         "crates/metastore/src/live_sink.rs",

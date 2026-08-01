@@ -25,6 +25,30 @@
 //! (`rust-toolchain.toml`); regenerate deliberately with
 //! `TRYBUILD=overwrite cargo test -p dagr-cli --test flow_builder_compile_fail`
 //! and review the diff — never a silent overwrite.
+//!
+//! # Why the harness runs under the default feature resolution only
+//!
+//! Byte-exactness makes a snapshot a function of *more* than the sample. The
+//! `source_without_stable_name` diagnostic reproduces rustc's "the following other
+//! types implement trait `StableName`" list, and that list is the set of `StableName`
+//! impls reachable from `dagr_cli` — so it is a function of the crate's **feature
+//! resolution**, not of the boundary being pinned. rustc prints the set in full up to
+//! nine candidates and truncates to eight plus "and N others" beyond that, and the
+//! default resolution sits at exactly nine, so *any* optional feature that adds an
+//! impl rewrites the snapshot. `blob` is such a feature: with `test-kit` it compiles
+//! `dagr_cli::exec_node_demo`, whose four pipeline tasks push the list over the cliff.
+//! `trybuild` reads the enabled features out of this test binary's own fingerprint and
+//! passes them to the project it generates, so the snapshot cannot be blessed for two
+//! resolutions at once and there is no per-case opt-out.
+//!
+//! The boundary itself is feature-independent — `FlowBuilder`'s bounds are not gated
+//! by any feature — so pinning it once, under the resolution the snapshots were
+//! blessed against, is the whole of the coverage; running the same samples again under
+//! `--all-features` only re-asserted rustc's candidate-list formatting. The harness is
+//! therefore compiled out when `blob` is on, which is what `cargo test --workspace
+//! --all-features` (the `feature-matrix` CI job) selects. The `test` job, on both
+//! platform tiers, runs it under the default resolution.
+#![cfg(not(feature = "blob"))]
 
 /// Compile every `tests/ui/flow_builder/pass/*.rs` and assert it builds; compile
 /// every `tests/ui/flow_builder/fail/*.rs` and assert it fails with output

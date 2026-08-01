@@ -539,6 +539,19 @@ fn dispatch(sample: &Sample, verb: Verb) -> ExitCode {
         Verb::Render => render_dispatch(&flags, &mut stdout),
         Verb::Run => run_dispatch(sample, &flags, &mut stdout),
         Verb::SingleNode => single_node_dispatch(sample, &flags, &mut stdout),
+        // `exec-node` is the machine-facing pod-side verb (T106). This sample binary
+        // is the operator-facing C26 surface and hosts no `Payload`-bounded flow, so
+        // it recognizes the verb and says which surface serves it, rather than
+        // pretending to run an attempt.
+        Verb::ExecNode => {
+            let _ = writeln!(
+                stdout,
+                "dagr exec-node: this sample binary serves the operator-facing verbs; \
+                 `exec-node` is dispatched through the flow registry \
+                 (dagr_cli::registry::run_registry) against a `Payload`-bounded flow",
+            );
+            ExitCode::InvalidUsage
+        }
         Verb::Resume => resume_verb_stub(&mut stdout),
         Verb::Fold => fold_dispatch(&flags, &mut stdout),
         Verb::Prune => prune_dispatch(sample, &flags, &mut stdout),

@@ -261,6 +261,12 @@ pub enum Verb {
     /// Replay node N from a prior run R, rehydrating inputs from durable
     /// references.
     SingleNode,
+    /// Run **one attempt of one node** from durable references supplied on argv,
+    /// and report it through an attempt shard (ADR 115 §3). The machine-facing
+    /// sibling of [`SingleNode`](Verb::SingleNode): that one is operator-facing and
+    /// reads a prior run from the run store; this one reads its references from the
+    /// invocation and writes to the blob store, so it needs no prior run at all.
+    ExecNode,
     /// Resume a prior run — **stubbed** for a binary that has not wired the real
     /// behaviour; recognized and help-listed, returns a defined "not yet
     /// implemented" outcome.
@@ -283,6 +289,7 @@ impl Verb {
             Verb::Render => "render",
             Verb::Run => "run",
             Verb::SingleNode => "single-node",
+            Verb::ExecNode => "exec-node",
             Verb::Resume => "resume",
             Verb::Fold => "fold",
             Verb::Prune => "prune",
@@ -298,6 +305,9 @@ impl Verb {
             Verb::Render => "render a diagram from a graph artifact (optionally overlaying a run)",
             Verb::Run => "mint run identity, open the store, and execute the pipeline",
             Verb::SingleNode => "replay a single node from a prior run",
+            Verb::ExecNode => {
+                "run one attempt of one node from supplied references (machine-facing)"
+            }
             Verb::Resume => "resume a prior run (not yet implemented — reserved for T58)",
             Verb::Fold => "fold an event stream into a run artifact (crashed-run path)",
             Verb::Prune => "delete old runs from the run store by count or age",
@@ -315,6 +325,7 @@ pub fn verb_table() -> &'static [Verb] {
         Verb::Render,
         Verb::Run,
         Verb::SingleNode,
+        Verb::ExecNode,
         Verb::Resume,
         Verb::Fold,
         Verb::Prune,
@@ -442,6 +453,16 @@ fn flag_takes_value(flag: &str) -> bool {
             | "dagr.pool.memory"
             | "dagr.headroom-fraction"
             | "data-interval"
+            // The `exec-node` verb's own value-taking arguments (T106). They are
+            // listed here for one reason only: so a value like `--node etl` is never
+            // mistaken for the flow-name positional the verb also accepts.
+            | "run"
+            | "node"
+            | "attempt"
+            | "blob-store"
+            | "input"
+            | "image-digest"
+            | "expect-structural"
     )
 }
 

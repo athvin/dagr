@@ -102,7 +102,7 @@ const STORE_FLAG: &str = "--store";
 /// A registered flow's **re-invokable factory** — called once per invocation to
 /// build a **fresh** [`RunnableFlow`] (the flow is consumed by
 /// [`run`](RunnableFlow::run), so it cannot be reused; see the module docs).
-type FlowFactory = Box<dyn Fn() -> RunnableFlow + Send + Sync>;
+pub(crate) type FlowFactory = Box<dyn Fn() -> RunnableFlow + Send + Sync>;
 
 /// A builder mapping a flow **name → a re-invokable factory** `Fn() -> RunnableFlow`
 /// so **one** binary can host **many** named flows.
@@ -325,6 +325,11 @@ where
         // `validate <flow>` builds another fresh flow, finishes it into a `Pipeline`,
         // and runs assembly-only — `AssemblyFailure` (3) comes straight from the verb.
         Verb::Validate => dispatch("validate", validate_selected_flow),
+        // `exec-node` is the pod-side verb (ADR 115 §3). It is a flow-selecting verb
+        // like any other — the whole design rests on the pod re-entering the same
+        // binary and rebuilding the same flow — so it routes through exactly these
+        // selection rules and gets `#[dag]` auto-discovery for free.
+        Verb::ExecNode => dispatch("exec-node", exec_node_action()),
         // `single-node` / `prune` select a flow but need per-invocation store /
         // parameter / rehydration plumbing the registry does not own. Recognize them
         // and point at the pipeline-specific verb wiring rather than silently
@@ -363,6 +368,38 @@ where
             );
             ExitCode::InvalidUsage
         }
+    }
+}
+
+/// The `exec-node` verb body, or the recognized-stub diagnostic a build without a
+/// blob backend answers with.
+///
+/// The verb is in the table unconditionally — an operator (or an orchestrator) must
+/// get the same answer from every dagr binary about what a verb *is* — but its body
+/// needs the blob store the default-off `blob` feature provides. A build without it
+/// refuses and says which feature is missing, rather than failing to recognize a verb
+/// that exists.
+fn exec_node_action<W: Write>() -> FlowAction<W> {
+    #[cfg(feature = "blob")]
+    {
+        crate::exec_node::exec_node_selected_flow
+    }
+    #[cfg(not(feature = "blob"))]
+    {
+        fn unavailable<W: Write>(
+            _name: &str,
+            _factory: &FlowFactory,
+            _argv: &[std::ffi::OsString],
+            out: &mut W,
+        ) -> ExitCode {
+            let _ = writeln!(
+                out,
+                "dagr exec-node: this build has no blob backend compiled in, and the verb \
+                 reads its inputs from one; rebuild `dagr-cli` with the `blob` feature",
+            );
+            ExitCode::InvalidUsage
+        }
+        unavailable::<W>
     }
 }
 

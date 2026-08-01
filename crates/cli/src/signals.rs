@@ -127,6 +127,107 @@ impl SignalRouter {
     }
 }
 
+/// The stateful router an installed handler drives when the trigger is a plain
+/// closure rather than the run loop's [`CancelHandle`] — the pod-side `exec-node`
+/// path, which has no run loop to request cancellation *of*, only a single attempt
+/// observing a [`CancellationSignal`](dagr_core::context::CancellationSignal).
+///
+/// It applies exactly the same [`route_signal`] re-entry hardening: the first signal
+/// fires, every later one is counted and does not re-fire or shortcut the flush.
+struct ClosureRouter<F> {
+    fire: F,
+    count: std::sync::Mutex<u32>,
+}
+
+impl<F: Fn()> ClosureRouter<F> {
+    /// Handle one delivered signal.
+    ///
+    /// Poison policy: recover — the same single `u32` and the same reason as
+    /// [`SignalRouter::on_signal`]: the trigger is fired while the lock is held, so a
+    /// panic beneath it must not make the process uncancellable.
+    fn on_signal(&self) {
+        let mut count = self
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut fire = || (self.fire)();
+        route_signal(&mut count, &mut fire);
+    }
+}
+
+/// Install the `SIGTERM`/`SIGINT` handlers wiring **any** trigger closure.
+///
+/// The generalization of [`install_signal_handlers`], for a caller whose
+/// cancellation is not the run loop's request channel — a single pod-side attempt,
+/// whose SIGTERM is pod deletion and whose cancellation is the
+/// [`CancellationSource`](dagr_core::context::CancellationSource) the attempt
+/// observes. Reception runs on the same isolated single-worker runtime, with the same
+/// re-entry hardening, and the returned [`SignalGuard`] owns it.
+///
+/// # Errors
+/// Returns an [`io::Error`](std::io::Error) if the handlers cannot be registered.
+///
+/// # Platform
+/// Unix installs real handlers; non-unix is the same documented no-op.
+#[cfg(unix)]
+pub fn install_signal_handlers_with<F>(fire: F) -> std::io::Result<SignalGuard>
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_io()
+        .build()?;
+    let router = std::sync::Arc::new(ClosureRouter {
+        fire,
+        count: std::sync::Mutex::new(0),
+    });
+    runtime.block_on(async {
+        let sigterm = signal(SignalKind::terminate())?;
+        let sigint = signal(SignalKind::interrupt())?;
+        spawn_closure_listener(std::sync::Arc::clone(&router), sigterm);
+        spawn_closure_listener(std::sync::Arc::clone(&router), sigint);
+        Ok::<(), std::io::Error>(())
+    })?;
+    Ok(SignalGuard { _runtime: runtime })
+}
+
+/// [`install_signal_handlers_with`] — the **non-unix documented no-op**.
+///
+/// # Errors
+/// Never fails on non-unix; the `Result` keeps signature parity with the unix path.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "signature parity with the unix path, which can fail to register"
+)]
+pub fn install_signal_handlers_with<F>(fire: F) -> std::io::Result<SignalGuard>
+where
+    F: Fn() + Send + Sync + 'static,
+{
+    let _ = fire;
+    Ok(SignalGuard {})
+}
+
+/// Spawn one listener routing every delivery of `stream` through the shared closure
+/// router — the [`spawn_listener`] twin, with the same deliberate
+/// outlives-its-call exception (the task cannot outlive the guard's runtime).
+#[cfg(unix)]
+fn spawn_closure_listener<F>(
+    router: std::sync::Arc<ClosureRouter<F>>,
+    mut stream: tokio::signal::unix::Signal,
+) where
+    F: Fn() + Send + Sync + 'static,
+{
+    tokio::spawn(async move {
+        while stream.recv().await.is_some() {
+            router.on_signal();
+        }
+    });
+}
+
 /// A live registration of the OS-signal handlers.
 ///
 /// Keep it alive for as long as the run should react to `SIGTERM`/`SIGINT`; drop it
