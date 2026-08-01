@@ -482,7 +482,7 @@ fn an_incomplete_shard_is_never_mistaken_for_a_complete_one() {
     // Fault injection: stop before the rename. Nothing lands at the final path.
     let exec = Exec::new(store, "double")
         .input(&input)
-        .env("DAGR_DEMO_SHARD_FAULT", "stop-before-rename");
+        .env("DAGR_SHARD_WRITE_FAULT", "stop-before-rename");
     let out = exec.go();
     assert_ne!(code(&out), Some(0), "an unwritable shard is not a success");
     assert!(
@@ -686,7 +686,11 @@ fn the_shard_records_the_input_references_it_was_given_positionally() {
     assert_eq!(code(&exec.go()), Some(0));
     let shard = exec.shard().expect("a complete shard");
 
-    let recorded: Vec<&str> = shard.inputs().iter().map(|c| c.uri()).collect();
+    let recorded: Vec<&str> = shard
+        .inputs()
+        .iter()
+        .map(dagr_cli::shard::ConsumedRef::uri)
+        .collect();
     assert_eq!(
         recorded,
         vec![first.as_str(), second.as_str()],

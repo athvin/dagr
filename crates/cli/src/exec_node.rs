@@ -73,10 +73,17 @@ const LOCAL_BACKEND: &str = "file";
 /// run verbs use.
 const DEFAULT_GRACE: Duration = Duration::from_secs(10);
 
-/// The environment variable the fault-injection test uses to stop a shard write
-/// **before** its rename — the atomic-write discipline's test seam, and the only
-/// thing in this module that exists for a test.
-const SHARD_FAULT_ENV: &str = "DAGR_DEMO_SHARD_FAULT";
+/// The fault-injection seam for the shard's atomic write: set to
+/// `stop-before-rename`, the verb performs every step except the rename, which is
+/// exactly what a process killed mid-write leaves behind.
+///
+/// It is an **environment variable** rather than a function parameter — the shape
+/// the blob backend's own `stop_before_rename` seam uses — for a reason specific to
+/// this verb: the thing under test is a separate process, so a test cannot reach a
+/// parameter inside it. The environment is the only channel there is. Unset (the
+/// only state any real invocation is in) it costs one `var` lookup on the write path
+/// and changes nothing.
+const SHARD_FAULT_ENV: &str = "DAGR_SHARD_WRITE_FAULT";
 
 // ===========================================================================
 // Arguments
@@ -194,14 +201,14 @@ pub(crate) fn exec_node_selected_flow<W: Write>(
     argv: &[OsString],
     out: &mut W,
 ) -> ExitCode {
-    let args = match ExecNodeArgs::parse(argv) {
-        Ok(args) => args,
+    let request = match ExecNodeArgs::parse(argv) {
+        Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(out, "dagr exec-node: {message}");
             return ExitCode::InvalidUsage;
         }
     };
-    match run_attempt(flow_name, factory, &args, out) {
+    match run_attempt(flow_name, factory, &request, out) {
         Ok(code) => code,
         Err(failure) => {
             let _ = writeln!(out, "dagr exec-node: {}", failure.message);
@@ -478,12 +485,16 @@ fn exit_code_for(state: TerminalState) -> ExitCode {
     match state {
         // A skip is a deliberate task decision, and a skip-only run exits cleanly.
         TerminalState::Succeeded | TerminalState::Skipped => ExitCode::Success,
-        TerminalState::Failed | TerminalState::TimedOut => ExitCode::RunFailure,
         TerminalState::Cancelled | TerminalState::Abandoned => ExitCode::Cancelled,
-        // Propagated and carried-forward states are decided by the orchestrator over
-        // a whole graph; a single attempt never reaches one. Reporting a run failure
-        // is the conservative answer if one ever did.
-        TerminalState::UpstreamSkipped
+        // A run failure, and — grouped with it deliberately — the three states a
+        // single attempt can never reach. `upstream-skipped`, `upstream-failed`, and
+        // `satisfied-from-prior` are decided by the orchestrator over a whole graph,
+        // so if one ever appeared here the engine would be wrong about something;
+        // reporting a run failure is the conservative answer, and it is the same
+        // number, which is why they share this arm.
+        TerminalState::Failed
+        | TerminalState::TimedOut
+        | TerminalState::UpstreamSkipped
         | TerminalState::UpstreamFailed
         | TerminalState::SatisfiedFromPrior => ExitCode::RunFailure,
     }

@@ -243,6 +243,12 @@ impl Task for Retrying {
 /// Every node goes through a `Payload`-bounded registrar, and the resource registry
 /// is constructed **here**, inside the factory, which is precisely why it exists once
 /// per invocation.
+///
+/// # Panics
+///
+/// If the single resource type fails to register — impossible for one registration
+/// of one type, and a defect in this fixture rather than a runtime condition, so it
+/// is asserted rather than propagated.
 #[must_use]
 pub fn build_exec_node_demo_flow() -> RunnableFlow {
     let mut flow = RunnableFlow::new();

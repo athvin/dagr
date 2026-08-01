@@ -473,48 +473,7 @@ impl AttemptShard {
             )));
         }
 
-        let schema = str_field(&header, "schema_version")?;
-        if schema != SHARD_SCHEMA_VERSION {
-            return Err(ShardError::malformed(format!(
-                "this build reads `{SHARD_SCHEMA_VERSION}` shards and this one is `{schema}`"
-            )));
-        }
-
-        let mut identity = ShardIdentity::new(
-            str_field(&header, "run_id")?,
-            str_field(&header, "node")?,
-            u32::try_from(u64_field(&header, "attempt")?)
-                .map_err(|_| ShardError::malformed("the attempt number does not fit in u32"))?,
-            str_field(&header, "structural_fingerprint")?,
-            str_field(&header, "policy_hash")?,
-            str_field(&header, "tool_version")?,
-        );
-        if let Some(digest) = header
-            .get("image_digest")
-            .and_then(serde_json::Value::as_str)
-        {
-            identity = identity.image_digest(digest);
-        }
-
-        let inputs = header
-            .get("inputs")
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| ShardError::malformed("the header carries no `inputs` array"))?
-            .iter()
-            .map(|entry| {
-                let uri = entry
-                    .get("uri")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| ShardError::malformed("an input entry carries no `uri`"))?;
-                Ok(ConsumedRef::new(
-                    uri,
-                    entry
-                        .get("content_hash")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
-                ))
-            })
-            .collect::<Result<Vec<_>, ShardError>>()?;
+        let (identity, inputs) = parse_header(&header)?;
 
         let output = trailer.get("output").and_then(|value| {
             let uri = value.get("uri")?.as_str()?;
@@ -740,7 +699,11 @@ impl AttemptShard {
 /// so "equivalent for the same outcome" is true by construction rather than by
 /// review. The `seq` numbers are attempt-local (they start at zero for every shard)
 /// and are rewritten when the orchestrator replays the records into its own
-/// single-writer stream, which is what keeps that stream gapless.
+/// single-writer stream, which is what keeps that stream gapless. `offset_ns` is
+/// attempt-local for the same reason and is likewise restamped on replay — and it
+/// carries no less information than a local attempt's does, because the abstract
+/// attempt-event port has no clock on it either: the driver stamps a local attempt's
+/// records when it *drains* them, after the attempt has returned.
 #[must_use]
 pub fn records_for(
     run_id: &str,
@@ -887,6 +850,59 @@ impl std::error::Error for ShardError {}
 // ===========================================================================
 // Line helpers
 // ===========================================================================
+
+/// Parse the shard header into its identity and its ordered consumed references.
+///
+/// Split out of [`AttemptShard::parse`] so each half stays readable: this one is the
+/// identity question ("who wrote this, for which attempt, over which references?"),
+/// and what remains there is the structural one ("is this a complete shard?").
+fn parse_header(
+    header: &serde_json::Value,
+) -> Result<(ShardIdentity, Vec<ConsumedRef>), ShardError> {
+    let schema = str_field(header, "schema_version")?;
+    if schema != SHARD_SCHEMA_VERSION {
+        return Err(ShardError::malformed(format!(
+            "this build reads `{SHARD_SCHEMA_VERSION}` shards and this one is `{schema}`"
+        )));
+    }
+
+    let mut identity = ShardIdentity::new(
+        str_field(header, "run_id")?,
+        str_field(header, "node")?,
+        u32::try_from(u64_field(header, "attempt")?)
+            .map_err(|_| ShardError::malformed("the attempt number does not fit in u32"))?,
+        str_field(header, "structural_fingerprint")?,
+        str_field(header, "policy_hash")?,
+        str_field(header, "tool_version")?,
+    );
+    if let Some(digest) = header
+        .get("image_digest")
+        .and_then(serde_json::Value::as_str)
+    {
+        identity = identity.image_digest(digest);
+    }
+
+    let inputs = header
+        .get("inputs")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ShardError::malformed("the header carries no `inputs` array"))?
+        .iter()
+        .map(|entry| {
+            let uri = entry
+                .get("uri")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ShardError::malformed("an input entry carries no `uri`"))?;
+            Ok(ConsumedRef::new(
+                uri,
+                entry
+                    .get("content_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+            ))
+        })
+        .collect::<Result<Vec<_>, ShardError>>()?;
+    Ok((identity, inputs))
+}
 
 fn parse_line(line: &str, index: usize) -> Result<serde_json::Value, ShardError> {
     serde_json::from_str(line)
