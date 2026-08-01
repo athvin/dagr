@@ -201,6 +201,50 @@ fn kinds(shard: &AttemptShard) -> Vec<String> {
 }
 
 // ===========================================================================
+// Interoperability with the T104 bridge
+// ===========================================================================
+
+/// The pod and the orchestrator exchange values through **T104's bridge**, in both
+/// directions: a reference the orchestrator produced with `Blob::put` is what the pod
+/// reads, and the reference the pod's shard names rehydrates through
+/// `Blob::<T>::rehydrate`.
+///
+/// This is the load-bearing claim of "encode and store the output through T104" — the
+/// pod cannot call the typed bridge itself (its codec is erased at the node boundary,
+/// which is what lets one verb serve every node), so the guarantee has to be that the
+/// bytes and the reference grammar are the same on both sides. Asserted here rather
+/// than assumed, because T108 depends on it entirely.
+#[test]
+fn the_pod_and_the_bridge_exchange_the_same_references() {
+    use dagr_cli::blob_bridge::Blob;
+    use dagr_core::assembly::DurableOutput;
+
+    let base = TempBase::new("exec-node-bridge");
+    let store = base.path();
+
+    // Orchestrator side: publish an input through the bridge, hand the pod its
+    // reference.
+    let published = Blob::put(&LocalFsBlob::open(store), Counted { n: 16 })
+        .expect("the bridge stores the input");
+    let exec = Exec::new(store, "double").input(published.serialize_reference());
+    let out = exec.go();
+    assert_eq!(code(&out), Some(0), "{}", said(&out));
+
+    // Pod side: the reference the shard names rehydrates back through the bridge,
+    // typed, with its recorded hash matching what the pod wrote down.
+    let shard = exec.shard().expect("a complete shard");
+    let output = shard.output().expect("an output");
+    let round_tripped: Blob<Counted> =
+        Blob::rehydrate(output.uri()).expect("the pod's output rehydrates through the bridge");
+    assert_eq!(*round_tripped.value(), Counted { n: 32 });
+    assert_eq!(
+        round_tripped.content_hash(),
+        output.recorded_content_hash().expect("a recorded hash"),
+        "the bridge and the shard agree on the content hash",
+    );
+}
+
+// ===========================================================================
 // One attempt, faithfully
 // ===========================================================================
 
@@ -214,7 +258,12 @@ fn one_attempt_stores_its_output_and_the_shard_records_succeeded() {
 
     let exec = Exec::new(store, "double").input(&input);
     let out = exec.go();
-    assert_eq!(code(&out), Some(0), "a succeeding attempt exits 0: {}", said(&out));
+    assert_eq!(
+        code(&out),
+        Some(0),
+        "a succeeding attempt exits 0: {}",
+        said(&out)
+    );
 
     let shard = exec.shard().expect("a complete shard");
     assert_eq!(shard.terminal_state(), "succeeded");
@@ -227,7 +276,9 @@ fn one_attempt_stores_its_output_and_the_shard_records_succeeded() {
     let output = shard.output().expect("a succeeded durable output");
     assert_eq!(get_counted(output.uri()), Counted { n: 42 });
     assert_eq!(
-        output.recorded_content_hash().expect("a recorded content hash"),
+        output
+            .recorded_content_hash()
+            .expect("a recorded content hash"),
         BlobKey::of(&Counted { n: 42 }.encode_to_vec()).to_string(),
         "the recorded hash is the digest of the encoded bytes",
     );
@@ -294,7 +345,9 @@ fn each_task_error_class_records_its_outcome_and_a_distinguishing_exit_code() {
             said(&out)
         );
 
-        let shard = exec.shard().expect("a shard is written for a failing attempt too");
+        let shard = exec
+            .shard()
+            .expect("a shard is written for a failing attempt too");
         assert_eq!(shard.terminal_state(), terminal, "class `{class}`");
         assert!(
             shard.output().is_none(),
@@ -373,7 +426,8 @@ fn a_retrying_node_still_performs_exactly_one_attempt_and_emits_no_backoff() {
         .filter(|r| r.get("kind").and_then(|k| k.as_str()) == Some("attempt-failed"))
         .count();
     assert_eq!(
-        failed, 1,
+        failed,
+        1,
         "no backoff record and no second attempt: {:?}",
         kinds(&shard)
     );
@@ -529,7 +583,10 @@ fn a_missing_input_blob_fails_distinguishably_and_names_the_reference() {
         said(&out)
     );
     let message = said(&out);
-    assert!(message.contains(&dangling), "names the reference: {message}");
+    assert!(
+        message.contains(&dangling),
+        "names the reference: {message}"
+    );
     assert!(
         message.contains("absent"),
         "names the classification: {message}"
@@ -551,10 +608,18 @@ fn an_input_whose_digest_no_longer_matches_fails_as_corrupt() {
 
     let exec = Exec::new(store, "double").input(&reference);
     let out = exec.go();
-    assert_eq!(code(&out), Some(4), "corrupt is not a task failure: {}", said(&out));
+    assert_eq!(
+        code(&out),
+        Some(4),
+        "corrupt is not a task failure: {}",
+        said(&out)
+    );
     let message = said(&out);
     assert!(message.contains("corrupt"), "names corruption: {message}");
-    assert!(message.contains(&reference), "names the reference: {message}");
+    assert!(
+        message.contains(&reference),
+        "names the reference: {message}"
+    );
 }
 
 /// A multi-input node rehydrates its inputs **in declared order**, and the arity is
@@ -603,10 +668,7 @@ fn a_multi_input_node_rehydrates_in_declared_order_and_checks_arity() {
         "names the node and the declared arity: {}",
         said(&short)
     );
-    let long = Exec::new(store, "double")
-        .input(&first)
-        .input(&second)
-        .go();
+    let long = Exec::new(store, "double").input(&first).input(&second).go();
     assert_eq!(code(&long), Some(2), "too many is invalid usage too");
 }
 
@@ -798,7 +860,10 @@ fn sigterm_mid_attempt_yields_a_truthful_cancelled_shard() {
         "cancelled",
         "a cancelled attempt is a real outcome, not a missing one",
     );
-    assert!(shard.output().is_none(), "a cancelled attempt names no output");
+    assert!(
+        shard.output().is_none(),
+        "a cancelled attempt names no output"
+    );
     assert_eq!(shard.identity().node(), "sleeper");
 }
 
@@ -900,12 +965,7 @@ fn each_attempt_gets_its_own_shard() {
     assert_eq!(code(&other_run.go()), Some(0));
     assert_ne!(
         shard_path(store, RUN, "double", 1),
-        shard_path(
-            store,
-            "01931f1e-0000-7000-8000-0000000000ff",
-            "double",
-            1
-        ),
+        shard_path(store, "01931f1e-0000-7000-8000-0000000000ff", "double", 1),
         "run identity is part of the shard's address",
     );
 }
@@ -933,7 +993,10 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 fn the_demo_flow_assembles() {
     let pipeline = build_exec_node_demo_flow().into_pipeline();
     pipeline.assemble().expect("the demo flow assembles");
-    let names: Vec<&str> = pipeline.nodes().map(dagr_core::flow::PipelineNode::name).collect();
+    let names: Vec<&str> = pipeline
+        .nodes()
+        .map(dagr_core::flow::PipelineNode::name)
+        .collect();
     for expected in [
         "seed",
         "double",

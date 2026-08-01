@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dagr_core::context::{ResourceRegistry, RunContext, TerminalState};
 use dagr_core::error::TaskError;
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
-use dagr_core::task::Task;
 use dagr_core::payload::Payload as PayloadCodec;
+use dagr_core::task::Task;
 use dagr_core::{Payload, StableName};
 
 use crate::run_flow::RunnableFlow;
@@ -251,8 +251,7 @@ pub fn build_exec_node_demo_flow() -> RunnableFlow {
     // attempt to get a fresh clone. `Counted` is `Copy`, so the clone is free.
     let seed = flow.register_source_payload("seed", Seed);
     let double = flow.register_payload("double", Double, seed.clone_on_read());
-    let _combine =
-        flow.register_payload("combine", Combine, (seed.clone_on_read(), double));
+    let _combine = flow.register_payload("combine", Combine, (seed.clone_on_read(), double));
     let _boom = flow.register_payload("boom", Boom, seed.clone_on_read());
     let _panicky = flow.register_payload("panicky", Panicky, seed.clone_on_read());
     let _sleeper = flow.register_payload("sleeper", Sleeper, seed.clone_on_read());

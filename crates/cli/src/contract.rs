@@ -305,7 +305,9 @@ impl Verb {
             Verb::Render => "render a diagram from a graph artifact (optionally overlaying a run)",
             Verb::Run => "mint run identity, open the store, and execute the pipeline",
             Verb::SingleNode => "replay a single node from a prior run",
-            Verb::ExecNode => "run one attempt of one node from supplied references (machine-facing)",
+            Verb::ExecNode => {
+                "run one attempt of one node from supplied references (machine-facing)"
+            }
             Verb::Resume => "resume a prior run (not yet implemented — reserved for T58)",
             Verb::Fold => "fold an event stream into a run artifact (crashed-run path)",
             Verb::Prune => "delete old runs from the run store by count or age",

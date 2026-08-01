@@ -82,7 +82,8 @@ pub fn shard_relative_path(run_id: &str, node: &str, attempt: u32) -> String {
 /// [`shard_relative_path`] resolved against a blob container `root`.
 #[must_use]
 pub fn shard_path(root: impl AsRef<Path>, run_id: &str, node: &str, attempt: u32) -> PathBuf {
-    root.as_ref().join(shard_relative_path(run_id, node, attempt))
+    root.as_ref()
+        .join(shard_relative_path(run_id, node, attempt))
 }
 
 // ===========================================================================
@@ -488,7 +489,10 @@ impl AttemptShard {
             str_field(&header, "policy_hash")?,
             str_field(&header, "tool_version")?,
         );
-        if let Some(digest) = header.get("image_digest").and_then(serde_json::Value::as_str) {
+        if let Some(digest) = header
+            .get("image_digest")
+            .and_then(serde_json::Value::as_str)
+        {
             identity = identity.image_digest(digest);
         }
 
@@ -515,7 +519,10 @@ impl AttemptShard {
         let output = trailer.get("output").and_then(|value| {
             let uri = value.get("uri")?.as_str()?;
             let mut out = ShardOutput::new(uri);
-            if let Some(hash) = value.get("content_hash").and_then(serde_json::Value::as_str) {
+            if let Some(hash) = value
+                .get("content_hash")
+                .and_then(serde_json::Value::as_str)
+            {
                 out = out.content_hash(hash);
             }
             if let Some(size) = value.get("size_bytes").and_then(serde_json::Value::as_u64) {
@@ -592,7 +599,12 @@ impl AttemptShard {
     ) -> Result<PathBuf, ShardError> {
         use std::io::Write;
 
-        let path = shard_path(root, self.identity.run_id(), self.identity.node(), self.identity.attempt);
+        let path = shard_path(
+            root,
+            self.identity.run_id(),
+            self.identity.node(),
+            self.identity.attempt,
+        );
         let dir = path
             .parent()
             .ok_or_else(|| ShardError::Io {
@@ -687,10 +699,7 @@ impl AttemptShard {
         let mut trailer = serde_json::Map::new();
         trailer.insert("schema_version".into(), SHARD_SCHEMA_VERSION.into());
         trailer.insert("kind".into(), KIND_TRAILER.into());
-        trailer.insert(
-            "terminal_state".into(),
-            self.terminal_state.clone().into(),
-        );
+        trailer.insert("terminal_state".into(), self.terminal_state.clone().into());
         trailer.insert("record_count".into(), (self.records.len() as u64).into());
         if let Some(output) = &self.output {
             let mut value = serde_json::Map::new();
@@ -929,7 +938,10 @@ mod tests {
                 .image_digest("sha256:beef"),
             "succeeded",
         )
-        .with_inputs(vec![ConsumedRef::new("dagr-blob+file:///r/sha256/aa", None)])
+        .with_inputs(vec![ConsumedRef::new(
+            "dagr-blob+file:///r/sha256/aa",
+            None,
+        )])
         .with_records(vec![serde_json::json!({"kind": "attempt-started"})])
         .with_output(ShardOutput::new("dagr-blob+file:///r/sha256/bb").size_bytes(4))
         .with_diagnostic("all good")
@@ -958,7 +970,10 @@ mod tests {
             .verify_build("other-fp", "dagr@1")
             .expect_err("a foreign fingerprint is refused");
         let message = err.to_string();
-        assert!(message.contains("other-fp") && message.contains("fp-s"), "{message}");
+        assert!(
+            message.contains("other-fp") && message.contains("fp-s"),
+            "{message}"
+        );
     }
 
     #[test]

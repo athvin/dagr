@@ -67,12 +67,12 @@ pub mod registry;
 pub mod run;
 pub mod run_flow;
 pub mod run_store;
+pub mod scale_bench;
 /// The **attempt shard** (M10, T106, ADR 115 §3): one attempt's slice of the event
 /// stream plus the outcome an orchestrator stamps from it. Gated behind the
 /// default-off `blob` feature — the shard's address is a blob-container path.
 #[cfg(feature = "blob")]
 pub mod shard;
-pub mod scale_bench;
 pub mod signals;
 pub mod structure_snapshot;
 #[cfg(feature = "test-kit")]

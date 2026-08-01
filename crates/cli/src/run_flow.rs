@@ -1133,16 +1133,16 @@ impl RunnableFlow {
 
         let mut inputs = Vec::with_capacity(upstream_ids.len());
         for id in &upstream_ids {
-            let (name, _, _, codec) = recipes
-                .iter()
-                .find(|(_, rid, _, _)| rid == id)
-                .ok_or_else(|| PrepareAttemptError::UnknownNode {
-                    node: format!("<upstream of `{node}`>"),
-                    available: Vec::new(),
-                })?;
-            let codec = codec.ok_or_else(|| PrepareAttemptError::NotRemoteEligible {
-                node: name.clone(),
-            })?;
+            let (name, _, _, codec) =
+                recipes
+                    .iter()
+                    .find(|(_, rid, _, _)| rid == id)
+                    .ok_or_else(|| PrepareAttemptError::UnknownNode {
+                        node: format!("<upstream of `{node}`>"),
+                        available: Vec::new(),
+                    })?;
+            let codec = codec
+                .ok_or_else(|| PrepareAttemptError::NotRemoteEligible { node: name.clone() })?;
             inputs.push(PreparedInput {
                 node: name.clone(),
                 id: *id,

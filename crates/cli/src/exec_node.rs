@@ -53,9 +53,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_blob::{BlobRef, BlobStore, LocalFsBlob};
-use dagr_core::context::{
-    CancellationSource, PipelineId, RunContext, RunId, TerminalState,
-};
+use dagr_core::context::{CancellationSource, PipelineId, RunContext, RunId, TerminalState};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink};
 use dagr_core::handle::NodeId;
 
@@ -170,8 +168,9 @@ impl ExecNodeArgs {
             run: run.ok_or("`exec-node` needs `--run <run-id>`")?,
             node: node.ok_or("`exec-node` needs `--node <name>`")?,
             attempt,
-            blob_store: blob_store
-                .ok_or("`exec-node` needs `--blob-store <container>` to write its output and shard")?,
+            blob_store: blob_store.ok_or(
+                "`exec-node` needs `--blob-store <container>` to write its output and shard",
+            )?,
             inputs,
             image_digest,
             expect_structural,
@@ -654,11 +653,7 @@ impl Watchdog {
         grace: Duration,
     ) -> Self {
         let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (args, structural, policy) = (
-            args.clone(),
-            structural.to_string(),
-            policy.to_string(),
-        );
+        let (args, structural, policy) = (args.clone(), structural.to_string(), policy.to_string());
         let (fired, sink, watch) = (Arc::clone(fired), sink.clone(), Arc::clone(&done));
         std::thread::spawn(move || {
             let poll = Duration::from_millis(20);
