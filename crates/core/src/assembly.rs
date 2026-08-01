@@ -755,8 +755,8 @@ impl NodePolicy {
     }
 
     /// Declare where the node's attempt should run — an opaque
-    /// [`Placement`](Placement). The default is **absent**, which means *here, in
-    /// this process*.
+    /// [`Placement`]. The default is **absent**, which means *here, in this
+    /// process*.
     ///
     /// Placement feeds the **policy hash** and is deliberately **out of** the
     /// structural fingerprint, so moving a node between local and placed is a
