@@ -1,0 +1,151 @@
+# dagr-k8s — the shared pod observer (M10, T107, ADR 115 §2/§4).
+#
+# Role: ONE watch per orchestrator process over one run's pods, demultiplexed to
+# per-attempt waiters — plus the reconnect discipline that makes a Kubernetes
+# watch survivable, and the label/annotation identity encoding a pod carries.
+# ADR 115 §2 makes one-watch-per-process a rule rather than an optimisation: a
+# watch per pod multiplies API-server connections by graph width and gives every
+# node its own reconnect bug, which is the pattern both reviewed implementations
+# (Airflow, Prefect) shipped and then removed.
+#
+# Dependency direction (the boundary this crate keeps):
+#   * dagr-k8s -> tokio                    — the async runtime the shared observer
+#                                            task runs on. The SAME tokio the
+#                                            workspace already commits to as a
+#                                            supported public dependency (arch.md
+#                                            C13); it is not an HTTP or TLS stack.
+#   * dagr-k8s -> kube, k8s-openapi,       — ONLY behind the default-OFF `client`
+#                 rustls, futures-util       feature. See the feature table below:
+#                                            this is the quarantine ADR 115
+#                                            §Consequences requires, and it is why
+#                                            a plain `cargo build --all` compiles
+#                                            no HTTP/TLS stack at all.
+#   * dagr-k8s -> (NO edge onto dagr-core) — the same C24-style boundary
+#                                            dagr-render, dagr-metastore and
+#                                            dagr-blob keep. This crate is
+#                                            structurally incapable of reaching the
+#                                            live-pipeline surface, so core's
+#                                            zero-runtime-dependency guarantee
+#                                            (arch.md "Stability", ADR 081/082) is
+#                                            untouched.
+#   * dagr-k8s -> (NO edge onto dagr-cli)  — nothing here knows about a verb, a
+#                                            flow, or a run loop. The executor that
+#                                            submits pods and consumes this
+#                                            observer is T108's, in dagr-cli.
+#
+# `dagr-cli` reaches this crate only behind its own default-off `k8s` feature, and
+# takes it with `default-features = false, features = ["client"]` so the fake API
+# surface never ships in a pipeline binary.
+# `scripts/check-k8s-feature-gating.sh` asserts every half of that.
+[package]
+name = "dagr-k8s"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The dagr shared pod observer: one Kubernetes watch per orchestrator process, its reconnect discipline, and the label/annotation identity encoding"
+documentation = "https://docs.rs/dagr-k8s"
+readme = "README.md"
+keywords = ["dag", "pipeline", "kubernetes", "observer", "orchestration"]
+categories = ["development-tools", "asynchronous", "api-bindings"]
+
+# --- Publish metadata ---------------------------------------------------------
+# `publish = false` is deliberately NOT set: the publish graph is CLOSED (Cargo
+# refuses to publish a crate whose optional dependency is not on the registry),
+# so `dagr-cli`'s optional edge onto this crate makes it publishable-or-nothing.
+# `scripts/check-crate-docs-and-metadata.sh` asserts that closure and the full
+# metadata set above.
+
+[lib]
+name = "dagr_k8s"
+path = "src/lib.rs"
+
+[features]
+# `test-kit` (default ON, mirroring `dagr-core`'s) ships `fake`: the in-process
+# implementation of the `PodApi` port that the observer's own suites drive. It is
+# the ticket's answer to "how is the fake API surface built" — a fake that can
+# induce a `resourceVersion` expiry, a silent stall, and a duplicate delivery on
+# demand, deterministically, on both CI platforms and with no cluster. It adds no
+# dependency; `--no-default-features` drops it, and `dagr-cli` takes this crate
+# with `default-features = false` so a pipeline binary never links it.
+default = ["test-kit"]
+test-kit = []
+
+# `client` (default OFF) is THE QUARANTINE. It turns on the kube-rs client
+# adapter — the only code here that speaks to a real API server — and with it the
+# whole HTTP/TLS tree ADR 115 §Consequences requires be confined:
+#
+#   * `cargo build --all` and `cargo build --workspace --no-default-features`
+#     compile NEITHER kube NOR an HTTP/TLS stack, because this feature is off in
+#     both. That is a stronger containment than the `metastore` feature's (libsql
+#     is an unconditional dependency of `dagr-metastore`, so `--all` does build
+#     it) and it is deliberate: a Kubernetes client roughly DOUBLES the lockfile,
+#     and a contributor who never touches remote execution should never compile it.
+#   * `dagr-core` is untouched at every feature setting — this crate has no edge
+#     onto it in either direction.
+#
+# The port, the observer, the reconnect discipline, the identity encoding and the
+# cluster-access resolution all live OUTSIDE this feature, on purpose: they are
+# the parts with the hard failure modes, and they are tested against the fake
+# with no client in the way.
+client = ["dep:kube", "dep:k8s-openapi", "dep:rustls", "dep:futures-util"]
+
+[dependencies]
+# tokio — the shared observer is one spawned task owning one watch, so it needs a
+# runtime, a timer (the stall bound and the reconnect backoff), channels (the
+# per-attempt waiters and the command seam), and `select!`. The feature set is
+# minimal and matches the workspace's existing posture: NOT `full`, no `net`, no
+# `fs`, no `process`. This crate opens nothing and reads no file of its own — the
+# cluster-access resolution below probes for *existence* through `std`, and every
+# byte on the wire is the client adapter's, behind the default-off `client`
+# feature.
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros"] }
+
+# --- The quarantined client tree (behind `client`) ---------------------------
+# kube — the client T101's spike chose, against measured behaviour rather than a
+# survey (docs/implementation/116-T101-remote-execution-spike.md, "Client choice").
+# `default-features = false` + `client` + `rustls-tls` takes the request path and
+# the TLS backend and NOTHING else. In particular `runtime` is deliberately OFF:
+# dagr implements its own list/watch discipline over `Api::list` / `Api::watch`,
+# which is the level T101's error taxonomy is written in terms of, and the level a
+# fake can stand in for. See this ticket's resolved open questions.
+#
+# `k8s-openapi` MUST be pinned to the exact minor `kube` depends on (T101 build
+# trap 1: declaring a different major resolves BOTH into the graph and the second
+# copy's build script panics with "None of the v1_* features are enabled"). The
+# Kubernetes API version feature is selected here, once.
+kube = { version = "1.1", default-features = false, features = ["client", "rustls-tls"], optional = true }
+k8s-openapi = { version = "0.25", default-features = false, features = ["v1_33"], optional = true }
+
+# rustls — T101 build trap 2: `kube`'s `rustls-tls` feature alone does NOT install
+# a process-level crypto provider, and the first TLS handshake then PANICS inside
+# rustls 0.23 ("Could not automatically determine the process-level
+# CryptoProvider"). A panic on first use is not an acceptable failure mode for an
+# opt-in library feature, so exactly one provider is named here and installed
+# explicitly, once, on the way to building a client.
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+
+# futures-util — the `Stream` the kube watch hands back is consumed with
+# `StreamExt::next`. `default-features = false` keeps it to the combinators.
+futures-util = { version = "0.3", default-features = false, optional = true }
+
+[dev-dependencies]
+# tokio's `test-util` gives the paused clock. The observer's whole subject is
+# timing — a stall bound measured in tens of seconds, an exponential reconnect
+# backoff, a shutdown budget — and a suite that slept through those would be both
+# slow and flaky. With `start_paused = true` the tests assert the SCHEDULE rather
+# than race it, and the 90-second stall bound is exercised in microseconds.
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros", "test-util"] }
+
+# serde_json — used only by the `client`-gated decode tests, which push RECORDED
+# watch frames (including the verbatim 410 body T101 captured off a real API
+# server) through kube's own `WatchEvent<Pod>` deserializer and then through this
+# crate's classifier. That is what keeps the fake honest: the fake proves the
+# discipline, the recorded frame proves the classification is aimed at the bytes a
+# real server sends. Already in the workspace tree; MIT.
+serde_json = "1"
+
+[lints]
+workspace = true

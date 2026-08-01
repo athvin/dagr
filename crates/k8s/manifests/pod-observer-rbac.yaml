@@ -1,0 +1,67 @@
+# Least-privilege RBAC for the dagr shared pod observer (M10, T107, ADR 115 §2).
+#
+# This is the WHOLE of what the observer needs: read pods, in ONE namespace.
+# It is a namespaced `Role`, never a `ClusterRole` — a cluster-wide pod read is
+# a materially different grant (every namespace's pod specs, environment
+# references and node placement) and the observer has no use for it. Watching
+# more than one namespace is out of scope by decision, not by omission.
+#
+# Deliberately ABSENT, and each absence is load-bearing:
+#   * `create` / `delete` / `patch` on pods — submitting an attempt, deleting a
+#     finished one, and rewriting an ownership label are the *executor's* and the
+#     *adoption* path's grants, not the observer's. They ship with the tickets
+#     that ship those mechanisms, so an operator who only wants to observe can
+#     apply this file alone.
+#   * `pods/log` — dagr does not stream logs from pods. Aggregation is the
+#     cluster's job, consistent with the refusal of push-export from inside the
+#     process; the observer watches status.
+#   * `pods/exec`, `pods/portforward` — the re-entrant same-image design needs no
+#     sidecar handshake and no channel into a running container.
+#   * `events`, `nodes` — an `Unschedulable` condition and both `reason` fields
+#     are on the pod object itself, so the diagnostics dagr reports need no
+#     second read and no cluster-scoped resource.
+#
+# Apply into the namespace the run's pods live in, and point the orchestrator at
+# that same namespace. Substitute `dagr` for your namespace in all three objects.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dagr-orchestrator
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dagr-pod-observer
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+rules:
+  # `get` is what a single-pod reconciliation reads; `list` is what a resync
+  # re-reads after a reconnect; `watch` is the one long-lived stream. There is no
+  # fourth verb, and no second resource.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dagr-pod-observer
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dagr-pod-observer
+subjects:
+  - kind: ServiceAccount
+    name: dagr-orchestrator
+    namespace: dagr
