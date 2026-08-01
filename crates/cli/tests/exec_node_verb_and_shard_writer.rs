@@ -31,6 +31,12 @@
 //! Nothing here asserts a constant next to itself: every expected value is derived
 //! from what the subprocess actually wrote (the blob it stored, the shard it
 //! emitted) or from the in-process engine run alongside it.
+//!
+//! The whole suite is gated on the default-off `blob` feature: the verb reads its
+//! inputs from a blob store and writes its shard to one, and the demo binary it
+//! launches is only built with the feature on. A default `cargo test --workspace`
+//! therefore compiles nothing here — the same gating `blob_bridge.rs` uses.
+#![cfg(feature = "blob")]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
