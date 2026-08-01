@@ -1114,7 +1114,7 @@ fn wire_terminal(state: TerminalState) -> WireTerminalState {
 /// wall stamp, monotonic offset) via the writer. Non-attempt records
 /// (`node-ready`, `run-started`, `run-finished`, `zombie-at-exit`) are the
 /// driver's own and are written directly.
-fn write_attempt_event<S, C>(
+pub(crate) fn write_attempt_event<S, C>(
     writer: &mut EventStreamWriter<S, C>,
     event: &AttemptEvent,
 ) -> Result<(), dagr_artifact::event_stream::SinkFault>
