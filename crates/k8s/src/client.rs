@@ -265,7 +265,7 @@ fn delivery(event: WatchEvent<Pod>) -> WatchDelivery {
             resource_version: bookmark.metadata.resource_version,
         },
         WatchEvent::Error(response) => WatchDelivery::ApiError {
-            code: u16::try_from(response.code).unwrap_or(u16::MAX),
+            code: response.code,
             reason: response.reason,
             message: response.message,
         },
@@ -275,11 +275,9 @@ fn delivery(event: WatchEvent<Pod>) -> WatchDelivery {
 /// Classify a client error into the port's shape, keeping the platform's words.
 fn failure(error: kube::Error) -> ApiFailure {
     match error {
-        kube::Error::Api(response) => ApiFailure::api(
-            u16::try_from(response.code).unwrap_or(u16::MAX),
-            response.reason,
-            response.message,
-        ),
+        kube::Error::Api(response) => {
+            ApiFailure::api(response.code, response.reason, response.message)
+        }
         other => ApiFailure::transport(other.to_string()),
     }
 }
