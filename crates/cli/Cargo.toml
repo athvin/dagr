@@ -57,6 +57,18 @@ path = "src/bin/dagr-run-a-flow-demo.rs"
 # the `test-kit`-gated `dagr_cli::t63_demo` reference pipeline, so it is gated behind
 # the same default-on feature: a production `default-features = false` build cleanly
 # excludes both. It ships in no released binary.
+# The T106 pod-side verb's reference pipeline (`exec-node`) — the process the
+# `exec_node_verb_and_shard_writer` suite launches as a subprocess in place of a pod.
+# It hosts a real flow of `Payload`-bounded tasks behind the standard registry
+# entrypoint, so the verb under test is reached exactly as a real pipeline binary
+# reaches it. Gated on `test-kit` (test-support scaffolding) AND `blob` (the verb
+# reads and writes a blob store), so a production `default-features = false` build
+# excludes it; it ships in no released binary.
+[[bin]]
+name = "dagr-exec-node-demo"
+path = "src/bin/dagr-exec-node-demo.rs"
+required-features = ["test-kit", "blob"]
+
 [[bin]]
 name = "dagr-t63-demo-run"
 path = "src/bin/dagr-t63-demo-run.rs"

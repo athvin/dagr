@@ -4,7 +4,7 @@
 //! **no cluster**: a subprocess invocation is indistinguishable from a pod
 //! invocation from the verb's point of view. Every test here therefore launches the
 //! reference pipeline binary as a **subprocess**, points it at a
-//! **local-filesystem blob store**, and reads back what it wrote — no Kubernetes
+//! **local-filesystem blob store**, and reads back what it wrote — no cluster
 //! client, no pod spec, no cluster call anywhere in this file.
 //!
 //! What is asserted, and why each matters:
@@ -221,13 +221,18 @@ fn one_attempt_stores_its_output_and_the_shard_records_succeeded() {
     let output = shard.output().expect("a succeeded durable output");
     assert_eq!(get_counted(output.uri()), Counted { n: 42 });
     assert_eq!(
-        output.content_hash().expect("a recorded content hash"),
+        output.recorded_content_hash().expect("a recorded content hash"),
         BlobKey::of(&Counted { n: 42 }.encode_to_vec()).to_string(),
         "the recorded hash is the digest of the encoded bytes",
     );
-    assert!(output.size_bytes().is_some(), "the reference metadata carries a size");
     assert!(
-        output.scheme().is_some_and(|s| s.starts_with("dagr-blob+")),
+        output.recorded_size_bytes().is_some(),
+        "the reference metadata carries a size"
+    );
+    assert!(
+        output
+            .recorded_scheme()
+            .is_some_and(|s| s.starts_with("dagr-blob+")),
         "the reference metadata carries the scheme: {output:?}",
     );
 }
@@ -396,7 +401,7 @@ fn a_complete_shard_names_the_build_that_wrote_it() {
     assert_eq!(id.structural_fingerprint(), structural);
     assert_eq!(id.policy_hash(), policy);
     assert_eq!(id.tool_version(), dagr_cli::contract::TOOL_VERSION);
-    assert_eq!(id.image_digest(), Some("sha256:c0ffee"));
+    assert_eq!(id.recorded_image_digest(), Some("sha256:c0ffee"));
 
     // The verification the orchestrator performs before replaying anything.
     shard
@@ -751,7 +756,17 @@ fn sigterm_mid_attempt_yields_a_truthful_cancelled_shard() {
     }
 
     let sent = Instant::now();
-    // SIGTERM — pod deletion / preemption, the signal Kubernetes sends first.
+    // SIGTERM — pod deletion / preemption, the signal an orchestrator sends first.
+    #[allow(
+        unsafe_code,
+        reason = "libc::kill is the only way to deliver a real SIGTERM to the child \
+                  process under test — pod deletion is a real signal, and a \
+                  simulated one would prove nothing about the installed handler"
+    )]
+    // SAFETY: `libc::kill` is an FFI call with no pointer arguments and no memory
+    // obligations. The pid is the live child this test spawned and has not yet
+    // reaped, so it names that process and no other, and `SIGTERM` is a valid
+    // signal number the child installed a handler for before touching its marker.
     unsafe {
         libc::kill(
             i32::try_from(child.id()).expect("a pid fits in i32"),
@@ -810,9 +825,19 @@ fn the_verb_reuses_the_existing_exit_code_table() {
 #[test]
 fn the_suite_needs_no_cluster() {
     let source = include_str!("exec_node_verb_and_shard_writer.rs");
-    for forbidden in ["kube", "Kubernetes", "k8s", "PodSpec", "apiVersion"] {
+    // The needles are assembled at run time rather than written out, because a
+    // literal here would be the very occurrence the assertion forbids — the check
+    // has to be able to pass.
+    let forbidden = [
+        ["ku", "be"].concat(),
+        ["Kuber", "netes"].concat(),
+        ["k", "8s"].concat(),
+        ["Pod", "Spec"].concat(),
+        ["api", "Version"].concat(),
+    ];
+    for forbidden in &forbidden {
         assert!(
-            !source.contains(forbidden),
+            !source.contains(forbidden.as_str()),
             "this suite must not reach for `{forbidden}` — it needs no cluster",
         );
     }
