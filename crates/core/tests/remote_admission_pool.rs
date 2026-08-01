@@ -57,7 +57,9 @@ fn remote_slots_is_a_pool_and_is_unconstrained_by_default() {
         "an unpinned remote pool is unconstrained — dagr does not invent a cluster ceiling"
     );
     assert_eq!(
-        PoolCapacities::new().remote_slots(2).total(Pool::RemoteSlots),
+        PoolCapacities::new()
+            .remote_slots(2)
+            .total(Pool::RemoteSlots),
         2,
         "the operator's ceiling is the pool's total capacity"
     );
@@ -73,7 +75,11 @@ fn remote_slots_is_a_pool_and_is_unconstrained_by_default() {
 #[test]
 fn a_placed_node_costs_one_remote_slot_and_no_local_working_capacity() {
     let cost = PoolCost::from_policy(placed_policy(), PlacementHandling::Honoured);
-    assert_eq!(cost.remote_slot_count(), 1, "one placed node, one remote slot");
+    assert_eq!(
+        cost.remote_slot_count(),
+        1,
+        "one placed node, one remote slot"
+    );
     assert_eq!(cost.working_memory_bytes(), 0);
     assert_eq!(cost.blocking_thread_count(), 0);
     assert_eq!(cost.compute_thread_count(), 0);
@@ -179,7 +185,11 @@ fn with_no_placed_nodes_the_remote_pool_is_never_consulted() {
     let cost = PoolCost::from_cost_vector(local_policy().cost());
     let permits: Vec<_> = ["a", "b", "c"]
         .iter()
-        .map(|n| admission.try_admit(n, &cost).expect("unconstrained pools admit"))
+        .map(|n| {
+            admission
+                .try_admit(n, &cost)
+                .expect("unconstrained pools admit")
+        })
         .collect();
     assert_eq!(
         admission.counted(Pool::RemoteSlots),

@@ -598,6 +598,7 @@ impl std::fmt::Display for CapacityError {
         let unit = match self.pool {
             Pool::Memory => "bytes",
             Pool::BlockingThreads | Pool::ComputeThreads => "threads",
+            Pool::RemoteSlots => "remote slots",
         };
         write!(
             f,

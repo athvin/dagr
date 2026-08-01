@@ -333,7 +333,7 @@ pub mod test_kit;
 pub use assembly::{
     AssemblyArtifact, AssemblyError, CostVector, DurableOutput, DurableReferenceMeta,
     DurableWitness, EffectivePolicy, FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, NodePolicy,
-    Problem, ProblemKind, Warning,
+    Placement, Problem, ProblemKind, Warning,
 };
 pub use binding::{
     BoundInput, CloneOnRead, DataEdge, Deps, EdgeKind, MAX_INPUT_ARITY, NodeBinding, OrderingEdge,

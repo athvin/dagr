@@ -184,6 +184,28 @@ pub struct PolicyDiff {
     pub current: u64,
 }
 
+impl std::fmt::Display for PolicyDiff {
+    /// The line a caller prints instead of refusing. It names both hashes and says
+    /// plainly that the run proceeds — a policy divergence (a raised timeout, a
+    /// node moved on or off remote compute) is the *motivating* case for resume,
+    /// not a reason to refuse it.
+    ///
+    /// It names the *aggregate* divergence, not the field that moved: the prior run
+    /// artifact records the two hashes and no per-node policy, so this type has
+    /// nothing finer to report. The per-node presentation — which node's timeout was
+    /// raised, which node gained a placement — comes from a structure diff against
+    /// the graph artifact, which does carry every node's full effective policy.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "policy hash diverged (prior fnv:{:016x}, current fnv:{:016x}); resume proceeds — \
+             a policy divergence prints this diff and never refuses. For the per-node detail \
+             (which policy value moved), diff the graph artifact's effective policies.",
+            self.prior, self.current
+        )
+    }
+}
+
 /// A **refusal** — resume verified the prior run against this binary and would not
 /// proceed. Each variant is a **distinct**, testable cause; the CLI maps every one
 /// to the resume-refusal exit code and prints the carried detail.
