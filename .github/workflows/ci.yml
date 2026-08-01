@@ -395,8 +395,21 @@ jobs:
       # verification) and the T104 DoD requires ubuntu + macOS — rename/fsync
       # semantics and temp-directory behaviour are exactly the kind of thing that
       # differs between the two.
-      - name: blob DurableOutput bridge (T104, --features blob)
-        run: cargo nextest run -p dagr-cli --features blob --test blob_bridge
+      #
+      # T106's `exec-node` suite rides the SAME `--features blob` build (one cargo
+      # invocation links both targets in parallel and pays cargo's startup once —
+      # the grouping the metastore steps above already use). It belongs on both
+      # tiers for the same reason the bridge does, and one more: it launches the
+      # pipeline binary as a SUBPROCESS in place of a pod and sends it a real
+      # SIGTERM, so process spawning, signal delivery, the shard's temp-file +
+      # fsync + rename, and the shutdown budget are all exercised per platform.
+      # No cluster is involved anywhere in it — a local-filesystem blob store is
+      # the whole of its infrastructure.
+      - name: blob DurableOutput bridge + exec-node verb and shard (T104/T106, --features blob)
+        run: |
+          cargo nextest run -p dagr-cli --features blob \
+            --test blob_bridge \
+            --test exec_node_verb_and_shard_writer
       # The lineage leg needs BOTH default-off features at once (the bridge and the
       # run index) — it proves an M8 lineage row carries a blob URI and hash through
       # the EXISTING projection, with `crates/metastore/src/mapping.rs` untouched.
