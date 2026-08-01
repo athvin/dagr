@@ -16,6 +16,14 @@
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+/// The **blob-backed durable-output bridge** (M10, T104, ADR 115 §8): `Blob<T>`,
+/// a `DurableOutput` over any `dagr_core::Payload`, stored through the
+/// `dagr_blob::BlobStore` port. Gated behind the default-off `blob` feature so a
+/// default build (and `--no-default-features`) drops both the bridge and the
+/// `dagr-blob` edge — `dagr-core` never sees either, and the port itself keeps no
+/// edge onto `dagr-core`.
+#[cfg(feature = "blob")]
+pub mod blob_bridge;
 pub mod config;
 pub mod contract;
 pub(crate) mod dispatch;

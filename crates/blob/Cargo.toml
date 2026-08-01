@@ -1,0 +1,64 @@
+# dagr-blob — the blob port and its local filesystem backend (M10, T104).
+#
+# Role: the place a payload's bytes live so that both the orchestrator and a
+# remote task can reach them. A three-operation port (`put` / `get` / `head`)
+# over an opaque, content-addressed key, plus the local filesystem
+# implementation of it.
+#
+# Dependency direction (the boundary this crate keeps):
+#   * dagr-blob -> (NOTHING)          — no workspace edge and no third-party
+#                                       crate. The SHA-256 content address is
+#                                       implemented here (FIPS 180-4, checked
+#                                       against the published vectors) precisely
+#                                       so that a plain `cargo build --all`
+#                                       compiles NO storage dependency.
+#   * dagr-blob -> (NO edge onto dagr-core)  — the same C24-style boundary
+#                                       dagr-render and dagr-metastore keep
+#                                       (ADR 097 §5). This crate is structurally
+#                                       incapable of reaching the live-pipeline
+#                                       surface, so core's zero-runtime-dependency
+#                                       guarantee (arch.md "Stability", ADR
+#                                       081/082) is untouched.
+#   * dagr-blob -> (NO edge onto dagr-cli)   — nothing here knows about a verb,
+#                                       a flow, or a run.
+#
+# The BRIDGE from this port to dagr-core's `DurableOutput` contract deliberately
+# does NOT live here — it needs both `DurableOutput` and `Payload`, which are
+# core's. It lives in `dagr-cli` behind the default-off `blob` feature
+# (crates/cli/src/blob_bridge.rs), which is the one place both sides are visible.
+#
+# The crate is a normal workspace member, so `cargo test --workspace` builds and
+# tests it directly; nothing depends on it by default. `scripts/check-blob-
+# feature-gating.sh` asserts both halves.
+[package]
+name = "dagr-blob"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The dagr blob port and its local filesystem backend: content-addressed, atomically-written opaque bytes"
+documentation = "https://docs.rs/dagr-blob"
+readme = "README.md"
+keywords = ["dag", "pipeline", "blob", "storage", "content-addressed"]
+categories = ["filesystem", "development-tools", "data-structures"]
+
+# --- Publish metadata ---------------------------------------------------------
+# `publish = false` is deliberately NOT set: the publish graph is CLOSED (Cargo
+# refuses to publish a crate whose optional dependency is not on the registry),
+# so `dagr-cli`'s optional edge onto this crate makes it publishable-or-nothing.
+# `scripts/check-crate-docs-and-metadata.sh` asserts that closure and the full
+# metadata set above.
+
+[lib]
+name = "dagr_blob"
+path = "src/lib.rs"
+
+# No [dependencies] table. That absence is the point, and it is asserted:
+# `scripts/check-blob-feature-gating.sh` fails the build if this crate ever grows
+# one, because "a plain `cargo build --all` compiles no storage dependency" is
+# only true while the table is empty.
+
+[lints]
+workspace = true

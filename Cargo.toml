@@ -12,6 +12,16 @@
 #   cli      -> core, artifact, render     (the pipeline binary; the one place
 #                                           the live pipeline and rendering meet)
 #   render   -> artifact                    (renderers consume artifacts only; C24)
+#   blob     -> (none)                      (the opt-in blob port + local backend;
+#                                           NO edge onto core, cli, or ANY
+#                                           third-party crate — its SHA-256 content
+#                                           address is in-tree so `cargo build
+#                                           --all` compiles no storage dependency
+#                                           at all, ADR 115 §8 / T104. cli reaches
+#                                           it only behind a default-off `blob`
+#                                           feature; the DurableOutput bridge lives
+#                                           in cli, the one place both sides are
+#                                           visible.)
 #   metastore-> artifact, libsql, tokio      (the opt-in run index; artifact-only
 #                                           workspace edge, NO edge onto core — the
 #                                           same C24-style boundary as render, ADR
@@ -44,6 +54,7 @@ members = [
     "crates/artifact",
     "crates/render",
     "crates/metastore",
+    "crates/blob",
     "crates/cli",
 ]
 

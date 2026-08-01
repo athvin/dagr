@@ -112,6 +112,23 @@ dag = ["dep:inventory"]
 # `tokio` and has NO path to `dagr-core`.
 metastore = ["dep:dagr-metastore"]
 
+# --- The M10 blob-storage feature (T104, ADR 115 §8), OFF by default ---------
+# `blob` turns on the optional `dagr-blob` dependency edge (the blob port + its
+# local filesystem backend) and, with it, `dagr_cli::blob_bridge` — the
+# `Blob<T>` durable-output bridge over `dagr_core::Payload`. It is DEFAULT-OFF,
+# like `metastore`: a pipeline that stores nothing pays for nothing, and a plain
+# `cargo build --all` / `cargo build -p dagr-cli --no-default-features` reaches
+# no storage backend through the binary.
+#
+# `dagr-blob` itself has NO dependencies at all (its SHA-256 content address is
+# in-tree), so unlike the metastore feature this one adds no third-party crate to
+# any resolution — the gating is about SURFACE (the bridge, the `Blob<T>` type),
+# not about keeping a heavy tree out. The bridge lives HERE rather than in
+# `dagr-blob` because it needs both `DurableOutput` and `Payload`, which are
+# `dagr-core`'s, and `dagr-blob` must keep its no-edge-onto-core boundary
+# (`scripts/check-blob-feature-gating.sh` asserts both halves).
+blob = ["dep:dagr-blob"]
+
 [dependencies]
 dagr-core = { path = "../core", version = "0.0.0" }
 dagr-artifact = { path = "../artifact", version = "0.0.0" }
@@ -126,6 +143,15 @@ dagr-render = { path = "../render", version = "0.0.0" }
 # `cargo test --workspace` still builds it directly; this edge is what the cli
 # reaches it through, and only under the feature.
 dagr-metastore = { path = "../metastore", version = "0.0.0", optional = true }
+
+# dagr-blob — the OPTIONAL M10 blob-storage crate (T104, ADR 115 §8), pulled ONLY
+# behind the default-off `blob` feature above. `optional = true` means the edge
+# exists only when the feature is on, so `cargo build --all` and
+# `--no-default-features` build `dagr-cli` with NO edge onto `dagr-blob`, and
+# `dagr-core` never sees it. It is a normal workspace member, so
+# `cargo test --workspace` still builds and tests it directly; this edge is what
+# the cli reaches it through, and only under the feature.
+dagr-blob = { path = "../blob", version = "0.0.0", optional = true }
 
 # dagr-macros — the build-time-only, zero-runtime-dependency proc-macro crate (ADR
 # 082/092). dagr-cli depends on it for the M6 `#[dag]` attribute (T80), which it
