@@ -184,7 +184,7 @@ Work in order: the ADR (T100), the spike (T101), the retry/timeout prerequisites
 - [x] **117** · [T102 — real retry backoff and per-attempt timeout on the run-flow path](117-T102-backoff-and-timeout-enforcement.md) · M · feature — after T100
 - [x] **118** · [T103 — the `Payload` codec trait and derive](118-T103-payload-trait-and-derive.md) · M · feature — after T101
 - [x] **119** · [T104 — the blob port, local backend, and `DurableOutput` bridge](119-T104-blob-port-and-local-backend.md) · M · feature — after T103
-- [ ] **120** · [T105 — placement policy, remote admission pool, executor selection](120-T105-placement-and-executor-selection.md) · M · feature — after T101
+- [x] **120** · [T105 — placement policy, remote admission pool, executor selection](120-T105-placement-and-executor-selection.md) · M · feature — after T101
 - [ ] **121** · [T106 — the `exec-node` pod-side verb and attempt shard writer](121-T106-exec-node-verb-and-shard-writer.md) · L · feature — after T104, T105
 - [ ] **122** · [T107 — the shared pod observer: one watch, reconnect, identity](122-T107-shared-pod-observer.md) · L · feature — after T105
 - [ ] **123** · [T108 — the Kubernetes node runner and the two retry budgets](123-T108-kubernetes-node-runner.md) · L · feature — after T102, T106, T107
