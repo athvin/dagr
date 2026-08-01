@@ -77,21 +77,31 @@ pub const STAGE_VALUE: &str = "STAGE-OUTPUT";
 /// The stage boundary's durable payload. Its reference is `blob://<content>`, so a
 /// distinctive marker survives serialize → record → rehydrate and can be traced to
 /// the prior run. Carries a [`StableName`] so the durable producer is snapshottable.
+///
+/// The Rust type is named `DemoBlob` while its graph identity stays `Blob`: the
+/// demo's toy payload must not share a type name with the shipped blob-backed
+/// bridge type, because a duplicate name in one crate is enough for the compiler to
+/// print fully-qualified paths in its diagnostics — which the checked-in `trybuild`
+/// `.stderr` snapshots match byte-for-byte, and which would therefore make those
+/// snapshots depend on which optional features are enabled. Renaming the type is
+/// free precisely because a node's identity is the `STABLE_NAME` string and never
+/// the type name, so the string stays `Blob` and every recorded artifact stays
+/// valid — which is the refactor-proofing [`StableName`] exists for.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Blob(pub String);
+pub struct DemoBlob(pub String);
 
-impl StableName for Blob {
+impl StableName for DemoBlob {
     const STABLE_NAME: &'static str = "Blob";
 }
 
-impl DurableOutput for Blob {
+impl DurableOutput for DemoBlob {
     fn serialize_reference(&self) -> String {
         format!("blob://{}", self.0)
     }
     fn rehydrate(reference: &str) -> Result<Self, RehydrateError> {
         reference
             .strip_prefix("blob://")
-            .map(|s| Blob(s.to_string()))
+            .map(|s| DemoBlob(s.to_string()))
             .ok_or_else(|| RehydrateError::corruption("malformed blob reference"))
     }
 }
@@ -114,9 +124,9 @@ impl StableName for Expensive {
 }
 impl Task for Expensive {
     type Input = ();
-    type Output = Blob;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Blob, TaskError> {
-        Ok(Blob(STAGE_VALUE.to_string()))
+    type Output = DemoBlob;
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<DemoBlob, TaskError> {
+        Ok(DemoBlob(STAGE_VALUE.to_string()))
     }
 }
 
@@ -127,9 +137,9 @@ impl StableName for InMemory {
 }
 impl Task for InMemory {
     type Input = ();
-    type Output = Blob;
-    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Blob, TaskError> {
-        Ok(Blob("IN-MEM".to_string()))
+    type Output = DemoBlob;
+    async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<DemoBlob, TaskError> {
+        Ok(DemoBlob("IN-MEM".to_string()))
     }
 }
 
@@ -150,9 +160,9 @@ impl StableName for Consumer {
     const STABLE_NAME: &'static str = "Consumer";
 }
 impl Task for Consumer {
-    type Input = Blob;
-    type Output = Blob;
-    async fn run(&mut self, _c: &RunContext, i: Blob) -> Result<Blob, TaskError> {
+    type Input = DemoBlob;
+    type Output = DemoBlob;
+    async fn run(&mut self, _c: &RunContext, i: DemoBlob) -> Result<DemoBlob, TaskError> {
         if let Some(cap) = &self.received {
             // Poison policy: panic — only this assignment runs under the capture
             // cell's lock (the task body around it does not hold it), so poisoning
@@ -294,7 +304,7 @@ pub fn assemble(
         NodePolicy::new(),
     );
 
-    // The consumer demands one producer's Blob and is ordered after `checkpoint`
+    // The consumer demands one producer's DemoBlob and is ordered after `checkpoint`
     // (so it is pending at a mid-run kill).
     let demanded = match consumer_from {
         ConsumerFrom::Expensive => expensive,
@@ -460,18 +470,18 @@ pub struct DemoRun<'a> {
     pub omit: &'a [&'a str],
     /// Producers whose slot is pre-filled by rehydration (resume), so a re-running
     /// consumer reads the value without the producer re-executing.
-    pub prefill: &'a BTreeMap<String, Blob>,
+    pub prefill: &'a BTreeMap<String, DemoBlob>,
     /// Where the consumer records the blob it received (for a non-vacuous
     /// rehydration assertion), or `None`.
     pub consumer_capture: Option<ConsumerCapture>,
 }
 
-/// The slots the demo's nodes write to, keyed by name — Blob-output producers and
+/// The slots the demo's nodes write to, keyed by name — DemoBlob-output producers and
 /// Unit-output effect nodes, built with each node's real consumer count.
 struct DemoSlots {
-    expensive: Arc<Slot<Blob>>,
-    inmem: Arc<Slot<Blob>>,
-    consumer: Arc<Slot<Blob>>,
+    expensive: Arc<Slot<DemoBlob>>,
+    inmem: Arc<Slot<DemoBlob>>,
+    consumer: Arc<Slot<DemoBlob>>,
     checkpoint: Arc<Slot<Unit>>,
     publish: Arc<Slot<Unit>>,
     cleanup: Arc<Slot<Unit>>,
@@ -612,16 +622,21 @@ pub fn build_runner_set(
     )
 }
 
-/// A Blob-output source runner; `durable` records the [`Expensive`] reference.
-fn blob_source<T>(name: &str, task: T, slot: Arc<Slot<Blob>>, durable: bool) -> Box<dyn NodeRunner>
+/// A DemoBlob-output source runner; `durable` records the [`Expensive`] reference.
+fn blob_source<T>(
+    name: &str,
+    task: T,
+    slot: Arc<Slot<DemoBlob>>,
+    durable: bool,
+) -> Box<dyn NodeRunner>
 where
-    T: Task<Input = (), Output = Blob> + Send + 'static,
+    T: Task<Input = (), Output = DemoBlob> + Send + 'static,
 {
     Box::new(SourceRunner {
         name: name.to_string(),
         task: Some(task),
         slot,
-        durable_reference: durable.then(|| Blob(STAGE_VALUE.to_string()).serialize_reference()),
+        durable_reference: durable.then(|| DemoBlob(STAGE_VALUE.to_string()).serialize_reference()),
     })
 }
 

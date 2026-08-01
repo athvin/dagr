@@ -13,9 +13,9 @@ help: the trait `StableName` is not implemented for `Unnamed`
    | ^^^^^^^^^^^^^^
    = help: the following other types implement trait `StableName`:
              ()
-             Blob
              Checkpoint
              Consumer
+             DemoBlob
              Effect
              Teardown
              Unit
@@ -40,9 +40,9 @@ error[E0277]: the trait bound `u64: StableName` is not satisfied
    |
    = help: the following other types implement trait `StableName`:
              ()
-             Blob
              Checkpoint
              Consumer
+             DemoBlob
              Effect
              Teardown
              Unit

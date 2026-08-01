@@ -46,7 +46,7 @@ use dagr_artifact::fold::fold_stream;
 use dagr_cli::contract::{ResumeOptions, ResumeOutcome, TOOL_VERSION, resume_verb};
 use dagr_cli::driver::{RunConfig, drive};
 use dagr_cli::t63_demo::{
-    Blob, ConsumerFrom, DemoRun, PIPELINE, assemble, base_groups, build_runner_set,
+    ConsumerFrom, DemoBlob, DemoRun, PIPELINE, assemble, base_groups, build_runner_set,
 };
 use dagr_core::assembly::DurableOutput;
 use dagr_core::context::{PipelineId, RunId as CoreRunId};
@@ -260,9 +260,9 @@ fn resume_mode(base: &str, prior: &str, new: &str, result_path: &str) -> ExitCod
         .keys()
         .map(String::as_str)
         .collect();
-    let mut prefill: BTreeMap<String, Blob> = BTreeMap::new();
+    let mut prefill: BTreeMap<String, DemoBlob> = BTreeMap::new();
     for (node, reference) in plan.rehydrate() {
-        match Blob::rehydrate(reference) {
+        match DemoBlob::rehydrate(reference) {
             Ok(value) => {
                 prefill.insert(node.clone(), value);
             }
