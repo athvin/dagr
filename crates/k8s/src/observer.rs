@@ -517,6 +517,23 @@ impl ObserverCore {
         }
     }
 
+    /// Health: the stall clock restarts and the failure run is forgotten.
+    ///
+    /// Called for a successful list, a delivered object, and a bookmark — the
+    /// three things that are evidence the server is answering. It is deliberately
+    /// **not** called when a watch is merely established, because a watch that is
+    /// accepted and immediately closed is exactly the failure the run counter
+    /// exists to notice.
+    ///
+    /// One consequence was considered and accepted: because a successful list
+    /// clears the run, a hypothetical server that expired every watch immediately
+    /// after the list that fed it would re-list without ever backing off. It needs
+    /// the watch cache to turn over *entirely* between a list and the watch that
+    /// follows it microseconds later, and a cluster in that state is beyond any
+    /// client-side pacing; the alternative — not clearing the run on a successful
+    /// list — would make an ordinary run's *isolated* transient failures
+    /// accumulate over hours until the elapsed bound tripped on a healthy cluster,
+    /// which is a worse failure and a far likelier one.
     fn note_progress(&mut self, now: Duration) {
         self.last_progress = now;
         self.consecutive_failures = 0;

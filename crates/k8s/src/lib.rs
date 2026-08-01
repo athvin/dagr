@@ -11,10 +11,13 @@
 //!   discipline, and the per-attempt waiters.
 //! - [`identity`] — the label/annotation encoding and its inverse: labels are
 //!   lossy selectors, annotations are authoritative.
-//! - [`api`] — the [`PodApi`](api::PodApi) port the observer watches through,
+//! - [`api`] — the [`PodApi`] port the observer watches through,
 //!   and the shapes a list and a watch hand back.
 //! - [`access`] — out-of-cluster and in-cluster resolution, as a pure decision.
-//! - [`client`] — the kube-rs adapter, behind the default-off `client` feature.
+//! - `client` — the kube-rs adapter, behind the default-off `client` feature.
+//!   Not linked, deliberately: it does not exist in a default build, and a link
+//!   to it would be a broken intra-doc link in the very resolution the
+//!   quarantine exists to produce.
 //!   The only module here that speaks to a real API server, and the only one that
 //!   pulls an HTTP or TLS crate.
 //! - [`fake`] — the in-process fake API surface, behind the default-on
