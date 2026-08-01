@@ -426,6 +426,43 @@ jobs:
       - name: blob feature-gating and crate boundary (T104)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-blob-feature-gating.sh
+      # === M10 remote execution: the shared pod observer =======================
+      # The observer's OWN suites — the reconnect discipline, identity, cluster
+      # access, the RBAC manifest — need NO feature: `dagr-k8s` is a normal
+      # workspace member whose default surface is client-free, so the plain
+      # `cargo nextest run --workspace` above runs all of them on BOTH tiers. That
+      # is deliberate and is where the T107 DoD's ubuntu + macOS line is met: the
+      # observer is task/timer/channel code and the access resolution is temp-dir
+      # and path code, both of which differ between the platforms.
+      #
+      # The step below turns on the quarantined client, which is the ONE part of
+      # the crate the default build does not compile. It is Linux tier-1 only: the
+      # client tests decode RECORDED watch frames through kube's deserializer and
+      # through this crate's translation, so they exercise no filesystem, no
+      # process spawning and no clock — nothing that differs by platform — while
+      # building the client costs a ~140-crate HTTP/TLS tree with a C toolchain
+      # for its TLS backend. `cargo build --workspace --all-features` on the
+      # feature-matrix job compiles the same tree a second way, so a break in the
+      # adapter cannot reach `main` unnoticed either way.
+      - name: shared pod observer — the quarantined kube client (T107, --features client)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run -p dagr-k8s --features client
+      # Clippy runs over the DEFAULT feature set, so the client adapter — the one
+      # module a default build does not compile — would otherwise never be linted.
+      # T104 and T106 both learned this class of gap the expensive way.
+      - name: shared pod observer — clippy over the quarantined client (T107)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy -p dagr-k8s --features client --all-targets -- -D warnings
+      # The structural gate proving the strongest containment in the workspace:
+      # `dagr-k8s` reaches no other dagr crate and is absent from core's
+      # reverse-dependency tree, the cli's default and --no-default-features
+      # resolutions carry no edge to it, --features k8s carries one and reaches the
+      # client through it, and — the literal T107 requirement — the WHOLE-WORKSPACE
+      # default and --no-default-features resolutions compile no HTTP/TLS crate at
+      # all.
+      - name: k8s feature-gating and crate boundary (T107)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-k8s-feature-gating.sh
       # --- Acceptance-criteria coverage matrix (system criterion 8) ------------
       # Verifies that every machine-classed criterion in the partition is bound to
       # an existing test (or an explicitly-deferred `unmapped` placeholder) in the

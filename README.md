@@ -176,18 +176,21 @@ topology and rationale are recorded in the ADR embedded in
 | `render` (`dagr-render`) | Reads an artifact and emits diagram source (DOT / Mermaid). Library plus a standalone renderer binary. | `artifact` **only** |
 | `metastore` (`dagr-metastore`) | The local, embedded, **opt-in** run index (M7): a queryable libSQL/SQLite projection of the event stream. Reached from `cli` only behind a default-off `metastore` feature. | `artifact` + `libsql` + `tokio` (no `core`) |
 | `blob` (`dagr-blob`) | The **opt-in** blob port and its local filesystem backend (M10): content-addressed, atomically-written opaque bytes. Reached from `cli` only behind a default-off `blob` feature. | *(nothing at all — no `core`, no third-party crate)* |
-| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` (+ `metastore` and `blob`, opt-in) |
+| `k8s` (`dagr-k8s`) | The **opt-in** shared pod observer (M10): one Kubernetes watch per orchestrator process, its reconnect discipline, and the label/annotation identity encoding. Reached from `cli` only behind a default-off `k8s` feature. | `tokio` (no `core`); the Kubernetes client itself sits behind a **second** default-off feature |
+| `cli` (`dagr-cli`) | The pipeline binary and its command-line contract (`run` / `graph` / `validate` / `list` / …). | `core`, `artifact`, `render` (+ `metastore`, `blob` and `k8s`, opt-in) |
 
 The allowed dependency edges are `cli → {core, artifact, render}`,
 `render → artifact`, `metastore → artifact`, and `core → macros` (build-time
-only); `cli → metastore` and `cli → blob` exist only behind their default-off
-features. **None of `render`, `metastore`, or `blob` has a dependency edge onto
-`core`**, so a renderer (and the run index, and the blob store) is structurally
-incapable of reaching the live pipeline — it consumes artifacts, or opaque bytes,
-and needs no access to the binary that produced them
-([`docs/arch.md`](docs/arch.md) C24 · Renderers). The standalone `dagr-render`
-binary builds without `core` or `cli`, which is that guarantee made concrete; so
-is `dagr-blob` compiling with an empty dependency table.
+only); `cli → metastore`, `cli → blob` and `cli → k8s` exist only behind their
+default-off features. **None of `render`, `metastore`, `blob`, or `k8s` has a
+dependency edge onto `core`**, so a renderer (and the run index, the blob store,
+and the pod observer) is structurally incapable of reaching the live pipeline —
+it consumes artifacts, or opaque bytes, or pod status, and needs no access to the
+binary that produced them ([`docs/arch.md`](docs/arch.md) C24 · Renderers). The
+standalone `dagr-render` binary builds without `core` or `cli`, which is that
+guarantee made concrete; so is `dagr-blob` compiling with an empty dependency
+table, and so is `cargo build --all` compiling **no HTTP or TLS crate at all**
+even though the workspace now contains a Kubernetes client.
 
 ## MSRV
 
