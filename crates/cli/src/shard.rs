@@ -736,6 +736,12 @@ struct LineSink {
 }
 
 impl LineSink {
+    /// The collected lines.
+    ///
+    /// Poison policy: recover. This buffer is written and read by one thread inside
+    /// [`records_for`], so it cannot in practice be poisoned at all; recovering
+    /// rather than panicking keeps a panic *elsewhere* in the attempt from also
+    /// destroying the shard that is supposed to report it.
     fn lines(&self) -> Vec<Vec<u8>> {
         self.lines
             .lock()
@@ -745,6 +751,8 @@ impl LineSink {
 }
 
 impl dagr_artifact::event_stream::EventSink for LineSink {
+    /// Poison policy: recover — the same buffer and the same reason as
+    /// [`lines`](LineSink::lines).
     fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
         self.lines
             .lock()

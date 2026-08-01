@@ -617,6 +617,11 @@ impl CollectingSink {
     }
 
     /// A snapshot of the abstract events, in emission order.
+    ///
+    /// Poison policy: recover — the same buffer and the same reason as
+    /// [`emit`](AttemptEventSink::emit): the shard is the only report this attempt
+    /// will ever make, and refusing to read the records because a panic poisoned the
+    /// lock would throw away the very record that panic produced.
     fn drain_snapshot(&self) -> Vec<AttemptEvent> {
         self.events
             .lock()
