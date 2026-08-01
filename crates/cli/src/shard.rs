@@ -212,6 +212,12 @@ impl ConsumedRef {
 /// The durable output a succeeded attempt produced: its reference plus the
 /// [`DurableReferenceMeta`](dagr_core::assembly::DurableReferenceMeta) fields the
 /// orchestrator stamps onto the attempt record exactly as a local durable node's are.
+///
+/// The metadata's fourth field, `produced_at_offset_ns`, is deliberately **not**
+/// here: an offset is measured from a run's start, and the pod's clock starts at its
+/// own attempt. Carrying an attempt-local offset into the orchestrator's stream would
+/// be a number that looks comparable and is not. The orchestrator stamps its own when
+/// it replays, exactly as it does for a locally-produced output.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShardOutput {
     uri: String,
