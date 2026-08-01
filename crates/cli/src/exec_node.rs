@@ -190,7 +190,7 @@ impl ExecNodeArgs {
 /// a **fresh** flow through the factory — the re-entrancy that makes the wire format
 /// tiny — and prepares exactly one attempt of the named node.
 pub(crate) fn exec_node_selected_flow<W: Write>(
-    _flow_name: &str,
+    flow_name: &str,
     factory: &FlowFactory,
     argv: &[OsString],
     out: &mut W,
@@ -202,7 +202,7 @@ pub(crate) fn exec_node_selected_flow<W: Write>(
             return ExitCode::InvalidUsage;
         }
     };
-    match run_attempt(factory, &args, out) {
+    match run_attempt(flow_name, factory, &args, out) {
         Ok(code) => code,
         Err(failure) => {
             let _ = writeln!(out, "dagr exec-node: {}", failure.message);
@@ -234,6 +234,7 @@ impl Refusal {
               sequence that is the point of reading it."
 )]
 fn run_attempt<W: Write>(
+    flow_name: &str,
     factory: &FlowFactory,
     args: &ExecNodeArgs,
     out: &mut W,
@@ -356,7 +357,10 @@ fn run_attempt<W: Write>(
     let ctx = {
         let mut builder = RunContext::builder(
             RunId::new(args.run.clone()),
-            PipelineId::new(args.node.clone()),
+            // The pipeline identity is the selected flow's name — the same identity a
+            // local run of this flow carries, so the attempt's log span reads the same
+            // on both sides.
+            PipelineId::new(flow_name),
             NodeId::from_name(&args.node),
         )
         .attempt(args.attempt)
