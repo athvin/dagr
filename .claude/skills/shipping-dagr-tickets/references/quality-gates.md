@@ -58,16 +58,25 @@ cargo deny check   # only if cargo-deny and deny.toml exist, else SKIP:named-rea
 In era `ci` the gate additionally runs the repo's **own** `scripts/check-*.sh`
 assertions, reported as `CHECK:repo:<script-name>`. They are discovered by
 glob, never enumerated — this repo adds a check script per ADR ticket, so a
-hard-coded list would silently rot behind them. Scripts that drive cargo
-(detected by grep) are reported `SKIP:cargo-driven`: they rebuild the
-workspace under varying feature sets, and the gate's own fmt/clippy/test/doc
-steps plus real CI already cover them.
+hard-coded list would silently rot behind them. The whole set runs in ~20s.
+The only one skipped is whichever script the `criteria-matrix` check above
+already ran, reported `SKIP:already run above as criteria-matrix`; it drives
+the full test suite and is the sole expensive member.
 
 This exists because CI runs these scripts and the gate did not, so an entire
-failure class — crate metadata, lint parity, ADR invariants — was invisible
-locally and could only surface as a CI fix round. Ticket 118 (T103) paid that
-cost once: a green local gate, then `crate-docs-and-metadata` failing on a
-`.unwrap()` in a doc example.
+failure class — crate metadata, lint parity, feature-matrix builds, ADR
+invariants — was invisible locally and could only surface as a CI fix round.
+Two tickets paid that cost:
+
+- **118 (T103)** — green local gate, then `crate-docs-and-metadata` failed on
+  a `.unwrap()` in a doc example.
+- **119 (T104)** — green local gate, then `feature-matrix` failed because a
+  new `Blob` type un-trimmed a path in a trybuild `.stderr` fixture.
+
+The 119 failure was in a script the first version of this loop *skipped*: it
+guessed at cost by grepping for `cargo` and skipped nine scripts, eight of
+which turned out to run in about a second. Measure before skipping — a cheap
+check is never worth a fix round.
 
 **Hand-off rule:** these are defaults. Once `CONTRIBUTING.md` or the CI
 workflow defines an exact command (the rustdoc lint especially), the repo

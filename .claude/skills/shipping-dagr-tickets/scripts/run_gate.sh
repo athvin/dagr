@@ -132,7 +132,13 @@ else
     # matrix debt is visible per-ticket instead of exploding at ticket 080.
     matrix=$(ls scripts/*criteria* ci/*criteria* scripts/*matrix* ci/*matrix* 2>/dev/null | head -1)
     if [ -n "$matrix" ]; then
-      run_check criteria-matrix "$matrix"
+      # CI passes the release checklist; match it so local and CI assert the
+      # same thing (quality-gates.md hand-off rule: CI's command is authoritative).
+      if [ -f docs/release-checklist.md ]; then
+        run_check criteria-matrix "$matrix" --checklist docs/release-checklist.md
+      else
+        run_check criteria-matrix "$matrix"
+      fi
     else
       skip criteria-matrix "no matrix-verification script found"
     fi
@@ -143,15 +149,18 @@ else
     # Discovered by glob, not enumerated: this repo adds a check script per ADR
     # ticket, and a hard-coded list would silently rot behind them.
     #
-    # Cargo-driven checks are skipped by name: they rebuild the workspace under
-    # varying feature sets (minutes each), and the gate's own fmt/clippy/test/
-    # doc steps plus real CI already cover them. The grep is the selector, so a
-    # newly-added script lands in the right bucket on its own.
+    # Run them all. Measured on the ticket-119 tree, every one of these is
+    # 0-3s except the criteria-matrix script above, which drives the whole test
+    # suite — so the only thing worth skipping is that one, and only because it
+    # already ran as `criteria-matrix`. An earlier version of this loop guessed
+    # at cost by grepping for `cargo` and skipped nine scripts; eight of them
+    # were ~1s, and one of the eight (feature-matrix) then failed in CI on
+    # ticket 119. Cheap checks are not worth a fix round.
     for chk in scripts/check-*.sh; do
       [ -e "$chk" ] || break                      # glob did not expand
       name="repo:$(basename "$chk" .sh)"
-      if grep -qE '(^|[^a-z-])cargo (build|test|clippy|doc|check|run|metadata|tree|fmt)' "$chk"; then
-        skip "$name" "cargo-driven — covered by this gate's cargo steps and by CI"
+      if [ "$chk" = "$matrix" ]; then
+        skip "$name" "already run above as criteria-matrix"
       else
         run_check "$name" bash "$chk"
       fi
