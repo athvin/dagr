@@ -180,10 +180,22 @@ Each verb maps its **own** outcome to its C26 exit code
 | `run <flow>` | the run's `RunReport` → its C26 code (success / run-failure / cancelled / …) |
 | `graph <flow>` | `Success` (0) on a clean emit; `AssemblyFailure` (3) if the flow cannot be emitted (a node without stable names) |
 | `validate <flow>` | `Success` (0) on a clean assembly; `AssemblyFailure` (3) otherwise, printing **every** problem |
+| `exec-node <flow>` | the single attempt's outcome → its C26 code (see below) |
 | bad/absent/unknown flow name | `InvalidUsage` (2), before the flow is built |
 
 `graph` and `validate` return their own codes **directly** — they do not go through
 the completed-run exit-code path.
+
+`exec-node` (the pod-side verb, ADR 115 §3) routes here for a reason worth stating:
+the remote side re-enters *the same binary* and rebuilds the flow through *the same
+factory*, so the verb needs exactly the selection rules every other flow-selecting
+verb uses — and a `#[dag]`-declared DAG gets it with no registry edit. Its own code
+is the attempt's: `0` on success or a deliberate skip, `1` on a task failure or a
+caught panic, `2` on a malformed invocation, `3` on a node this build's graph does
+not have, `4` on an absent or corrupt input, `5` on cancellation, `6` on a
+fingerprint the invoker did not expect, `7` on an unwritable shard. Its body needs
+the default-off `blob` feature; a build without it answers with a recognized stub
+naming the feature rather than failing to recognize the verb.
 
 ## What the registry does not route
 
