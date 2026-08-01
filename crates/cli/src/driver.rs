@@ -95,7 +95,9 @@ use dagr_artifact::event_stream::{
     RunStartedHeader, TerminalState as WireTerminalState,
 };
 pub use dagr_artifact::event_stream::{RunId, RunOutcome as OverallOutcome};
-use dagr_core::admission::{AdmissionController, Permit, PoolCapacities, PoolCost};
+use dagr_core::admission::{
+    AdmissionController, Permit, PlacementHandling, PoolCapacities, PoolCost,
+};
 use dagr_core::assembly::AssemblyError;
 use dagr_core::context::{
     CancellationOrigin, CancellationSource, CoveredNodeStates, PipelineId, RunContext,
@@ -110,6 +112,7 @@ use dagr_core::task::ExecutionClass;
 use tracing::Instrument;
 
 use crate::dispatch::{Dispatcher, Surface};
+use crate::executor::ExecutorKind;
 
 /// The thread execution **surface** a unit of work ran on — the observable half of
 /// the class→surface routing. Await-bound work runs on
@@ -442,6 +445,7 @@ pub struct RunConfig {
     data_interval: Option<[String; 2]>,
     capacities: PoolCapacities,
     failure_mode: FailureMode,
+    executor: ExecutorKind,
     // The programmatic cancellation trigger: a shared request channel a caller (a
     // test, or an OS-signal handler) fires and the run loop observes. Cloned into
     // the loop; a `CancelHandle` handed out by `cancel_handle` shares the same
@@ -473,6 +477,10 @@ impl RunConfig {
             // nothing, so an unset mode leaves the loop's behaviour unchanged.
             // Stop-on-first-failure is opt-in.
             failure_mode: FailureMode::default(),
+            // Every node runs in this process unless an operator selects otherwise.
+            // A node's placement is then recorded and ignored, which is what lets one
+            // binary be both a laptop run and a placed one.
+            executor: ExecutorKind::Local,
             // A fresh, un-fired cancellation trigger. Unless a caller fires the
             // handle (or stop-on-first-failure routes through the core), the run is
             // never cancelled and its behaviour is unchanged.
@@ -606,6 +614,27 @@ impl RunConfig {
     #[must_use]
     pub fn effective_failure_mode(&self) -> FailureMode {
         self.failure_mode
+    }
+
+    /// Select the [executor](ExecutorKind) that runs this invocation's node
+    /// attempts — the driver-side seam the resolved `--dagr.executor` /
+    /// `DAGR_EXECUTOR` knob feeds ([`resolve_executor`](crate::config::resolve_executor)).
+    ///
+    /// The default is [`Local`](ExecutorKind::Local), so leaving it unset preserves
+    /// the run loop's behaviour exactly. Selecting an executor this build does not
+    /// implement is refused at **bootstrap** with the executor's own diagnostic — a
+    /// `bootstrap-failed` run with zero attempts, never a quiet local substitution.
+    #[must_use]
+    pub fn executor(mut self, executor: ExecutorKind) -> Self {
+        self.executor = executor;
+        self
+    }
+
+    /// The **effective** [executor](ExecutorKind) this run will use (the selection
+    /// if set, else [`Local`](ExecutorKind::Local)).
+    #[must_use]
+    pub fn effective_executor(&self) -> ExecutorKind {
+        self.executor
     }
 
     /// Set the **grace period** from `flag > env > default`: the already-parsed
@@ -1321,6 +1350,33 @@ where
     };
     let _ = writer.run_started(header);
 
+    // --- The executor check. An executor this build does not implement is refused
+    // HERE, at bootstrap, rather than at the CLI verb alone: a caller driving the
+    // engine programmatically must get the same answer, because the alternative is
+    // running every node in-process while the operator believes their placement was
+    // honoured. Zero attempts, a `bootstrap-failed` outcome, and the executor's own
+    // actionable diagnostic naming the ticket that implements it.
+    if let Err(refusal) = config.executor.ensure_available() {
+        eprintln!("{refusal}");
+        let _ = writer.run_finished(RunOutcome::BootstrapFailed);
+        let flush_ok = finalize_shutdown(&mut writer, &temp_dir);
+        return RunReport {
+            outcome: RunOutcome::BootstrapFailed,
+            terminal_states: BTreeMap::new(),
+            run_id: run_id_str,
+            stream_path,
+            cancellation_origin: None,
+            shutdown_exit: select_shutdown_exit(RunOutcome::BootstrapFailed, None, flush_ok),
+        };
+    }
+
+    // How this run's executor charges a placed node: an executor that honours
+    // placement runs the attempt elsewhere (one remote slot, near-zero local cost),
+    // and the local one records the placement and runs the node here anyway, so its
+    // declared local cost stands. One decision, read by both the bootstrap capacity
+    // check below and the loop's admission.
+    let placement_handling = config.executor.placement_handling();
+
     // --- The too-big-node bootstrap check: reject, before any node executes, any
     // node whose declared cost exceeds a pool's total capacity — fail fast rather
     // than wedge at admission time. This runs after the header is recorded (so a
@@ -1334,7 +1390,7 @@ where
         .map(|n| {
             (
                 n.name().to_string(),
-                PoolCost::from_cost_vector(n.policy().cost()),
+                PoolCost::from_policy(n.policy(), placement_handling),
             )
         })
         .collect();
@@ -1382,6 +1438,7 @@ where
         config.failure_mode,
         &admission,
         &config.capacities,
+        placement_handling,
         &config.cancel_trigger,
         &temp_dir,
         &config.base,
@@ -1624,6 +1681,11 @@ struct AdmitCtx<'a> {
     dispatcher: &'a Dispatcher,
     tx: &'a tokio::sync::mpsc::UnboundedSender<AttemptDone>,
     admission: &'a AdmissionController,
+    // How this run's executor charges a PLACED node against the pools. The local
+    // executor records a placement and ignores it, so a placed node pays its
+    // declared local cost; an executor that honours placement charges one remote
+    // slot and near-zero local capacity instead.
+    placement_handling: PlacementHandling,
     run_cancel: &'a CancellationSource,
     live: &'a LiveSet,
     // The run's per-run temp directory, threaded into each attempt's `RunContext`
@@ -1688,6 +1750,7 @@ fn run_loop<S, C>(
     failure_mode: FailureMode,
     admission: &AdmissionController,
     capacities: &PoolCapacities,
+    placement_handling: PlacementHandling,
     cancel_trigger: &Arc<CancelTrigger>,
     temp_dir: &std::path::Path,
     scratch_base: &str,
@@ -1839,6 +1902,7 @@ where
             dispatcher: &dispatcher,
             tx: &tx,
             admission,
+            placement_handling,
             run_cancel: &run_cancel,
             live: &live,
             temp_dir,
@@ -2622,11 +2686,11 @@ fn enter_cancellation(
 /// the admission controller acquires against. Reads the node's `NodePolicy::cost`
 /// without duplicating the definition; an unknown node (a framework defect handled
 /// downstream) demands nothing.
-fn declared_cost(pipeline: &Pipeline, name: &str) -> PoolCost {
-    pipeline
+fn declared_cost(ctx: &AdmitCtx, name: &str) -> PoolCost {
+    ctx.pipeline
         .node(NodeId::from_name(name))
         .map_or_else(PoolCost::new, |n| {
-            PoolCost::from_cost_vector(n.policy().cost())
+            PoolCost::from_policy(n.policy(), ctx.placement_handling)
         })
 }
 
@@ -2646,7 +2710,7 @@ fn offer_or_pend<S, C>(
     C: MonotonicClock,
 {
     let admission = ctx.admission;
-    let cost = declared_cost(ctx.pipeline, name);
+    let cost = declared_cost(ctx, name);
     match admission.try_admit(name, &cost) {
         Some(permit) => {
             admit(ctx, name, writer, permit);
@@ -2825,7 +2889,7 @@ fn drain_pending<S, C>(
     let mut index = 0;
     while index < pending.len() {
         let name = pending[index].clone();
-        let cost = declared_cost(ctx.pipeline, &name);
+        let cost = declared_cost(ctx, &name);
         if let Some(permit) = ctx.admission.try_admit(&name, &cost) {
             pending.remove(index);
             admit(ctx, &name, writer, permit);

@@ -8,7 +8,8 @@
 //!
 //! The **run-loop driver** is [`driver`] — the component that orchestrates one
 //! complete run from an assembled pipeline to a truthful end. The one-call
-//! run-a-flow seam is [`run_flow`]; the command-line contract and exit-code
+//! run-a-flow seam is [`run_flow`]; the per-invocation choice of *which* executor
+//! runs a node attempt is [`executor`]; the command-line contract and exit-code
 //! table are [`contract`]; many-DAGs-in-one-binary is [`registry`] (hand-wired)
 //! and [`run`](mod@run) (auto-discovered); the structure fixture is
 //! [`structure_snapshot`]; the C28 fakes harness is [`full_pipeline`].
@@ -28,6 +29,7 @@ pub mod config;
 pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;
+pub mod executor;
 pub mod flow_builder;
 #[cfg(feature = "test-kit")]
 pub mod full_pipeline;

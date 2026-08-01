@@ -92,6 +92,24 @@ pub const DAGR_METASTORE: &str = "DAGR_METASTORE";
 /// ([`resolve_force_roundtrip`]).
 pub const DAGR_FORCE_ROUNDTRIP: &str = "DAGR_FORCE_ROUNDTRIP";
 
+/// Environment fallback for `--dagr.executor` (which executor runs this
+/// invocation's node attempts, M10, T105). Accepts the closed set
+/// [`ExecutorKind::ALL`](crate::executor::ExecutorKind::ALL) — `local` | `k8s` —
+/// and **defaults to `local`**, so a binary with no knob set runs entirely
+/// in-process exactly as it always has. An unrecognized value fails loudly
+/// ([`resolve_executor`]); it is never resolved to the default.
+pub const DAGR_EXECUTOR: &str = "DAGR_EXECUTOR";
+
+/// Environment fallback for `--dagr.max-pods` (the flat operator ceiling on
+/// concurrently-placed node attempts, M10, T105 — the
+/// [`RemoteSlots`](dagr_core::admission::Pool::RemoteSlots) pool's capacity).
+///
+/// The default is [`MAX_PODS_DEFAULT`] — **no dagr-side ceiling**. This is a flat
+/// operator limit, not a model of anyone's cluster: dagr does not know the capacity
+/// on the other side and does not second-guess it, so it invents no number of its
+/// own and leaves the pool unconstrained until an operator states one.
+pub const DAGR_MAX_PODS: &str = "DAGR_MAX_PODS";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -697,6 +715,121 @@ pub fn parse_force_roundtrip_flag(argv: &[std::ffi::OsString]) -> Result<Option<
                 .map(|b| Some(b.into_inner()))
                 .map_err(|e| format!("`{FORCE_ROUNDTRIP_FLAG}={value}` {e}"));
         }
+    }
+    Ok(None)
+}
+
+// ===========================================================================
+// Executor selection — DAGR_EXECUTOR / --dagr.executor
+// ===========================================================================
+
+/// The library-owned flag selecting the executor (`--dagr.executor`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names), so a pipeline
+/// parameter can never shadow it.
+pub const EXECUTOR_FLAG: &str = "--dagr.executor";
+
+/// The library-owned flag capping concurrently-placed node attempts
+/// (`--dagr.max-pods`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const MAX_PODS_FLAG: &str = "--dagr.max-pods";
+
+/// The default remote-slot ceiling: **unconstrained**.
+///
+/// The remote pool is a flat *operator* limit on in-flight placed work, and the
+/// cluster remains responsible for its own capacity. Picking a finite default here
+/// would be dagr second-guessing an accounting it cannot see, and would silently
+/// serialize a wide fan-out nobody asked to serialize — so the pool is unpinned
+/// until an operator states a number, matching every other pool's
+/// [unconstrained](dagr_core::admission::PoolCapacities::new) default.
+pub const MAX_PODS_DEFAULT: u32 = u32::MAX;
+
+/// Resolve which **executor** runs this invocation by `flag > env > default`
+/// (default [`Local`](crate::executor::ExecutorKind::Local)): a present
+/// `--dagr.executor` flag wins outright (the env is never read); with no flag,
+/// [`DAGR_EXECUTOR`] is read and parsed; with neither, every node runs in-process.
+///
+/// A value outside the closed set fails **loudly**, naming the variable and the
+/// rejected value — an executor is never silently downgraded to `local`, because a
+/// run that quietly ignored the operator's placement request and reported success
+/// is the one outcome worse than refusing.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_EXECUTOR`] when its value is not a
+/// recognized executor name.
+pub fn resolve_executor(
+    flag: Option<crate::executor::ExecutorKind>,
+) -> Result<crate::executor::ExecutorKind, EnvParseError> {
+    resolve(flag, DAGR_EXECUTOR, crate::executor::ExecutorKind::Local)
+}
+
+/// Resolve the **remote-slot ceiling** by `flag > env > default` (default
+/// [`MAX_PODS_DEFAULT`], unconstrained): a present `--dagr.max-pods` flag wins
+/// outright; with no flag, [`DAGR_MAX_PODS`] is read and parsed as a pod count;
+/// with neither, the remote pool imposes no dagr-side ceiling.
+///
+/// `0` is a legitimate value meaning *no remote capacity at all*: a placed node
+/// then fails the bootstrap over-demand check with a named reason, rather than
+/// waiting for capacity that can never arrive.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_MAX_PODS`] when its value is not a
+/// non-negative integer.
+pub fn resolve_max_pods(flag: Option<u32>) -> Result<u32, EnvParseError> {
+    resolve(flag, DAGR_MAX_PODS, MAX_PODS_DEFAULT)
+}
+
+/// Parse `--dagr.executor` out of a raw invocation. Absent → [`None`] (fall
+/// through to the env/default); `--dagr.executor=k8s` and `--dagr.executor k8s`
+/// both yield the parsed executor.
+///
+/// # Errors
+/// Returns the diagnostic message when the value is not a recognized executor name
+/// — a bad selection fails loudly, never silently local.
+pub fn parse_executor_flag(
+    argv: &[std::ffi::OsString],
+) -> Result<Option<crate::executor::ExecutorKind>, String> {
+    parse_valued_flag(argv, EXECUTOR_FLAG)
+}
+
+/// Parse `--dagr.max-pods` out of a raw invocation, in the same two grammars as
+/// [`parse_executor_flag`].
+///
+/// # Errors
+/// Returns the diagnostic message when the value is not a non-negative integer.
+pub fn parse_max_pods_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, String> {
+    parse_valued_flag(argv, MAX_PODS_FLAG)
+}
+
+/// Read a **value-taking** library flag out of a raw invocation, accepting both
+/// `--flag=value` and `--flag value`.
+///
+/// Distinct from the bare-boolean toggles ([`parse_force_roundtrip_flag`]): these
+/// flags have no meaningful "present means on" form, so a flag with **no** value is
+/// itself an error rather than a default — silently ignoring `--dagr.executor` with
+/// a missing value would drop an operator's instruction on the floor.
+fn parse_valued_flag<T>(argv: &[std::ffi::OsString], flag: &str) -> Result<Option<T>, String>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let eq_prefix = format!("{flag}=");
+    let mut it = argv.iter();
+    while let Some(arg) = it.next() {
+        let Some(s) = arg.to_str() else { continue };
+        let raw = if s == flag {
+            it.next()
+                .and_then(|a| a.to_str())
+                .ok_or_else(|| format!("`{flag}` needs a value"))?
+        } else if let Some(value) = s.strip_prefix(&eq_prefix) {
+            value
+        } else {
+            continue;
+        };
+        return T::from_str(raw)
+            .map(Some)
+            .map_err(|e| format!("`{flag}={raw}` {e}"));
     }
     Ok(None)
 }

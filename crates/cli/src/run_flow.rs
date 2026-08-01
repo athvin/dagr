@@ -361,13 +361,37 @@ impl RunnableFlow {
         T: Task<Input = ()> + StableName + Send + 'static,
         T::Output: StableName + Send + Sync + 'static,
     {
+        self.register_source_named_with(name, task, NodePolicy::new())
+    }
+
+    /// Register a **stable-name-aware source** node under `name` with an explicit
+    /// [`NodePolicy`], returning its output [`Handle`].
+    ///
+    /// The policy-carrying counterpart of
+    /// [`register_source_named`](Self::register_source_named): identical in every
+    /// other respect, and the registrar to reach for when a graph-emittable node
+    /// also needs a stated policy — a [placement](dagr_core::Placement), a retry
+    /// budget, a declared cost. Both facets are needed together often enough (a
+    /// placed node is exactly a node whose *policy* the graph artifact must show)
+    /// that having to choose between stable names and a policy would be a real gap.
+    #[must_use]
+    pub fn register_source_named_with<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName + Send + 'static,
+        T::Output: StableName + Send + Sync + 'static,
+    {
         let name = name.into();
         // The stable-name-aware flow registrar captures `T`'s author-declared stable
         // names into the pipeline node, so the built pipeline is graph-emittable.
-        let handle =
-            self.flow
-                .register_source_named::<T>(&name, &task, None::<String>, NodePolicy::new());
-        self.push_source_runner(&name, task, handle);
+        let handle = self
+            .flow
+            .register_source_named::<T>(&name, &task, None::<String>, policy);
+        self.push_source_runner_with(&name, task, policy, handle);
         handle
     }
 
@@ -416,7 +440,22 @@ impl RunnableFlow {
         T: Task<Input = ()> + Send + 'static,
         T::Output: Send + Sync + 'static,
     {
-        let policy = NodePolicy::new();
+        self.push_source_runner_with(name, task, NodePolicy::new(), handle);
+    }
+
+    /// [`push_source_runner`](Self::push_source_runner) with an explicit policy —
+    /// the shared body, so the policy-carrying and default-policy source registrars
+    /// build the same runner from one place.
+    fn push_source_runner_with<T>(
+        &mut self,
+        name: &str,
+        task: T,
+        policy: NodePolicy,
+        handle: Handle<T::Output>,
+    ) where
+        T: Task<Input = ()> + Send + 'static,
+        T::Output: Send + Sync + 'static,
+    {
         let retry_config = policy.retry_config();
         let enforcement = TimeoutEnforcement::for_node::<T>(&policy);
         let node_name = name.to_string();
@@ -517,8 +556,32 @@ impl RunnableFlow {
         T::Output: StableName + Send + Sync + 'static,
         D: Deps<Inputs = T::Input> + InputWiring + Clone,
     {
+        self.register_named_with(name, task, deps, NodePolicy::new())
+    }
+
+    /// Register a **stable-name-aware data-dependent** node under `name`, binding
+    /// `deps`, with an explicit [`NodePolicy`], returning its output [`Handle`].
+    ///
+    /// The policy-carrying counterpart of [`register_named`](Self::register_named)
+    /// — the registrar a graph-emittable node with a stated policy needs. A
+    /// [placed](dagr_core::Placement) node is the motivating case: its placement is
+    /// policy, and the whole point of declaring it is that the graph artifact and a
+    /// structure diff show it, which requires the node to carry stable names too.
+    #[must_use]
+    pub fn register_named_with<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        deps: D,
+        policy: NodePolicy,
+    ) -> Handle<T::Output>
+    where
+        T: Task + StableName + Send + 'static,
+        T::Input: StableInputNames + Clone + Send + 'static,
+        T::Output: StableName + Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
         let name = name.into();
-        let policy = NodePolicy::new();
         // The stable-name-aware flow registrar captures `T`/`T::Input`/`T::Output`'s
         // author-declared stable names into the pipeline node (so the built pipeline
         // is graph-emittable) while binding the same edges `register` does.

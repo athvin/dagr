@@ -16,7 +16,11 @@
 //! and **output** type names, effective **execution class**, the **complete
 //! effective policy** with every policy field written out (defaults included),
 //! declared **resource requirements** (the per-pool cost vector), and the
-//! **dependency list**. For **every edge**: its **kind** (data vs ordering) and,
+//! **dependency list**. A node that declares a
+//! [placement](dagr_core::Placement) carries it inside its policy block, verbatim
+//! and unparsed; a node that does not carries **no** placement field at all, so an
+//! unplaced pipeline's artifact is byte-identical to what it was before placement
+//! existed. For **every edge**: its **kind** (data vs ordering) and,
 //! for a data edge, the **stable name of the carried type**. The versioned
 //! **header** carries the schema version, tool version, generation time, pipeline
 //! identity, the **computed fingerprints** — the structural fingerprint, the
@@ -77,8 +81,8 @@ use dagr_core::binding::EdgeKind;
 use dagr_core::flow::{Pipeline, PipelineNode};
 use dagr_core::task::ExecutionClass;
 use dagr_core::{
-    EffectivePolicy, FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, TriggerRule, UNIT_STABLE_NAME,
-    is_well_formed,
+    EffectivePolicy, FINGERPRINT_ALGORITHM_VERSION, FingerprintSlot, Placement, TriggerRule,
+    UNIT_STABLE_NAME, is_well_formed,
 };
 use serde_json::{Map, Value, json};
 
@@ -499,7 +503,7 @@ fn validate_stable_name(node: &str, value: &str) -> Result<(), GraphEmitError> {
 fn build_policy(policy: &EffectivePolicy) -> Value {
     let cost = policy.cost();
     let backoff = policy.backoff();
-    json!({
+    let mut block = json!({
         "retries": policy.retry_count(),
         "backoff": {
             "base_ms": duration_ms(backoff.base()),
@@ -522,6 +526,46 @@ fn build_policy(policy: &EffectivePolicy) -> Value {
         "trigger_rule": trigger_rule_name(policy.trigger_rule()),
         "retained": policy.is_retained(),
         "durable": policy.is_durable(),
+    });
+    // Placement is emitted ONLY when the node declares one. An unplaced node's
+    // policy block is therefore byte-for-byte what it was before placement existed
+    // — the same no-churn rule the canonical policy encoding follows, so a diagram,
+    // a structure snapshot, and a fixture from an older build all still match.
+    if let Some(placement) = policy.placement()
+        && let Some(obj) = block.as_object_mut()
+    {
+        obj.insert("placement".into(), build_placement(&placement));
+    }
+    block
+}
+
+/// Serialize a node's [`Placement`] — every field written out (an unstated CPU or
+/// memory request as an explicit `null`), so a placed node's block is complete in
+/// the same way the effective policy around it is.
+///
+/// The strings are recorded **verbatim**: this emitter parses none of them and
+/// knows what none of them mean. Selectors keep their declared order and are
+/// recorded as `{key, value}` objects rather than a JSON map, because a map would
+/// impose key semantics (uniqueness, reordering) that the declaration deliberately
+/// does not have.
+fn build_placement(placement: &Placement) -> Value {
+    json!({
+        "cpu": placement.cpu_request().map_or(Value::Null, Value::from),
+        "memory": placement.memory_request().map_or(Value::Null, Value::from),
+        "node_selectors": Value::Array(
+            placement
+                .node_selector_pairs()
+                .iter()
+                .map(|(key, value)| json!({ "key": key, "value": value }))
+                .collect(),
+        ),
+        "tolerations": Value::Array(
+            placement
+                .toleration_strings()
+                .iter()
+                .map(|t| Value::from(*t))
+                .collect(),
+        ),
     })
 }
 

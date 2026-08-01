@@ -474,7 +474,10 @@ fn the_new_knobs_live_in_the_reserved_flag_namespace() {
 #[test]
 fn a_pipeline_parameter_named_after_a_knob_is_a_hard_collision() {
     for name in ["dagr.executor", "dagr.max-pods"] {
-        let params = [ParamSpec::new(name, "a pipeline parameter that must not exist")];
+        let params = [ParamSpec::new(
+            name,
+            "a pipeline parameter that must not exist",
+        )];
         let collision = check_reserved_collision(&params)
             .expect_err("a pipeline parameter cannot shadow a library flag");
         assert_eq!(collision.flag, name);
@@ -575,8 +578,10 @@ fn the_run_verb_refuses_the_kubernetes_executor() {
 // ===========================================================================
 
 /// With no executor flag, the local executor runs and a **placed** pipeline's event
-/// stream is byte-identical to the unplaced one's: placement is recorded in the
-/// graph, and completely inert at run time.
+/// stream is what the unplaced one's is, record for record — save for the one field
+/// that *should* move, the header's recorded **policy hash**. Placement is recorded
+/// (in the header, and in the graph artifact) and completely inert at run time: no
+/// extra record, no different admission, no different outcome.
 #[test]
 fn under_the_local_executor_a_placement_is_recorded_and_ignored() {
     let drive = |placement: Option<Placement>| {
@@ -604,10 +609,49 @@ fn under_the_local_executor_a_placement_is_recorded_and_ignored() {
     assert_eq!(placed_outcome, RunOutcome::Succeeded);
     assert_eq!(plain_outcome, RunOutcome::Succeeded);
     assert_eq!(placed_terminals, plain_terminals);
+
+    let (placed_records, plain_records) = (strip_wall(&placed_stream), strip_wall(&plain_stream));
+    // The header legitimately records a different policy hash — that IS the
+    // placement, and a resume against the other binary prints it as a policy diff.
+    // The structural fingerprint must be identical: the graph did not change.
+    let header = |records: &[Value]| {
+        records[0]
+            .get("header")
+            .cloned()
+            .expect("run-started header")
+    };
+    let (placed_header, plain_header) = (header(&placed_records), header(&plain_records));
+    assert_ne!(
+        placed_header.get("fingerprint_policy"),
+        plain_header.get("fingerprint_policy"),
+        "the recorded policy hash carries the placement"
+    );
     assert_eq!(
-        strip_wall(&placed_stream),
-        strip_wall(&plain_stream),
-        "a placement changes nothing about a local run's event stream"
+        placed_header.get("fingerprint_structural"),
+        plain_header.get("fingerprint_structural"),
+        "and the structural fingerprint is untouched"
+    );
+
+    // Everything else — every field of the header and every subsequent record — is
+    // identical: a placement emits no record and changes no outcome locally.
+    let mask_policy_hash = |records: Vec<Value>| -> Vec<Value> {
+        records
+            .into_iter()
+            .map(|mut rec| {
+                if let Some(h) = rec.get_mut("header").and_then(Value::as_object_mut) {
+                    h.insert(
+                        "fingerprint_policy".into(),
+                        Value::String("<policy>".into()),
+                    );
+                }
+                rec
+            })
+            .collect()
+    };
+    assert_eq!(
+        mask_policy_hash(placed_records),
+        mask_policy_hash(plain_records),
+        "a placement adds no record and changes no outcome under the local executor"
     );
 }
 

@@ -497,6 +497,39 @@ fn run_selected_flow<W: Write>(
     };
     let flow = flow.force_roundtrip(force_roundtrip);
 
+    // Which executor runs this invocation (`--dagr.executor` / `DAGR_EXECUTOR`,
+    // default `local`), and the flat ceiling on concurrently-placed attempts
+    // (`--dagr.max-pods` / `DAGR_MAX_PODS`, default unconstrained). Both are
+    // resolved before the store is opened: an invocation that cannot run should not
+    // leave a run directory behind, and an unknown value is invalid usage rather
+    // than a silent fallback.
+    let executor = match crate::config::parse_executor_flag(argv)
+        .and_then(|flag| crate::config::resolve_executor(flag).map_err(|e| e.to_string()))
+    {
+        Ok(kind) => kind,
+        Err(detail) => {
+            let _ = writeln!(out, "dagr run {name}: {detail}");
+            return ExitCode::InvalidUsage;
+        }
+    };
+    let max_pods = match crate::config::parse_max_pods_flag(argv)
+        .and_then(|flag| crate::config::resolve_max_pods(flag).map_err(|e| e.to_string()))
+    {
+        Ok(slots) => slots,
+        Err(detail) => {
+            let _ = writeln!(out, "dagr run {name}: {detail}");
+            return ExitCode::InvalidUsage;
+        }
+    };
+    // A recognized-but-unbuilt executor is refused HERE, before a store directory
+    // exists: the alternative — running every node locally — would report a success
+    // the operator never asked for. The driver refuses the same selection again for
+    // a caller that drives it directly.
+    if let Err(refusal) = executor.ensure_available() {
+        let _ = writeln!(out, "dagr run {name}: {refusal}");
+        return ExitCode::BootstrapFailure;
+    }
+
     // The run-store event-stream path is `<base>/<pipeline>/<run-id>/events.jsonl`;
     // the run mints its own id, so the id segment is unknown until the run resolves
     // it. The driver opens the stream through the injected sink, which writes under
@@ -547,7 +580,14 @@ fn run_selected_flow<W: Write>(
         }
     };
 
-    let config = crate::driver::RunConfig::new(base).run_id(run_id);
+    // The remote-slot ceiling is the only pool this entrypoint pins: the other three
+    // derive from the machine, and this one has no machine to derive from. Left at
+    // its unconstrained default it is byte-for-byte the capacity set this path
+    // always used.
+    let config = crate::driver::RunConfig::new(base)
+        .run_id(run_id)
+        .executor(executor)
+        .capacities(dagr_core::admission::PoolCapacities::new().remote_slots(max_pods));
     match flow.run(name, &config, sink, TickClock::default()) {
         Ok(report) => exit_code_for_run(report.driver_report()),
         Err(err) => {
