@@ -1,7 +1,7 @@
 //! Identity: labels are lossy selectors, annotations are authoritative.
 //!
 //! Kubernetes caps a label *value* at 63 characters. dagr's run ids are
-//! 36-character UUIDv7 values before any node name is appended, so a label cannot
+//! 36-character `UUIDv7` values before any node name is appended, so a label cannot
 //! carry identity without truncating — which is why annotations exist and why the
 //! observer reads them on every path. These are the tests that make that claim
 //! mean something: a truncation collision is *constructed*, and the two colliding
@@ -31,7 +31,11 @@ fn every_emitted_label_value_is_within_the_ceiling_and_syntactically_valid() {
     let id = identity(LONG_NODE, 7);
     let labels = id.labels();
 
-    assert_eq!(RUN_ID.len(), 36, "the fixture must exercise a real UUID length");
+    assert_eq!(
+        RUN_ID.len(),
+        36,
+        "the fixture must exercise a real UUID length"
+    );
     assert!(
         LONG_NODE.len() > LABEL_VALUE_MAX,
         "the fixture node name must be longer than a label value can hold"
@@ -52,7 +56,10 @@ fn every_emitted_label_value_is_within_the_ceiling_and_syntactically_valid() {
     // The five selector keys ADR 115 §4 names, and nothing else: a label set that
     // grew a sixth key would be identity leaking back into the lossy half.
     let keys: Vec<&str> = labels.keys().map(String::as_str).collect();
-    assert_eq!(keys, vec![LABEL_ATTEMPT, LABEL_NODE, LABEL_OWNER, LABEL_RUN_ID]);
+    assert_eq!(
+        keys,
+        vec![LABEL_ATTEMPT, LABEL_NODE, LABEL_OWNER, LABEL_RUN_ID]
+    );
     assert_eq!(labels.get(LABEL_RUN_ID).map(String::as_str), Some(RUN_ID));
     assert_eq!(labels.get(LABEL_ATTEMPT).map(String::as_str), Some("7"));
 
@@ -154,7 +161,8 @@ fn a_missing_annotation_is_a_named_identity_error() {
 
     let mut labels = id.labels();
     labels.remove(LABEL_ATTEMPT);
-    let err = identify(&labels, &id.annotations()).expect_err("an attempt-less pod cannot identify");
+    let err =
+        identify(&labels, &id.annotations()).expect_err("an attempt-less pod cannot identify");
     match err {
         IdentityError::MissingLabel { key } => assert_eq!(key, LABEL_ATTEMPT),
         other => panic!("expected a missing-label error, got {other:?}"),

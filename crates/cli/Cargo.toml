@@ -141,6 +141,31 @@ metastore = ["dep:dagr-metastore"]
 # (`scripts/check-blob-feature-gating.sh` asserts both halves).
 blob = ["dep:dagr-blob"]
 
+# --- The M10 shared-pod-observer feature (T107, ADR 115 §2/§4), OFF by default -
+# `k8s` turns on the optional `dagr-k8s` dependency edge — the shared pod
+# observer, its reconnect discipline, and the label/annotation identity encoding
+# — WITH that crate's own `client` feature, which is where the Kubernetes client
+# and its whole HTTP/TLS tree live.
+#
+# It is DEFAULT-OFF, like `metastore` and `blob`, and the containment is the
+# strongest of the three: the client sits behind a default-off feature INSIDE
+# `dagr-k8s` as well, so `cargo build --all` and
+# `cargo build -p dagr-cli --no-default-features` compile NO HTTP or TLS crate at
+# all — not merely none reachable through the cli. That matters because a
+# Kubernetes client roughly doubles the lockfile and pulls a C toolchain for its
+# TLS backend, and a contributor who never touches remote execution should never
+# build it.
+#
+# `default-features = false` on the edge below is deliberate too: it drops
+# `dagr-k8s`'s default-on `test-kit` feature, so the fake API surface the
+# observer's suites drive never ships in a pipeline binary.
+#
+# The EXECUTOR that submits pods and consumes this observer is not here yet — the
+# `k8s` executor is still the recognized stub `crates/cli/src/executor.rs`
+# refuses. This feature ships the observer and the boundary around it; the runner
+# arrives with the ticket that stub names.
+k8s = ["dep:dagr-k8s"]
+
 [dependencies]
 dagr-core = { path = "../core", version = "0.0.0" }
 dagr-artifact = { path = "../artifact", version = "0.0.0" }
@@ -164,6 +189,19 @@ dagr-metastore = { path = "../metastore", version = "0.0.0", optional = true }
 # `cargo test --workspace` still builds and tests it directly; this edge is what
 # the cli reaches it through, and only under the feature.
 dagr-blob = { path = "../blob", version = "0.0.0", optional = true }
+
+# dagr-k8s — the OPTIONAL M10 shared-pod-observer crate (T107, ADR 115 §2/§4),
+# pulled ONLY behind the default-off `k8s` feature above, and with
+# `default-features = false` so the fake API surface stays out of a pipeline
+# binary. `features = ["client"]` is what turns the Kubernetes client on: without
+# it the crate compiles to the observer, the port, the identity encoding and the
+# cluster-access resolution, and no HTTP or TLS crate is compiled anywhere in the
+# workspace. It is a normal workspace member, so `cargo test --workspace` still
+# builds and tests its client-free surface directly; this edge is what the cli
+# reaches it through, and only under the feature.
+dagr-k8s = { path = "../k8s", version = "0.0.0", optional = true, default-features = false, features = [
+    "client",
+] }
 
 # dagr-macros — the build-time-only, zero-runtime-dependency proc-macro crate (ADR
 # 082/092). dagr-cli depends on it for the M6 `#[dag]` attribute (T80), which it

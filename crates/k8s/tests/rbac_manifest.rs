@@ -25,7 +25,10 @@ fn body() -> String {
 fn the_manifest_grants_get_list_watch_on_pods_in_one_namespace() {
     let body = body();
 
-    assert!(body.contains("kind: Role"), "the grant is a namespaced Role");
+    assert!(
+        body.contains("kind: Role"),
+        "the grant is a namespaced Role"
+    );
     assert!(
         body.contains("kind: RoleBinding"),
         "the binding is namespaced too"
@@ -93,7 +96,11 @@ fn the_manifest_scan_is_not_vacuous() {
     assert!(body.contains("roleRef:"));
     assert!(body.contains("subjects:"));
     assert!(
-        MANIFEST.lines().filter(|l| l.trim_start().starts_with('#')).count() > 5,
+        MANIFEST
+            .lines()
+            .filter(|l| l.trim_start().starts_with('#'))
+            .count()
+            > 5,
         "the manifest explains its absences, or the next reader widens it by accident"
     );
 }

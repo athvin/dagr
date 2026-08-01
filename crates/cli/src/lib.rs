@@ -45,6 +45,15 @@ pub mod flow_builder;
 #[cfg(feature = "test-kit")]
 pub mod full_pipeline;
 pub mod graph;
+/// The **shared pod observer** (M10, T107, ADR 115 §2/§4), re-exported here behind
+/// the default-off `k8s` feature: one watch per orchestrator process over one run's
+/// pods, its reconnect discipline, and the label/annotation identity encoding. The
+/// executor that submits pods and consumes it is not here yet — `--dagr.executor
+/// k8s` is still the recognized stub [`executor`] refuses. Absent from a default
+/// build and from `--no-default-features`, which compile no HTTP or TLS crate at
+/// all.
+#[cfg(feature = "k8s")]
+pub use dagr_k8s;
 pub mod logging;
 /// The `dagr metastore init` verb (M7, T83, ADR 097). Gated behind the default-off
 /// `metastore` feature so `--no-default-features` (and any default build) drops the

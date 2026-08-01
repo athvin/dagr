@@ -32,7 +32,10 @@ async fn the_watch_is_torn_down_and_the_task_does_not_outlive_the_run() {
         .await
         .expect("the observer accepts a waiter");
     control.await_watch().await;
-    assert!(control.watch_is_open(), "a watch is open while the run is live");
+    assert!(
+        control.watch_is_open(),
+        "a watch is open while the run is live"
+    );
 
     observer
         .shutdown(Duration::from_secs(5))
@@ -153,7 +156,10 @@ async fn an_observation_that_precedes_its_waiter_is_still_delivered() {
         .watch_attempt(AttemptKey::new(RUN_ID, "extract", 1))
         .await
         .expect("the observer accepts a late waiter");
-    let observation = waiter.terminal().await.expect("the buffered terminal arrives");
+    let observation = waiter
+        .terminal()
+        .await
+        .expect("the buffered terminal arrives");
     assert_eq!(observation.phase, PodPhase::Succeeded);
 
     observer

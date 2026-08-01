@@ -34,7 +34,7 @@ fn limits() -> ObserverLimits {
         backoff_initial: Duration::from_millis(250),
         backoff_max: Duration::from_secs(30),
         max_consecutive_failures: 4,
-        failure_window: Duration::from_secs(300),
+        failure_window: Duration::from_mins(5),
         watch_timeout_secs: 270,
     }
 }
@@ -63,7 +63,10 @@ async fn expiry_relists_and_delivers_a_gap_terminal_exactly_once() {
 
     control.await_watch().await;
     assert_eq!(control.lists(), 1, "the observer lists before it watches");
-    let pending = waiter.next().await.expect("the initial LIST reports Pending");
+    let pending = waiter
+        .next()
+        .await
+        .expect("the initial LIST reports Pending");
     assert!(matches!(
         pending,
         WaiterEvent::Observed(ref o) if o.phase == PodPhase::Pending
@@ -82,7 +85,10 @@ async fn expiry_relists_and_delivers_a_gap_terminal_exactly_once() {
         })
         .await;
 
-    let event = waiter.next().await.expect("the terminal transition arrives");
+    let event = waiter
+        .next()
+        .await
+        .expect("the terminal transition arrives");
     let WaiterEvent::Observed(observation) = event else {
         panic!("expected an observation, got {event:?}");
     };
@@ -131,7 +137,10 @@ async fn a_silent_watch_is_detected_within_the_bound_and_reconnected() {
         .expect("the observer accepts a waiter");
 
     control.await_watch().await;
-    let first = waiter.next().await.expect("the initial LIST reports Running");
+    let first = waiter
+        .next()
+        .await
+        .expect("the initial LIST reports Running");
     assert!(matches!(
         first,
         WaiterEvent::Observed(ref o) if o.phase == PodPhase::Running
@@ -143,7 +152,7 @@ async fn a_silent_watch_is_detected_within_the_bound_and_reconnected() {
     control.upsert(pod("extract", 1, PodPhase::Failed, "140"));
 
     let started = tokio::time::Instant::now();
-    let event = tokio::time::timeout(Duration::from_secs(600), waiter.next())
+    let event = tokio::time::timeout(Duration::from_mins(10), waiter.next())
         .await
         .expect("a stalled watch must not hang the run")
         .expect("the reconnect finds the transition");
@@ -196,13 +205,16 @@ async fn repeated_termination_backs_off_and_fails_with_a_classified_error() {
         .expect("the observer accepts a waiter");
 
     // The Pending pod from the initial LIST arrives first.
-    let first = waiter.next().await.expect("the initial LIST reports Pending");
+    let first = waiter
+        .next()
+        .await
+        .expect("the initial LIST reports Pending");
     assert!(matches!(
         first,
         WaiterEvent::Observed(ref o) if o.phase == PodPhase::Pending
     ));
 
-    let event = tokio::time::timeout(Duration::from_secs(3600), waiter.next())
+    let event = tokio::time::timeout(Duration::from_hours(1), waiter.next())
         .await
         .expect("a permanently broken watch must fail, not hang")
         .expect("the waiter is told");
@@ -210,7 +222,10 @@ async fn repeated_termination_backs_off_and_fails_with_a_classified_error() {
         panic!("expected a classified failure, got {event:?}");
     };
     assert!(matches!(failure.cause, TerminationCause::Transport));
-    assert_eq!(failure.consecutive_failures, limits().max_consecutive_failures);
+    assert_eq!(
+        failure.consecutive_failures,
+        limits().max_consecutive_failures
+    );
     assert!(
         failure.last_message.contains("reading a body"),
         "the classified error keeps the platform's own words: {}",
@@ -229,10 +244,7 @@ async fn repeated_termination_backs_off_and_fails_with_a_classified_error() {
     let gaps = control.watch_open_gaps();
     assert!(gaps.len() >= 2, "not enough retries to observe a backoff");
     for pair in gaps.windows(2) {
-        assert!(
-            pair[1] > pair[0],
-            "reconnection did not back off: {gaps:?}"
-        );
+        assert!(pair[1] > pair[0], "reconnection did not back off: {gaps:?}");
     }
 
     let report = observer
@@ -260,7 +272,9 @@ async fn a_terminal_transition_delivered_twice_notifies_the_waiter_once() {
     control
         .deliver(WatchDelivery::Modified(terminal.clone()))
         .await;
-    control.deliver(WatchDelivery::Modified(terminal.clone())).await;
+    control
+        .deliver(WatchDelivery::Modified(terminal.clone()))
+        .await;
     control.deliver(WatchDelivery::Added(terminal)).await;
 
     let event = waiter.next().await.expect("the terminal arrives");
@@ -419,7 +433,10 @@ async fn a_pod_that_vanishes_during_a_gap_is_reported_once() {
         .expect("the observer accepts a waiter");
     control.await_watch().await;
 
-    let first = waiter.next().await.expect("the initial LIST reports Running");
+    let first = waiter
+        .next()
+        .await
+        .expect("the initial LIST reports Running");
     assert!(matches!(first, WaiterEvent::Observed(ref o) if !o.vanished));
 
     control.remove("dagr-extract-1");
@@ -488,7 +505,7 @@ async fn a_transport_end_resumes_from_the_last_seen_version_and_a_410_re_lists()
             message: "too old resource version: 133 (972)".to_string(),
         })
         .await;
-    control.await_watch().await;
+    control.await_lists(2).await;
     assert_eq!(control.lists(), 2, "a 410 always re-lists");
 
     observer
@@ -517,7 +534,10 @@ async fn a_transient_403_is_retried_rather_than_treated_as_permanent() {
         .watch_attempt(key("extract", 1))
         .await
         .expect("the observer accepts a waiter");
-    let first = waiter.next().await.expect("the initial LIST reports Pending");
+    let first = waiter
+        .next()
+        .await
+        .expect("the initial LIST reports Pending");
     assert!(matches!(first, WaiterEvent::Observed(_)));
 
     control.await_watch().await;
@@ -537,5 +557,8 @@ async fn a_transient_403_is_retried_rather_than_treated_as_permanent() {
         .shutdown(Duration::from_secs(5))
         .await
         .expect("shutdown completes");
-    assert!(report.failure.is_none(), "a transient 403 is not a run failure");
+    assert!(
+        report.failure.is_none(),
+        "a transient 403 is not a run failure"
+    );
 }

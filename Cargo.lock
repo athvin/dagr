@@ -326,6 +326,7 @@ dependencies = [
  "dagr-artifact",
  "dagr-blob",
  "dagr-core",
+ "dagr-k8s",
  "dagr-macros",
  "dagr-metastore",
  "dagr-render",

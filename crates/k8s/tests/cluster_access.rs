@@ -126,7 +126,9 @@ fn service_account_files_configure_in_cluster() {
             assert_eq!(host, "10.96.0.1");
             assert_eq!(port, "443");
         }
-        other => panic!("expected an in-cluster resolution, got {other:?}"),
+        other @ ClusterAccess::OutOfCluster { .. } => {
+            panic!("expected an in-cluster resolution, got {other:?}")
+        }
     }
 }
 
@@ -182,8 +184,14 @@ fn neither_present_is_an_actionable_error_naming_what_it_looked_for() {
         );
     }
     assert!(
-        message.contains(&scratch.path().join("home").join(".kube").display().to_string())
-            || message.contains(&scratch.path().display().to_string()),
+        message.contains(
+            &scratch
+                .path()
+                .join("home")
+                .join(".kube")
+                .display()
+                .to_string()
+        ) || message.contains(&scratch.path().display().to_string()),
         "the error must name the paths it actually probed: {message}"
     );
 }
@@ -224,7 +232,9 @@ fn a_multi_path_kubeconfig_takes_the_first_that_exists() {
 
     match resolve(&probe).expect("the second entry exists") {
         ClusterAccess::OutOfCluster { kubeconfig, .. } => assert_eq!(kubeconfig, second),
-        other => panic!("expected an out-of-cluster resolution, got {other:?}"),
+        other @ ClusterAccess::InCluster { .. } => {
+            panic!("expected an out-of-cluster resolution, got {other:?}")
+        }
     }
 }
 
@@ -244,6 +254,12 @@ fn the_default_probe_reads_the_ambient_environment() {
         std::env::var_os("KUBECONFIG"),
         "the probe reads KUBECONFIG rather than inventing one"
     );
-    assert_eq!(probe.service_host, std::env::var("KUBERNETES_SERVICE_HOST").ok());
-    assert_eq!(probe.service_port, std::env::var("KUBERNETES_SERVICE_PORT").ok());
+    assert_eq!(
+        probe.service_host,
+        std::env::var("KUBERNETES_SERVICE_HOST").ok()
+    );
+    assert_eq!(
+        probe.service_port,
+        std::env::var("KUBERNETES_SERVICE_PORT").ok()
+    );
 }

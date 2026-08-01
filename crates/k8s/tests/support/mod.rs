@@ -3,6 +3,12 @@
 //!
 //! Every suite in this crate speaks about the same run, so the fixture lives once
 //! and the tests differ only in what happens to the pods.
+//!
+//! `allow(dead_code)`: this module is compiled separately into each integration
+//! test binary, and no single one of them uses every fixture. The alternative is
+//! four near-identical copies of the same run.
+
+#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
@@ -10,7 +16,7 @@ use dagr_k8s::api::{PodPhase, PodSnapshot};
 use dagr_k8s::identity::{AttemptIdentity, AttemptKey};
 use dagr_k8s::observer::RunSelector;
 
-/// The run every suite observes. A real 36-character UUIDv7, because the
+/// The run every suite observes. A real 36-character `UUIDv7`, because the
 /// 63-character label ceiling only bites at that length.
 pub const RUN_ID: &str = "0197f3a8-6b21-7c4e-9d55-1f2a3b4c5d6e";
 
