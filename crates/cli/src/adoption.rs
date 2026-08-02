@@ -108,6 +108,13 @@ impl Adoptions {
     }
 
     /// Take the claim for `key`, if there is one.
+    ///
+    /// Poison policy: **recover**. The map behind this lock is a plain
+    /// `BTreeMap` of decisions a startup pass already finished making — a panic
+    /// on another node's runner cannot leave it half-updated, so there is no
+    /// invariant a poisoned flag is warning about. Escalating here would turn one
+    /// node's panic into "no other node can find the pod it was told to adopt",
+    /// which is the duplicate-execution outcome this module exists to prevent.
     #[must_use]
     pub fn take(&self, key: &AttemptKey) -> Option<Claim> {
         self.claims
@@ -117,6 +124,9 @@ impl Adoptions {
     }
 
     /// How many claims are outstanding.
+    ///
+    /// Poison policy: **recover**, for the reason [`take`](Self::take) states —
+    /// and a fortiori here, where the lock guards a read for a report.
     #[must_use]
     pub fn len(&self) -> usize {
         self.claims
