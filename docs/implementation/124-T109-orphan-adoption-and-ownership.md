@@ -156,3 +156,120 @@ Make an orchestrator restart safe, and pod ownership explicit.
   control plane outliving the run. dagr remains not a scheduler, a distributed
   execution system, a coordinating metadata store, a web interface, a DSL, or a
   backfill orchestrator, and the graph's shape never changes at runtime.
+
+## Open questions — resolved
+
+`docs/tasks.md` carries **no `T109` entry** (it enumerates M0–M4 only), and
+`.claude/skills/shipping-dagr-tickets/references/dagx-prior-art.md`'s routing table
+routes no section to this ticket, so there are no `Q:` items beyond this file's own
+two. Both are answered below, together with the decisions the implementation had
+to make that the ticket did not name.
+
+### 1. Does adoption require the same run id? → **Yes, and the consequence is a revocation pass.**
+
+Confirmed as the ticket proposes: the attempt key is scoped to a run, dagr's
+resume mints a **new** run id, and a resumed run adopting the killed run's pods
+would blur two runs' event streams. `dagr_cli::adoption::discover` therefore lists
+`dagr.io/run-id=<this run>` and filters the result client-side as well, so a
+server that widened the selector cannot make it cross a run boundary.
+
+The consequence the ticket asks to be recorded: a **resumed** run does not adopt
+the killed run's pods — it **revokes** them. `AdoptionConfig::prior_run_id` is the
+resumed run's parent, and its still-live (non-tombstoned) pods are revoked by the
+same patch-then-delete every revocation uses, because leaving them running would
+double both the work and the cluster capacity the resumed run is about to spend.
+That pass is **not** the reaper the Out-of-scope list forbids: a reaper is a
+background process that outlives a run, and this is one act of the run that is
+starting, over the pods of the run it descends from.
+
+The kill-restart guarantee is therefore a guarantee about **restarting the same
+run id** — an operator-supplied id, which `RunId::from_operator` already supports.
+
+### 2. Should an un-adoptable foreign pod be revoked or left running? → **Left running and reported.**
+
+Confirmed as the ticket proposes. `plan` never puts a foreign-build pod in
+`revoke`; the discovery report names it, an `info` line records it, and the node
+whose attempt it occupies fails with `RemoteLaunchError::AdoptionRefused`, whose
+message names the pod and **both** disagreeing values. Deleting another program's
+pod is not dagr's call.
+
+### 3. What verb does adoption use, and where does its RBAC live? → **`PodLifecycle::patch_labels`, and the grant is T112's.**
+
+Adoption needs a write the port did not have. It is added to `PodLifecycle` (the
+executor's port) rather than `PodApi` (the observer's), because the two ports exist
+precisely to keep the read grant and the write grant separate in the type system as
+well as in a manifest. `KubePodApi` implements it as a **merge patch scoped to
+`metadata.labels`** — the narrowest write the API offers for this. A full `replace`
+would race whatever the platform has written to `status` since the read, and a
+typed `ObjectMeta.labels` (a `BTreeMap<String, String>`) cannot express the JSON
+`null` that *removes* a label, which is exactly what revocation needs. That is why
+`serde_json` becomes an optional dependency of `dagr-k8s` behind the existing
+`client` quarantine; kube already resolves it, so the lockfile is unchanged and
+`cargo build --all` still compiles no HTTP/TLS stack.
+
+The shipped RBAC manifest is **deliberately not widened**: it grants
+`get`/`list`/`watch` only, its own test fails if a write verb appears, and its
+comments already name `create`/`delete`/`patch` as belonging to the tickets that
+ship those mechanisms. Provisioning them is T112's, which this ticket's
+Out-of-scope list assigns "RBAC beyond T107's watch permissions".
+
+### 4. Which of several pods claiming one attempt is adopted? → **The lexicographically smallest object name.**
+
+A total order over a field every pod has, computed from the listing alone. The
+alternatives were worse: "the first one listed" makes the answer depend on an
+enumeration of a set, "the oldest" needs a creation timestamp the port does not
+carry, and "the one whose name this build derives" is a special case that does not
+resolve two non-canonical pods. `the_resolution_does_not_depend_on_the_order_the_api_listed_them`
+asserts the property rather than the rule.
+
+### 5. Does a foreign-build pod fail the node even when one of ours is also there? → **No.**
+
+A refusal exists for an operational reason, not a moral one: the object name this
+build derives is occupied by work dagr did not launch, so there is nothing to
+submit through. When the attempt **also** has a pod of ours, that reasoning does
+not apply — object names are unique, so the two are different objects, ours is
+genuinely ours, and adopting it is both correct and the outcome the ticket wants.
+The foreign one is reported and left running. A refusal is therefore raised only
+when the attempt's *only* pod belongs to a different program.
+
+### 6. Is discovery wired into the run path? → **No, and that is T112's, exactly as it was T112's for T108.**
+
+`--dagr.executor=k8s` still refuses at bootstrap (T105's decision, restated in
+T108's resolved question 6): lifting it needs cluster access, a published image
+digest, a namespace and a shared blob container, every one of which T112
+provisions. So `dagr_cli::adoption::discover` ships as the library seam the run
+path will call, driven by its own suite against T107's fake — the same shape
+`K8sNodeRunner` shipped in.
+
+### 7. A tombstoned pod is squatting on the attempt's own object name. Now what? → **Revoke it, then create the replacement.**
+
+The tombstone's job is to stop an attempt being adopted twice, and the case it
+exists for is precisely the one where the pod's deletion was deferred or failed. A
+pod carrying the completion key on the name `pod_name(key)` therefore fails T108's
+in-process adoption probe: its outcome is already in the record, so adopting it
+would re-consume the same attempt and replay a stale shard. It is revoked — the
+same two-step every orchestrator-initiated delete uses — and the attempt gets a
+fresh pod.
+
+### 8. Why does the run's own watch now exclude tombstoned pods too? → **One selector, and a retirement hazard that has no other fix.**
+
+`RunSelector::label_selector` now *is* `adoption_selector`. The reason is not
+tidiness: T107's observer retires an attempt key once a **final** observation is
+delivered for an object, so on a restart the terminal phase of an
+already-consumed pod would retire the waiter registered for the *new* pod of the
+same attempt — and the runner would hang or consume a stale shard. Excluding
+consumed pods from the watch removes the class. The same decision is also made
+client-side in `ObserverCore::observe`, because a selector is a request to a server
+and this is a guarantee.
+
+### 9. What if the ownership patch itself fails? → **Not adopted, named in the report, and it degrades to T108's probe.**
+
+Neither of the tempting answers is right. Failing the run turns a transient
+`500` on a label write into an abandoned pipeline; adopting anyway records an
+ownership that was never taken. So the pod is **not** claimed (and emphatically not
+deleted — a label write that did not land says nothing about the work in flight),
+it is named in `DiscoveryReport::unpatched`, and the node falls back to T108's
+in-process probe, which finds the same pod under the attempt's own object name and
+adopts it there. The degradation is visible rather than silent, and the only case
+it does not cover — a pod whose name this build does not derive — is exactly the
+one the report names.
