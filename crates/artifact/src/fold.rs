@@ -1158,10 +1158,7 @@ fn string_field(record: &Value, field: &str) -> Option<String> {
 /// record carries an `inputs` array, `None` when it carries none at all — the
 /// known-zero versus unknown distinction.
 fn submission_inputs(record: &Value) -> Option<Vec<Value>> {
-    record
-        .get("inputs")
-        .and_then(Value::as_array)
-        .map(Clone::clone)
+    record.get("inputs").and_then(Value::as_array).cloned()
 }
 
 /// Fold every `output-produced` record into the append-only, FK-free `outputs[]`,

@@ -138,7 +138,11 @@ fn a_submission_with_no_outcome_is_surfaced_as_submitted_but_never_completed() {
 
     let artifact = fold_stream(&sink.bytes(), &[]).expect("the stream folds");
     let submissions = artifact.submissions();
-    assert_eq!(submissions.len(), 1, "the submission is surfaced, not dropped");
+    assert_eq!(
+        submissions.len(),
+        1,
+        "the submission is surfaced, not dropped"
+    );
     let s = &submissions[0];
     assert_eq!(s.node(), "extract");
     assert_eq!(s.attempt_number(), 1);
@@ -463,7 +467,8 @@ fn a_placed_run() -> Vec<u8> {
     clock.set(70);
     w.attempt_started("extract", 1).expect("attempt-started");
     clock.set(100);
-    w.attempt_succeeded("extract", 1).expect("attempt-succeeded");
+    w.attempt_succeeded("extract", 1)
+        .expect("attempt-succeeded");
     w.attempt_outcome(AttemptOutcomeRecord::new(
         "extract",
         1,

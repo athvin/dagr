@@ -309,7 +309,8 @@ fn emit_placed_run<S: EventSink>(
         ],
     );
     w.attempt_outcome(outcome).unwrap();
-    w.node_terminal("extract", TerminalState::Succeeded).unwrap();
+    w.node_terminal("extract", TerminalState::Succeeded)
+        .unwrap();
 
     // --- load: submitted with ordered inputs, never reports ---------------
     clock.set(150);
@@ -445,7 +446,9 @@ async fn a_pre_t111_store_upgrades_in_place_and_converges_with_a_fresh_one() {
         assert_eq!(
             scalar_i64(
                 &upgraded,
-                &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'")
+                &format!(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                )
             )
             .await,
             1,
@@ -466,9 +469,12 @@ async fn a_pre_t111_store_upgrades_in_place_and_converges_with_a_fresh_one() {
         Some("pipe")
     );
     assert_eq!(
-        opt_string(&upgraded, "SELECT state FROM dag_run WHERE run_id='old-run'")
-            .await
-            .as_deref(),
+        opt_string(
+            &upgraded,
+            "SELECT state FROM dag_run WHERE run_id='old-run'"
+        )
+        .await
+        .as_deref(),
         Some("succeeded")
     );
     assert_eq!(
@@ -485,9 +491,8 @@ async fn a_pre_t111_store_upgrades_in_place_and_converges_with_a_fresh_one() {
     let fresh_dir = TempDir::new("fresh");
     let fresh = open_store_at(&fresh_dir.path().join("metastore.db")).await;
     for table in ["attempt_submitted", "attempt_submitted_input"] {
-        let shape = format!(
-            "SELECT name||' '||type FROM pragma_table_info('{table}') ORDER BY cid"
-        );
+        let shape =
+            format!("SELECT name||' '||type FROM pragma_table_info('{table}') ORDER BY cid");
         assert_eq!(
             rows_text(&upgraded, &shape).await,
             rows_text(&fresh, &shape).await,
@@ -529,7 +534,9 @@ async fn the_submission_tables_carry_no_foreign_keys() {
         assert_eq!(
             scalar_i64(
                 &store,
-                &format!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'")
+                &format!(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='{table}'"
+                )
             )
             .await,
             1,
@@ -616,7 +623,10 @@ async fn a_completed_submission_joins_to_its_node_attempt_row() {
     .await;
     assert_eq!(
         joined,
-        vec!["extract/1/succeeded".to_string(), "source/1/succeeded".to_string()],
+        vec![
+            "extract/1/succeeded".to_string(),
+            "source/1/succeeded".to_string()
+        ],
         "the completed submissions join on (run_id, node_id, try_number)"
     );
     assert_eq!(
@@ -863,9 +873,7 @@ async fn the_divergence_query_surfaces_a_submitted_versus_read_mismatch() {
     .await;
     assert_eq!(
         diverged,
-        vec![
-            "extract 1 blob://in-0 submitted=sha256:0000 read=sha256:OVERWRITTEN".to_string()
-        ],
+        vec!["extract 1 blob://in-0 submitted=sha256:0000 read=sha256:OVERWRITTEN".to_string()],
         "exactly the one reference whose content hash moved under the attempt"
     );
 
