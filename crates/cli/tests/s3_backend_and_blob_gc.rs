@@ -107,7 +107,7 @@ fn manifest(rows: u64) -> Manifest {
 fn s3(bucket: &str) -> (S3Blob<FakeS3>, FakeS3) {
     let fake = FakeS3::new(bucket);
     let store = S3Blob::new(
-        S3Config::new(bucket).region("eu-west-2"),
+        S3Config::new(bucket).with_region("eu-west-2"),
         S3Credentials::new("AKIAIOSFODNN7EXAMPLE", "a-fabricated-secret"),
         fake.clone(),
     )
@@ -791,27 +791,25 @@ fn endpoint_bucket_region_and_prefix_follow_flag_over_env_over_default() {
     };
 
     // Default, with nothing set anywhere.
-    let cleared = |name: &str| -> Option<String> {
-        let _ = name;
-        None
-    };
+    let cleared: &dyn Fn(&str) -> Option<String> = &|_name: &str| None;
     assert_eq!(
         resolve_blob_region(None, cleared).expect("default"),
         BLOB_REGION_DEFAULT
     );
     assert_eq!(resolve_blob_endpoint(None, cleared).expect("default"), None);
     assert_eq!(resolve_blob_bucket(None, cleared).expect("default"), None);
-    assert_eq!(resolve_blob_prefix(None, cleared).expect("default"), String::new());
+    assert_eq!(
+        resolve_blob_prefix(None, cleared).expect("default"),
+        String::new()
+    );
 
     // Env supplies it when no flag does.
-    let env = |name: &str| -> Option<String> {
-        match name {
-            "DAGR_BLOB_ENDPOINT" => Some("https://minio.internal:9000".to_string()),
-            "DAGR_BLOB_BUCKET" => Some("from-env".to_string()),
-            "DAGR_BLOB_REGION" => Some("eu-west-2".to_string()),
-            "DAGR_BLOB_PREFIX" => Some("env-prefix".to_string()),
-            _ => None,
-        }
+    let env: &dyn Fn(&str) -> Option<String> = &|name: &str| match name {
+        "DAGR_BLOB_ENDPOINT" => Some("https://minio.internal:9000".to_string()),
+        "DAGR_BLOB_BUCKET" => Some("from-env".to_string()),
+        "DAGR_BLOB_REGION" => Some("eu-west-2".to_string()),
+        "DAGR_BLOB_PREFIX" => Some("env-prefix".to_string()),
+        _ => None,
     };
     assert_eq!(
         resolve_blob_endpoint(None, env).expect("env"),
@@ -833,11 +831,53 @@ fn endpoint_bucket_region_and_prefix_follow_flag_over_env_over_default() {
         resolve_blob_region(Some("us-east-2".to_string()), env).expect("flag"),
         "us-east-2"
     );
+
+    // A bad value fails LOUDLY and names the variable — never silently ignored,
+    // and never silently guessed at.
+    let bad: &dyn Fn(&str) -> Option<String> = &|name: &str| match name {
+        "DAGR_BLOB_ENDPOINT" => Some("minio.internal:9000".to_string()),
+        "DAGR_BLOB_BUCKET" => Some("bucket/with/a/prefix".to_string()),
+        _ => None,
+    };
+    let err = resolve_blob_endpoint(None, bad).expect_err("a schemeless endpoint");
+    assert!(err.to_string().contains("DAGR_BLOB_ENDPOINT"), "{err}");
+    let err = resolve_blob_bucket(None, bad).expect_err("a bucket with a prefix in it");
+    assert!(err.to_string().contains("DAGR_BLOB_BUCKET"), "{err}");
+}
+
+#[test]
+fn an_s3_container_is_named_on_the_blob_store_flag_by_scheme() {
+    use dagr_cli::blob_gc::OBJECT_STORE_SCHEME;
+    assert_eq!(OBJECT_STORE_SCHEME, "s3://");
+    // Without the client feature, an `s3://` container is refused BY NAME rather
+    // than silently treated as a directory path — which is what would happen if it
+    // fell through to the filesystem backend, and would make the reclaim compute
+    // reachability against an empty store.
+    #[cfg(not(feature = "blob-s3"))]
+    {
+        let base = TempRoot::new("s3-flag");
+        std::fs::create_dir_all(base.path().join("etl")).expect("create");
+        let mut out = Vec::new();
+        let code = reclaim_blobs_verb(
+            &argv(&[
+                "--store",
+                base.path().to_str().unwrap(),
+                "--blob-store",
+                "s3://bucket/prefix",
+                "--reclaim-blobs",
+                "dry-run",
+            ]),
+            &mut out,
+        );
+        assert_ne!(code, ExitCode::Success);
+        let text = String::from_utf8(out).expect("utf-8");
+        assert!(text.contains("blob-s3"), "names the missing feature: {text}");
+    }
 }
 
 #[test]
 fn an_s3_container_resolves_to_a_config_naming_its_bucket_and_prefix() {
-    let config = S3Config::new("dagr-blobs").prefix("intermediates");
+    let config = S3Config::new("dagr-blobs").with_prefix("intermediates");
     assert_eq!(config.container(), "dagr-blobs/intermediates");
     let parsed = S3Config::from_container("dagr-blobs/intermediates")
         .expect("a container names a bucket and an optional prefix");

@@ -123,6 +123,27 @@ pub const DAGR_MAX_PODS: &str = "DAGR_MAX_PODS";
 /// The default is [`POD_LAUNCH_RETRIES_DEFAULT`].
 pub const DAGR_POD_LAUNCH_RETRIES: &str = "DAGR_POD_LAUNCH_RETRIES";
 
+/// Environment fallback for `--dagr.blob.endpoint` (M10, T110): the base URL of
+/// the S3-compatible object store. Unset means AWS's endpoint for the configured
+/// region, so an S3-compatible store that is **not** AWS works by pointing this at
+/// it, with no code change.
+pub const DAGR_BLOB_ENDPOINT: &str = "DAGR_BLOB_ENDPOINT";
+
+/// Environment fallback for `--dagr.blob.bucket` (M10, T110): the bucket
+/// intermediate blobs live in. There is no default — a bucket is a name only the
+/// operator knows.
+pub const DAGR_BLOB_BUCKET: &str = "DAGR_BLOB_BUCKET";
+
+/// Environment fallback for `--dagr.blob.region` (M10, T110): the region requests
+/// are **signed** for. Defaults to [`BLOB_REGION_DEFAULT`], which every
+/// S3-compatible implementation accepts when it has no regions of its own.
+pub const DAGR_BLOB_REGION: &str = "DAGR_BLOB_REGION";
+
+/// Environment fallback for `--dagr.blob.prefix` (M10, T110): the key prefix
+/// within the bucket. Empty by default; a prefix lets one bucket hold more than
+/// one dagr installation without either seeing the other's blobs.
+pub const DAGR_BLOB_PREFIX: &str = "DAGR_BLOB_PREFIX";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -855,6 +876,189 @@ pub fn resolve_pod_launch_retries(flag: Option<u32>) -> Result<u32, EnvParseErro
 /// when the flag is present with no value at all.
 pub fn parse_pod_launch_retries_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, String> {
     parse_valued_flag(argv, POD_LAUNCH_RETRIES_FLAG)
+}
+
+// ===========================================================================
+// Object-store location — DAGR_BLOB_* / --dagr.blob.* (M10, T110)
+// ===========================================================================
+//
+// Where the blob store IS, as opposed to what is in it. Four knobs, all
+// operator-owned, all following the same `flag > env > default` precedence
+// everything else here does.
+//
+// Deliberately absent from this list: any credential. dagr holds no credential of
+// its own, so there is no `--dagr.blob.access-key`, no `DAGR_BLOB_SECRET`, and no
+// file it reads one out of. Credentials come from the ambient environment the
+// platform already populates — see `dagr_blob::s3::creds`. A knob here would be a
+// credential surface, and adding one is the thing this design is avoiding.
+//
+// Also deliberately absent from a stored reference: the endpoint and the region.
+// They are *this process's* view of how to reach a bucket, and the same bucket is
+// reached through different endpoints from inside and outside a cluster. A
+// reference names `<bucket>/<prefix>` and a content address, so it keeps
+// resolving when the network changes and the storage does not.
+
+/// The library-owned flag naming the object store's endpoint
+/// (`--dagr.blob.endpoint`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const BLOB_ENDPOINT_FLAG: &str = "--dagr.blob.endpoint";
+
+/// The library-owned flag naming the bucket (`--dagr.blob.bucket`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const BLOB_BUCKET_FLAG: &str = "--dagr.blob.bucket";
+
+/// The library-owned flag naming the signing region (`--dagr.blob.region`).
+/// Reserved in [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const BLOB_REGION_FLAG: &str = "--dagr.blob.region";
+
+/// The library-owned flag naming the key prefix (`--dagr.blob.prefix`). Reserved
+/// in [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const BLOB_PREFIX_FLAG: &str = "--dagr.blob.prefix";
+
+/// The signing region assumed when an operator configures none.
+///
+/// `us-east-1` rather than "no region": SigV4 has no unregioned form, and this is
+/// the value every S3-compatible implementation without regions of its own
+/// accepts. Against real AWS an operator sets the region their bucket is in;
+/// against MinIO, Ceph or a gateway the value is signed and ignored.
+pub const BLOB_REGION_DEFAULT: &str = "us-east-1";
+
+/// How the object-store knobs read the environment. Injected rather than assumed
+/// so a test can assert precedence without mutating the process environment —
+/// `std::env` is process-global, and a suite that set and unset real variables
+/// would be order-dependent under CI parallelism.
+pub type EnvReader<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Read the real process environment. The reader every non-test caller passes.
+#[must_use]
+pub fn ambient_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// The shared body of the four resolvers: flag wins outright (the environment is
+/// never read), then a non-empty environment value, then the default.
+fn resolve_string(flag: Option<String>, env_key: &str, read: EnvReader<'_>) -> Option<String> {
+    if let Some(value) = flag {
+        let trimmed = value.trim().to_string();
+        return if trimmed.is_empty() { None } else { Some(trimmed) };
+    }
+    read(env_key)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Resolve the object store's **endpoint** by `flag > env > default` (default:
+/// none, i.e. AWS's endpoint for the resolved region).
+///
+/// # Errors
+///
+/// [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) when the value is not an `http://` or `https://`
+/// URL. A bare host is rejected rather than guessed at: guessing the scheme would
+/// mean silently choosing between a plaintext and an encrypted channel for signed
+/// requests, which is not a default anything should pick.
+pub fn resolve_blob_endpoint(
+    flag: Option<String>,
+    read: EnvReader<'_>,
+) -> Result<Option<String>, EnvParseError> {
+    let Some(endpoint) = resolve_string(flag, DAGR_BLOB_ENDPOINT, read) else {
+        return Ok(None);
+    };
+    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+        return Err(EnvParseError::parse(
+            DAGR_BLOB_ENDPOINT,
+            endpoint,
+            "an object-store endpoint must be an absolute `http://` or `https://` URL",
+        ));
+    }
+    Ok(Some(endpoint))
+}
+
+/// Resolve the **bucket** by `flag > env > default` (default: none — a bucket has
+/// no sensible default and an unset one simply means "no object store configured").
+///
+/// # Errors
+///
+/// [`EnvParseError`] when the value contains a `/`: that is a bucket **and a
+/// prefix**, and the prefix has its own knob. Splitting it silently would make
+/// `--dagr.blob.prefix` quietly ineffective.
+pub fn resolve_blob_bucket(
+    flag: Option<String>,
+    read: EnvReader<'_>,
+) -> Result<Option<String>, EnvParseError> {
+    let Some(bucket) = resolve_string(flag, DAGR_BLOB_BUCKET, read) else {
+        return Ok(None);
+    };
+    if bucket.contains('/') {
+        return Err(EnvParseError::parse(
+            DAGR_BLOB_BUCKET,
+            bucket,
+            "a bucket name contains no `/` — set the key prefix with `--dagr.blob.prefix`",
+        ));
+    }
+    Ok(Some(bucket))
+}
+
+/// Resolve the **signing region** by `flag > env > default`
+/// ([`BLOB_REGION_DEFAULT`]).
+///
+/// # Errors
+///
+/// Never fails today; the fallible signature is deliberate, because a region is
+/// exactly the kind of value that grows a validation rule, and widening an
+/// infallible public signature later is a breaking change.
+pub fn resolve_blob_region(
+    flag: Option<String>,
+    read: EnvReader<'_>,
+) -> Result<String, EnvParseError> {
+    Ok(resolve_string(flag, DAGR_BLOB_REGION, read)
+        .unwrap_or_else(|| BLOB_REGION_DEFAULT.to_string()))
+}
+
+/// Resolve the **key prefix** by `flag > env > default` (default: empty).
+///
+/// # Errors
+///
+/// Never fails today; fallible for the same reason [`resolve_blob_region`] is.
+pub fn resolve_blob_prefix(
+    flag: Option<String>,
+    read: EnvReader<'_>,
+) -> Result<String, EnvParseError> {
+    Ok(resolve_string(flag, DAGR_BLOB_PREFIX, read)
+        .map(|p| p.trim_matches('/').to_string())
+        .unwrap_or_default())
+}
+
+/// Parse `--dagr.blob.endpoint` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the flag is present with no value.
+pub fn parse_blob_endpoint_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, String> {
+    parse_valued_flag(argv, BLOB_ENDPOINT_FLAG)
+}
+
+/// Parse `--dagr.blob.bucket` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the flag is present with no value.
+pub fn parse_blob_bucket_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, String> {
+    parse_valued_flag(argv, BLOB_BUCKET_FLAG)
+}
+
+/// Parse `--dagr.blob.region` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the flag is present with no value.
+pub fn parse_blob_region_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, String> {
+    parse_valued_flag(argv, BLOB_REGION_FLAG)
+}
+
+/// Parse `--dagr.blob.prefix` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the flag is present with no value.
+pub fn parse_blob_prefix_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, String> {
+    parse_valued_flag(argv, BLOB_PREFIX_FLAG)
 }
 
 /// Read a **value-taking** library flag out of a raw invocation, accepting both

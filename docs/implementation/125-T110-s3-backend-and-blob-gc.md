@@ -163,3 +163,184 @@ Add the object-store backend and make intermediate blobs reclaimable.
   what its own artifacts no longer reference. dagr remains not a scheduler, a
   distributed execution system, a coordinating metadata store, a web interface, a DSL,
   or a backfill orchestrator, and the graph's shape never changes at runtime.
+
+---
+
+## Decisions recorded
+
+Every open question this ticket carried, resolved with its evidence. (`docs/tasks.md`
+enumerates M0–M4 only — the M9–M11 tickets were appended under `docs/implementation/`
+alone — so this ticket has **no** additional `Q:` items to answer; checked in the file,
+not assumed.)
+
+### 1. Which S3 client, and does it bring its own retry? (the ticket's first open question)
+
+**Decided: no S3 client crate at all. The protocol is in-tree in `dagr-blob`; only the
+HTTP transport is a dependency, and it is `ureq` + `rustls` + `rustls-native-certs`
+behind a new default-off `blob-s3` feature on `dagr-cli`.**
+
+The forcing constraint is a boundary this milestone already asserted: `dagr-blob`
+declares **no dependencies at all**, and `scripts/check-blob-feature-gating.sh` fails
+the build if it ever grows one. That is what makes T104's *"`cargo build --all`
+compiles no storage dependency"* true. Putting an S3 SDK there — even optionally —
+would have meant weakening a shipped assertion, so the backend was split instead,
+along the sans-IO line T104 and T107 already established:
+
+- **`dagr-blob`** holds the whole protocol: request construction, AWS SigV4 signing
+  (over an in-tree HMAC-SHA256 built on T104's SHA-256), the status→classification
+  map, paged `ListObjectsV2`, and the bounded retry. Zero dependencies; every build
+  compiles it.
+- **`dagr-cli::blob_s3`** holds the socket, behind `blob-s3`. `cargo build --all`,
+  `--no-default-features` *and* `--features blob` compile no HTTP or TLS crate —
+  containment as strong as `dagr-k8s`'s `client` feature, and stronger than the
+  metastore's.
+
+The trust boundary is where the in-tree argument stops, and that line is drawn
+deliberately rather than by convenience. T104 justified an in-tree SHA-256 as *"a
+fully specified fixed function over public bytes, checkable against published
+vectors"*. HMAC-SHA256 and SigV4 satisfy the same test — RFC 4231's vectors and AWS's
+published key-derivation and canonical-request values are asserted in
+`crates/blob/src/hmac.rs` and `crates/blob/src/s3/sigv4.rs`. TLS, certificate-chain
+verification and HTTP framing do **not**: they are negotiated, adversarial, and carry
+a standing security-maintenance obligation. So they are a maintained crate's.
+
+**Retry: exactly one policy, and it is the backend's.** `ureq` is configured with
+`max_redirects(0)` and does no retrying; the transport port's contract says so in
+words (*"an implementation does not retry and does not interpret status codes"*).
+`S3Blob` owns the single bounded retry, and the classified error names how many
+attempts it spent. A **permanent** failure is never retried — a 403 is transient by
+*classification* (it is not evidence of deletion) but is returned on the first
+attempt, because a permission problem does not clear by waiting and spending the
+budget on it only delays the diagnosis.
+
+**Licence budget: no new SPDX id.** Audited crate by crate; every transitive licence
+resolves into `deny.toml`'s existing five, and most of the tree (rustls, ring, http,
+httparse, base64, bytes) is already in the lockfile via T107's Kubernetes client. One
+addition *was* found and **designed out** rather than allowed: `ureq`'s default
+`rustls` feature pulls `webpki-roots`, whose CA bundle is `CDLA-Permissive-2.0`. The
+feature therefore takes `rustls-no-provider` and loads roots from the **platform trust
+store** (`rustls-native-certs`, `Apache-2.0 OR ISC OR MIT`) — which is also the better
+answer independently, because an operator's private CA then works by being trusted
+where everything else on the host trusts it. A new assertion in
+`check-blob-feature-gating.sh` fails the build if `webpki-roots` re-enters the
+resolution.
+
+### 2. Does the GC belong in `prune` or its own verb? (the ticket's second open question)
+
+**Decided: `prune`, as the ticket proposed** — it already owns retention (C26) and
+already reasons over the run store, and a second retention verb would be two places to
+get wrong. The mechanism is `dagr_cli::blob_gc`, and `prune`'s verb body calls it
+**after** its run-directory retention, because retention is what decides which
+artifacts survive and the surviving artifacts are exactly what defines reachability.
+
+The flag grammar is `--reclaim-blobs <dry-run|delete>` plus `--blob-store
+<container>`. One value-taking flag rather than a bare toggle plus a `--force`: the
+destructive mode has to be *typed*, and an unrecognized value is refused rather than
+defaulted, so no typo can resolve to `delete`. A bare `prune` is byte-for-byte
+unchanged.
+
+### 3. Multipart upload (the ticket's third open question)
+
+**Deferred, as the ticket directs, and the non-breaking-extension claim is now
+checkable rather than asserted.** `BlobStore::put(&self, bytes: &[u8]) -> Result<BlobKey,
+BlobError>` takes the bytes and returns the address; a multipart implementation
+changes only how `S3Blob::put` transfers them and is invisible at the port. Nothing in
+the reference grammar, the classification, the retry or the reclaim depends on the
+transfer being a single request.
+
+### 4. `Absent` is 404 and nothing else
+
+The three-way split has no "permanent failure" class, so every non-404 failure —
+including a 403 — classifies as **transient**. That is not a fudge: `Absent` is the
+verdict that refuses a resume plan up front as a `DanglingReference`, and a
+credential or policy problem is evidence that *this process could not look*, not that
+anything was deleted. The probe turns it into `CannotDetermine`, the plan proceeds,
+and the real failure surfaces at rehydration, named. A retry budget that outlives its
+bound reports transient too, never a false absent — asserted directly
+(`a_transient_failure_that_outlives_the_bound_surfaces_with_the_attempt_count`,
+`an_unreachable_object_store_does_not_turn_a_resume_into_a_dangling_reference`).
+
+### 5. `head` measures the hash; it does not trust stored metadata
+
+An object store can answer size from a cheap `HEAD`, and can serve back whatever user
+metadata a writer attached — and neither answers the question the probe exists for.
+The probe's job is catching an **out-of-band overwrite**, and an overwrite replaces an
+object's metadata along with its bytes, so any predicate cheaper than reading would
+report `Present` for exactly the case `MutatedReference` exists to refuse. `S3Blob::head`
+therefore reads the object and hashes it, exactly as `LocalFsBlob::head` does. The cost
+is bounded by blob size and is documented at the method.
+
+### 6. Credentials: the environment and a credentials file; **no STS exchange**
+
+`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`), then
+`AWS_SHARED_CREDENTIALS_FILE` / `~/.aws/credentials` under `AWS_PROFILE`. Web-identity
+(IRSA) **token exchange** is deliberately not implemented: trading a projected
+service-account token for temporary credentials means calling STS — a second service,
+a second signing path, and a background refresh loop — which is a credential *broker*,
+i.e. precisely the surface this ticket's objective says dagr does not add. An operator
+on IRSA runs that exchange where every other workload does and dagr reads the result.
+The refusal names every variable and file consulted, so hitting it is a five-second
+diagnosis; and it is **not** a `BlobError`, so it can never be mistaken for a missing
+object.
+
+`S3Credentials` has no `Display`, its `Debug` renders `<redacted credential>` for
+every field, and the secret is reachable only through `expose_secret()`, whose single
+caller is the signer — asserted mechanically by a new check in
+`check-blob-feature-gating.sh`, alongside checks that no `--dagr.blob.*` flag and no
+`DAGR_BLOB_*` variable names a secret.
+
+### 7. The retry shape is the engine's, reproduced rather than imported
+
+The ticket asks the backend to reuse *"the engine's existing backoff shape rather than
+a second policy"*. `dagr_core::execution::Backoff` is the shape (`base · factor^n`
+clamped to `cap`), but `dagr-blob` cannot depend on `dagr-core` — that boundary is why
+the crate exists. So `dagr_blob::retry::RetryBudget` reproduces the curve and a
+**parity test in `dagr-cli`** — the one crate where both types are visible — pins them
+equal across a matrix of parameters and attempt indices
+(`the_backends_retry_budget_is_the_engines_backoff_shape`). Jitter is deliberately
+absent: the engine jitters *node* retries because many nodes retry against one
+downstream at once, whereas a blob retry is already inside one attempt whose start the
+engine jittered.
+
+### 8. Reachability over-approximates, on purpose
+
+Getting reachability wrong is not symmetric. A missed reference deletes a blob a run
+still needs — silent, permanent loss whose first symptom is a resume refused months
+later. An extra "reference" keeps a dead blob one prune longer. Every uncertain case
+therefore resolves toward keeping:
+
+- reference extraction walks the **whole** artifact document and takes every string
+  that parses as a blob reference in this container, rather than reading the three
+  fields that carry one today (`outputs[].uri`,
+  `attempts[].durable_reference`, `attempts[].inputs[].uri`). A schema that grows a
+  fourth cannot silently make live blobs collectable;
+- an artifact that cannot be read is a **refusal**, not a zero-reference artifact;
+- a run directory with an event stream and no folded `run.json` is a refusal too,
+  naming `fold` — its references are still in the stream, so its blobs would look
+  unreferenced when they are not;
+- a missing `--store` base is a refusal rather than "no artifacts", because a mistyped
+  base would otherwise make every blob in the container look garbage;
+- a reference naming a different container contributes nothing and is not evidence
+  about this one.
+
+Attempt shards (T106) share the container and are never enumerated as blobs: the local
+backend's `list` walks `<root>/<algorithm>/` and keeps only names that are valid
+content addresses, so `attempt-shards/` and hidden write debris are structurally
+invisible to it; the object-store `list` scopes its prefix the same way.
+
+### 9. `RUN_ARTIFACT_FILE_NAME` promoted to library surface
+
+`"run.json"` was a private constant in the T56 acceptance sample. The reaper's whole
+notion of reachability is "the references in the retained run artifacts", so it has to
+recognize one on disk — and a second string literal for the same reserved run-store
+name is exactly the drift the run-store contract (ADR 012) exists to prevent. It now
+lives in `dagr_cli::run_store` beside `DEFAULT_STORE_BASE`.
+
+### 10. Knobs not yet in arch.md's C26 table
+
+`--dagr.blob.endpoint` / `.bucket` / `.region` / `.prefix` and `--reclaim-blobs` are
+reserved in `contract::reserved_flag_names()` and follow `flag > env > default`, but
+arch.md's C26 env-fallback table is not amended here — this ticket does not own that
+decision, and there is precedent (`--dagr.pod-launch-retries`, added by T108, is not in
+it either). T117 (the knob mapping table) is the ticket that reconciles the table with
+the shipped set; this entry is the record it will need.

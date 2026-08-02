@@ -80,6 +80,31 @@ version = 2
 #
 # The whole tree is behind TWO default-off features (`dagr-cli`'s `k8s` and
 # `dagr-k8s`'s `client`), so a plain `cargo build --all` compiles none of it.
+#
+# --- The M10 object-store client tree (T110, ADR 115 §8) — AUDITED, NO ADDITION -
+# The S3-compatible blob backend's HTTPS transport (`dagr-cli`'s default-off
+# `blob-s3` feature: `ureq` + `rustls` + `rustls-native-certs`) was audited crate
+# by crate against this allow-list, and it needs NO new SPDX id. The expressions
+# encountered are `MIT OR Apache-2.0`, `MIT`, `Apache-2.0 OR ISC OR MIT`,
+# `Apache-2.0 AND ISC` (ring), `ISC` (rustls-webpki, untrusted) and
+# `BSD-3-Clause` (subtle) — every one already allowed, no copyleft anywhere, and
+# most of the tree (rustls, ring, http, httparse, base64, bytes) is ALREADY in the
+# lockfile via the Kubernetes client above.
+#
+# ONE addition was found and DESIGNED OUT rather than allowed. `ureq`'s default
+# `rustls` feature pulls **`webpki-roots`**, whose bundled Mozilla CA list is
+# `CDLA-Permissive-2.0` — a data licence this list does not carry. Rather than
+# widen the allow-list for a CA bundle, the feature takes `rustls-no-provider` and
+# loads roots from the **platform trust store** via `rustls-native-certs`
+# (`Apache-2.0 OR ISC OR MIT`). That is the better engineering answer
+# independently: an operator's private CA — the normal case for an in-cluster
+# MinIO or gateway — then works by being trusted where everything else on the host
+# trusts it. `scripts/check-blob-feature-gating.sh` fails the build if
+# `webpki-roots` ever re-enters the resolution, so this cannot regress silently.
+#
+# The SIGNING half of the S3 client adds nothing at all: SigV4 and its HMAC-SHA256
+# are implemented in `dagr-blob`, whose dependency table is empty and asserted to
+# stay that way.
 allow = ["MIT", "Unicode-3.0", "Apache-2.0", "BSD-3-Clause", "ISC"]
 # A crate whose declared license does not resolve to an SPDX id in `allow`
 # fails; this confidence threshold keeps that resolution strict.
