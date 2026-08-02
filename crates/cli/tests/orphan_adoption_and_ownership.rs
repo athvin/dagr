@@ -43,9 +43,7 @@ use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink, Backoff, RetryConfig};
 use dagr_core::resume::{PriorNode, PriorRun, ReferenceExistence, ResumeRefusal, plan_resume};
 use dagr_k8s::adoption::BuildIdentity;
-use dagr_k8s::api::{
-    ApiFailure, CreatedPod, PodLifecycle, PodPhase, PodSnapshot, WatchDelivery,
-};
+use dagr_k8s::api::{ApiFailure, CreatedPod, PodLifecycle, PodPhase, PodSnapshot, WatchDelivery};
 use dagr_k8s::executor::{ClusterRetry, PodPlacement, PodSpec, pod_name};
 use dagr_k8s::fake::{FakeApi, FakeControl, fake_api};
 use dagr_k8s::identity::{
@@ -165,7 +163,10 @@ impl Lifecycle {
     }
 
     fn patches(&self) -> Vec<Call> {
-        self.calls().into_iter().filter(|c| c.verb == "patch").collect()
+        self.calls()
+            .into_iter()
+            .filter(|c| c.verb == "patch")
+            .collect()
     }
 
     fn pod(&self, name: &str) -> Option<PodSnapshot> {
@@ -294,7 +295,11 @@ impl PodLifecycle for Lifecycle {
         }
         async move {
             if refused {
-                return Err(ApiFailure::api(500, "InternalError", "etcdserver: too many requests"));
+                return Err(ApiFailure::api(
+                    500,
+                    "InternalError",
+                    "etcdserver: too many requests",
+                ));
             }
             Ok(())
         }
@@ -523,7 +528,9 @@ fn write_shard(root: &Path, node: &str, attempt: u32, state: TerminalState) {
     AttemptShard::new(shard_identity(node, attempt), token)
         .with_inputs(Vec::<ConsumedRef>::new())
         .with_records(dagr_cli::shard::records_for(RUN_ID, &events))
-        .with_output(ShardOutput::new("dagr-blob+local://blobs/sha256/abc").content_hash("sha256:abc"))
+        .with_output(
+            ShardOutput::new("dagr-blob+local://blobs/sha256/abc").content_hash("sha256:abc"),
+        )
         .write_atomically(root, false)
         .expect("the shard is written");
 }
@@ -599,7 +606,10 @@ async fn a_live_pod_is_adopted_by_a_fresh_orchestrator_and_the_object_is_otherwi
         "ONLY the owner key — adoption never rewrites anything the pod is running"
     );
 
-    let after = w.lifecycle.pod(&before.name).expect("the pod is still there");
+    let after = w
+        .lifecycle
+        .pod(&before.name)
+        .expect("the pod is still there");
     assert_eq!(after.uid, before.uid, "the same object: never recreated");
     assert_eq!(after.phase, before.phase, "its phase is untouched");
     assert_eq!(after.host, before.host, "it is still on the same node");
@@ -634,7 +644,14 @@ async fn an_adopted_pods_shard_is_replayed_and_the_node_reaches_the_shards_termi
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, report.adoptions, SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        report.adoptions,
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
 
@@ -672,7 +689,11 @@ async fn an_adopted_pods_shard_is_replayed_and_the_node_reaches_the_shards_termi
         .into_iter()
         .filter(|r| r["kind"] == "attempt-submitted" && r.get("observed_uid").is_some())
         .collect();
-    assert_eq!(observed.len(), 1, "one submission record, additively completed");
+    assert_eq!(
+        observed.len(),
+        1,
+        "one submission record, additively completed"
+    );
     assert_eq!(
         observed[0]["observed_uid"], "uid-orphan-extract-1",
         "the ADOPTED pod's real identity is what the record carries — intent and \
@@ -794,7 +815,14 @@ async fn a_consumed_outcome_is_tombstoned_and_a_later_discovery_excludes_it() {
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, report.adoptions, SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        report.adoptions,
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
 
@@ -850,7 +878,14 @@ async fn a_tombstoned_pod_whose_deletion_was_deferred_is_never_adopted_by_the_su
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, Adoptions::none(), SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        Adoptions::none(),
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
 
@@ -914,7 +949,10 @@ async fn a_pod_from_a_different_build_is_left_alone_and_fails_its_node_naming_bo
     .await
     .expect("discovery lists the run's pods");
 
-    assert!(report.adopted.is_empty(), "a different program's pod is never adopted");
+    assert!(
+        report.adopted.is_empty(),
+        "a different program's pod is never adopted"
+    );
     assert_eq!(report.refused, vec![foreign.name.clone()], "it is reported");
     assert!(
         w.lifecycle.patches().is_empty() && w.lifecycle.deleted().is_empty(),
@@ -927,7 +965,14 @@ async fn a_pod_from_a_different_build_is_left_alone_and_fails_its_node_naming_bo
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, report.adoptions, SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        report.adoptions,
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
     let state = r.run(&ctx, &mut sink).await;
@@ -971,13 +1016,12 @@ async fn a_mismatched_tool_version_or_image_digest_is_refused_likewise() {
         .expect("discovery lists the run's pods");
 
         assert!(report.adopted.is_empty(), "{key}: never adopted");
-        assert!(
-            w.lifecycle.patches().is_empty(),
-            "{key}: left untouched"
-        );
+        assert!(w.lifecycle.patches().is_empty(), "{key}: left untouched");
         let named = report.report_for(&AttemptKey::new(RUN_ID, "extract", 1));
         assert!(
-            named.as_ref().is_some_and(|r| r.contains(value) && r.contains(expected)),
+            named
+                .as_ref()
+                .is_some_and(|r| r.contains(value) && r.contains(expected)),
             "{key}: both values are named: {named:?}"
         );
     }
@@ -1114,7 +1158,14 @@ async fn two_live_pods_for_one_attempt_produce_one_adoption_one_revocation_and_o
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, report.adoptions, SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        report.adoptions,
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
 
@@ -1136,7 +1187,10 @@ async fn two_live_pods_for_one_attempt_produce_one_adoption_one_revocation_and_o
         "exactly one terminal state, however many pods claimed the attempt: {:?}",
         sink.events()
     );
-    assert!(w.lifecycle.created().is_empty(), "and nothing was resubmitted");
+    assert!(
+        w.lifecycle.created().is_empty(),
+        "and nothing was resubmitted"
+    );
     let _ = observer.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -1160,7 +1214,14 @@ async fn a_pod_terminal_with_a_readable_shard_at_discovery_is_consumed_without_r
     let log = SubmissionLog::open(&w.stream_path, RUN_ID, "example-pipeline")
         .expect("the submission log opens");
     let observer = PodObserver::spawn(w.api.clone(), selector(), limits());
-    let mut r = runner(&w, "extract", &observer, &log, report.adoptions, SECOND_OWNER);
+    let mut r = runner(
+        &w,
+        "extract",
+        &observer,
+        &log,
+        report.adoptions,
+        SECOND_OWNER,
+    );
     let mut sink = Recorder::default();
     let ctx = RunContext::for_test();
 
@@ -1273,8 +1334,7 @@ async fn a_resume_refusal_attempts_no_adoption() {
     prior.structural_fingerprint ^= 0xdead_beef;
 
     let w = world("refused-resume");
-    w.lifecycle
-        .seed(orphan("load", 1, PodPhase::Running, None));
+    w.lifecycle.seed(orphan("load", 1, PodPhase::Running, None));
 
     // The composition, in the order the run path has it: resume plans first, and
     // discovery is downstream of a plan that succeeded.
@@ -1395,7 +1455,11 @@ async fn an_orchestrator_killed_mid_run_restarts_and_the_node_is_executed_exactl
     )
     .await
     .expect("discovery lists the run's pods");
-    assert_eq!(report.adopted, vec![name.clone()], "the orphan is reclaimed");
+    assert_eq!(
+        report.adopted,
+        vec![name.clone()],
+        "the orphan is reclaimed"
+    );
     assert_eq!(
         w.lifecycle
             .pod(&name)
@@ -1490,11 +1554,7 @@ impl dagr_core::stable_name::StableName for Seven {
 impl dagr_core::task::Task for Seven {
     type Input = ();
     type Output = u64;
-    async fn run(
-        &mut self,
-        _ctx: &RunContext,
-        _i: (),
-    ) -> Result<u64, dagr_core::TaskError> {
+    async fn run(&mut self, _ctx: &RunContext, _i: ()) -> Result<u64, dagr_core::TaskError> {
         Ok(7)
     }
 }

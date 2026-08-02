@@ -206,7 +206,10 @@ fn a_refused_pod_is_reported_against_its_attempt_and_never_revoked() {
         "a foreign pod is left running, not deleted"
     );
     let key = AttemptKey::new(RUN_ID, "extract", 1);
-    let refused = plan.refuse.get(&key).expect("the refusal is keyed by attempt");
+    let refused = plan
+        .refuse
+        .get(&key)
+        .expect("the refusal is keyed by attempt");
     assert_eq!(refused.name, "dagr-extract-1");
 }
 
@@ -349,8 +352,14 @@ fn the_resolution_does_not_depend_on_the_order_the_api_listed_them() {
     let backwards = plan(&[second, first], RUN_ID, &build(), &everything());
 
     assert_eq!(
-        forwards.adopt.get(&AttemptKey::new(RUN_ID, "extract", 1)).map(|p| p.name.clone()),
-        backwards.adopt.get(&AttemptKey::new(RUN_ID, "extract", 1)).map(|p| p.name.clone()),
+        forwards
+            .adopt
+            .get(&AttemptKey::new(RUN_ID, "extract", 1))
+            .map(|p| p.name.clone()),
+        backwards
+            .adopt
+            .get(&AttemptKey::new(RUN_ID, "extract", 1))
+            .map(|p| p.name.clone()),
         "deterministic means deterministic: a listing is a set, and the answer \
          cannot depend on its enumeration"
     );
