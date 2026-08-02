@@ -92,10 +92,61 @@ fn cookbook_teaches_the_native_query_path() {
         "output_produced",
         "input_consumed",
         "asset",
+        "attempt_submitted",
+        "attempt_submitted_input",
     ] {
         assert!(
             s.contains(table),
             "the section queries the shipped `{table}` table"
+        );
+    }
+}
+
+/// The audit section teaches the shipped T111 shape: intent kept apart from
+/// reality, submitted-but-never-completed as a first-class state, positional input
+/// order, and the same by-value / no-FK discipline the lineage tables keep. It must
+/// not promise a verb for the divergence question — that is a query.
+#[test]
+fn cookbook_teaches_the_submission_audit_projection_and_its_boundary() {
+    let s = cookbook_metastore_section();
+    let lower = normalize_ws(&s).to_lowercase();
+    assert!(
+        lower.contains("attempt-submitted"),
+        "the section names the write-ahead record the audit rows project from"
+    );
+    for column in [
+        "target_name",
+        "observed_name",
+        "input_count",
+        "completed",
+        "outcome_state",
+        "position",
+    ] {
+        assert!(
+            s.contains(column),
+            "the section documents the `{column}` column an audit query reads"
+        );
+    }
+    assert!(
+        lower.contains("no foreign key"),
+        "the audit rows are stated to carry no foreign key (they outlive their referent)"
+    );
+    assert!(
+        lower.contains("never completed") || lower.contains("never-completed"),
+        "the section teaches submitted-but-never-completed as a state, not an absence"
+    );
+    // The divergence question was resolved as SQL, not a verb: the docs must not
+    // promise a command that does not exist.
+    for unshipped in [
+        "dagr audit",
+        "dagr metastore audit",
+        "dagr divergence",
+        "dagr metastore divergence",
+    ] {
+        assert!(
+            !lower.contains(unshipped),
+            "the section must not promise an unshipped `{unshipped}` verb — the divergence \
+             question is answered by a documented query"
         );
     }
 }

@@ -297,7 +297,11 @@ Query it with the cookbook's [worked examples](docs/cookbook.md#querying-run-sta
 consumed dataset X", referencing a dataset **by its `uri` value** with no hard foreign
 key (a lineage row survives GC of the referent). This is a local, non-coordinating
 provenance index — dagr is **not** an asset scheduler (no data-triggered runs, no
-asset queues/watchers/partitions).
+asset queues/watchers/partitions). For nodes placed on remote compute, the
+`attempt_submitted` / `attempt_submitted_input` tables answer "what was this attempt
+launched with, and did it read what we told it to" — including attempts that were
+submitted and **never completed** — under the same by-value, no-foreign-key
+discipline.
 
 ## When not to use this
 

@@ -244,7 +244,7 @@ fn positional_input_order_is_preserved_and_position_k_is_recoverable() {
     let artifact = fold_stream(&sink.bytes(), &[]).expect("the stream folds");
     let s = &artifact.submissions()[0];
     assert_eq!(s.input_count(), Some(3));
-    let uris: Vec<&str> = s.inputs().iter().map(|i| i.uri()).collect();
+    let uris: Vec<String> = s.inputs().iter().map(|i| i.uri().to_string()).collect();
     assert_eq!(
         uris,
         vec!["blob://zeta", "blob://alpha", "blob://mid"],
