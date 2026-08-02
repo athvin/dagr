@@ -236,6 +236,44 @@ the audit (every crate in the new ~140-crate tree resolves into the existing
 allow-list; `cargo audit` clean) rather than an id. The next ticket that reaches for
 `runtime` will find the cost written down where it will look.
 
+### 3b. Where does the *runtime* live? → **`dagr-cli`, where ADR 004 already places it. `dagr-k8s` names no async runtime at all.**
+
+The first implementation of this ticket gave the new crate a `tokio` dependency —
+the observer is a spawned task with a stall timer, a reconnect backoff, waiter
+channels and a `select!`, so a runtime looked unavoidable. It failed
+`scripts/check-async-runtime-adr.sh` and `check-timeout-and-permit-adr.sh`, whose
+allowlist places tokio on `cli` (ADR 004: the crate that owns the run loop) and
+`metastore` (ADR 097 §5) and requires **every other crate to justify a runtime
+edge or not have one**.
+
+The allowlist was not widened. The crate was split at the boundary its own module
+documentation already described:
+
+- **`dagr-k8s` keeps the parts with the hard failure modes and no runtime.**
+  `ObserverCore` was already a deterministic state machine over a monotonic offset
+  its caller supplies. What was left to remove was incidental: `PodWatch` became a
+  *trait* whose `next` returns an anonymous future instead of a struct wrapping a
+  `tokio::sync::mpsc::Receiver` and a `JoinHandle`; `PodApi` gained an associated
+  `Watch` type; the kube adapter holds the client's `Stream` **directly** instead
+  of pumping it into a channel from a spawned task (which also deletes a task and
+  an abort-on-drop); and `fake` became a queue behind a `std::sync::Mutex` with
+  `std::task::Waker`s. The crate's whole dependency table is now the four optional
+  client crates.
+- **`dagr_cli::pod_observer` is the task**, behind the same default-off `k8s`
+  feature: the spawn, the timer, the `select!`, the command inbox, the routing
+  table, `PodObserver`/`ObserverHandle`/`AttemptWaiter`, and the two suites that
+  drive all of it under a paused clock. `tokio/macros` rides on the `k8s` feature
+  so the default surface keeps its minimal feature set.
+
+The DoD is satisfied literally — it requires *"the **client** lives in a new
+opt-in crate"*, and it does — and the split is better than the thing it replaced
+on its own terms. "One watch per orchestrator **process**" is a property of the
+process, so the singleton belongs to the process rather than to a library it
+drives; the library half is now usable from any runtime; and the fake, having no
+runtime, can express the *stall* as its simplest case (a parked waker nobody
+wakes) rather than as a channel that has to be persuaded to stay quiet. No ADR
+moved, and no allowlist changed: the boundary was satisfied, not relocated.
+
 ### 4. Where does the client quarantine live? → **Inside `dagr-k8s`, behind a second default-off feature.**
 
 The ticket asks that *"`cargo build --all` and `--no-default-features` must pull
@@ -247,8 +285,8 @@ make that sentence false however the cli gated its edge. (This is the shape the
 So the containment is doubled: `dagr-cli`'s `k8s` feature is default-off, **and**
 `dagr-k8s`'s own `client` feature is default-off, with `kube`, `k8s-openapi`,
 `rustls` and `futures-util` all optional behind it. The default surface of the
-crate — the observer, the discipline, the port, the identity encoding, the
-cluster-access resolution — compiles with `tokio` and nothing else, and
+crate — the discipline, the port, the identity encoding, the cluster-access
+resolution and the fake — compiles with **no dependency at all** (see 3b), and
 `scripts/check-k8s-feature-gating.sh` asserts the **whole-workspace** default and
 `--no-default-features` resolutions contain no HTTP/TLS crate at all. That is the
 literal reading, and it buys something real: a contributor who never touches remote
@@ -256,7 +294,10 @@ execution never compiles a ~140-crate tree with a C toolchain behind its TLS bac
 
 The consequence is that the client is *not* built by `cargo test --workspace`, so
 CI compiles it two other ways: a dedicated `-p dagr-k8s --features client` test and
-clippy leg, and the existing `--all-features` build on the feature-matrix job.
+clippy leg, and the existing `--all-features` build on the feature-matrix job. The
+same is true of the task half behind `dagr-cli`'s `k8s` feature, which gets its own
+`-p dagr-cli --features k8s` test and clippy legs — on **both** tiers, since that
+is the half whose subject is timing.
 
 ### 5. Is the node label a digest or a truncation? → **A truncation, and the ticket's own test is why.**
 
