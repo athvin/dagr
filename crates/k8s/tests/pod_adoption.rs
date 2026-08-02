@@ -126,7 +126,9 @@ fn a_pod_annotated_with_this_build_is_adoptable() {
         AdoptionVerdict::Adopt(identity) => {
             assert_eq!(identity.key, AttemptKey::new(RUN_ID, "extract", 1));
         }
-        other => panic!("this run's pod, from this build, is adoptable: {other:?}"),
+        refused @ AdoptionVerdict::Refuse(_) => {
+            panic!("this run's pod, from this build, is adoptable: {refused:?}")
+        }
     }
 }
 
@@ -143,7 +145,9 @@ fn a_pod_from_a_different_structural_fingerprint_is_refused_naming_both_fingerpr
 
     let refusal = match classify(&foreign, RUN_ID, &build()) {
         AdoptionVerdict::Refuse(refusal) => refusal,
-        other => panic!("a different program's pod is never adopted: {other:?}"),
+        adopted @ AdoptionVerdict::Adopt(_) => {
+            panic!("a different program's pod is never adopted: {adopted:?}")
+        }
     };
     assert!(
         matches!(refusal, AdoptionRefusal::StructuralFingerprint { .. }),
@@ -163,7 +167,9 @@ fn a_pod_from_a_different_tool_version_is_refused_naming_both_versions() {
 
     let refusal = match classify(&foreign, RUN_ID, &build()) {
         AdoptionVerdict::Refuse(refusal) => refusal,
-        other => panic!("a different tool version's pod is never adopted: {other:?}"),
+        adopted @ AdoptionVerdict::Adopt(_) => {
+            panic!("a different tool version's pod is never adopted: {adopted:?}")
+        }
     };
     assert!(matches!(refusal, AdoptionRefusal::ToolVersion { .. }));
     let message = refusal.to_string();
@@ -179,7 +185,9 @@ fn a_pod_from_a_different_image_digest_is_refused_naming_both_digests() {
 
     let refusal = match classify(&foreign, RUN_ID, &build()) {
         AdoptionVerdict::Refuse(refusal) => refusal,
-        other => panic!("a different image's pod is never adopted: {other:?}"),
+        adopted @ AdoptionVerdict::Adopt(_) => {
+            panic!("a different image's pod is never adopted: {adopted:?}")
+        }
     };
     assert!(matches!(refusal, AdoptionRefusal::ImageDigest { .. }));
     let message = refusal.to_string();

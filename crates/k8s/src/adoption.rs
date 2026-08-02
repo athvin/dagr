@@ -15,7 +15,7 @@
 //! # The mechanics, and why each one is shaped the way it is
 //!
 //! **Ownership lives in a mutable label, patched in place.** Adoption is a
-//! labels-only patch rewriting [`LABEL_OWNER`](crate::identity::LABEL_OWNER) —
+//! labels-only patch rewriting [`LABEL_OWNER`] —
 //! *never* a pod recreation, because recreating a pod is running the attempt
 //! twice, which is the thing this whole module is here to avoid. So the patch
 //! this module produces touches exactly one key ([`adoption_patch`]), and nothing
@@ -498,7 +498,9 @@ pub fn plan(
         // A `None` here cannot happen — a key is only in the map because a pod put
         // it there — but it is expressed as a skip rather than an `expect`, so this
         // function has no panic to document and no panic to hit.
-        let Some(adopted) = found.next() else { continue };
+        let Some(adopted) = found.next() else {
+            continue;
+        };
         out.revoke.extend(found.map(|pod| pod.name));
         out.adopt.insert(key, adopted);
     }
@@ -512,7 +514,9 @@ pub fn plan(
             out.ignored.extend(refused);
         } else {
             let mut refused = refused.into_iter();
-            let Some(first) = refused.next() else { continue };
+            let Some(first) = refused.next() else {
+                continue;
+            };
             out.refuse.insert(key, first);
             out.ignored.extend(refused);
         }

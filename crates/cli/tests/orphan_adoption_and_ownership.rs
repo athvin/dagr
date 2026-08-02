@@ -395,7 +395,7 @@ impl Drop for TempRoot {
 
 /// The fake platform plus the run's blob container and event stream.
 struct World {
-    _tmp: TempRoot,
+    tmp: TempRoot,
     root: PathBuf,
     stream_path: PathBuf,
     api: FakeApi,
@@ -411,7 +411,7 @@ fn world(tag: &str) -> World {
     let (api, control) = fake_api();
     let lifecycle = Lifecycle::new(control.clone());
     World {
-        _tmp: tmp,
+        tmp,
         root,
         stream_path,
         api,
@@ -685,17 +685,17 @@ async fn an_adopted_pods_shard_is_replayed_and_the_node_reaches_the_shards_termi
         "…and its output reference reached the hook the driver already reads"
     );
 
-    let observed: Vec<Value> = stream_records(&w.stream_path)
+    let submissions: Vec<Value> = stream_records(&w.stream_path)
         .into_iter()
         .filter(|r| r["kind"] == "attempt-submitted" && r.get("observed_uid").is_some())
         .collect();
     assert_eq!(
-        observed.len(),
+        submissions.len(),
         1,
         "one submission record, additively completed"
     );
     assert_eq!(
-        observed[0]["observed_uid"], "uid-orphan-extract-1",
+        submissions[0]["observed_uid"], "uid-orphan-extract-1",
         "the ADOPTED pod's real identity is what the record carries — intent and \
          reality are two facts, and reality here is a pod this process did not create"
     );
@@ -715,7 +715,7 @@ fn a_run_that_adopted_a_pod_still_has_gapless_seq_and_folds_cleanly() {
     let _entered = rt.enter();
 
     let w = world("fold");
-    let store = w._tmp.path().join("store");
+    let store = w.tmp.path().join("store");
     std::fs::create_dir_all(&store).expect("run store");
     let pod = orphan("extract", 1, PodPhase::Running, None);
     w.lifecycle.seed(pod.clone());
@@ -867,11 +867,11 @@ async fn a_tombstoned_pod_whose_deletion_was_deferred_is_never_adopted_by_the_su
     // in-process idempotency probe would otherwise "adopt" it and consume its
     // stale shard a second time.
     let w = world("stale");
-    let mut stale = orphan("extract", 1, PodPhase::Succeeded, None);
-    stale
+    let mut spent = orphan("extract", 1, PodPhase::Succeeded, None);
+    spent
         .labels
         .insert(LABEL_COMPLETE.to_string(), TOMBSTONE_VALUE.to_string());
-    w.lifecycle.seed(stale.clone());
+    w.lifecycle.seed(spent.clone());
     // The shard the earlier attempt left behind, which must NOT be re-consumed.
     write_shard(&w.root, "extract", 1, TerminalState::Failed);
 
@@ -902,10 +902,10 @@ async fn a_tombstoned_pod_whose_deletion_was_deferred_is_never_adopted_by_the_su
         );
         transition(&control, &fresh, PodPhase::Succeeded).await;
     });
-    let state = r.run(&ctx, &mut sink).await;
+    let outcome = r.run(&ctx, &mut sink).await;
     driver.await.expect("the driver task completes");
 
-    assert_eq!(state, TerminalState::Succeeded);
+    assert_eq!(outcome, TerminalState::Succeeded);
     assert_eq!(
         w.lifecycle.created().len(),
         1,
@@ -913,9 +913,9 @@ async fn a_tombstoned_pod_whose_deletion_was_deferred_is_never_adopted_by_the_su
          attempt instead"
     );
     let trace = w.lifecycle.trace();
-    let stale_calls: Vec<_> = trace.iter().filter(|(_, p)| *p == stale.name).collect();
+    let spent_calls: Vec<_> = trace.iter().filter(|(_, p)| *p == spent.name).collect();
     assert!(
-        stale_calls
+        spent_calls
             .iter()
             .any(|(verb, _)| *verb == "patch" || *verb == "delete"),
         "the consumed pod squatting on the attempt's name is revoked to free it: \
