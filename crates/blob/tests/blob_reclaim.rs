@@ -74,7 +74,10 @@ fn the_local_backend_enumerates_exactly_the_blobs_it_holds() {
     let root = TempRoot::new("list-local");
     let store = LocalFsBlob::open(root.path());
     assert!(
-        store.list().expect("an empty store lists cleanly").is_empty(),
+        store
+            .list()
+            .expect("an empty store lists cleanly")
+            .is_empty(),
         "a store that was never written to holds nothing"
     );
 
@@ -97,7 +100,11 @@ fn enumeration_ignores_attempt_shards_and_write_debris_in_the_same_container() {
 
     // An attempt shard (T106) lives under the SAME container root, in a sibling
     // subtree. It is not a blob and a reaper must never see it as one.
-    let shard_dir = root.path().join("attempt-shards").join("run-1").join("abcd");
+    let shard_dir = root
+        .path()
+        .join("attempt-shards")
+        .join("run-1")
+        .join("abcd");
     std::fs::create_dir_all(&shard_dir).expect("plant a shard directory");
     std::fs::write(shard_dir.join("1.jsonl"), b"{\"kind\":\"shard-header\"}\n")
         .expect("plant a shard");
@@ -176,8 +183,12 @@ fn deleting_a_blob_removes_it_from_both_backends_and_is_idempotent() {
         ("file", &local as &dyn BlobReclaimAndStore),
         ("s3", &s3 as &dyn BlobReclaimAndStore),
     ] {
-        let key = store.put_bytes(b"a blob about to be reclaimed").expect("put");
-        store.delete_key(&key).unwrap_or_else(|e| panic!("{label}: delete: {e}"));
+        let key = store
+            .put_bytes(b"a blob about to be reclaimed")
+            .expect("put");
+        store
+            .delete_key(&key)
+            .unwrap_or_else(|e| panic!("{label}: delete: {e}"));
         assert!(
             store.head_key(&key).expect_err("it is gone").is_absent(),
             "{label}: a deleted blob is absent"
@@ -217,7 +228,9 @@ fn an_unreachable_object_store_refuses_to_enumerate_rather_than_reporting_nothin
     store.put(b"present").expect("put");
     fake.set_unreachable(true);
 
-    let err = store.list().expect_err("an unreachable store cannot enumerate");
+    let err = store
+        .list()
+        .expect_err("an unreachable store cannot enumerate");
     assert!(
         err.is_transient(),
         "an unreachable store is transient — an empty listing would read as \

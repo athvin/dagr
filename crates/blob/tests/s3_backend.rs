@@ -73,7 +73,10 @@ struct RecordingSleeper {
 
 impl RecordingSleeper {
     fn delays(&self) -> Vec<Duration> {
-        self.delays.lock().expect("the sleeper log is poisoned").clone()
+        self.delays
+            .lock()
+            .expect("the sleeper log is poisoned")
+            .clone()
     }
 }
 
@@ -118,16 +121,23 @@ fn s3_store(bucket: &str) -> (S3Blob<FakeS3>, FakeS3) {
 fn port_suite(store: &dyn BlobStore, backend: &str) {
     // Round-trip.
     let bytes = b"the encoded payload for the parity suite".to_vec();
-    let key = store.put(&bytes).unwrap_or_else(|e| panic!("{backend}: put: {e}"));
+    let key = store
+        .put(&bytes)
+        .unwrap_or_else(|e| panic!("{backend}: put: {e}"));
     assert_eq!(
-        store.get(&key).unwrap_or_else(|e| panic!("{backend}: get: {e}")),
+        store
+            .get(&key)
+            .unwrap_or_else(|e| panic!("{backend}: get: {e}")),
         bytes,
         "{backend}: put then get round-trips the bytes"
     );
 
     // Content addressing: the same value twice is one key, computable by anyone.
     let again = store.put(&bytes).expect("a second put of the same bytes");
-    assert_eq!(key, again, "{backend}: the same bytes land under the same key");
+    assert_eq!(
+        key, again,
+        "{backend}: the same bytes land under the same key"
+    );
     assert!(
         key.matches(&bytes),
         "{backend}: the key is the digest of the bytes"
@@ -138,8 +148,14 @@ fn port_suite(store: &dyn BlobStore, backend: &str) {
     assert_ne!(key, other, "{backend}: different values get different keys");
 
     // head reports the size and the ACTUAL current hash.
-    let stat = store.head(&key).unwrap_or_else(|e| panic!("{backend}: head: {e}"));
-    assert_eq!(stat.size_bytes(), bytes.len() as u64, "{backend}: head size");
+    let stat = store
+        .head(&key)
+        .unwrap_or_else(|e| panic!("{backend}: head: {e}"));
+    assert_eq!(
+        stat.size_bytes(),
+        bytes.len() as u64,
+        "{backend}: head size"
+    );
     assert_eq!(
         stat.content_hash(),
         key.to_string(),
@@ -149,12 +165,16 @@ fn port_suite(store: &dyn BlobStore, backend: &str) {
     // A missing key is ABSENT from both get and head — never transient, never a
     // decoded value.
     let missing = dagr_blob::BlobKey::of(b"a value that was never stored anywhere");
-    let get_err = store.get(&missing).expect_err("a missing key cannot be read");
+    let get_err = store
+        .get(&missing)
+        .expect_err("a missing key cannot be read");
     assert!(
         get_err.is_absent(),
         "{backend}: a missing key is absent from get, got {get_err}"
     );
-    let head_err = store.head(&missing).expect_err("a missing key cannot be probed");
+    let head_err = store
+        .head(&missing)
+        .expect_err("a missing key cannot be probed");
     assert!(
         head_err.is_absent(),
         "{backend}: a missing key is absent from head, got {head_err}"
@@ -205,9 +225,14 @@ fn the_object_store_backend_names_its_bucket_and_prefix_as_the_container() {
 fn stored_bytes_that_no_longer_hash_to_their_key_are_corrupt_not_a_value() {
     let (store, fake) = s3_store("corrupt-bucket");
     let key = store.put(b"the original bytes").expect("put");
-    fake.overwrite_object(&store.object_key(&key), b"different bytes entirely".to_vec());
+    fake.overwrite_object(
+        &store.object_key(&key),
+        b"different bytes entirely".to_vec(),
+    );
 
-    let err = store.get(&key).expect_err("corrupt bytes are never returned");
+    let err = store
+        .get(&key)
+        .expect_err("corrupt bytes are never returned");
     assert!(err.is_corrupt(), "expected corrupt, got {err}");
     assert!(
         err.to_string().contains(key.hex()),
@@ -234,14 +259,20 @@ fn an_unreachable_store_is_transient_and_never_absent() {
     let key = store.put(b"stored while the store was up").expect("put");
     fake.set_unreachable(true);
 
-    let head_err = store.head(&key).expect_err("an unreachable store cannot answer");
+    let head_err = store
+        .head(&key)
+        .expect_err("an unreachable store cannot answer");
     assert!(
         head_err.is_transient() && !head_err.is_absent(),
         "an unreachable store is transient, never absent: {head_err}"
     );
-    let get_err = store.get(&key).expect_err("an unreachable store cannot answer");
+    let get_err = store
+        .get(&key)
+        .expect_err("an unreachable store cannot answer");
     assert!(get_err.is_transient(), "get is transient too: {get_err}");
-    let put_err = store.put(b"anything").expect_err("an unreachable store cannot answer");
+    let put_err = store
+        .put(b"anything")
+        .expect_err("an unreachable store cannot answer");
     assert!(put_err.is_transient(), "put is transient too: {put_err}");
 }
 
@@ -339,7 +370,9 @@ fn a_transient_failure_that_outlives_the_bound_surfaces_with_the_attempt_count()
     .with_sleeper(Arc::new(sleeper.clone()));
 
     fake.set_unreachable(true);
-    let err = store.put(b"never lands").expect_err("the bound is exhausted");
+    let err = store
+        .put(b"never lands")
+        .expect_err("the bound is exhausted");
     assert!(err.is_transient(), "still transient, never absent: {err}");
     assert!(
         err.to_string().contains('3'),
@@ -367,7 +400,10 @@ fn the_retry_budget_is_the_engines_backoff_shape() {
 
     // A budget can never be zero-attempt: that would be a store that refuses to
     // try at all.
-    assert_eq!(RetryBudget::new(0, Duration::ZERO, 2.0, Duration::ZERO).attempts(), 1);
+    assert_eq!(
+        RetryBudget::new(0, Duration::ZERO, 2.0, Duration::ZERO).attempts(),
+        1
+    );
 }
 
 // ===========================================================================
@@ -401,7 +437,10 @@ fn credentials_come_from_the_ambient_environment_in_the_documented_order() {
     })
     .expect("the environment tier supplies them");
     assert_eq!(creds.access_key_id(), "AKIAIOSFODNN7EXAMPLE");
-    assert!(creds.has_session_token(), "an injected session token is carried");
+    assert!(
+        creds.has_session_token(),
+        "an injected session token is carried"
+    );
 }
 
 #[test]
@@ -429,7 +468,8 @@ fn no_credential_value_appears_in_a_debug_rendering_or_an_error() {
     fake.set_unreachable(true);
     let err = store.put(b"anything").expect_err("unreachable");
     assert!(
-        !format!("{err}").contains(SECRET_SENTINEL) && !format!("{err:?}").contains(SECRET_SENTINEL),
+        !format!("{err}").contains(SECRET_SENTINEL)
+            && !format!("{err:?}").contains(SECRET_SENTINEL),
         "the error must not leak the secret: {err}"
     );
 }

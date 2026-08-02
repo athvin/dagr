@@ -85,7 +85,8 @@ impl RetryBudget {
     /// for the same reason: a delay computation is not a place to fail a run.
     #[must_use]
     pub fn nominal_delay(&self, n: u32) -> Duration {
-        let scaled = self.base.as_secs_f64() * self.factor.powi(i32::try_from(n).unwrap_or(i32::MAX));
+        let scaled =
+            self.base.as_secs_f64() * self.factor.powi(i32::try_from(n).unwrap_or(i32::MAX));
         if !scaled.is_finite() || scaled < 0.0 {
             return self.cap;
         }
@@ -146,7 +147,10 @@ mod tests {
 
     #[test]
     fn a_zero_attempt_budget_is_clamped_to_one() {
-        assert_eq!(RetryBudget::new(0, Duration::ZERO, 2.0, Duration::ZERO).attempts(), 1);
+        assert_eq!(
+            RetryBudget::new(0, Duration::ZERO, 2.0, Duration::ZERO).attempts(),
+            1
+        );
     }
 
     #[test]

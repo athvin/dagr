@@ -228,13 +228,74 @@ if printf '%s' "$default_line" | grep -q 'blob-s3'; then
 else
   pass "cli: blob-s3 is NOT in the default feature set (default-off)"
 fi
+# Is <dep> declared OPTIONAL in <manifest>'s `[dependencies]` table?
+#
+# It reads the WHOLE `<dep> = { … }` value rather than one line, because Cargo
+# lets that value span lines and these three entries do (a `features = [ … ]`
+# list). A same-line grep would report "not optional" for a manifest that is
+# correct and merely wrapped — and, worse, would silently start passing again if
+# someone reflowed it, which is a checker that tracks formatting instead of the
+# invariant.
+declares_optional() { # declares_optional <manifest> <dep>
+  awk -v want="$2" '
+    BEGIN { intable = 0; collecting = 0; buf = ""; found = 0 }
+    /^[[:space:]]*\[/ {
+      h = $0; sub(/^[[:space:]]*\[/, "", h); sub(/\].*$/, "", h)
+      intable = (h == "dependencies"); collecting = 0; next
+    }
+    !intable { next }
+    collecting {
+      buf = buf " " $0
+      if (buf ~ /}/) {
+        collecting = 0
+        if (buf ~ /optional[[:space:]]*=[[:space:]]*true/) { found = 1; exit }
+      }
+      next
+    }
+    {
+      line = $0; sub(/^[[:space:]]+/, "", line)
+      if (line ~ ("^" want "[[:space:]]*=")) {
+        buf = line
+        if (line ~ /\{/ && line !~ /}/) { collecting = 1; next }
+        if (buf ~ /optional[[:space:]]*=[[:space:]]*true/) { found = 1; exit }
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$1" 2>/dev/null
+}
 for dep in ureq rustls rustls-native-certs; do
-  if grep -qE "^[[:space:]]*$dep[[:space:]]*=.*optional[[:space:]]*=[[:space:]]*true" "$cli"; then
+  if declares_optional "$cli" "$dep"; then
     pass "cli: the $dep dependency is optional (no default edge)"
   else
     bad "cli: the $dep dependency is not marked optional — a default build would compile it"
   fi
 done
+# The predicate is non-vacuous, proved against planted manifests rather than by
+# inspecting the real one: a multi-line optional entry must read as optional, and
+# a non-optional one must not.
+oprobe=$(mktemp -d 2>/dev/null) || oprobe=""
+if [ -n "$oprobe" ]; then
+  printf '[dependencies]\nureq = { version = "3", features = [\n  "x",\n], optional = true }\n' \
+    >"$oprobe/yes.toml"
+  printf '[dependencies]\nureq = { version = "3", features = [\n  "x",\n] }\n' >"$oprobe/no.toml"
+  printf '[dev-dependencies]\nureq = { version = "3", optional = true }\n' >"$oprobe/dev.toml"
+  if declares_optional "$oprobe/yes.toml" ureq; then
+    pass "cli: the optional-dependency predicate reads a MULTI-LINE entry (it tracks the invariant, not the formatting)"
+  else
+    bad "cli: the optional-dependency predicate misses a multi-line optional entry — it is vacuous"
+  fi
+  if declares_optional "$oprobe/no.toml" ureq; then
+    bad "cli: the optional-dependency predicate passes a NON-optional entry — it asserts nothing"
+  else
+    pass "cli: the optional-dependency predicate rejects a non-optional entry"
+  fi
+  if declares_optional "$oprobe/dev.toml" ureq; then
+    bad "cli: the optional-dependency predicate reads the dev table (a dev edge is not the shipping edge)"
+  else
+    pass "cli: the optional-dependency predicate reads the [dependencies] table only"
+  fi
+  rm -rf "$oprobe"
+fi
 
 # 5b. `dagr-blob` still has no dependency at ANY feature setting. The manifest
 #     check above reads the file; this reads the RESOLUTION, including the crate's
@@ -326,19 +387,46 @@ fi
 # environment the platform already populated. A `--dagr.blob.*` flag or a
 # `DAGR_BLOB_*` variable that named a secret would BE a credential surface, so the
 # absence is asserted rather than left to review.
-cred_flags=$(grep -rEn -- '--dagr\.blob\.[a-z.-]*(secret|key|password|token|credential)' crates/ 2>/dev/null || true)
+#
+# The patterns require the name to appear as a QUOTED STRING LITERAL, because that
+# is what DECLARING a flag or an environment variable looks like. Matching bare
+# text would flag the comment in `crates/cli/src/config.rs` that says there is no
+# such knob — a checker that reads prose has to be loosened the first time someone
+# documents the invariant it exists to defend, which is exactly backwards.
+cred_flags=$(grep -rEn -- '"--dagr\.blob\.[a-z.-]*(secret|key|password|token|credential)"' crates/ 2>/dev/null || true)
 if [ -z "$cred_flags" ]; then
   pass "creds: no --dagr.blob.* flag names a secret (dagr adds no credential surface)"
 else
   bad "creds: a --dagr.blob.* flag names a secret — dagr holds no credential of its own:"
   printf '%s\n' "$cred_flags" | sed 's/^/        /'
 fi
-cred_env=$(grep -rEn 'DAGR_BLOB_[A-Z_]*(SECRET|PASSWORD|TOKEN|ACCESS_KEY|CREDENTIAL)' crates/ 2>/dev/null || true)
+cred_env=$(grep -rEn '"DAGR_BLOB_[A-Z_]*(SECRET|PASSWORD|TOKEN|ACCESS_KEY|CREDENTIAL)[A-Z_]*"' crates/ 2>/dev/null || true)
 if [ -z "$cred_env" ]; then
   pass "creds: no DAGR_BLOB_* variable names a secret"
 else
   bad "creds: a DAGR_BLOB_* variable names a secret:"
   printf '%s\n' "$cred_env" | sed 's/^/        /'
+fi
+# Non-vacuity: the two scans DO fire on a planted declaration, so "no output"
+# means "none declared" rather than "the pattern matches nothing".
+cprobe=$(mktemp -d 2>/dev/null) || cprobe=""
+if [ -n "$cprobe" ]; then
+  printf 'pub const F: &str = "--dagr.blob.secret-key";\n' >"$cprobe/flag.rs"
+  printf 'pub const E: &str = "DAGR_BLOB_SECRET_ACCESS_KEY";\n' >"$cprobe/env.rs"
+  printf '// there is no `--dagr.blob.access-key` and no `DAGR_BLOB_SECRET` here\n' >"$cprobe/prose.rs"
+  hits=$(grep -rEn -- '"--dagr\.blob\.[a-z.-]*(secret|key|password|token|credential)"' "$cprobe" 2>/dev/null || true)
+  hits="$hits$(grep -rEn '"DAGR_BLOB_[A-Z_]*(SECRET|PASSWORD|TOKEN|ACCESS_KEY|CREDENTIAL)[A-Z_]*"' "$cprobe" 2>/dev/null || true)"
+  if printf '%s' "$hits" | grep -q 'flag.rs' && printf '%s' "$hits" | grep -q 'env.rs'; then
+    pass "creds: the credential-surface scans fire on a planted declaration (non-vacuous)"
+  else
+    bad "creds: the credential-surface scans missed a planted declaration — they assert nothing"
+  fi
+  if printf '%s' "$hits" | grep -q 'prose.rs'; then
+    bad "creds: the credential-surface scans flag PROSE about the invariant, not a declaration"
+  else
+    pass "creds: the credential-surface scans read declarations, not prose"
+  fi
+  rm -rf "$cprobe"
 fi
 # The secret is reachable through exactly one accessor, and exactly one caller
 # uses it. A second call site is a review question, not a silent change.

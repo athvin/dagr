@@ -72,6 +72,6 @@ pub use local::LocalFsBlob;
 pub use retry::{RetryBudget, Sleeper, ThreadSleeper};
 pub use s3::{S3Blob, S3Config, S3Credentials};
 pub use store::{
-    BlobError, BlobErrorClass, BlobKey, BlobRef, BlobRefError, BlobReclaim, BlobStat, BlobStore,
+    BlobError, BlobErrorClass, BlobKey, BlobReclaim, BlobRef, BlobRefError, BlobStat, BlobStore,
     REFERENCE_SCHEME_PREFIX,
 };

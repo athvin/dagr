@@ -917,10 +917,10 @@ pub const BLOB_PREFIX_FLAG: &str = "--dagr.blob.prefix";
 
 /// The signing region assumed when an operator configures none.
 ///
-/// `us-east-1` rather than "no region": SigV4 has no unregioned form, and this is
+/// `us-east-1` rather than "no region": `SigV4` has no unregioned form, and this is
 /// the value every S3-compatible implementation without regions of its own
 /// accepts. Against real AWS an operator sets the region their bucket is in;
-/// against MinIO, Ceph or a gateway the value is signed and ignored.
+/// against `MinIO`, Ceph or a gateway the value is signed and ignored.
 pub const BLOB_REGION_DEFAULT: &str = "us-east-1";
 
 /// How the object-store knobs read the environment. Injected rather than assumed
@@ -940,7 +940,11 @@ pub fn ambient_env(name: &str) -> Option<String> {
 fn resolve_string(flag: Option<String>, env_key: &str, read: EnvReader<'_>) -> Option<String> {
     if let Some(value) = flag {
         let trimmed = value.trim().to_string();
-        return if trimmed.is_empty() { None } else { Some(trimmed) };
+        return if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
     }
     read(env_key)
         .map(|v| v.trim().to_string())

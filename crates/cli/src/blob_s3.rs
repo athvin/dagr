@@ -37,9 +37,7 @@ use std::time::Duration;
 use dagr_blob::s3::http::{HttpRequest, HttpResponse, HttpTransport, TransportError};
 use dagr_blob::{S3Blob, S3Config, S3Credentials};
 
-use crate::config::{
-    ambient_env, resolve_blob_endpoint, resolve_blob_region,
-};
+use crate::config::{ambient_env, resolve_blob_endpoint, resolve_blob_region};
 
 /// How long a single object-store request may take, end to end.
 ///
@@ -48,7 +46,7 @@ use crate::config::{
 /// attempt is one. It is deliberately not a `--dagr.*` knob, on the same
 /// precedent as the pod stall bound: it becomes one if an acceptance run shows it
 /// needs to be.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// A real HTTPS transport for the object-store backend.
 pub struct HttpsTransport {
@@ -101,6 +99,12 @@ impl HttpsTransport {
             // would multiply the bound and make the attempt count in a classified
             // error a lie.
             .max_redirects(0)
+            // A non-2xx status is a RESPONSE, not a transport failure. The backend
+            // owns the status-to-classification mapping, and a client that turned a
+            // 404 into an error would erase the one status that means "the referent
+            // is gone" — the difference between a resume that proceeds and one that
+            // is refused as dangling.
+            .http_status_as_error(false)
             .build();
         Ok(Self {
             agent: ureq::Agent::new_with_config(config),
@@ -110,30 +114,51 @@ impl HttpsTransport {
 
 impl HttpTransport for HttpsTransport {
     fn execute(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
-        let mut builder = self.agent.request(request.method(), request.url());
-        for (name, value) in request.headers() {
-            // `host` is set by the client from the URL; sending it again is a
-            // duplicate header, and the signature already covers the authority the
-            // URL names.
-            if name.eq_ignore_ascii_case("host") {
-                continue;
-            }
-            builder = builder.header(name.as_str(), value.as_str());
-        }
+        // `host` is never forwarded: the client sets it from the URL, so sending it
+        // again is a duplicate header — and the signature already covers the
+        // authority the URL names.
+        let forwarded = || {
+            request
+                .headers()
+                .iter()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("host"))
+        };
 
-        // A response with ANY status is a success at this level: the backend owns
-        // the status-to-classification mapping, and a client that turned a 404 into
-        // an error would erase the one status that means "the referent is gone".
-        let sent = if request.body().is_empty() {
-            builder.send_empty()
-        } else {
-            builder.send(request.body())
+        // ureq types a body-carrying builder differently from a bodiless one, so the
+        // two shapes are built separately rather than through one `request(method,
+        // url)` call. Both converge on the same `Result<Response<Body>, Error>`.
+        let sent = match request.method() {
+            "PUT" | "POST" => {
+                let mut builder = if request.method() == "PUT" {
+                    self.agent.put(request.url())
+                } else {
+                    self.agent.post(request.url())
+                };
+                for (name, value) in forwarded() {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                builder.send(request.body())
+            }
+            "GET" | "HEAD" | "DELETE" => {
+                let mut builder = match request.method() {
+                    "GET" => self.agent.get(request.url()),
+                    "HEAD" => self.agent.head(request.url()),
+                    _ => self.agent.delete(request.url()),
+                };
+                for (name, value) in forwarded() {
+                    builder = builder.header(name.as_str(), value.as_str());
+                }
+                builder.call()
+            }
+            other => {
+                return Err(TransportError::new(format!(
+                    "the object-store backend asked for an HTTP method this transport does not \
+                     implement: `{other}`"
+                )));
+            }
         };
         let mut response = match sent {
             Ok(response) => response,
-            Err(ureq::Error::StatusCode(status)) => {
-                return Ok(HttpResponse::new(status));
-            }
             Err(err) => {
                 return Err(TransportError::new(err.to_string()).with_source(err));
             }
@@ -180,8 +205,8 @@ impl HttpTransport for HttpsTransport {
 /// A message naming what was missing: a container that names no bucket, an
 /// unusable endpoint, an unreadable trust store, or — named precisely, and
 /// distinguishably from a missing object — no credential in the environment.
-pub fn open_ambient(container: String) -> Result<S3Blob<HttpsTransport>, String> {
-    let mut config = S3Config::from_container(&container).ok_or_else(|| {
+pub fn open_ambient(container: &str) -> Result<S3Blob<HttpsTransport>, String> {
+    let mut config = S3Config::from_container(container).ok_or_else(|| {
         format!("`{container}` names no bucket, so no object store could be opened")
     })?;
     let read = &ambient_env as &dyn Fn(&str) -> Option<String>;
@@ -203,7 +228,7 @@ mod tests {
     /// store addressed at nothing.
     #[test]
     fn a_container_without_a_bucket_is_refused() {
-        let err = open_ambient(String::new()).expect_err("no bucket");
+        let err = open_ambient("").expect_err("no bucket");
         assert!(err.contains("names no bucket"), "{err}");
     }
 }

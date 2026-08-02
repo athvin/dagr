@@ -124,10 +124,7 @@ pub fn sign(
         hasher.update(canonical_request.as_bytes());
         to_hex(&hasher.finish())
     };
-    let string_to_sign = format!(
-        "{ALGORITHM}\n{}\n{scope}\n{hashed_request}",
-        time.stamp()
-    );
+    let string_to_sign = format!("{ALGORITHM}\n{}\n{scope}\n{hashed_request}", time.stamp());
 
     // --- The signature ---------------------------------------------------------
     let signing_key = signing_key(credentials.expose_secret(), time.date(), region, SERVICE);
@@ -190,9 +187,9 @@ pub(crate) fn signing_key(secret: &str, date: &str, region: &str, service: &str)
 /// Split an absolute URL into its path and its raw query string.
 fn split_url(url: &str) -> (&str, &str) {
     let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let path_and_query = after_scheme.find('/').map_or("/", |i| {
-        after_scheme.get(i..).unwrap_or("/")
-    });
+    let path_and_query = after_scheme
+        .find('/')
+        .map_or("/", |i| after_scheme.get(i..).unwrap_or("/"));
     path_and_query
         .split_once('?')
         .unwrap_or((path_and_query, ""))
@@ -336,10 +333,7 @@ mod tests {
         ];
         let (canonical, signed_headers) =
             super::canonical_request("GET", "/test.txt", "", &headers, &empty_payload);
-        assert_eq!(
-            signed_headers,
-            "host;range;x-amz-content-sha256;x-amz-date"
-        );
+        assert_eq!(signed_headers, "host;range;x-amz-content-sha256;x-amz-date");
         let hashed = to_hex(&{
             let mut h = crate::digest::Sha256::new();
             h.update(canonical.as_bytes());
@@ -397,7 +391,10 @@ mod tests {
             "us-east-1",
             &SigningTime::from_unix_seconds(1_700_000_000),
         );
-        assert_eq!(signed.header("x-amz-security-token"), Some("a-projected-token"));
+        assert_eq!(
+            signed.header("x-amz-security-token"),
+            Some("a-projected-token")
+        );
         assert!(
             signed
                 .header("authorization")
@@ -458,10 +455,19 @@ mod tests {
         // A leap day in a year divisible by 400.
         assert_eq!(civil_from_unix_seconds(951_782_400), (2000, 2, 29, 0, 0, 0));
         // The day after a non-leap century boundary's February.
-        assert_eq!(civil_from_unix_seconds(4_107_542_400), (2100, 3, 1, 0, 0, 0));
+        assert_eq!(
+            civil_from_unix_seconds(4_107_542_400),
+            (2100, 3, 1, 0, 0, 0)
+        );
         // The documented S3 example's instant renders as the documented stamp.
-        assert_eq!(SigningTime::from_unix_seconds(1_369_353_600).stamp(), "20130524T000000Z");
-        assert_eq!(SigningTime::from_unix_seconds(1_369_353_600).date(), "20130524");
+        assert_eq!(
+            SigningTime::from_unix_seconds(1_369_353_600).stamp(),
+            "20130524T000000Z"
+        );
+        assert_eq!(
+            SigningTime::from_unix_seconds(1_369_353_600).date(),
+            "20130524"
+        );
         // Time of day survives.
         assert_eq!(
             SigningTime::from_unix_seconds(1_369_353_600 + 3_723).stamp(),

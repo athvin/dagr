@@ -69,7 +69,9 @@ impl FakeS3 {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// How many requests the fixture has been given, including failed ones.
@@ -230,12 +232,16 @@ fn split_path(url: &str) -> (String, String) {
     let path_and_query = after_scheme
         .find('/')
         .map_or("/", |i| after_scheme.get(i..).unwrap_or("/"));
-    let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+    let (path, query) = path_and_query
+        .split_once('?')
+        .unwrap_or((path_and_query, ""));
     (path.to_string(), query.to_string())
 }
 
 /// A `ListObjectsV2` answer, paged at the configured size.
 fn list_objects(state: &State, query: &str) -> HttpResponse {
+    use std::fmt::Write as _;
+
     let params: BTreeMap<&str, String> = query
         .split('&')
         .filter(|p| !p.is_empty())
@@ -245,7 +251,10 @@ fn list_objects(state: &State, query: &str) -> HttpResponse {
         })
         .collect();
     let prefix = params.get("prefix").cloned().unwrap_or_default();
-    let after = params.get("continuation-token").cloned().unwrap_or_default();
+    let after = params
+        .get("continuation-token")
+        .cloned()
+        .unwrap_or_default();
 
     let matching: Vec<&String> = state
         .objects
@@ -257,15 +266,16 @@ fn list_objects(state: &State, query: &str) -> HttpResponse {
     let next = page.last().map(|k| (**k).clone()).unwrap_or_default();
 
     let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult>");
-    body.push_str(&format!("<IsTruncated>{truncated}</IsTruncated>"));
+    let _ = write!(body, "<IsTruncated>{truncated}</IsTruncated>");
     for key in &page {
-        body.push_str(&format!("<Contents><Key>{}</Key></Contents>", escape(key)));
+        let _ = write!(body, "<Contents><Key>{}</Key></Contents>", escape(key));
     }
     if truncated {
-        body.push_str(&format!(
+        let _ = write!(
+            body,
             "<NextContinuationToken>{}</NextContinuationToken>",
             escape(&next)
-        ));
+        );
     }
     body.push_str("</ListBucketResult>");
     HttpResponse::new(200).with_body(body.into_bytes())
@@ -296,15 +306,12 @@ fn percent_decode(text: &str) -> String {
         match bytes.get(i) {
             Some(b'%') if i + 2 < bytes.len() => {
                 let hex = text.get(i + 1..i + 3).unwrap_or("");
-                match u8::from_str_radix(hex, 16) {
-                    Ok(byte) => {
-                        out.push(byte);
-                        i += 3;
-                    }
-                    Err(_) => {
-                        out.push(b'%');
-                        i += 1;
-                    }
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
                 }
             }
             Some(byte) => {
@@ -326,9 +333,11 @@ mod tests {
     fn an_object_round_trips_and_a_missing_one_is_a_404() {
         let fake = FakeS3::new("b");
         assert_eq!(
-            fake.execute(&HttpRequest::new("PUT", "https://h/b/sha256/aa").with_body(b"x".to_vec()))
-                .expect("put")
-                .status(),
+            fake.execute(
+                &HttpRequest::new("PUT", "https://h/b/sha256/aa").with_body(b"x".to_vec())
+            )
+            .expect("put")
+            .status(),
             200
         );
         let got = fake
@@ -355,9 +364,18 @@ mod tests {
     fn the_fault_switches_do_what_they_say() {
         let fake = FakeS3::new("b");
         fake.fail_next(2);
-        assert!(fake.execute(&HttpRequest::new("GET", "https://h/b/x")).is_err());
-        assert!(fake.execute(&HttpRequest::new("GET", "https://h/b/x")).is_err());
-        assert!(fake.execute(&HttpRequest::new("GET", "https://h/b/x")).is_ok());
+        assert!(
+            fake.execute(&HttpRequest::new("GET", "https://h/b/x"))
+                .is_err()
+        );
+        assert!(
+            fake.execute(&HttpRequest::new("GET", "https://h/b/x"))
+                .is_err()
+        );
+        assert!(
+            fake.execute(&HttpRequest::new("GET", "https://h/b/x"))
+                .is_ok()
+        );
 
         fake.respond_next_with_status(1, 500);
         assert_eq!(
@@ -374,7 +392,10 @@ mod tests {
         );
 
         fake.set_unreachable(true);
-        assert!(fake.execute(&HttpRequest::new("GET", "https://h/b/x")).is_err());
+        assert!(
+            fake.execute(&HttpRequest::new("GET", "https://h/b/x"))
+                .is_err()
+        );
     }
 
     #[test]

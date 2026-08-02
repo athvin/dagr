@@ -150,9 +150,8 @@ impl S3Credentials {
 
         // Tier 2: a shared credentials file, under the selected profile.
         let profile = non_empty(PROFILE_ENV).unwrap_or_else(|| "default".to_string());
-        let path = non_empty(SHARED_CREDENTIALS_FILE_ENV).or_else(|| {
-            non_empty("HOME").map(|home| format!("{home}/.aws/credentials"))
-        });
+        let path = non_empty(SHARED_CREDENTIALS_FILE_ENV)
+            .or_else(|| non_empty("HOME").map(|home| format!("{home}/.aws/credentials")));
         if let Some(path) = &path
             && let Ok(text) = std::fs::read_to_string(path)
             && let Some(creds) = from_profile(&text, &profile)

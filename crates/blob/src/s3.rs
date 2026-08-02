@@ -468,7 +468,9 @@ impl<T: HttpTransport> BlobReclaim for S3Blob<T> {
                     keys.push(key);
                 }
             }
-            token = xml_values(&body, "NextContinuationToken").into_iter().next();
+            token = xml_values(&body, "NextContinuationToken")
+                .into_iter()
+                .next();
             if token.is_none() {
                 break;
             }
@@ -628,11 +630,15 @@ mod tests {
             "https://s3.eu-west-2.amazonaws.com"
         );
         assert_eq!(
-            S3Config::new("b").with_endpoint("https://minio.internal:9000/").endpoint_url(),
+            S3Config::new("b")
+                .with_endpoint("https://minio.internal:9000/")
+                .endpoint_url(),
             "https://minio.internal:9000"
         );
         assert_eq!(
-            S3Config::new("b").with_endpoint("https://minio.internal:9000").host(),
+            S3Config::new("b")
+                .with_endpoint("https://minio.internal:9000")
+                .host(),
             "minio.internal:9000"
         );
     }
@@ -648,7 +654,10 @@ mod tests {
             S3Config::new("b").with_prefix("/blobs/").object_key(&key),
             format!("blobs/sha256/{}", key.hex())
         );
-        assert_eq!(S3Config::new("b").with_prefix("blobs").listing_prefix(), "blobs/sha256/");
+        assert_eq!(
+            S3Config::new("b").with_prefix("blobs").listing_prefix(),
+            "blobs/sha256/"
+        );
     }
 
     #[test]
@@ -675,9 +684,15 @@ mod tests {
             <Contents><Key>blobs/sha256/bb</Key><Size>2</Size></Contents>\
             <NextContinuationToken>tok&amp;en</NextContinuationToken>\
             </ListBucketResult>";
-        assert_eq!(xml_values(body, "Key"), vec!["blobs/sha256/aa", "blobs/sha256/bb"]);
+        assert_eq!(
+            xml_values(body, "Key"),
+            vec!["blobs/sha256/aa", "blobs/sha256/bb"]
+        );
         assert_eq!(xml_values(body, "NextContinuationToken"), vec!["tok&en"]);
         assert!(xml_values(body, "Absent").is_empty());
-        assert_eq!(decode_entities("a&lt;b&gt;c&quot;d&apos;e&amp;f"), "a<b>c\"d'e&f");
+        assert_eq!(
+            decode_entities("a&lt;b&gt;c&quot;d&apos;e&amp;f"),
+            "a<b>c\"d'e&f"
+        );
     }
 }

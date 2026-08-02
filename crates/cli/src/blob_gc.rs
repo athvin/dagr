@@ -259,12 +259,20 @@ pub fn plan_reclaim<S: BlobStore + BlobReclaim + ?Sized>(
     let container = store.container();
     let mut artifacts = Vec::new();
     let mut reachable = BTreeSet::new();
-    walk_run_store(store_base, &backend, &container, &mut artifacts, &mut reachable)?;
+    walk_run_store(
+        store_base,
+        &backend,
+        &container,
+        &mut artifacts,
+        &mut reachable,
+    )?;
 
-    let held = store.list().map_err(|err| ReclaimRefusal::StoreUnreadable {
-        container: container.clone(),
-        reason: err.to_string(),
-    })?;
+    let held = store
+        .list()
+        .map_err(|err| ReclaimRefusal::StoreUnreadable {
+            container: container.clone(),
+            reason: err.to_string(),
+        })?;
     let mut reclaimable: Vec<BlobKey> = held
         .into_iter()
         .filter(|key| !reachable.contains(key.hex()))
@@ -497,10 +505,10 @@ fn object_store_reclaim<W: Write>(
     mode: ReclaimMode,
     out: &mut W,
 ) -> Result<ExitCode, ReclaimRefusal> {
-    let store = crate::blob_s3::open_ambient(container.to_string()).map_err(|err| {
+    let store = crate::blob_s3::open_ambient(container).map_err(|reason| {
         ReclaimRefusal::StoreUnreadable {
             container: container.to_string(),
-            reason: err.to_string(),
+            reason,
         }
     })?;
     let plan = plan_reclaim(base, &store)?;
@@ -544,14 +552,14 @@ fn finish<S: BlobStore + BlobReclaim + ?Sized, W: Write>(
 /// and `--flag value` grammars.
 fn flag_value(argv: &[OsString], flag: &str) -> Option<String> {
     let prefix = format!("{flag}=");
-    let mut args = argv.iter();
-    while let Some(arg) = args.next() {
+    let mut remaining = argv.iter();
+    while let Some(arg) = remaining.next() {
         let text = arg.to_string_lossy();
         if let Some(value) = text.strip_prefix(&prefix) {
             return Some(value.to_string());
         }
         if text == flag {
-            return args.next().map(|v| v.to_string_lossy().into_owned());
+            return remaining.next().map(|v| v.to_string_lossy().into_owned());
         }
     }
     None
@@ -577,7 +585,10 @@ mod tests {
             flag_value(&argv(&["--reclaim-blobs=dry-run"]), "--reclaim-blobs"),
             Some("dry-run".to_string())
         );
-        assert_eq!(flag_value(&argv(&["--store", "b"]), "--reclaim-blobs"), None);
+        assert_eq!(
+            flag_value(&argv(&["--store", "b"]), "--reclaim-blobs"),
+            None
+        );
     }
 
     #[test]
@@ -608,15 +619,16 @@ mod tests {
         });
         // 64-hex is required by the grammar, so build real digests.
         let text = serde_json::to_string(&value).expect("json");
-        let text = ["aa", "bb", "cc", "dd", "ee"].iter().enumerate().fold(
-            text,
-            |acc, (i, short)| {
-                acc.replace(
-                    &format!("sha256/{short}"),
-                    &format!("sha256/{}", "0".repeat(63) + &i.to_string()),
-                )
-            },
-        );
+        let text =
+            ["aa", "bb", "cc", "dd", "ee"]
+                .iter()
+                .enumerate()
+                .fold(text, |acc, (i, short)| {
+                    acc.replace(
+                        &format!("sha256/{short}"),
+                        &format!("sha256/{}", "0".repeat(63) + &i.to_string()),
+                    )
+                });
         let value: serde_json::Value = serde_json::from_str(&text).expect("json");
 
         let mut reachable = BTreeSet::new();

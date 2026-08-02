@@ -78,10 +78,8 @@ impl TempRoot {
     fn new(tag: &str) -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "dagr-cli-t110-{tag}-{}-{n}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("dagr-cli-t110-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&path).expect("create temp root");
         Self { path }
     }
@@ -160,7 +158,12 @@ fn prior_with(pipeline: &Pipeline, blob: &Blob<Manifest>) -> PriorRun {
 /// `produce` output `reference` (with `content_hash`), in both places a folded
 /// artifact records it: the top-level `outputs` lineage array and the attempt's
 /// `durable_reference`.
-fn plant_run_artifact(base: &Path, pipeline: &str, run_id: &str, outputs: &[(&str, &Blob<Manifest>)]) {
+fn plant_run_artifact(
+    base: &Path,
+    pipeline: &str,
+    run_id: &str,
+    outputs: &[(&str, &Blob<Manifest>)],
+) {
     let dir = base.join(pipeline).join(run_id);
     std::fs::create_dir_all(&dir).expect("create the run directory");
     std::fs::write(dir.join("events.jsonl"), b"").expect("plant an event stream");
@@ -238,7 +241,10 @@ fn a_payload_stored_in_the_object_store_round_trips_through_the_bridge() {
     let meta = published
         .durable_reference_meta()
         .expect("a blob-backed output always carries metadata");
-    assert_eq!(meta.recorded_content_hash(), Some(published.content_hash().as_str()));
+    assert_eq!(
+        meta.recorded_content_hash(),
+        Some(published.content_hash().as_str())
+    );
     assert_eq!(meta.recorded_size_bytes(), Some(published.size_bytes()));
     assert_eq!(meta.recorded_scheme(), Some("dagr-blob+s3"));
 }
@@ -426,7 +432,10 @@ fn blobs_of_a_pruned_run_that_nothing_else_references_are_reclaimed() {
     let deleted = apply_reclaim(&store, &plan).expect("delete");
     assert_eq!(hexes(&deleted), hexes(plan.reclaimable()));
     assert!(
-        store.head(orphaned.blob_ref().key()).expect_err("gone").is_absent(),
+        store
+            .head(orphaned.blob_ref().key())
+            .expect_err("gone")
+            .is_absent(),
         "the reclaimed blob is gone"
     );
     assert!(
@@ -523,7 +532,10 @@ fn an_unreadable_run_artifact_makes_the_reclaim_refuse_and_say_why() {
     let refusal = plan_reclaim(base.path(), &store).expect_err("unknown reachability refuses");
     match &refusal {
         ReclaimRefusal::UnreadableArtifact { path, .. } => {
-            assert!(path.ends_with("run.json"), "the refusal names the artifact: {path:?}");
+            assert!(
+                path.ends_with("run.json"),
+                "the refusal names the artifact: {path:?}"
+            );
         }
         other => panic!("expected UnreadableArtifact, got {other}"),
     }
@@ -542,7 +554,9 @@ fn an_unfolded_run_makes_the_reclaim_refuse_rather_than_guess() {
     let base = TempRoot::new("unfolded");
     let blobs = TempRoot::new("unfolded-store");
     let store = LocalFsBlob::open(blobs.path());
-    store.put(b"a blob whose run was never folded").expect("put");
+    store
+        .put(b"a blob whose run was never folded")
+        .expect("put");
 
     // A crashed run: an event stream, no artifact. Its references are in the
     // stream, not in an artifact — so reachability is unknown until `fold` runs.
@@ -589,7 +603,10 @@ fn the_dry_run_listing_is_exactly_what_the_real_run_deletes() {
     let dry = String::from_utf8(dry).expect("utf-8");
 
     // Nothing was deleted by the dry run.
-    assert!(store.head(&a).is_ok() && store.head(&b).is_ok(), "dry run deletes nothing");
+    assert!(
+        store.head(&a).is_ok() && store.head(&b).is_ok(),
+        "dry run deletes nothing"
+    );
     assert_eq!(
         hexes(&store.list().expect("list")).len(),
         3,
@@ -644,10 +661,7 @@ fn the_reclaim_is_opt_in_and_a_bare_prune_touches_no_blob() {
 
     // No `--reclaim-blobs`: the verb does nothing to the store and says so.
     let mut out = Vec::new();
-    let code = reclaim_blobs_verb(
-        &argv(&["--store", base.path().to_str().unwrap()]),
-        &mut out,
-    );
+    let code = reclaim_blobs_verb(&argv(&["--store", base.path().to_str().unwrap()]), &mut out);
     assert_eq!(code, ExitCode::Success);
     assert_eq!(
         store.list().expect("list").len(),
@@ -669,7 +683,11 @@ fn the_reclaim_is_opt_in_and_a_bare_prune_touches_no_blob() {
         &mut out,
     );
     assert_eq!(code, ExitCode::InvalidUsage);
-    assert_eq!(store.list().expect("list").len(), 1, "and nothing was deleted");
+    assert_eq!(
+        store.list().expect("list").len(),
+        1,
+        "and nothing was deleted"
+    );
 }
 
 #[test]
@@ -698,7 +716,10 @@ fn a_refusal_exits_non_zero_and_deletes_nothing() {
     assert_ne!(code, ExitCode::Success, "a refusal is not a success");
     assert_eq!(store.list().expect("list").len(), 1, "and deletes nothing");
     let text = String::from_utf8(out).expect("utf-8");
-    assert!(text.contains("run.json"), "the diagnostic names the artifact: {text}");
+    assert!(
+        text.contains("run.json"),
+        "the diagnostic names the artifact: {text}"
+    );
 }
 
 #[test]
@@ -871,7 +892,10 @@ fn an_s3_container_is_named_on_the_blob_store_flag_by_scheme() {
         );
         assert_ne!(code, ExitCode::Success);
         let text = String::from_utf8(out).expect("utf-8");
-        assert!(text.contains("blob-s3"), "names the missing feature: {text}");
+        assert!(
+            text.contains("blob-s3"),
+            "names the missing feature: {text}"
+        );
     }
 }
 
@@ -923,6 +947,8 @@ fn the_backends_retry_budget_is_the_engines_backoff_shape() {
 
 #[test]
 fn no_credential_value_reaches_a_captured_log_line() {
+    use std::fmt::Write as _;
+
     const SENTINEL: &str = "SENTINEL-b41c7e-DO-NOT-LEAK-93af2";
     let fake = FakeS3::new("logging-bucket");
     let store = S3Blob::new(
@@ -934,16 +960,16 @@ fn no_credential_value_reaches_a_captured_log_line() {
 
     let mut captured = String::new();
     let published = Blob::put(&store, manifest(2)).expect("publish");
-    captured.push_str(&format!("{:?}", published.durable_reference_meta()));
+    let _ = write!(captured, "{:?}", published.durable_reference_meta());
     captured.push_str(&published.serialize_reference());
-    captured.push_str(&format!("{store:?}"));
+    let _ = write!(captured, "{store:?}");
 
     fake.set_unreachable(true);
     let err = Blob::<Manifest>::rehydrate_from(&store, &published.serialize_reference())
         .expect_err("unreachable");
-    captured.push_str(&format!("{err}{err:?}"));
+    let _ = write!(captured, "{err}{err:?}");
     let plan_err = plan_reclaim(Path::new("/nonexistent-run-store"), &store);
-    captured.push_str(&format!("{plan_err:?}"));
+    let _ = write!(captured, "{plan_err:?}");
 
     assert!(
         !captured.contains(SENTINEL),
