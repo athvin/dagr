@@ -4,8 +4,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::digest::{Sha256, to_hex};
-use crate::store::{BlobError, BlobKey, BlobStat, BlobStore};
+use crate::digest::{ALGORITHM, Sha256, to_hex};
+use crate::store::{BlobError, BlobKey, BlobReclaim, BlobStat, BlobStore};
 
 /// The backend name this store writes into a reference.
 const BACKEND: &str = "file";
@@ -221,6 +221,80 @@ impl BlobStore for LocalFsBlob {
             format!("{}:{}", key.algorithm(), to_hex(&hasher.finish())),
         ))
     }
+}
+
+impl BlobReclaim for LocalFsBlob {
+    /// Walk `<root>/<algorithm>/` and report every file whose name is a valid
+    /// content address.
+    ///
+    /// The name test is what keeps this safe. A container holds more than blobs:
+    /// attempt shards live under a sibling `attempt-shards/` subtree, and an
+    /// interrupted `put` leaves a hidden `.<hex>.tmp.<pid>.<n>` file beside a real
+    /// object. Neither is a valid `<algorithm>/<64 hex>` name, so neither is ever
+    /// enumerated — and a reaper is only ever handed things it may delete.
+    ///
+    /// A container that does not exist yet holds nothing, which is not an error:
+    /// `open` performs no I/O, so "never written to" and "empty" are the same
+    /// state.
+    fn list(&self) -> Result<Vec<BlobKey>, BlobError> {
+        let algorithm_root = self.root.join(ALGORITHM);
+        let mut keys = Vec::new();
+        match std::fs::metadata(&algorithm_root) {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(keys),
+            Err(err) => {
+                return Err(BlobError::transient(format!(
+                    "could not enumerate the blob container `{}`: {err}",
+                    self.root.display()
+                ))
+                .with_source(err));
+            }
+        }
+        collect_objects(&algorithm_root, &mut keys).map_err(|err| {
+            BlobError::transient(format!(
+                "could not enumerate the blob container `{}`: {err}",
+                self.root.display()
+            ))
+            .with_source(err)
+        })?;
+        keys.sort();
+        Ok(keys)
+    }
+
+    fn delete(&self, key: &BlobKey) -> Result<(), BlobError> {
+        match std::fs::remove_file(self.object_path(key)) {
+            Ok(()) => Ok(()),
+            // Already gone is the outcome the caller wanted.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(BlobError::transient(format!(
+                "could not reclaim `{key}` from `{}`: {err}",
+                self.root.display()
+            ))
+            .with_source(err)),
+        }
+    }
+}
+
+/// Recursively collect every file under `dir` whose name is a content address in
+/// this build's algorithm. Directory entries that are not objects are skipped
+/// silently — that is the point, not an oversight.
+fn collect_objects(dir: &Path, out: &mut Vec<BlobKey>) -> io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_objects(&path, out)?;
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some(key) = BlobKey::from_parts(ALGORITHM, name) {
+            out.push(key);
+        }
+    }
+    Ok(())
 }
 
 /// A per-process monotonic counter so two temp files in one directory never share

@@ -100,7 +100,7 @@ fn test_credentials() -> S3Credentials {
 fn s3_store(bucket: &str) -> (S3Blob<FakeS3>, FakeS3) {
     let fake = FakeS3::new(bucket);
     let store = S3Blob::new(
-        S3Config::new(bucket).region("eu-west-2"),
+        S3Config::new(bucket).with_region("eu-west-2"),
         test_credentials(),
         fake.clone(),
     )
@@ -181,7 +181,7 @@ fn the_port_suite_holds_identically_for_the_local_and_the_object_store_backends(
 fn the_object_store_backend_names_its_bucket_and_prefix_as_the_container() {
     let fake = FakeS3::new("dagr-blobs");
     let store = S3Blob::new(
-        S3Config::new("dagr-blobs").prefix("intermediates"),
+        S3Config::new("dagr-blobs").with_prefix("intermediates"),
         test_credentials(),
         fake,
     );

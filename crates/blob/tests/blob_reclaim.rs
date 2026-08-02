@@ -145,7 +145,7 @@ fn the_object_store_backend_enumerates_across_pages() {
 fn the_object_store_enumeration_is_scoped_to_the_configured_prefix() {
     let fake = FakeS3::new("shared-bucket");
     let mine = S3Blob::new(
-        S3Config::new("shared-bucket").prefix("dagr"),
+        S3Config::new("shared-bucket").with_prefix("dagr"),
         credentials(),
         fake.clone(),
     );

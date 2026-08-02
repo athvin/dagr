@@ -55,6 +55,19 @@ categories = ["filesystem", "development-tools", "data-structures"]
 name = "dagr_blob"
 path = "src/lib.rs"
 
+[features]
+# `test-kit` (default ON, mirroring `dagr-core`'s and `dagr-k8s`'s) ships
+# `s3::fake`: the in-process S3-compatible fixture the object-store backend's
+# suites drive. It is the answer to "how is an S3 backend tested without an S3" —
+# a transport that can be made unreachable, made to fail a bounded number of
+# times, made to answer a specific status, or have an object overwritten
+# out-of-band, deterministically, on both CI platforms and with no network.
+# It adds NO dependency (nothing here does); `--no-default-features` drops it, and
+# `dagr-cli` takes this crate with `default-features = false` so a pipeline binary
+# never links it.
+default = ["test-kit"]
+test-kit = []
+
 # No [dependencies] table. That absence is the point, and it is asserted:
 # `scripts/check-blob-feature-gating.sh` fails the build if this crate ever grows
 # one, because "a plain `cargo build --all` compiles no storage dependency" is
