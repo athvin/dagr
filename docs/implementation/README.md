@@ -187,7 +187,7 @@ Work in order: the ADR (T100), the spike (T101), the retry/timeout prerequisites
 - [x] **120** · [T105 — placement policy, remote admission pool, executor selection](120-T105-placement-and-executor-selection.md) · M · feature — after T101
 - [x] **121** · [T106 — the `exec-node` pod-side verb and attempt shard writer](121-T106-exec-node-verb-and-shard-writer.md) · L · feature — after T104, T105
 - [x] **122** · [T107 — the shared pod observer: one watch, reconnect, identity](122-T107-shared-pod-observer.md) · L · feature — after T105
-- [ ] **123** · [T108 — the Kubernetes node runner and the two retry budgets](123-T108-kubernetes-node-runner.md) · L · feature — after T102, T106, T107
+- [x] **123** · [T108 — the Kubernetes node runner and the two retry budgets](123-T108-kubernetes-node-runner.md) · L · feature — after T102, T106, T107
 - [ ] **124** · [T109 — orphan adoption, tombstones, and ownership revocation](124-T109-orphan-adoption-and-ownership.md) · M · feature — after T108
 - [ ] **125** · [T110 — the S3-compatible backend and intermediate-blob GC](125-T110-s3-backend-and-blob-gc.md) · M · feature — after T104, T108
 - [ ] **126** · [T111 — the submission projection and audit surface](126-T111-submission-projection-and-audit.md) · M · feature — after T108
