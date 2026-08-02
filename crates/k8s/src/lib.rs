@@ -16,7 +16,7 @@
 //!   lossy selectors, annotations are authoritative.
 //! - [`api`] — the [`PodApi`] port the observer watches through,
 //!   and the shapes a list and a watch hand back, plus the
-//!   [`PodLifecycle`](api::PodLifecycle) port the executor submits through.
+//!   [`PodLifecycle`] port the executor submits through.
 //! - [`executor`] — the executor's **pure half** (M10, T108): the pod spec, the
 //!   never-retry invariant, the three pre-start surfaces T101 measured, and
 //!   terminal classification from pod status. No I/O, no clock, no runtime; the
