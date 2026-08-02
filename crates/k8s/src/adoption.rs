@@ -495,7 +495,10 @@ pub fn plan(
     for (key, mut found) in candidates {
         found.sort_by(|a, b| a.name.cmp(&b.name));
         let mut found = found.into_iter();
-        let adopted = found.next().expect("a candidate list is never empty");
+        // A `None` here cannot happen — a key is only in the map because a pod put
+        // it there — but it is expressed as a skip rather than an `expect`, so this
+        // function has no panic to document and no panic to hit.
+        let Some(adopted) = found.next() else { continue };
         out.revoke.extend(found.map(|pod| pod.name));
         out.adopt.insert(key, adopted);
     }
@@ -509,7 +512,7 @@ pub fn plan(
             out.ignored.extend(refused);
         } else {
             let mut refused = refused.into_iter();
-            let first = refused.next().expect("a refusal list is never empty");
+            let Some(first) = refused.next() else { continue };
             out.refuse.insert(key, first);
             out.ignored.extend(refused);
         }
