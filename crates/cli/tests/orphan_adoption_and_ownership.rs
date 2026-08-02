@@ -44,7 +44,7 @@ use dagr_core::execution::{AttemptEvent, AttemptEventSink, Backoff, RetryConfig}
 use dagr_core::resume::{PriorNode, PriorRun, ReferenceExistence, ResumeRefusal, plan_resume};
 use dagr_k8s::adoption::BuildIdentity;
 use dagr_k8s::api::{
-    ApiFailure, CreatedPod, PodApi, PodLifecycle, PodPhase, PodSnapshot, WatchDelivery,
+    ApiFailure, CreatedPod, PodLifecycle, PodPhase, PodSnapshot, WatchDelivery,
 };
 use dagr_k8s::executor::{ClusterRetry, PodPlacement, PodSpec, pod_name};
 use dagr_k8s::fake::{FakeApi, FakeControl, fake_api};
@@ -216,10 +216,19 @@ impl PodLifecycle for Lifecycle {
     ) -> impl std::future::Future<Output = Result<(), ApiFailure>> + Send {
         {
             let mut guard = self.guard();
+            // The labels the pod carried **at the instant it was deleted** — what a
+            // watch's `Deleted` delivery hands a reader, and the only thing that
+            // distinguishes our teardown from somebody else's.
+            let labels = guard.live.get(name).map_or_else(BTreeMap::new, |pod| {
+                pod.labels
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                    .collect()
+            });
             guard.calls.push(Call {
                 verb: "delete",
                 pod: name.to_string(),
-                labels: BTreeMap::new(),
+                labels,
             });
             guard.live.remove(name);
         }
@@ -658,6 +667,17 @@ async fn an_adopted_pods_shard_is_replayed_and_the_node_reaches_the_shards_termi
         Some("dagr-blob+local://blobs/sha256/abc"),
         "…and its output reference reached the hook the driver already reads"
     );
+
+    let observed: Vec<Value> = stream_records(&w.stream_path)
+        .into_iter()
+        .filter(|r| r["kind"] == "attempt-submitted" && r.get("observed_uid").is_some())
+        .collect();
+    assert_eq!(observed.len(), 1, "one submission record, additively completed");
+    assert_eq!(
+        observed[0]["observed_uid"], "uid-orphan-extract-1",
+        "the ADOPTED pod's real identity is what the record carries — intent and \
+         reality are two facts, and reality here is a pod this process did not create"
+    );
     let _ = observer.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -1027,23 +1047,6 @@ async fn a_watcher_distinguishes_a_revoked_pod_from_an_externally_deleted_one() 
     w.lifecycle.seed(keeper.clone());
     w.lifecycle.seed(loser.clone());
 
-    // The labels the pod carried at the instant it was deleted — what the watch's
-    // `Deleted` delivery hands a reader.
-    let observed = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
-    let recorder = Arc::clone(&observed);
-    let lifecycle = w.lifecycle.clone();
-    let loser_name = loser.name.clone();
-    let watcher = tokio::spawn(async move {
-        // Poll the world until the loser is gone, capturing its last labels.
-        loop {
-            match lifecycle.pod(&loser_name) {
-                Some(pod) => *recorder.lock().expect("observed mutex") = pod.labels.clone(),
-                None => break,
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    });
-
     discover(
         &w.api,
         &w.lifecycle,
@@ -1051,19 +1054,36 @@ async fn a_watcher_distinguishes_a_revoked_pod_from_an_externally_deleted_one() 
     )
     .await
     .expect("discovery lists the run's pods");
-    watcher.await.expect("the watcher task completes");
 
-    let last = observed.lock().expect("observed mutex").clone();
+    // The labels the loser carried at the instant of the delete — exactly what a
+    // watch's `Deleted` delivery hands a reader.
+    let at_delete = w
+        .lifecycle
+        .calls()
+        .into_iter()
+        .find(|c| c.verb == "delete" && c.pod == loser.name)
+        .expect("the loser was deleted");
+    let observed: BTreeMap<String, String> = at_delete
+        .labels
+        .iter()
+        .filter_map(|(key, value)| value.clone().map(|value| (key.clone(), value)))
+        .collect();
+
+    assert!(
+        !observed.is_empty(),
+        "the pod still carried its other labels — revocation clears the OWNER, not \
+         the identity"
+    );
     assert_eq!(
-        deletion_origin(&last),
+        deletion_origin(&observed),
         DeletionOrigin::Revoked,
-        "the pod had already lost its owner when it disappeared, so the teardown \
-         reads as ours: {last:?}"
+        "it had already lost its owner when it disappeared, so the teardown reads \
+         as ours: {observed:?}"
     );
     assert_eq!(
         deletion_origin(&keeper.labels),
         DeletionOrigin::External,
-        "a pod that still carries an owner was deleted by somebody else"
+        "a pod that still carries an owner when it goes was deleted by somebody else"
     );
 }
 
@@ -1164,7 +1184,7 @@ async fn a_pod_terminal_with_a_readable_shard_at_discovery_is_consumed_without_r
 // ===========================================================================
 
 /// A two-node pipeline, for the resume-composition tests.
-fn resumable() -> dagr_core::assembly::Pipeline {
+fn resumable() -> dagr_core::flow::Pipeline {
     use dagr_core::flow::Flow;
     let mut flow = Flow::new();
     let _ = flow.register_source("extract", &Seven);
@@ -1172,7 +1192,7 @@ fn resumable() -> dagr_core::assembly::Pipeline {
     flow.finish()
 }
 
-fn prior_run(pipeline: &dagr_core::assembly::Pipeline, load_state: TerminalState) -> PriorRun {
+fn prior_run(pipeline: &dagr_core::flow::Pipeline, load_state: TerminalState) -> PriorRun {
     let fingerprint = pipeline.fingerprint();
     PriorRun {
         structural_fingerprint: fingerprint.structural(),

@@ -35,12 +35,23 @@
 //! pre-start surfaces `dagr_k8s::executor` classifies and applies **its own bound**
 //! — the bound is what ends the wait, because the platform will not.
 //!
-//! # What the runner is *not* responsible for
+//! # Ownership, across a restart (T109)
 //!
-//! Surviving an orchestrator restart — orphan adoption, tombstoning, ownership
-//! revocation — is T109's, and it *reads* the `attempt-submitted` records written
-//! here. The metastore projection of those records is T111's; nothing here writes
-//! SQL. The real-cluster proof is T112's; every test here drives T107's fake.
+//! One attempt is one pod, and a pod outlives the process that submitted it. So
+//! three acts here are about **ownership** rather than execution:
+//!
+//! - an attempt whose pod was **adopted** by [`crate::adoption`]'s startup pass
+//!   waits on that pod instead of creating one, through the same code path a
+//!   freshly created pod takes;
+//! - a pod whose outcome has been **consumed** is tombstoned, so a later discovery
+//!   excludes it and the same attempt cannot be adopted twice;
+//! - every orchestrator-initiated delete — cancellation, the node's timeout, a
+//!   pre-start failure — is a **revocation**: the owner label is cleared *before*
+//!   the delete, so a watcher can tell dagr's teardown from an external deletion.
+//!
+//! What stays elsewhere: the metastore projection of the `attempt-submitted`
+//! records written here is T111's; nothing here writes SQL. The real-cluster proof
+//! is T112's; every test here drives T107's fake.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -52,6 +63,7 @@ use dagr_artifact::event_stream::{
 };
 use dagr_core::context::{RunContext, TerminalState};
 use dagr_core::execution::{AttemptEvent, AttemptEventSink, NoJitter, RetryConfig};
+use dagr_k8s::adoption::{AdoptionRefusal, DiscoveredPod, is_tombstoned};
 use dagr_k8s::api::{ApiFailure, CreatedPod, PodLifecycle, PodSnapshot};
 use dagr_k8s::executor::{
     ClusterRetry, ClusterRetryRefused, CredentialInReference, PodOutcome, PodPlacement, PodRequest,
@@ -60,6 +72,7 @@ use dagr_k8s::executor::{
 use dagr_k8s::identity::{AttemptIdentity, AttemptKey};
 use dagr_k8s::observer::PodObservation;
 
+use crate::adoption::{Adoptions, Claim};
 use crate::driver::NodeRunner;
 use crate::pod_observer::{AttemptWaiter, ObserverHandle, WaiterEvent};
 use crate::run_flow::AttemptTimer;
@@ -218,6 +231,18 @@ pub enum RemoteLaunchError {
         /// What the observer said.
         message: String,
     },
+    /// A pod already occupies this attempt's object name and belongs to a
+    /// different program — a different graph, tool version, or image. It is left
+    /// running (deleting somebody else's work is not dagr's call) and the node
+    /// fails rather than guessing.
+    AdoptionRefused {
+        /// The node.
+        node: String,
+        /// The pod, by name — left exactly as it was found.
+        pod: String,
+        /// Which surface disagreed, and both values.
+        refusal: AdoptionRefusal,
+    },
 }
 
 impl fmt::Display for RemoteLaunchError {
@@ -268,6 +293,12 @@ impl fmt::Display for RemoteLaunchError {
                 f,
                 "`{node}` lost its pod observer before the attempt concluded: {message}"
             ),
+            Self::AdoptionRefused { node, pod, refusal } => write!(
+                f,
+                "refusing to run `{node}`: pod `{pod}` already holds this attempt \
+                 and {refusal}. It is left running — deleting another program's pod \
+                 is not dagr's call — and this node fails rather than guessing."
+            ),
         }
     }
 }
@@ -277,6 +308,7 @@ impl std::error::Error for RemoteLaunchError {
         match self {
             Self::CredentialBearing { source, .. } => Some(source),
             Self::ClusterRetry(refusal) => Some(refusal),
+            Self::AdoptionRefused { refusal, .. } => Some(refusal),
             _ => None,
         }
     }
@@ -324,6 +356,7 @@ pub struct K8sNodeRunner<L: PodLifecycle> {
     submissions: SubmissionHandle,
     timer: Arc<dyn AttemptTimer>,
     config: RemoteAttemptConfig,
+    adoptions: Adoptions,
     durable_reference: Option<String>,
     durable_reference_meta: Option<WireMeta>,
     diagnostics: Vec<String>,
@@ -359,11 +392,25 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             submissions,
             timer,
             config,
+            adoptions: Adoptions::none(),
             durable_reference: None,
             durable_reference_meta: None,
             diagnostics: Vec::new(),
             last_failure: None,
         }
+    }
+
+    /// Let this node reclaim a pod a previous orchestrator left running.
+    ///
+    /// The registry comes from [`crate::adoption::discover`], one pass at startup
+    /// for the whole run. An attempt whose key has a claim waits on the pod that
+    /// already exists instead of creating a second one; every attempt without a
+    /// claim submits exactly as it always did — which is why there is **one** code
+    /// path after adoption rather than two.
+    #[must_use]
+    pub fn with_adoptions(mut self, adoptions: Adoptions) -> Self {
+        self.adoptions = adoptions;
+        self
     }
 
     /// The classified failure this node ended on, if it failed.
@@ -527,7 +574,12 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
                     return AttemptEnd::Terminal(TerminalState::TimedOut);
                 }
                 LaunchEnd::Terminal(observation) => {
-                    return AttemptEnd::Terminal(self.conclude(sink, attempt, &observation));
+                    let state = self.conclude(sink, attempt, &observation);
+                    // The outcome is now in the run's record, so the pod is spent.
+                    // Tombstoning it is what stops the next restart adopting an
+                    // attempt whose result this run already has.
+                    self.tombstone(&observation.pod_name).await;
+                    return AttemptEnd::Terminal(state);
                 }
             }
         }
@@ -560,6 +612,22 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             Err(refusal) => return LaunchEnd::Refused(RemoteLaunchError::ClusterRetry(refusal)),
         };
 
+        // Ownership, before anything else: a pod this attempt's key was refused
+        // belongs to a different program and occupies the object name this build
+        // derives. There is nothing to submit through, so the node fails naming
+        // both values rather than colliding.
+        let reclaimed = match self.adoptions.take(&identity.key) {
+            Some(Claim::Refused(refused)) => {
+                return LaunchEnd::Refused(RemoteLaunchError::AdoptionRefused {
+                    node: self.node.clone(),
+                    pod: refused.name,
+                    refusal: refused.refusal,
+                });
+            }
+            Some(Claim::Adopted(pod)) => Some(pod),
+            None => None,
+        };
+
         // Register the waiter BEFORE anything is created, so a transition cannot
         // land in the gap between creating and watching.
         let waiter = match self.observer.watch_attempt(identity.key.clone()).await {
@@ -572,12 +640,26 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             }
         };
 
-        // Idempotency on the attempt key: a live pod for this key is adopted rather
-        // than duplicated (ADR 115 §5). A read is not a create, so this precedes the
-        // write-ahead record without weakening it.
-        let existing = match self.lifecycle.get(&spec.name).await {
-            Ok(found) => found,
-            Err(failure) => return LaunchEnd::Rejected(failure),
+        // Idempotency on the attempt key, in two layers. An orchestrator restart
+        // resolved this attempt at startup (T109) and hands the pod over here; a
+        // *duplicate submission inside one live process* (T108) is caught by the
+        // probe below. Either way the answer is the same: adopt, never duplicate
+        // (ADR 115 §5). A read is not a create, so this precedes the write-ahead
+        // record without weakening it.
+        let existing = match reclaimed {
+            Some(pod) => Some(adopted_pod(&pod)),
+            None => match self.lifecycle.get(&spec.name).await {
+                Ok(Some(pod)) if is_tombstoned(&pod.labels) => {
+                    // Its outcome has already been consumed. Adopting it would
+                    // re-consume the same attempt, so the name is freed instead —
+                    // by the ordinary two-step revocation, because this is an
+                    // orchestrator-initiated delete like any other.
+                    crate::adoption::revoke(&self.lifecycle, &pod.name).await;
+                    None
+                }
+                Ok(found) => found.as_ref().map(adopted),
+                Err(failure) => return LaunchEnd::Rejected(failure),
+            },
         };
 
         // === The write-ahead point =========================================
@@ -591,7 +673,7 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
         }
 
         let created = match existing {
-            Some(pod) => adopted(&pod),
+            Some(pod) => pod,
             None => match self.lifecycle.create(&spec).await {
                 Ok(created) => created,
                 Err(failure) => return LaunchEnd::Rejected(failure),
@@ -616,7 +698,12 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             });
         }
 
-        self.await_pod(ctx, waiter, &spec.name, deadline).await
+        // The **observed** name, not the intended one: an adopted pod need not
+        // carry the name this build derives, and everything from here on — the
+        // wait, the delete, the tombstone — is about the object that actually
+        // exists.
+        let pod = created.name.clone();
+        self.await_pod(ctx, waiter, &pod, deadline).await
     }
 
     /// Wait for the pod to start and finish — or for the runner's own bound to
@@ -631,14 +718,14 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
         let mut fatal_since: Option<(PreStartFailure, Instant)> = None;
         loop {
             if ctx.cancellation().is_cancelled() {
-                self.delete(pod).await;
+                self.revoke(pod).await;
                 return LaunchEnd::Cancelled;
             }
             // The node's declared budget. A pod that starts and never reports is
             // bounded here — the run does not hang waiting for a report that is not
             // coming — and the pod is deleted rather than abandoned.
             if deadline.is_some_and(|at| Instant::now() >= at) {
-                self.delete(pod).await;
+                self.revoke(pod).await;
                 return LaunchEnd::TimedOut;
             }
             // The bound: once a pre-start surface has reported, the platform is not
@@ -648,7 +735,7 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
                 && since.elapsed() >= self.config.pre_start_bound
             {
                 let failure = failure.clone();
-                self.delete(pod).await;
+                self.revoke(pod).await;
                 return LaunchEnd::PreStart(failure);
             }
             match tokio::time::timeout(CANCEL_POLL, waiter.next()).await {
@@ -668,6 +755,14 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
                     });
                 }
                 Ok(Some(WaiterEvent::Observed(observation))) => {
+                    // Several pods can carry one attempt key — two orchestrators
+                    // that both submitted, or a duplicate discovery revoked at
+                    // startup. The waiter is keyed by the attempt, so it hears about
+                    // all of them; this attempt's fate is decided by the object it
+                    // is actually waiting on and by nothing else.
+                    if observation.pod_name != pod {
+                        continue;
+                    }
                     if observation.vanished {
                         return LaunchEnd::Vanished;
                     }
@@ -694,12 +789,27 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
         }
     }
 
-    /// Delete a pod, best effort. A delete that fails leaves the pod behind and is
-    /// worth saying so, but it is never a reason to fail a node twice.
-    async fn delete(&self, pod: &str) {
-        if let Err(failure) = self.lifecycle.delete(pod).await {
-            tracing::warn!(node = %self.node, pod = %pod, error = %failure, "could not delete pod");
-        }
+    /// **Revoke** a pod: clear the owner label, then delete it.
+    ///
+    /// Every delete this runner issues is an orchestrator-initiated teardown —
+    /// cancellation, the node's own timeout, a pod that will never start — so every
+    /// one of them goes through the two-step form, and whatever is watching reads
+    /// the disappearance as dagr's rather than as somebody else's
+    /// (`dagr_k8s::adoption::deletion_origin`).
+    ///
+    /// Best effort. A revocation that fails leaves the pod behind and is worth
+    /// saying so, but it is never a reason to fail a node twice.
+    async fn revoke(&self, pod: &str) {
+        crate::adoption::revoke(&self.lifecycle, pod).await;
+    }
+
+    /// **Tombstone** a pod whose outcome this runner has consumed.
+    ///
+    /// The key is the one a later discovery's selector excludes, so the attempt
+    /// cannot be adopted a second time — independently of whether the pod is ever
+    /// deleted, which is the protection that can be lost.
+    async fn tombstone(&self, pod: &str) {
+        crate::adoption::tombstone(&self.lifecycle, pod).await;
     }
 
     /// Read the shard, replay it, and decide the attempt's terminal state.
@@ -844,6 +954,15 @@ fn verdict_status(observation: &PodObservation) -> String {
 
 /// Treat an already-live pod as the created one.
 fn adopted(pod: &PodSnapshot) -> CreatedPod {
+    CreatedPod {
+        name: pod.name.clone(),
+        uid: pod.uid.clone(),
+        host: pod.host.clone(),
+    }
+}
+
+/// The same, for a pod the startup discovery pass reclaimed.
+fn adopted_pod(pod: &DiscoveredPod) -> CreatedPod {
     CreatedPod {
         name: pod.name.clone(),
         uid: pod.uid.clone(),
