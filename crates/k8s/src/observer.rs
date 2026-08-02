@@ -325,6 +325,15 @@ pub struct PodObservation {
     pub pod_reason: Option<String>,
     /// The **container**-level reason, e.g. an out-of-memory kill.
     pub container_reason: Option<String>,
+    /// The container's **waiting** reason, when it is waiting rather than running
+    /// — the first of the pre-start surfaces (T101). Carried because a pod that
+    /// never starts reaches no terminal phase, so a waiter that only reads
+    /// [`terminal`](Self::terminal) would wait forever.
+    pub waiting_reason: Option<String>,
+    /// The scheduler's refusal reason — the second pre-start surface, and one a
+    /// waiting-reason check cannot see, because an unschedulable pod has no
+    /// container status entry at all.
+    pub scheduling_refusal: Option<String>,
     /// The container's exit code, when it ran.
     pub exit_code: Option<i32>,
     /// The authoritative identity read off the pod's annotations.
@@ -375,20 +384,51 @@ pub struct ObserverStats {
     pub reconnects: u32,
 }
 
+/// What makes one non-terminal observation *the same* as the last one, for the
+/// purpose of not re-delivering it.
+///
+/// The **object version** is part of it, not only the phase. A periodic LIST that
+/// re-reads an unchanged pod returns the same `resourceVersion` and is still
+/// suppressed, which is what this bookkeeping was always for; but a pod that
+/// genuinely changed *without* changing phase — `Pending` → `Pending` +
+/// `ImagePullBackOff` is the case T101 measured, and the only transition a pod that
+/// never starts will ever make — has a new version and is a new fact. Keying on the
+/// phase alone made exactly that transition invisible.
+///
+/// Private, because it is bookkeeping rather than vocabulary — the observation a
+/// waiter receives is [`PodObservation`], which carries these fields and more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PodReading {
+    resource_version: String,
+    phase: PodPhase,
+    waiting_reason: Option<String>,
+    scheduling_refusal: Option<String>,
+}
+
 /// The deterministic half: the reconnect discipline, the demultiplexing, and the
 /// exactly-once bookkeeping, with no I/O and no clock of its own.
 #[derive(Debug)]
 pub struct ObserverCore {
     selector: RunSelector,
     limits: ObserverLimits,
-    /// The last phase delivered per attempt, so an unchanged phase is not
+    /// The last reading delivered per attempt, so an unchanged reading is not
     /// re-delivered on every reconciliation.
-    phases: BTreeMap<AttemptKey, PodPhase>,
-    /// Attempts whose final observation has been delivered. This is what makes
-    /// delivery idempotent on the **attempt key** rather than on the event, so a
-    /// duplicate from the API, a repeat across a reconnect, and a re-read during
-    /// a resync all collapse to one notification.
-    finished: BTreeSet<AttemptKey>,
+    phases: BTreeMap<AttemptKey, PodReading>,
+    /// Attempts whose final observation has been delivered, and the **object
+    /// identity** it was delivered for. This is what makes delivery idempotent on
+    /// the **attempt key** rather than on the event, so a duplicate from the API, a
+    /// repeat across a reconnect, and a re-read during a resync all collapse to one
+    /// notification.
+    ///
+    /// The identity is recorded rather than a bare key because retirement must be
+    /// retirement *of a pod*, not of an attempt key forever: an executor that
+    /// deletes a pod which never started and submits another one for the same
+    /// attempt (T108's infrastructure retry) creates a genuinely new object, and a
+    /// key retired for the old one would silence every observation of the new one.
+    /// A *different* object under the same key therefore re-arms; the same object
+    /// observed again does not, which is exactly the duplicate this set exists to
+    /// absorb.
+    finished: BTreeMap<AttemptKey, String>,
     /// Attempts whose pod has been seen at least once, so a later absence is a
     /// disappearance rather than a pod that has not been created yet — with the
     /// pod name and identity last read off it, so a disappearance can be reported
@@ -412,7 +452,7 @@ impl ObserverCore {
             selector,
             limits,
             phases: BTreeMap::new(),
-            finished: BTreeSet::new(),
+            finished: BTreeMap::new(),
             seen: BTreeMap::new(),
             last_version: None,
             last_progress: Duration::ZERO,
@@ -672,11 +712,11 @@ impl ObserverCore {
         let vanished: Vec<(AttemptKey, String, ObservedIdentity)> = self
             .seen
             .iter()
-            .filter(|(key, _)| !present.contains(*key) && !self.finished.contains(*key))
+            .filter(|(key, _)| !present.contains(*key) && !self.finished.contains_key(*key))
             .map(|(key, (name, identity))| (key.clone(), name.clone(), identity.clone()))
             .collect();
         for (key, pod_name, identity) in vanished {
-            self.finished.insert(key.clone());
+            self.finished.insert(key.clone(), pod_name.clone());
             deliveries.push(Delivery::Observed(Box::new(PodObservation {
                 key,
                 pod_name,
@@ -685,6 +725,8 @@ impl ObserverCore {
                 vanished: true,
                 pod_reason: None,
                 container_reason: None,
+                waiting_reason: None,
+                scheduling_refusal: None,
                 exit_code: None,
                 identity,
             })));
@@ -730,20 +772,41 @@ impl ObserverCore {
         self.seen
             .insert(key.clone(), (pod.name.clone(), identity.clone()));
 
-        if self.finished.contains(&key) {
-            // Delivered already. This is the whole of exactly-once: a duplicate
-            // from the API, a repeat across a reconnect, and a re-read during a
-            // resync are all the same event as far as the waiter is concerned.
-            return Vec::new();
+        // What retirement is keyed on: the platform's own identifier when it has
+        // one (the only field that distinguishes a *recreated* object of the same
+        // name from the original), else the name.
+        let object = pod.uid.clone().unwrap_or_else(|| pod.name.clone());
+        match self.finished.get(&key) {
+            // Delivered already, for this same object. This is the whole of
+            // exactly-once: a duplicate from the API, a repeat across a reconnect,
+            // and a re-read during a resync are all the same event as far as the
+            // waiter is concerned.
+            Some(retired) if retired == &object => return Vec::new(),
+            // A different object under the same attempt key: the executor deleted
+            // one pod and created another for the same attempt. Re-arm, or the new
+            // pod's transitions would be silently swallowed.
+            Some(_) => {
+                self.finished.remove(&key);
+                self.phases.remove(&key);
+            }
+            None => {}
         }
 
         let terminal = pod.phase.is_terminal();
-        if !terminal && !deleted && self.phases.get(&key) == Some(&pod.phase) {
+        // Suppress a repeat of the SAME non-terminal observation — see `PodReading`
+        // for what "the same" means and why the phase alone is not it.
+        let reading = PodReading {
+            resource_version: pod.resource_version.clone(),
+            phase: pod.phase,
+            waiting_reason: pod.waiting_reason.clone(),
+            scheduling_refusal: pod.scheduling_refusal.clone(),
+        };
+        if !terminal && !deleted && self.phases.get(&key) == Some(&reading) {
             return Vec::new();
         }
-        self.phases.insert(key.clone(), pod.phase);
+        self.phases.insert(key.clone(), reading);
         if terminal || deleted {
-            self.finished.insert(key.clone());
+            self.finished.insert(key.clone(), object);
         }
 
         vec![Delivery::Observed(Box::new(PodObservation {
@@ -754,6 +817,8 @@ impl ObserverCore {
             vanished: deleted,
             pod_reason: pod.pod_reason.clone(),
             container_reason: pod.container_reason.clone(),
+            waiting_reason: pod.waiting_reason.clone(),
+            scheduling_refusal: pod.scheduling_refusal.clone(),
             exit_code: pod.exit_code,
             identity,
         }))]

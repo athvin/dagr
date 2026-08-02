@@ -77,7 +77,7 @@ fn writer(sink: CaptureSink) -> EventStreamWriter<CaptureSink, FrozenClock> {
     EventStreamWriter::new(
         sink,
         FrozenClock,
-        RunId::new(RUN_ID),
+        RunId::from_operator(RUN_ID),
         "example-pipeline".to_string(),
     )
     .with_wall_clock(|| "2026-07-23T00:00:00.000Z".to_string())

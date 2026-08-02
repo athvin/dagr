@@ -69,7 +69,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_core::assembly::NodePolicy;
+use dagr_core::assembly::{NodePolicy, Placement};
 use dagr_core::binding::{BoundInput, Deps, ReceiveMode};
 use dagr_core::context::{ResourceRegistry, RunContext, TerminalState};
 use dagr_core::execution::{
@@ -604,6 +604,60 @@ impl RunnableFlow {
             Some(codec_of::<T::Output>()),
         );
         handle
+    }
+
+    /// Register a **placed source** node: one an operator means to run somewhere
+    /// else (M10, T108, ADR 115 §8).
+    ///
+    /// This is the registrar that makes remote eligibility a **compile-time** fact.
+    /// A placed node is one dagr may hand to a pod, and a pod can only be handed
+    /// bytes — so `T::Output: Payload` is a bound here rather than a check later.
+    /// Registering a placement alongside a payload type with no codec reds the
+    /// build, naming the type and the missing bound, instead of assembling cleanly
+    /// and failing at submission time with a value nobody can serialize. That is in
+    /// keeping with mis-wiring already being a compile error.
+    ///
+    /// `placement` is merged into `policy`, so the two cannot disagree: a placement
+    /// stated here is the one the policy hash sees, the graph artifact shows, and
+    /// the executor reads.
+    ///
+    /// Nothing about the local path changes. Under `--dagr.executor=local` a
+    /// placement is recorded and ignored (T105) and the node runs in-process exactly
+    /// as an unplaced one does — which is what makes one binary genuinely both.
+    #[must_use]
+    pub fn register_source_placed<T>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        policy: NodePolicy,
+        placement: Placement,
+    ) -> Handle<T::Output>
+    where
+        T: Task<Input = ()> + StableName + Send + 'static,
+        T::Output: Payload + Send + Sync + 'static,
+    {
+        self.register_source_payload_with(name, task, policy.placement(placement))
+    }
+
+    /// Register a **placed data-dependent** node — the data-node twin of
+    /// [`register_source_placed`](Self::register_source_placed), with the same
+    /// `T::Output: Payload` bound and the same reason for it.
+    #[must_use]
+    pub fn register_placed<T, D>(
+        &mut self,
+        name: impl Into<String>,
+        task: T,
+        deps: D,
+        policy: NodePolicy,
+        placement: Placement,
+    ) -> Handle<T::Output>
+    where
+        T: Task + Send + 'static,
+        T::Input: Clone + Send + 'static,
+        T::Output: Payload + Send + Sync + 'static,
+        D: Deps<Inputs = T::Input> + InputWiring + Clone,
+    {
+        self.register_payload_with(name, task, deps, policy.placement(placement))
     }
 
     /// Capture the runner factory + output-slot maker for a **source** node — the

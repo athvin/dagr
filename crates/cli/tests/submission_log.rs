@@ -20,6 +20,7 @@
 #![cfg(feature = "k8s")]
 
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use dagr_artifact::event_stream::{
@@ -29,6 +30,42 @@ use dagr_artifact::event_stream::{
 };
 use dagr_cli::submission_log::SubmissionLog;
 use serde_json::Value;
+
+// ---------------------------------------------------------------------------
+// A private per-test temp root, removed on drop. Named per process, per nanos and
+// per counter: the suite runs in parallel with every other, and a shared path in
+// /tmp is a flake class this repo has already paid for once.
+// ---------------------------------------------------------------------------
+
+struct TempRoot {
+    path: PathBuf,
+}
+
+impl TempRoot {
+    fn new(tag: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "dagr-cli-t108-{tag}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create temp root");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
 
 const RUN_ID: &str = "018f4a1e-6c2a-7b3d-9e10-0123456789ab";
 
@@ -83,7 +120,7 @@ fn a_run<S: EventSink>(sink: S) {
     let mut w = EventStreamWriter::new(
         sink,
         FrozenClock,
-        RunId::new(RUN_ID),
+        RunId::from_operator(RUN_ID),
         "example-pipeline".to_string(),
     )
     .with_wall_clock(|| "2026-07-23T00:00:00.000Z".to_string());
@@ -91,7 +128,8 @@ fn a_run<S: EventSink>(sink: S) {
     w.node_ready("extract").expect("node-ready");
     w.node_admitted("extract").expect("node-admitted");
     w.attempt_started("extract", 1).expect("attempt-started");
-    w.attempt_succeeded("extract", 1).expect("attempt-succeeded");
+    w.attempt_succeeded("extract", 1)
+        .expect("attempt-succeeded");
     w.attempt_outcome(AttemptOutcomeRecord::new("extract", 1, "succeeded"))
         .expect("attempt-outcome");
     w.node_terminal("extract", TerminalState::Succeeded)
@@ -132,7 +170,7 @@ fn a_submission_record_takes_the_next_sequence_and_the_stream_stays_gapless() {
     let mut w = EventStreamWriter::new(
         log.sink(),
         FrozenClock,
-        RunId::new(RUN_ID),
+        RunId::from_operator(RUN_ID),
         "example-pipeline".to_string(),
     )
     .with_wall_clock(|| "2026-07-23T00:00:00.000Z".to_string());
@@ -169,15 +207,15 @@ fn a_submission_record_takes_the_next_sequence_and_the_stream_stays_gapless() {
         );
     }
     assert!(
-        recs.iter().all(|r| r["run_id"] == RUN_ID
-            && r["schema_version"] == "dagr.event-stream@1"),
+        recs.iter()
+            .all(|r| r["run_id"] == RUN_ID && r["schema_version"] == "dagr.event-stream@1"),
         "every record carries the run identity and schema version"
     );
 }
 
 #[test]
 fn a_recorded_submission_is_flushed_the_moment_it_is_written() {
-    let tmp = tempfile::tempdir().expect("temp dir");
+    let tmp = TempRoot::new("log");
     let path = tmp.path().join("events.jsonl");
     let log = SubmissionLog::open(&path, RUN_ID, "example-pipeline").expect("the log opens");
     log.handle()

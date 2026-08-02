@@ -309,6 +309,14 @@ jobs:
       - name: artifact validation + schema-compatibility gate (T48)
         if: matrix.os == 'ubuntu-latest'
         run: cargo nextest run -p dagr-artifact --features schema-validation --test compatibility_ci
+      # The `@1.3` minor (T108, ticket 123, ADR 115 §9): the `attempt-submitted`
+      # write-ahead kind. Its corpus member is checked against the REAL writer's
+      # bytes rather than hand-authored — the lesson DEVIATIONS.md records for the
+      # T19/T39 divergence, where a schema validated hand-written fixtures for
+      # three tickets while the shipped producer quietly diverged from it.
+      - name: attempt-submitted @1.3 schema round-trip + corpus member (T108)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run -p dagr-artifact --features schema-validation --test attempt_submitted_schema
       # === M7 metastore: the feature-gated CLI suites =========================
       # The `metastore` cli feature is OFF by default (libSQL is heavy and pre-1.0),
       # so the plain `cargo test --workspace` above never pulls `libsql` through the
@@ -440,6 +448,24 @@ jobs:
       # differs between the platforms.
       - name: shared pod observer — the task half (T107, --features k8s)
         run: cargo nextest run -p dagr-cli --features k8s --test pod_observer_task --test pod_observer_shutdown
+      # === M10 remote execution: the node runner and the two retry budgets =====
+      # T108's suites ride the SAME `--features k8s` build (one cargo invocation
+      # links every target in parallel and pays cargo's startup once — the grouping
+      # the metastore and blob steps above already use). `k8s` turns `blob` on, so
+      # this build also carries the shard reader the runner replays through.
+      #
+      # BOTH tiers. The runner is timer/channel/filesystem code — a bounded await
+      # loop, a per-attempt cancellation poll, an atomically-written shard read back
+      # off disk — and every one of those differs enough between the platforms to be
+      # worth asserting on each. No cluster is involved anywhere in it: the pod API
+      # is T107's in-process fake and the blob container is a temp directory. The
+      # real-cluster run is T112's.
+      - name: kubernetes node runner + submission log (T108, --features k8s)
+        run: |
+          cargo nextest run -p dagr-cli --features k8s \
+            --test k8s_node_runner \
+            --test submission_log \
+            --test pod_launch_retries_knob
       - name: shared pod observer — clippy over the task half (T107)
         run: cargo clippy -p dagr-cli --features k8s --all-targets -- -D warnings
       #

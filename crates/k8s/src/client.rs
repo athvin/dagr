@@ -331,6 +331,25 @@ fn snapshot(pod: &Pod) -> PodSnapshot {
             .and_then(|terminated| terminated.reason.clone())
             .or_else(|| waiting.and_then(|waiting| waiting.reason.clone())),
         exit_code: terminated.map(|terminated| terminated.exit_code),
+        uid: pod.metadata.uid.clone(),
+        host: pod.spec.as_ref().and_then(|spec| spec.node_name.clone()),
+        // Carried in its own field as well as folded into `container_reason`: the
+        // executor's pre-start classification must be able to tell "the container is
+        // WAITING for this reason" from "the container TERMINATED for this reason",
+        // and the merged field cannot (T101 — a pod that never starts reaches no
+        // terminal phase, so the waiting reason is the only signal there will be).
+        waiting_reason: waiting.and_then(|waiting| waiting.reason.clone()),
+        // The second pre-start surface: an unschedulable pod reports through the
+        // `PodScheduled` condition and has no container status entry at all, so a
+        // waiting-reason check alone never sees it.
+        scheduling_refusal: status
+            .and_then(|status| status.conditions.as_ref())
+            .and_then(|conditions| {
+                conditions.iter().find(|condition| {
+                    condition.type_ == "PodScheduled" && condition.status == "False"
+                })
+            })
+            .and_then(|condition| condition.reason.clone()),
     }
 }
 

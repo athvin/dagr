@@ -170,7 +170,14 @@ blob = ["dep:dagr-blob"]
 # other arm), which is the one place in this crate that needs the macro. The
 # default surface keeps tokio's minimal feature set — the driver still builds its
 # runtimes by hand and there is still no `#[tokio::main]`.
-k8s = ["dep:dagr-k8s", "tokio/macros"]
+#
+# It also turns `blob` on (T108). That is not a convenience: a remote attempt
+# reports through an attempt shard whose address IS a blob-container path, and it
+# returns its output as a blob reference — so `k8s` without `blob` describes an
+# executor that can submit a pod and can never learn what the pod did. Making the
+# dependency explicit here keeps it out of every caller's feature list and out of
+# CI's, and `blob` remains independently selectable for the local durable path.
+k8s = ["dep:dagr-k8s", "tokio/macros", "blob"]
 
 [dependencies]
 dagr-core = { path = "../core", version = "0.0.0" }

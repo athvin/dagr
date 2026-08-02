@@ -1,0 +1,25 @@
+{
+  "attempt": 1,
+  "executor": "k8s",
+  "image_digest": "sha256:cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+  "inputs": [
+    {
+      "content_hash": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "uri": "dagr-blob+local://blobs/sha256/2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+    }
+  ],
+  "kind": "attempt-submitted",
+  "node": "extract",
+  "observed_host": "kind-worker2",
+  "observed_name": "dagr-extract-1",
+  "observed_uid": "6f0f1b2c-3d4e-5a6b-7c8d-9e0f1a2b3c4d",
+  "offset_ns": 200,
+  "policy_hash": "blake3:2222222222222222222222222222222222222222222222222222222222222222",
+  "run_id": "018f4a1e-6c2a-7b3d-9e10-0123456789ab",
+  "schema_version": "dagr.event-stream@1",
+  "seq": 0,
+  "structural_fingerprint": "blake3:1111111111111111111111111111111111111111111111111111111111111111",
+  "target_name": "dagr-extract-1",
+  "tool_version": "dagr@1",
+  "wall": "2026-07-23T00:00:00.000Z"
+}

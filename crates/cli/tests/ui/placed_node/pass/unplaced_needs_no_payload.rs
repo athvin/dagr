@@ -7,11 +7,15 @@ use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::TaskError;
 use dagr_core::assembly::{NodePolicy, Placement};
 use dagr_core::context::RunContext;
+use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
 
 struct NoCodec;
 
 struct Local;
+impl StableName for Local {
+    const STABLE_NAME: &'static str = "t108.Local";
+}
 impl Task for Local {
     type Input = ();
     type Output = NoCodec;
@@ -21,11 +25,16 @@ impl Task for Local {
 }
 
 struct Remote;
+impl StableName for Remote {
+    const STABLE_NAME: &'static str = "t108.Remote";
+}
 impl Task for Remote {
     type Input = ();
-    type Output = u64;
-    async fn run(&mut self, _ctx: &RunContext, _i: ()) -> Result<u64, TaskError> {
-        Ok(7)
+    // `()` is `Codec + StableName`, hence `Payload` through the blanket impl — the
+    // smallest type that satisfies the placement bound without a derive.
+    type Output = ();
+    async fn run(&mut self, _ctx: &RunContext, _i: ()) -> Result<(), TaskError> {
+        Ok(())
     }
 }
 

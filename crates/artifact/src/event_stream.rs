@@ -204,6 +204,18 @@ pub enum Event {
     /// **no foreign key** to any asset-identity row, so the lineage outlives
     /// garbage-collection of the referent (the metastore projection is T91).
     OutputProduced(OutputProducedRecord),
+    /// One remote attempt was **submitted** — the write-ahead record of what the
+    /// orchestrator *intended* to launch, emitted before the remote work object is
+    /// created (T108, `dagr.event-stream@1.3`, ADR 115 §9).
+    ///
+    /// Emitted **only by a remote executor**, so a local in-process run's stream is
+    /// byte-identical to a pre-`@1.3` run. Everything else in the vocabulary
+    /// records an *outcome*, which by construction is written after the fact; this
+    /// is the one record whose value comes from existing **before** the thing it
+    /// describes, so a crash between deciding and submitting still leaves a durable
+    /// statement of intent, and "what was this task launched with?" survives the
+    /// platform garbage-collecting its own work object.
+    AttemptSubmitted(AttemptSubmittedRecord),
     /// The node reached a terminal state from the event vocabulary.
     NodeTerminal {
         /// The node's author-declared identity name.
@@ -389,6 +401,179 @@ impl OutputProducedRecord {
             // the same name would overwrite it. (This is the sole vocabulary field
             // that would collide with a header key.)
             fields.push(("output_kind".to_string(), k.clone().into()));
+        }
+        fields
+    }
+}
+
+/// The payload of an **`attempt-submitted`** record (T108,
+/// `dagr.event-stream@1.3`, minor+additive, ADR 115 §9): the **write-ahead** record
+/// of what the orchestrator intended to launch for one remote attempt, emitted
+/// *before* the remote work object is created.
+///
+/// Three of its properties are load-bearing rather than decorative:
+///
+/// - **`inputs` is always present**, and an empty array is the correct encoding for
+///   a consume-nothing source — never a null and never absent. Combined with a
+///   statically-known arity, that is what makes a mismatch *detectable* instead of
+///   silent. Order is positional and load-bearing (dagr binds inputs by position,
+///   with a ceiling of eight).
+/// - **Intent and reality are separate facts.** [`target_name`](Self::target_name)
+///   is the name the orchestrator is *about* to create; the `observed_*` fields
+///   carry what the platform actually created. They diverge, and a post-mortem
+///   needs both — so the observed identity is recorded *additively*, by a second
+///   record, once creation returns.
+/// - **No reference here may carry a credential.** A presigned or otherwise
+///   secret-bearing URL must never reach an event record; credentials come from the
+///   ambient environment of the backend that resolves the reference.
+///
+/// Every field beyond the identity pair is optional on the wire, so the record
+/// stays minimal for a producer that knows less.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AttemptSubmittedRecord {
+    /// The submitted node's author-declared identity name. With the envelope's
+    /// `run_id` and [`attempt`](Self::attempt) this is the idempotency key
+    /// `(run_id, node, attempt)` that adoption uses — a run id alone cannot
+    /// distinguish try 1 from try 3.
+    pub node: String,
+    /// The 1-based attempt number this submission is for.
+    pub attempt: u32,
+    /// The **ordered, positional** durable references handed to the attempt. Empty
+    /// for a consume-nothing source; its length equals the node's declared arity.
+    pub inputs: Vec<ConsumedInput>,
+    /// The executor that submitted the attempt. Absent on a local run, which never
+    /// emits this kind at all.
+    pub executor: Option<String>,
+    /// The **intended** name of the remote work object, recorded before creation.
+    pub target_name: Option<String>,
+    /// The name the platform actually created, once known.
+    pub observed_name: Option<String>,
+    /// The platform's own unique identifier for the created object — the field that
+    /// distinguishes a recreated object from the original.
+    pub observed_uid: Option<String>,
+    /// The host the platform scheduled the work onto. Diagnostic only.
+    pub observed_host: Option<String>,
+    /// The structural fingerprint the attempt was launched under.
+    pub structural_fingerprint: Option<String>,
+    /// The policy hash the attempt was launched under.
+    pub policy_hash: Option<String>,
+    /// The tool version that launched it — the comparability token a recovering
+    /// orchestrator refuses across.
+    pub tool_version: Option<String>,
+    /// The image digest the attempt was launched with.
+    pub image_digest: Option<String>,
+}
+
+impl AttemptSubmittedRecord {
+    /// A submission record for `(node, attempt)` with an **empty** input list and
+    /// no provenance yet — the minimum the published schema requires.
+    #[must_use]
+    pub fn new(node: impl Into<String>, attempt: u32) -> Self {
+        Self {
+            node: node.into(),
+            attempt,
+            ..Self::default()
+        }
+    }
+
+    /// The ordered, positional references the attempt was handed.
+    #[must_use]
+    pub fn inputs(mut self, inputs: Vec<ConsumedInput>) -> Self {
+        self.inputs = inputs;
+        self
+    }
+
+    /// The executor that submitted the attempt.
+    #[must_use]
+    pub fn executor(mut self, executor: impl Into<String>) -> Self {
+        self.executor = Some(executor.into());
+        self
+    }
+
+    /// The **intended** name of the remote work object.
+    #[must_use]
+    pub fn target_name(mut self, name: impl Into<String>) -> Self {
+        self.target_name = Some(name.into());
+        self
+    }
+
+    /// The name the platform actually created.
+    #[must_use]
+    pub fn observed_name(mut self, name: impl Into<String>) -> Self {
+        self.observed_name = Some(name.into());
+        self
+    }
+
+    /// The platform's own unique identifier for the created object.
+    #[must_use]
+    pub fn observed_uid(mut self, uid: impl Into<String>) -> Self {
+        self.observed_uid = Some(uid.into());
+        self
+    }
+
+    /// The host the platform scheduled the work onto.
+    #[must_use]
+    pub fn observed_host(mut self, host: impl Into<String>) -> Self {
+        self.observed_host = Some(host.into());
+        self
+    }
+
+    /// The structural fingerprint the attempt was launched under.
+    #[must_use]
+    pub fn structural_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.structural_fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    /// The policy hash the attempt was launched under.
+    #[must_use]
+    pub fn policy_hash(mut self, hash: impl Into<String>) -> Self {
+        self.policy_hash = Some(hash.into());
+        self
+    }
+
+    /// The tool version that launched the attempt.
+    #[must_use]
+    pub fn tool_version(mut self, version: impl Into<String>) -> Self {
+        self.tool_version = Some(version.into());
+        self
+    }
+
+    /// The image digest the attempt was launched with.
+    #[must_use]
+    pub fn image_digest(mut self, digest: impl Into<String>) -> Self {
+        self.image_digest = Some(digest.into());
+        self
+    }
+
+    /// The top-level wire fields spread beside the shared header. `node`,
+    /// `attempt` and `inputs` are **always** written (the published schema requires
+    /// all three, and an empty `inputs` array is the source encoding); every other
+    /// field is written only when present, so a minimal producer stays minimal.
+    fn to_fields(&self) -> Vec<WireField> {
+        let mut fields: Vec<WireField> = vec![
+            ("node".to_string(), self.node.clone().into()),
+            ("attempt".to_string(), self.attempt.into()),
+            (
+                "inputs".to_string(),
+                serde_json::Value::Array(self.inputs.iter().map(ConsumedInput::to_value).collect()),
+            ),
+        ];
+        let optional: [(&str, &Option<String>); 9] = [
+            ("executor", &self.executor),
+            ("target_name", &self.target_name),
+            ("observed_name", &self.observed_name),
+            ("observed_uid", &self.observed_uid),
+            ("observed_host", &self.observed_host),
+            ("structural_fingerprint", &self.structural_fingerprint),
+            ("policy_hash", &self.policy_hash),
+            ("tool_version", &self.tool_version),
+            ("image_digest", &self.image_digest),
+        ];
+        for (name, value) in optional {
+            if let Some(v) = value {
+                fields.push((name.to_string(), v.clone().into()));
+            }
         }
         fields
     }
@@ -847,6 +1032,22 @@ impl<S: EventSink, C: MonotonicClock> EventStreamWriter<S, C> {
         self.emit(&Event::OutputProduced(record))
     }
 
+    /// Emit an `attempt-submitted` **write-ahead** record (T108,
+    /// `dagr.event-stream@1.3`) — what the orchestrator intends to launch for one
+    /// remote attempt.
+    ///
+    /// The caller is responsible for the ordering that gives the record its value:
+    /// it must be emitted (and made durable) **before** the remote work is created.
+    /// Recording after submission would lose exactly the crash window it exists to
+    /// cover. Emitted only by a remote executor, so a local run's stream is
+    /// byte-identical to a pre-`@1.3` run.
+    ///
+    /// # Errors
+    /// Returns a [`SinkFault`] if the sink cannot record the transition.
+    pub fn attempt_submitted(&mut self, record: AttemptSubmittedRecord) -> Result<(), SinkFault> {
+        self.emit(&Event::AttemptSubmitted(record))
+    }
+
     /// Emit a `node-terminal` record carrying the normative terminal state.
     ///
     /// # Errors
@@ -1036,6 +1237,7 @@ fn event_wire(event: &Event, run_id: &str) -> (&'static str, Vec<WireField>) {
         ),
         Event::AttemptOutcome(record) => ("attempt-outcome", attempt_outcome_fields(record)),
         Event::OutputProduced(record) => ("output-produced", record.to_fields()),
+        Event::AttemptSubmitted(record) => ("attempt-submitted", record.to_fields()),
         Event::NodeTerminal { node, state } => (
             "node-terminal",
             vec![

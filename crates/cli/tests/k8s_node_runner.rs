@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::ConsumedInput;
+use dagr_cli::driver::NodeRunner;
 use dagr_cli::k8s_runner::{K8sNodeRunner, RemoteAttemptConfig, RemoteLaunchError};
 use dagr_cli::pod_observer::PodObserver;
 use dagr_cli::run_flow::AttemptTimer;
@@ -37,7 +38,7 @@ use dagr_cli::shard::{AttemptShard, ConsumedRef, ShardIdentity, ShardOutput};
 use dagr_cli::submission_log::SubmissionLog;
 use dagr_core::context::TerminalState;
 use dagr_core::execution::{AttemptEvent, AttemptEventSink, Backoff, RetryConfig};
-use dagr_k8s::api::{ApiFailure, CreatedPod, PodApi, PodLifecycle, PodPhase, PodSnapshot};
+use dagr_k8s::api::{ApiFailure, CreatedPod, PodLifecycle, PodPhase, PodSnapshot};
 use dagr_k8s::executor::{ClusterRetry, PodPlacement, PodSpec, pod_name};
 use dagr_k8s::fake::{FakeControl, fake_api};
 use dagr_k8s::identity::AttemptKey;
@@ -237,6 +238,20 @@ impl Recorder {
         self.events.lock().expect("recorder mutex").clone()
     }
 
+    /// Whether any *closing* attempt record was emitted — the records the driver
+    /// turns into `attempt-outcome` rows, i.e. a user-visible try.
+    fn has_attempt_outcome(&self) -> bool {
+        self.events().iter().any(|e| {
+            matches!(
+                e,
+                AttemptEvent::AttemptSucceeded { .. }
+                    | AttemptEvent::AttemptFailed { .. }
+                    | AttemptEvent::AttemptTimedOut { .. }
+                    | AttemptEvent::AttemptPanicked { .. }
+            )
+        })
+    }
+
     fn attempt_numbers(&self) -> Vec<u32> {
         self.events()
             .iter()
@@ -259,8 +274,15 @@ impl AttemptEventSink for Recorder {
 // ---------------------------------------------------------------------------
 
 fn shard_identity(node: &str, attempt: u32) -> ShardIdentity {
-    ShardIdentity::new(RUN_ID, node, attempt, FINGERPRINT, POLICY_HASH, TOOL_VERSION)
-        .image_digest(IMAGE_DIGEST)
+    ShardIdentity::new(
+        RUN_ID,
+        node,
+        attempt,
+        FINGERPRINT,
+        POLICY_HASH,
+        TOOL_VERSION,
+    )
+    .image_digest(IMAGE_DIGEST)
 }
 
 /// Write the shard a pod-side attempt would have left behind.
@@ -326,8 +348,44 @@ fn terminal_token(state: TerminalState) -> &'static str {
 // Wiring
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// A private per-test temp root, removed on drop. Named per process, per nanos and
+// per counter: the suite runs in parallel with every other, and a shared path in
+// /tmp is a flake class this repo has already paid for once.
+// ---------------------------------------------------------------------------
+
+struct TempRoot {
+    path: PathBuf,
+}
+
+impl TempRoot {
+    fn new(tag: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "dagr-cli-t108-{tag}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create temp root");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 struct Harness {
-    _tmp: tempfile::TempDir,
+    _tmp: TempRoot,
     root: PathBuf,
     stream_path: PathBuf,
     log: SubmissionLog,
@@ -349,7 +407,7 @@ fn limits() -> ObserverLimits {
 }
 
 fn harness(create_hook: Option<CreateHook>) -> Harness {
-    let tmp = tempfile::tempdir().expect("a temp dir");
+    let tmp = TempRoot::new("runner");
     let root = tmp.path().join("blobs");
     std::fs::create_dir_all(&root).expect("blob container");
     let stream_path = tmp.path().join("events.jsonl");
@@ -375,7 +433,7 @@ fn harness(create_hook: Option<CreateHook>) -> Harness {
     }
 }
 
-fn config(node: &str, root: &Path) -> RemoteAttemptConfig {
+fn config(root: &Path) -> RemoteAttemptConfig {
     RemoteAttemptConfig {
         pipeline: "example-pipeline".to_string(),
         namespace: "dagr".to_string(),
@@ -394,11 +452,14 @@ fn config(node: &str, root: &Path) -> RemoteAttemptConfig {
         pre_start_bound: Duration::from_secs(30),
         retry: RetryConfig::new(1, Backoff::new(Duration::ZERO, 2.0, Duration::MAX)),
         command: vec!["dagr".to_string(), "exec-node".to_string()],
-        _node: node.to_string(),
     }
 }
 
-fn runner(h: &Harness, node: &str, config: RemoteAttemptConfig) -> K8sNodeRunner<ScriptedLifecycle> {
+fn runner(
+    h: &Harness,
+    node: &str,
+    config: RemoteAttemptConfig,
+) -> K8sNodeRunner<ScriptedLifecycle> {
     K8sNodeRunner::new(
         node,
         RUN_ID,
@@ -419,6 +480,11 @@ fn stream_records(path: &Path) -> Vec<Value> {
 
 /// Drive the fake so the pod for `key` reaches `phase`, carrying the given
 /// diagnostics.
+///
+/// Every transition takes a fresh `resourceVersion`, exactly as a real modification
+/// does. It matters: two successive launches of the same attempt report the *same*
+/// phase and the *same* reason, and only the object version says they are two
+/// different facts.
 async fn transition(
     control: &FakeControl,
     node: &str,
@@ -426,8 +492,10 @@ async fn transition(
     phase: PodPhase,
     mutate: impl FnOnce(&mut PodSnapshot),
 ) {
+    static VERSION: AtomicU32 = AtomicU32::new(200);
     let key = AttemptKey::new(RUN_ID, node, attempt);
-    let mut pod = PodSnapshot::new(pod_name(&key), "200", phase, &identity(node, attempt));
+    let version = VERSION.fetch_add(1, Ordering::SeqCst).to_string();
+    let mut pod = PodSnapshot::new(pod_name(&key), version, phase, &identity(node, attempt));
     mutate(&mut pod);
     control.upsert(pod.clone());
     control
@@ -455,7 +523,7 @@ async fn the_submission_record_is_durably_flushed_before_the_create_call_is_issu
     })));
     *stream_for_hook.lock().expect("path mutex") = Some(h.stream_path.clone());
 
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -513,11 +581,14 @@ async fn a_crash_between_the_record_and_the_create_leaves_the_intent_and_no_pod(
     // the orchestrator dying between the two — either way the record is on disk and
     // nothing was created.
     let h = harness(None);
-    h.lifecycle.script(vec![CreateOutcome::Rejected(
-        ApiFailure::api(403, "Forbidden", "exceeded quota: pods"),
-    )]);
+    h.lifecycle
+        .script(vec![CreateOutcome::Rejected(ApiFailure::api(
+            403,
+            "Forbidden",
+            "exceeded quota: pods",
+        ))]);
 
-    let mut cfg = config("extract", &h.root);
+    let mut cfg = config(&h.root);
     cfg.launch_retries = 0;
     let mut r = runner(&h, "extract", cfg);
     let mut sink = Recorder::default();
@@ -550,7 +621,7 @@ async fn a_crash_between_the_record_and_the_create_leaves_the_intent_and_no_pod(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_declared_arity_that_disagrees_with_the_assembled_references_fails_before_launching() {
     let h = harness(None);
-    let mut cfg = config("join", &h.root);
+    let mut cfg = config(&h.root);
     cfg.declared_arity = 2;
     cfg.inputs = vec![ConsumedInput {
         uri: "dagr-blob+local://blobs/sha256/aaa".to_string(),
@@ -570,7 +641,14 @@ async fn a_declared_arity_that_disagrees_with_the_assembled_references_fails_bef
     );
     let failure = r.last_failure().expect("a classified failure");
     assert!(
-        matches!(failure, RemoteLaunchError::ArityMismatch { declared: 2, assembled: 1, .. }),
+        matches!(
+            failure,
+            RemoteLaunchError::ArityMismatch {
+                declared: 2,
+                assembled: 1,
+                ..
+            }
+        ),
         "the error names both counts: {failure}"
     );
     assert!(
@@ -585,7 +663,7 @@ async fn a_declared_arity_that_disagrees_with_the_assembled_references_fails_bef
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_credential_bearing_reference_is_rejected_before_it_can_reach_a_record() {
     let h = harness(None);
-    let mut cfg = config("load", &h.root);
+    let mut cfg = config(&h.root);
     cfg.declared_arity = 1;
     cfg.inputs = vec![ConsumedInput {
         uri: "https://bucket.s3.amazonaws.com/k?X-Amz-Signature=deadbeefdeadbeef".to_string(),
@@ -613,7 +691,7 @@ async fn a_credential_bearing_reference_is_rejected_before_it_can_reach_a_record
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_image_pull_backoff_is_bounded_by_the_runner_and_never_waits_for_a_terminal_phase() {
     let h = harness(None);
-    let mut cfg = config("extract", &h.root);
+    let mut cfg = config(&h.root);
     cfg.launch_retries = 0;
     cfg.pre_start_bound = Duration::from_millis(50);
 
@@ -644,8 +722,9 @@ async fn an_image_pull_backoff_is_bounded_by_the_runner_and_never_waits_for_a_te
         "the infrastructure cause is named: {failure}"
     );
     assert!(
-        sink.events().is_empty(),
-        "a pod that never started produced NO user-visible attempt: {:?}",
+        sink.attempt_numbers().is_empty() && !sink.has_attempt_outcome(),
+        "a pod that never started produced NO user-visible attempt — the node still \
+         reaches a terminal state, but no try is recorded: {:?}",
         sink.events()
     );
     assert_eq!(
@@ -659,7 +738,7 @@ async fn an_image_pull_backoff_is_bounded_by_the_runner_and_never_waits_for_a_te
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unschedulable_pod_is_retried_against_the_launch_budget_and_consumes_no_attempt() {
     let h = harness(None);
-    let mut cfg = config("extract", &h.root);
+    let mut cfg = config(&h.root);
     cfg.launch_retries = 2;
     cfg.pre_start_bound = Duration::from_millis(30);
     // A node with a real retry budget, so "untouched" means something.
@@ -677,7 +756,7 @@ async fn an_unschedulable_pod_is_retried_against_the_launch_budget_and_consumes_
                 pod.scheduling_refusal = Some("Unschedulable".to_string());
             })
             .await;
-            tokio::time::sleep(Duration::from_millis(60)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     });
 
@@ -691,7 +770,7 @@ async fn an_unschedulable_pod_is_retried_against_the_launch_budget_and_consumes_
         "one initial submission plus two launch retries"
     );
     assert!(
-        sink.events().is_empty(),
+        sink.attempt_numbers().is_empty() && !sink.has_attempt_outcome(),
         "the node's own retry budget is UNTOUCHED — the artifact shows no extra \
          attempt: {:?}",
         sink.events()
@@ -707,7 +786,7 @@ async fn an_unschedulable_pod_is_retried_against_the_launch_budget_and_consumes_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_successful_launch_after_a_pre_start_failure_is_still_try_number_one() {
     let h = harness(None);
-    let mut cfg = config("extract", &h.root);
+    let mut cfg = config(&h.root);
     cfg.launch_retries = 1;
     cfg.pre_start_bound = Duration::from_millis(30);
 
@@ -723,7 +802,7 @@ async fn a_successful_launch_after_a_pre_start_failure_is_still_try_number_one()
             pod.waiting_reason = Some("ErrImagePull".to_string());
         })
         .await;
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         control.await_watch().await;
         write_shard(&root, "extract", 1, TerminalState::Succeeded, None);
         transition(&control, "extract", 1, PodPhase::Succeeded, |_| {}).await;
@@ -744,7 +823,7 @@ async fn a_successful_launch_after_a_pre_start_failure_is_still_try_number_one()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_started_attempt_that_fails_consumes_the_nodes_retry_budget_with_real_backoff() {
     let h = harness(None);
-    let mut cfg = config("extract", &h.root);
+    let mut cfg = config(&h.root);
     cfg.retry = RetryConfig::new(2, Backoff::new(Duration::from_secs(4), 2.0, Duration::MAX));
 
     let mut r = runner(&h, "extract", cfg);
@@ -796,7 +875,7 @@ async fn a_started_attempt_that_fails_consumes_the_nodes_retry_budget_with_real_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_oom_killed_pod_is_a_failed_attempt_carrying_a_diagnostic() {
     let h = harness(None);
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -835,7 +914,7 @@ async fn an_oom_killed_pod_is_a_failed_attempt_carrying_a_diagnostic() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_shards_records_are_replayed_and_its_output_reference_reaches_the_existing_hooks() {
     let h = harness(None);
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -864,13 +943,12 @@ async fn the_shards_records_are_replayed_and_its_output_reference_reaches_the_ex
 
     let events = sink.events();
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            AttemptEvent::AttemptStarted { attempt: 1, .. }
-        )) && events.iter().any(|e| matches!(
-            e,
-            AttemptEvent::AttemptSucceeded { attempt: 1, .. }
-        )),
+        events
+            .iter()
+            .any(|e| matches!(e, AttemptEvent::AttemptStarted { attempt: 1, .. }))
+            && events
+                .iter()
+                .any(|e| matches!(e, AttemptEvent::AttemptSucceeded { attempt: 1, .. })),
         "the shard's records were replayed through the INJECTED sink, so the \
          orchestrator stays the single writer: {events:?}"
     );
@@ -897,7 +975,7 @@ async fn the_shards_records_are_replayed_and_its_output_reference_reaches_the_ex
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_terminal_pod_with_no_readable_shard_is_a_classified_failure_naming_the_pod() {
     let h = harness(None);
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -936,7 +1014,7 @@ async fn a_terminal_pod_with_no_readable_shard_is_a_classified_failure_naming_th
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shard_from_a_different_build_is_refused_naming_both_fingerprints() {
     let h = harness(None);
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -980,12 +1058,17 @@ async fn a_shard_from_a_different_build_is_refused_naming_both_fingerprints() {
 async fn a_submission_for_an_attempt_key_with_a_live_pod_adopts_it_rather_than_creating_a_second() {
     let h = harness(None);
     let key = AttemptKey::new(RUN_ID, "extract", 1);
-    let mut existing = PodSnapshot::new(pod_name(&key), "100", PodPhase::Running, &identity("extract", 1));
+    let mut existing = PodSnapshot::new(
+        pod_name(&key),
+        "100",
+        PodPhase::Running,
+        &identity("extract", 1),
+    );
     existing.uid = Some("uid-existing".to_string());
     existing.host = Some("kind-worker9".to_string());
     h.lifecycle.adopt_target(existing);
 
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
     let ctx = dagr_core::context::RunContext::for_test();
 
@@ -1020,14 +1103,14 @@ async fn a_submission_for_an_attempt_key_with_a_live_pod_adopts_it_rather_than_c
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_attempt_deletes_its_pod_and_records_cancelled() {
     let h = harness(None);
-    let mut r = runner(&h, "extract", config("extract", &h.root));
+    let mut r = runner(&h, "extract", config(&h.root));
     let mut sink = Recorder::default();
 
-    let cancel = dagr_core::execution::CancellationSource::new();
+    let cancel = dagr_core::context::CancellationSource::new();
     let ctx = dagr_core::context::RunContext::builder(
         dagr_core::context::RunId::new(RUN_ID),
         dagr_core::context::PipelineId::new("example-pipeline"),
-        dagr_core::context::NodeId::from_name("extract"),
+        dagr_core::handle::NodeId::from_name("extract"),
     )
     .cancellation(cancel.signal())
     .build();
@@ -1051,4 +1134,226 @@ async fn a_cancelled_attempt_deletes_its_pod_and_records_cancelled() {
         "cancellation deletes the pod rather than orphaning it"
     );
     let _ = h.observer.shutdown(Duration::from_secs(5)).await;
+}
+
+// ===========================================================================
+// The seam holds: the driver runs a placed node with no special case for it
+// ===========================================================================
+
+/// A local source, for the unplaced half of the mixed pipeline.
+struct Seven;
+
+impl dagr_core::stable_name::StableName for Seven {
+    const STABLE_NAME: &'static str = "t108.Seven";
+}
+
+impl dagr_core::task::Task for Seven {
+    type Input = ();
+    type Output = u64;
+    async fn run(
+        &mut self,
+        _ctx: &dagr_core::context::RunContext,
+        _i: (),
+    ) -> Result<u64, dagr_core::TaskError> {
+        Ok(7)
+    }
+}
+
+/// The minimal local runner: one attempt through the real core attempt path.
+struct LocalRunner {
+    name: String,
+    slot: Arc<dagr_core::slot::Slot<u64>>,
+    task: Option<Seven>,
+}
+
+impl NodeRunner for LocalRunner {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn run<'a>(
+        &'a mut self,
+        ctx: &'a dagr_core::context::RunContext,
+        sink: &'a mut (dyn AttemptEventSink + Send),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TerminalState> + Send + 'a>> {
+        let name = self.name.clone();
+        let mut task = self.task.take().expect("a node runs exactly once");
+        let slot = Arc::clone(&self.slot);
+        Box::pin(async move {
+            dagr_core::execution::run_attempt_caught(&mut task, &name, ctx, &slot, sink)
+                .await
+                .terminal_state()
+        })
+    }
+}
+
+/// A monotonic clock that ticks once per read — enough for the driver's offsets.
+#[derive(Default)]
+struct TickClock(std::sync::atomic::AtomicU64);
+
+impl dagr_artifact::event_stream::MonotonicClock for TickClock {
+    fn elapsed_ns(&self) -> u64 {
+        self.0.fetch_add(1_000, Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone, Default)]
+struct StreamSink {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl dagr_artifact::event_stream::EventSink for StreamSink {
+    fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
+        self.bytes
+            .lock()
+            .expect("stream mutex")
+            .extend_from_slice(line);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// **The claim ADR 115 rests on.** A pipeline with one placed node and one local
+/// one runs end to end through the *unchanged* `drive()` loop: the readiness
+/// cascade, the admission ledger, the attempt-outcome recording and the exit
+/// selection all behave exactly as they do for a local run, the replayed shard's
+/// records land in stream order with gapless `seq`, and the folded artifact does
+/// not distinguish the two nodes.
+#[test]
+fn a_mixed_pipeline_runs_end_to_end_through_the_unchanged_driver() {
+    use dagr_core::flow::Flow;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("a runtime for the observer");
+    let _entered = rt.enter();
+
+    let tmp = TempRoot::new("seam");
+    let root = tmp.path().join("blobs");
+    std::fs::create_dir_all(&root).expect("blob container");
+    let store = tmp.path().join("store");
+    std::fs::create_dir_all(&store).expect("run store");
+
+    let stream = StreamSink::default();
+    let log = SubmissionLog::over(stream.clone(), RUN_ID, "example-pipeline");
+    let (api, control) = fake_api();
+    let lifecycle = ScriptedLifecycle::new(control.clone());
+    let observer = PodObserver::spawn(api, selector(), limits());
+
+    let mut flow = Flow::new();
+    let _ = flow.register_source("extract", &Seven);
+    let _ = flow.register_source("local", &Seven);
+    let pipeline = flow.finish();
+
+    let remote = K8sNodeRunner::new(
+        "extract",
+        RUN_ID,
+        lifecycle.clone(),
+        observer.handle(),
+        log.handle(),
+        Arc::new(RecordingTimer::default()) as Arc<dyn AttemptTimer>,
+        config(&root),
+    );
+    let slot = Arc::new(dagr_core::slot::Slot::new(
+        dagr_core::handle::NodeId::from_name("local"),
+        "local",
+        0,
+        false,
+        0,
+        dagr_core::slot::ResidencyLedger::new(),
+    ));
+    let mut runners: BTreeMap<String, Box<dyn NodeRunner>> = BTreeMap::new();
+    runners.insert("extract".to_string(), Box::new(remote));
+    runners.insert(
+        "local".to_string(),
+        Box::new(LocalRunner {
+            name: "local".to_string(),
+            slot,
+            task: Some(Seven),
+        }),
+    );
+    let plan = dagr_cli::driver::RunPlan::new(pipeline, runners);
+
+    // Drive the fake platform from the test's own runtime while the driver blocks
+    // on its own.
+    let shard_root = root.clone();
+    rt.spawn(async move {
+        control.await_watch().await;
+        write_shard(
+            &shard_root,
+            "extract",
+            1,
+            TerminalState::Succeeded,
+            Some(ShardOutput::new("dagr-blob+local://blobs/sha256/abc").content_hash("sha256:abc")),
+        );
+        transition(&control, "extract", 1, PodPhase::Succeeded, |_| {}).await;
+    });
+
+    let report = dagr_cli::driver::drive(
+        &dagr_cli::driver::RunConfig::new(store.to_string_lossy().to_string()).run_id(RUN_ID),
+        "example-pipeline",
+        Ok(plan),
+        &[],
+        log.sink(),
+        TickClock::default(),
+    );
+
+    assert_eq!(
+        report.terminal_states.get("extract"),
+        Some(&TerminalState::Succeeded),
+        "the placed node reached a terminal state through the ordinary loop"
+    );
+    assert_eq!(
+        report.terminal_states.get("local"),
+        Some(&TerminalState::Succeeded),
+        "…and so did the unplaced one, in the same run"
+    );
+
+    let bytes = stream.bytes.lock().expect("stream mutex").clone();
+    let records = dagr_artifact::event_stream::read_records(&bytes)
+        .expect("the stream parses")
+        .records;
+    for (i, record) in records.iter().enumerate() {
+        assert_eq!(
+            record["seq"].as_u64(),
+            Some(i as u64),
+            "gapless, strictly increasing seq across the driver's records and the \
+             replayed shard's"
+        );
+    }
+    assert!(
+        records.iter().any(|r| r["kind"] == "attempt-submitted"),
+        "the placed node recorded its submission"
+    );
+
+    let artifact =
+        dagr_artifact::fold::fold_stream(&bytes, &["extract".to_string(), "local".to_string()])
+            .expect("the stream folds cleanly");
+    assert_eq!(artifact.overall_outcome(), "succeeded");
+    let mut nodes: Vec<&str> = artifact.attempts().iter().map(|a| a.node()).collect();
+    nodes.sort_unstable();
+    assert_eq!(
+        nodes,
+        vec!["extract", "local"],
+        "the artifact records one attempt each and does not distinguish them by \
+         where they ran"
+    );
+    assert_eq!(
+        artifact
+            .attempts()
+            .iter()
+            .find(|a| a.node() == "extract")
+            .and_then(dagr_artifact::fold::AttemptRecord::durable_reference)
+            .and_then(|v| v.as_str()),
+        Some("dagr-blob+local://blobs/sha256/abc"),
+        "the shard's output reference was stamped by the driver's existing hook"
+    );
+
+    rt.block_on(async { observer.shutdown(Duration::from_secs(5)).await })
+        .ok();
 }

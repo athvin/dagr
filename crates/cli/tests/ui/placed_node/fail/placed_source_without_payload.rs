@@ -10,12 +10,16 @@ use dagr_cli::run_flow::RunnableFlow;
 use dagr_core::TaskError;
 use dagr_core::assembly::{NodePolicy, Placement};
 use dagr_core::context::RunContext;
+use dagr_core::stable_name::StableName;
 use dagr_core::task::Task;
 
 /// An output type with **no** `Payload` impl: it cannot cross a process boundary.
 struct NoCodec;
 
 struct Local;
+impl StableName for Local {
+    const STABLE_NAME: &'static str = "t108.Local";
+}
 impl Task for Local {
     type Input = ();
     type Output = NoCodec;

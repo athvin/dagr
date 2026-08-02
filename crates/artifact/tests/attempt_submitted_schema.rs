@@ -60,7 +60,7 @@ fn corpus_record_line() -> Vec<u8> {
     let mut w = EventStreamWriter::new(
         sink.clone(),
         FrozenClock,
-        RunId::new(RUN_ID),
+        RunId::from_operator(RUN_ID),
         "example-pipeline".to_string(),
     )
     .with_wall_clock(|| "2026-07-23T00:00:00.000Z".to_string());
@@ -75,9 +75,7 @@ fn corpus_record_line() -> Vec<u8> {
             .structural_fingerprint(
                 "blake3:1111111111111111111111111111111111111111111111111111111111111111",
             )
-            .policy_hash(
-                "blake3:2222222222222222222222222222222222222222222222222222222222222222",
-            )
+            .policy_hash("blake3:2222222222222222222222222222222222222222222222222222222222222222")
             .tool_version("dagr@1")
             .image_digest("sha256:cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe")
             .inputs(vec![ConsumedInput {
@@ -123,7 +121,7 @@ fn a_consume_nothing_submission_validates_with_an_empty_inputs_array() {
     let mut w = EventStreamWriter::new(
         sink.clone(),
         FrozenClock,
-        RunId::new(RUN_ID),
+        RunId::from_operator(RUN_ID),
         "example-pipeline".to_string(),
     )
     .with_wall_clock(|| "2026-07-23T00:00:00.000Z".to_string());

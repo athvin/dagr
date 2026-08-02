@@ -71,8 +71,14 @@ fn request(node: &str, attempt: u32) -> PodRequest {
 fn the_pod_carries_its_identity_as_selector_labels_and_authoritative_annotations() {
     let spec = build_pod(&request("extract", 2), ClusterRetry::Disabled).expect("a spec is built");
 
-    assert_eq!(spec.labels.get(LABEL_RUN_ID).map(String::as_str), Some(RUN_ID));
-    assert_eq!(spec.labels.get(LABEL_ATTEMPT).map(String::as_str), Some("2"));
+    assert_eq!(
+        spec.labels.get(LABEL_RUN_ID).map(String::as_str),
+        Some(RUN_ID)
+    );
+    assert_eq!(
+        spec.labels.get(LABEL_ATTEMPT).map(String::as_str),
+        Some("2")
+    );
     assert_eq!(
         spec.annotations.get(ANNOTATION_NODE).map(String::as_str),
         Some("extract"),
@@ -399,7 +405,12 @@ fn a_presigned_or_otherwise_secret_bearing_url_is_rejected_before_it_can_be_reco
 
 #[test]
 fn a_snapshot_carries_the_platform_identity_and_the_pre_start_surfaces() {
-    let mut snap = PodSnapshot::new("dagr-extract-1", "100", PodPhase::Pending, &identity("extract", 1));
+    let mut snap = PodSnapshot::new(
+        "dagr-extract-1",
+        "100",
+        PodPhase::Pending,
+        &identity("extract", 1),
+    );
     snap.uid = Some("6f0f1b2c".to_string());
     snap.host = Some("kind-worker2".to_string());
     snap.waiting_reason = Some("ImagePullBackOff".to_string());
@@ -413,7 +424,12 @@ fn a_snapshot_carries_the_platform_identity_and_the_pre_start_surfaces() {
     );
 
     // A pod with no diagnostics at all still yields readable facts.
-    let clean = PodSnapshot::new("dagr-load-1", "101", PodPhase::Running, &identity("load", 1));
+    let clean = PodSnapshot::new(
+        "dagr-load-1",
+        "101",
+        PodPhase::Running,
+        &identity("load", 1),
+    );
     assert!(classify_pre_start(&PodStatusFacts::from(&clean)).is_none());
     assert_eq!(clean.labels.len(), 4);
     assert!(!clean.annotations.is_empty());
