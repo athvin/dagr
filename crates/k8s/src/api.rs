@@ -381,4 +381,28 @@ pub trait PodLifecycle: Send + Sync + 'static {
         &self,
         name: &str,
     ) -> impl Future<Output = Result<Option<PodSnapshot>, ApiFailure>> + Send;
+
+    /// Rewrite `labels` on the pod named `name`, **in place**, changing nothing
+    /// else about it.
+    ///
+    /// This is the one verb orphan adoption needs and the reason it is safe: an
+    /// orchestrator reclaims a pod that is *still running an attempt* by moving a
+    /// label, never by recreating the object (ADR 115 §5) — recreating it would be
+    /// running the attempt twice, which is the outcome adoption exists to prevent.
+    /// The patch is therefore a **merge** over `metadata.labels` only, and a key
+    /// mapped to [`None`] is removed (the JSON-merge-patch null), which is how
+    /// revocation clears the owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiFailure`] when the patch could not be applied. An
+    /// **already-absent** pod is `Ok(())` for the same reason `delete` is: this
+    /// sits on the adoption, tombstone and revocation paths, all of which must be
+    /// runnable twice, and a caller learns that a pod has gone from the observer
+    /// rather than from a write it issued.
+    fn patch_labels(
+        &self,
+        name: &str,
+        labels: &crate::adoption::LabelPatch,
+    ) -> impl Future<Output = Result<(), ApiFailure>> + Send;
 }

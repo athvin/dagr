@@ -14,6 +14,11 @@
 //!   process and its async runtime are (ADR 004).
 //! - [`identity`] — the label/annotation encoding and its inverse: labels are
 //!   lossy selectors, annotations are authoritative.
+//! - [`adoption`] — ownership after an orchestrator restart (M10, T109): the
+//!   discovery selector and the completion tombstone it excludes, the three
+//!   build surfaces a refusal names, the three labels-only patches, and the
+//!   deterministic resolution when several pods claim one attempt. Decisions
+//!   only; the pass that lists, patches and deletes is `dagr_cli::adoption`.
 //! - [`api`] — the [`PodApi`] port the observer watches through,
 //!   and the shapes a list and a watch hand back, plus the
 //!   [`PodLifecycle`] port the executor submits through.
@@ -35,6 +40,7 @@
 //! crate-level lint attributes.
 
 pub mod access;
+pub mod adoption;
 pub mod api;
 /// The **kube-rs adapter** — the one place this crate speaks to a real API
 /// server. Behind the default-off `client` feature, which is the quarantine: a
@@ -52,6 +58,11 @@ pub mod identity;
 pub mod observer;
 
 pub use access::{AccessProbe, ClusterAccess, NoClusterAccess, resolve};
+pub use adoption::{
+    AdoptionRefusal, AdoptionVerdict, BuildIdentity, DeletionOrigin, DiscoveredPod, DiscoveryPlan,
+    LabelPatch, RefusedPod, adoption_patch, adoption_selector, classify, deletion_origin,
+    is_tombstoned, plan, revocation_patch, tombstone_patch,
+};
 pub use api::{
     CreatedPod, PodApi, PodLifecycle, PodListing, PodPhase, PodSnapshot, PodWatch, WatchDelivery,
 };

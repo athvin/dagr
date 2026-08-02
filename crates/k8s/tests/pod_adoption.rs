@@ -211,6 +211,35 @@ fn a_refused_pod_is_reported_against_its_attempt_and_never_revoked() {
 }
 
 #[test]
+fn a_foreign_build_alongside_one_of_ours_reports_rather_than_failing_the_node() {
+    // A refusal exists because the attempt's object name is occupied by work dagr
+    // did not launch and cannot submit through. When the attempt ALSO has a pod of
+    // ours, that reasoning does not apply: object names are unique, so the two are
+    // different objects, and ours is genuinely ours.
+    let ours = pod("dagr-aaaa-extract-1", "extract", 1, PodPhase::Running);
+    let theirs = pod_with_annotation(
+        "dagr-zzzz-extract-1",
+        "dagr.io/structural-fingerprint",
+        "sf-a-different-graph",
+    );
+
+    let plan = plan(&[ours, theirs], RUN_ID, &build(), &everything());
+    assert_eq!(
+        plan.adopt
+            .get(&AttemptKey::new(RUN_ID, "extract", 1))
+            .map(|p| p.name.as_str()),
+        Some("dagr-aaaa-extract-1"),
+        "our own pod is adopted"
+    );
+    assert!(
+        plan.refuse.is_empty(),
+        "the node is not failed on account of somebody else's object"
+    );
+    assert!(plan.revoke.is_empty(), "and theirs is not deleted");
+    assert_eq!(plan.ignored.len(), 1, "it is reported, and left running");
+}
+
+#[test]
 fn a_pod_from_another_run_is_not_this_runs_business_at_all() {
     let mut other_run = pod("dagr-extract-1", "extract", 1, PodPhase::Running);
     other_run.labels.insert(
@@ -409,11 +438,16 @@ fn one_pass_over_a_mixed_listing_sorts_every_pod_into_exactly_one_outcome() {
     tombstoned
         .labels
         .insert(LABEL_COMPLETE.to_string(), TOMBSTONE_VALUE.to_string());
+    let mut foreign = pod("dagr-foreign-load-2", "load", 2, PodPhase::Running);
+    foreign.annotations.insert(
+        "dagr.io/image-digest".to_string(),
+        "sha256:decafbad".to_string(),
+    );
     let pods = vec![
         pod("dagr-aaaa-extract-1", "extract", 1, PodPhase::Running),
         pod("dagr-zzzz-extract-1", "extract", 1, PodPhase::Running),
         tombstoned,
-        pod_with_annotation("dagr-foreign-1", "dagr.io/image-digest", "sha256:decafbad"),
+        foreign,
     ];
 
     let plan = plan(&pods, RUN_ID, &build(), &everything());

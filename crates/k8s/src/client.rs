@@ -46,7 +46,7 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
-use kube::api::{Api, DeleteParams, ListParams, PostParams, WatchParams};
+use kube::api::{Api, DeleteParams, ListParams, Patch, PatchParams, PostParams, WatchParams};
 use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::core::WatchEvent;
 
@@ -413,6 +413,48 @@ impl PodLifecycle for KubePodApi {
         async move {
             match pods.get_opt(&name).await {
                 Ok(found) => Ok(found.as_ref().map(snapshot)),
+                Err(err) => Err(failure(err)),
+            }
+        }
+    }
+
+    /// A **strategic-merge patch scoped to `metadata.labels`** — the narrowest
+    /// write the API offers for this, and the one ADR 115 §5 requires: adoption
+    /// reclaims a pod that is still running an attempt, so the object must not be
+    /// replaced, and a full `replace` would race whatever the platform has written
+    /// to `status` since the read.
+    ///
+    /// A key mapped to `None` serializes as JSON `null`, which is how a merge patch
+    /// *removes* a label — the encoding revocation depends on.
+    fn patch_labels(
+        &self,
+        name: &str,
+        labels: &crate::adoption::LabelPatch,
+    ) -> impl Future<Output = Result<(), ApiFailure>> + Send {
+        let pods = self.pods.clone();
+        let name = name.to_string();
+        let body = serde_json::json!({
+            "metadata": { "labels": serde_json::Value::Object(
+                labels
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            value.clone().map_or(serde_json::Value::Null, serde_json::Value::String),
+                        )
+                    })
+                    .collect(),
+            ) }
+        });
+        async move {
+            match pods
+                .patch(&name, &PatchParams::default(), &Patch::Merge(&body))
+                .await
+            {
+                Ok(_) => Ok(()),
+                // Already gone: the same idempotency `delete` promises, and for the
+                // same reason — these paths must be runnable twice.
+                Err(kube::Error::Api(err)) if err.code == 404 => Ok(()),
                 Err(err) => Err(failure(err)),
             }
         }
