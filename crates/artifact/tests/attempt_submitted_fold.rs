@@ -29,7 +29,7 @@ use dagr_artifact::event_stream::{
     FINGERPRINT_ALGORITHM_VERSION, MonotonicClock, RunId, RunOutcome, RunStartedHeader,
     TerminalState,
 };
-use dagr_artifact::fold::fold_stream;
+use dagr_artifact::fold::{SubmittedAttempt, fold_stream};
 
 // ---------------------------------------------------------------------------
 // Scaffolding: an in-memory sink and a settable monotonic clock.
@@ -390,7 +390,11 @@ fn the_submission_fold_is_deterministic_and_in_stream_order() {
         second.submissions(),
         "the same bytes fold to the same submissions"
     );
-    let order: Vec<&str> = first.submissions().iter().map(|s| s.node()).collect();
+    let order: Vec<&str> = first
+        .submissions()
+        .iter()
+        .map(SubmittedAttempt::node)
+        .collect();
     assert_eq!(
         order,
         vec!["extract", "load"],

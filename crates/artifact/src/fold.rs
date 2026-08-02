@@ -1079,31 +1079,32 @@ fn assemble_submissions(records: &[Value]) -> Vec<SubmittedAttempt> {
             continue;
         };
         let key = (node.clone(), attempt);
-        match merged.get_mut(&key) {
-            Some(existing) => merge_submission(existing, rec),
-            None => {
-                order.push(key.clone());
-                merged.insert(
-                    key.clone(),
-                    SubmittedAttempt {
-                        node,
-                        attempt,
-                        inputs: submission_inputs(rec),
-                        executor: string_field(rec, "executor"),
-                        target_name: string_field(rec, "target_name"),
-                        observed_name: string_field(rec, "observed_name"),
-                        observed_uid: string_field(rec, "observed_uid"),
-                        observed_host: string_field(rec, "observed_host"),
-                        structural_fingerprint: string_field(rec, "structural_fingerprint"),
-                        policy_hash: string_field(rec, "policy_hash"),
-                        tool_version: string_field(rec, "tool_version"),
-                        image_digest: string_field(rec, "image_digest"),
-                        submitted_at_offset_ns: offset_of(rec),
-                        outcome_state: outcomes.get(&key).cloned(),
-                    },
-                );
-            }
+        // A second record for a key already seen is the additive observed-identity
+        // one: fold it onto the submission rather than starting another.
+        if let Some(existing) = merged.get_mut(&key) {
+            merge_submission(existing, rec);
+            continue;
         }
+        order.push(key.clone());
+        merged.insert(
+            key.clone(),
+            SubmittedAttempt {
+                node,
+                attempt,
+                inputs: submission_inputs(rec),
+                executor: string_field(rec, "executor"),
+                target_name: string_field(rec, "target_name"),
+                observed_name: string_field(rec, "observed_name"),
+                observed_uid: string_field(rec, "observed_uid"),
+                observed_host: string_field(rec, "observed_host"),
+                structural_fingerprint: string_field(rec, "structural_fingerprint"),
+                policy_hash: string_field(rec, "policy_hash"),
+                tool_version: string_field(rec, "tool_version"),
+                image_digest: string_field(rec, "image_digest"),
+                submitted_at_offset_ns: offset_of(rec),
+                outcome_state: outcomes.get(&key).cloned(),
+            },
+        );
     }
 
     order
