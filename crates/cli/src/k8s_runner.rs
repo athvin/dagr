@@ -136,6 +136,18 @@ pub struct RemoteAttemptConfig {
     pub pre_start_bound: Duration,
     /// The node's own retry discipline, from `NodePolicy`.
     pub retry: RetryConfig,
+    /// The node's declared **per-attempt timeout**, from `NodePolicy`.
+    ///
+    /// A remote attempt is await-bound by construction — the orchestrator is doing
+    /// nothing but waiting on a watch — so C14's honest timeout semantics take their
+    /// *cancellable* form: the wait is abandoned, the pod is **deleted**, and the
+    /// attempt is `timed-out` immediately. There is no unkillable closure to hand
+    /// off to the driver's isolated deadline, and nothing is left running: deleting
+    /// the pod is the one cancellation dagr can actually perform on remote work.
+    ///
+    /// It bounds the whole attempt, launch retries included. A node that declares
+    /// thirty seconds means thirty seconds, not thirty seconds per submission.
+    pub timeout: Option<Duration>,
     /// The container's argv.
     pub command: Vec<String>,
 }
@@ -280,6 +292,9 @@ enum LaunchEnd {
     Terminal(Box<PodObservation>),
     /// The pod never started, and the runner's own bound expired.
     PreStart(PreStartFailure),
+    /// The node's declared per-attempt timeout elapsed while the pod was still
+    /// running. The pod is deleted; nothing is left behind.
+    TimedOut,
     /// The API refused the create outright.
     Rejected(ApiFailure),
     /// The pod vanished before it reached a phase.
@@ -477,8 +492,12 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
     ) -> AttemptEnd {
         let mut cause = String::from("no submission was attempted");
         let launches = self.config.launch_retries.saturating_add(1);
+        // The attempt's deadline is taken once, here, so the launch retries below
+        // spend the same budget the attempt declares rather than each getting a
+        // fresh one.
+        let deadline = self.config.timeout.map(|budget| Instant::now() + budget);
         for _ in 0..launches {
-            match self.launch_once(ctx, attempt).await {
+            match self.launch_once(ctx, attempt, deadline).await {
                 LaunchEnd::Cancelled => return AttemptEnd::Cancelled,
                 LaunchEnd::Refused(err) => return AttemptEnd::NeverLaunched(err),
                 LaunchEnd::Rejected(failure) => {
@@ -491,6 +510,21 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
                 }
                 LaunchEnd::Vanished => {
                     cause = "the pod vanished before it reached a phase".to_string();
+                }
+                LaunchEnd::TimedOut => {
+                    // The container ran (or the platform was still trying to start
+                    // it) and the node's own budget is what ended the wait, so this
+                    // IS a user-visible attempt: it is `timed-out`, retry-eligible
+                    // under the node's retry budget, exactly as a local one is.
+                    sink.emit(AttemptEvent::AttemptStarted {
+                        node: self.node.clone(),
+                        attempt,
+                    });
+                    sink.emit(AttemptEvent::AttemptTimedOut {
+                        node: self.node.clone(),
+                        attempt,
+                    });
+                    return AttemptEnd::Terminal(TerminalState::TimedOut);
                 }
                 LaunchEnd::Terminal(observation) => {
                     return AttemptEnd::Terminal(self.conclude(sink, attempt, &observation));
@@ -505,7 +539,12 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
     }
 
     /// One submission: record, create (or adopt), and await.
-    async fn launch_once(&mut self, ctx: &RunContext, attempt: u32) -> LaunchEnd {
+    async fn launch_once(
+        &mut self,
+        ctx: &RunContext,
+        attempt: u32,
+        deadline: Option<Instant>,
+    ) -> LaunchEnd {
         let identity = self.identity(attempt);
         let spec = match build_pod(
             &PodRequest {
@@ -577,7 +616,7 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             });
         }
 
-        self.await_pod(ctx, waiter, &spec.name).await
+        self.await_pod(ctx, waiter, &spec.name, deadline).await
     }
 
     /// Wait for the pod to start and finish — or for the runner's own bound to
@@ -587,12 +626,20 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
         ctx: &RunContext,
         mut waiter: AttemptWaiter,
         pod: &str,
+        deadline: Option<Instant>,
     ) -> LaunchEnd {
         let mut fatal_since: Option<(PreStartFailure, Instant)> = None;
         loop {
             if ctx.cancellation().is_cancelled() {
                 self.delete(pod).await;
                 return LaunchEnd::Cancelled;
+            }
+            // The node's declared budget. A pod that starts and never reports is
+            // bounded here — the run does not hang waiting for a report that is not
+            // coming — and the pod is deleted rather than abandoned.
+            if deadline.is_some_and(|at| Instant::now() >= at) {
+                self.delete(pod).await;
+                return LaunchEnd::TimedOut;
             }
             // The bound: once a pre-start surface has reported, the platform is not
             // going to produce a terminal event, so the runner's own clock is what

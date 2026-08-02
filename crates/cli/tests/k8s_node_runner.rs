@@ -450,6 +450,7 @@ fn config(root: &Path) -> RemoteAttemptConfig {
         launch_retries: 0,
         pre_start_bound: Duration::from_secs(30),
         retry: RetryConfig::new(1, Backoff::new(Duration::ZERO, 2.0, Duration::MAX)),
+        timeout: None,
         command: vec!["dagr".to_string(), "exec-node".to_string()],
     }
 }
@@ -1094,6 +1095,87 @@ async fn a_shard_from_a_different_build_is_refused_naming_both_fingerprints() {
         "both fingerprints are named: {failure}"
     );
     let _ = h.observer.shutdown(Duration::from_secs(5)).await;
+}
+
+// ===========================================================================
+// Timeout and hang
+// ===========================================================================
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pod_that_starts_and_never_reports_is_bounded_by_the_node_timeout_and_deleted() {
+    let h = harness(None);
+    let mut cfg = config(&h.root);
+    // A remote attempt is await-bound by construction, so C14's cancellable form
+    // applies: the wait is abandoned and the pod is deleted at the mark.
+    cfg.timeout = Some(Duration::from_millis(120));
+    let mut r = runner(&h, "extract", cfg);
+    let mut sink = Recorder::default();
+    let ctx = dagr_core::context::RunContext::for_test();
+
+    let control = h.control.clone();
+    let driver = tokio::spawn(async move {
+        control.await_watch().await;
+        // The container starts — and then says nothing, ever. No shard is written
+        // and no terminal phase arrives.
+        transition(&control, "extract", 1, PodPhase::Running, |_| {}).await;
+    });
+
+    let state = r.run(&ctx, &mut sink).await;
+    driver.await.expect("the driver task completes");
+
+    assert_eq!(
+        state,
+        TerminalState::TimedOut,
+        "the node's declared budget ended the wait — the run does not hang"
+    );
+    assert_eq!(
+        h.lifecycle.deleted(),
+        vec![pod_name(&AttemptKey::new(RUN_ID, "extract", 1))],
+        "and the pod is deleted rather than left running"
+    );
+    assert!(
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, AttemptEvent::AttemptTimedOut { attempt: 1, .. })),
+        "a pod that ran and blew its budget IS a user-visible attempt: {:?}",
+        sink.events()
+    );
+    let _ = h.observer.shutdown(Duration::from_secs(5)).await;
+}
+
+#[test]
+fn the_terminal_taxonomy_still_has_exactly_nine_members() {
+    // The whole classification story rests on this: a pod's status is *evidence*
+    // about an attempt, never a verdict that needs a new word for it. `OOMKilled`,
+    // `Evicted`, `Unschedulable` and `ImagePullBackOff` are diagnostic strings, and
+    // the exhaustive match below is what fails if a later ticket reaches for a
+    // tenth state instead.
+    let all = [
+        TerminalState::Succeeded,
+        TerminalState::Failed,
+        TerminalState::TimedOut,
+        TerminalState::Skipped,
+        TerminalState::UpstreamSkipped,
+        TerminalState::UpstreamFailed,
+        TerminalState::Cancelled,
+        TerminalState::Abandoned,
+        TerminalState::SatisfiedFromPrior,
+    ];
+    assert_eq!(all.len(), 9);
+    for state in all {
+        // Exhaustive: adding a tenth variant stops this compiling.
+        match state {
+            TerminalState::Succeeded
+            | TerminalState::Failed
+            | TerminalState::TimedOut
+            | TerminalState::Skipped
+            | TerminalState::UpstreamSkipped
+            | TerminalState::UpstreamFailed
+            | TerminalState::Cancelled
+            | TerminalState::Abandoned
+            | TerminalState::SatisfiedFromPrior => {}
+        }
+    }
 }
 
 // ===========================================================================

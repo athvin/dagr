@@ -35,18 +35,26 @@
 //! classification here is aimed at those observations. The recorded frames in
 //! this module's tests are the ones it captured.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
 use futures_util::{Stream, StreamExt};
-use k8s_openapi::api::core::v1::Pod;
-use kube::api::{Api, ListParams, WatchParams};
+use k8s_openapi::api::core::v1::{
+    Container, Pod, PodSpec as K8sPodSpec, ResourceRequirements, Toleration,
+};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use kube::api::{Api, DeleteParams, ListParams, PostParams, WatchParams};
 use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::core::WatchEvent;
 
 use crate::access::ClusterAccess;
-use crate::api::{ApiFailure, PodApi, PodListing, PodPhase, PodSnapshot, PodWatch, WatchDelivery};
+use crate::api::{
+    ApiFailure, CreatedPod, PodApi, PodLifecycle, PodListing, PodPhase, PodSnapshot, PodWatch,
+    WatchDelivery,
+};
 use crate::observer::{ObserverLimits, WATCH_TIMEOUT_CEILING_SECS};
 
 /// The crypto provider is installed once per process, and the outcome is
@@ -350,6 +358,119 @@ fn snapshot(pod: &Pod) -> PodSnapshot {
                 })
             })
             .and_then(|condition| condition.reason.clone()),
+    }
+}
+
+/// The **write side**, over the same client the observer reads through.
+///
+/// Kept in this module rather than beside the executor's pure half for the reason
+/// the whole crate is shaped around: this is the one place that speaks to an API
+/// server, and it is the one thing a default build does not compile.
+///
+/// A note on what `delete` does and does not report: an already-absent pod is
+/// **`Ok(())`**. Delete is on the cancellation and cleanup paths, which must be
+/// runnable twice — after a pre-start failure, after a cancel, after a restart —
+/// and a `404` there is the desired state, not a failure to report.
+impl PodLifecycle for KubePodApi {
+    fn create(
+        &self,
+        spec: &crate::executor::PodSpec,
+    ) -> impl Future<Output = Result<CreatedPod, ApiFailure>> + Send {
+        let pod = pod_object(spec);
+        let pods = self.pods.clone();
+        async move {
+            let created = pods
+                .create(&PostParams::default(), &pod)
+                .await
+                .map_err(failure)?;
+            Ok(CreatedPod {
+                name: created.metadata.name.clone().unwrap_or_default(),
+                uid: created.metadata.uid.clone(),
+                host: created.spec.as_ref().and_then(|s| s.node_name.clone()),
+            })
+        }
+    }
+
+    fn delete(&self, name: &str) -> impl Future<Output = Result<(), ApiFailure>> + Send {
+        let pods = self.pods.clone();
+        let name = name.to_string();
+        async move {
+            match pods.delete(&name, &DeleteParams::default()).await {
+                Ok(_) => Ok(()),
+                // Already gone is the outcome the caller wanted.
+                Err(kube::Error::Api(err)) if err.code == 404 => Ok(()),
+                Err(err) => Err(failure(err)),
+            }
+        }
+    }
+
+    fn get(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<PodSnapshot>, ApiFailure>> + Send {
+        let pods = self.pods.clone();
+        let name = name.to_string();
+        async move {
+            match pods.get_opt(&name).await {
+                Ok(found) => Ok(found.as_ref().map(snapshot)),
+                Err(err) => Err(failure(err)),
+            }
+        }
+    }
+}
+
+/// Translate this crate's [`PodSpec`](crate::executor::PodSpec) into the API's own
+/// object.
+///
+/// The executor's spec is deliberately **not** a Kubernetes type — a spec that named
+/// `k8s_openapi` would drag the whole HTTP/TLS tree into every build that wanted to
+/// reason about placement — so the translation lives here, on the one side that has
+/// those types anyway.
+fn pod_object(spec: &crate::executor::PodSpec) -> Pod {
+    let mut requests: BTreeMap<String, Quantity> = BTreeMap::new();
+    if let Some(cpu) = &spec.cpu {
+        requests.insert("cpu".to_string(), Quantity(cpu.clone()));
+    }
+    if let Some(memory) = &spec.memory {
+        requests.insert("memory".to_string(), Quantity(memory.clone()));
+    }
+    Pod {
+        metadata: ObjectMeta {
+            name: Some(spec.name.clone()),
+            namespace: Some(spec.namespace.clone()),
+            labels: Some(spec.labels.clone()),
+            annotations: Some(spec.annotations.clone()),
+            ..ObjectMeta::default()
+        },
+        spec: Some(K8sPodSpec {
+            containers: vec![Container {
+                name: "dagr".to_string(),
+                image: Some(spec.image.clone()),
+                command: Some(spec.command.clone()),
+                resources: (!requests.is_empty()).then(|| ResourceRequirements {
+                    requests: Some(requests),
+                    ..ResourceRequirements::default()
+                }),
+                ..Container::default()
+            }],
+            // The invariant, carried verbatim from the spec: the platform never
+            // restarts the work, so it can never duplicate an attempt (ADR 115 §2).
+            restart_policy: Some(spec.restart_policy.to_string()),
+            node_selector: (!spec.node_selectors.is_empty())
+                .then(|| spec.node_selectors.iter().cloned().collect()),
+            tolerations: (!spec.tolerations.is_empty()).then(|| {
+                spec.tolerations
+                    .iter()
+                    .map(|key| Toleration {
+                        key: Some(key.clone()),
+                        operator: Some("Exists".to_string()),
+                        ..Toleration::default()
+                    })
+                    .collect()
+            }),
+            ..K8sPodSpec::default()
+        }),
+        status: None,
     }
 }
 
