@@ -104,6 +104,21 @@ pub struct PodSnapshot {
     /// produced by both an out-of-memory kill and an external termination, so it
     /// never disambiguates them on its own — the reasons above do.
     pub exit_code: Option<i32>,
+    /// The platform's own unique identifier for this object. It is what
+    /// distinguishes a *recreated* pod of the same name from the original, which no
+    /// other field can.
+    pub uid: Option<String>,
+    /// The host the platform scheduled the pod onto, once it has. Diagnostic only.
+    pub host: Option<String>,
+    /// The container's **waiting** reason, when it is waiting rather than running.
+    /// The first of the three pre-start surfaces: an unpullable image sits here
+    /// indefinitely and never reaches a terminal phase at all, so a caller that
+    /// awaits one waits forever.
+    pub waiting_reason: Option<String>,
+    /// The reason the scheduler refused to place the pod (`PodScheduled` false).
+    /// The second pre-start surface, and one a waiting-reason check cannot see: an
+    /// unschedulable pod has **no container status entry whatsoever**.
+    pub scheduling_refusal: Option<String>,
 }
 
 impl PodSnapshot {
@@ -125,6 +140,10 @@ impl PodSnapshot {
             pod_reason: None,
             container_reason: None,
             exit_code: None,
+            uid: None,
+            host: None,
+            waiting_reason: None,
+            scheduling_refusal: None,
         }
     }
 }
@@ -291,4 +310,75 @@ pub trait PodApi: Send + Sync + 'static {
         selector: &str,
         resource_version: &str,
     ) -> impl Future<Output = Result<Self::Watch, ApiFailure>> + Send;
+}
+
+/// What the platform reports back from a successful create: the identity it
+/// actually assigned.
+///
+/// It is separate from [`PodSnapshot`] because it answers a different question. A
+/// snapshot is an *observation* of a pod's state; this is the *reality* of what was
+/// created, and the two are recorded as distinct facts (ADR 115 §9) because they
+/// diverge and a post-mortem needs both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedPod {
+    /// The name the platform actually assigned.
+    pub name: String,
+    /// The platform's unique identifier for it, when it supplied one.
+    pub uid: Option<String>,
+    /// The host it was scheduled onto, when it has been.
+    pub host: Option<String>,
+}
+
+/// Write access to one namespace's pods: create, delete, and the single read a
+/// resubmission needs to decide whether to adopt.
+///
+/// Separate from [`PodApi`] on purpose, and not merely for tidiness. [`PodApi`] is
+/// what the **observer** holds and needs nothing but read verbs; the least-privilege
+/// RBAC the observer ships with grants exactly `get`/`list`/`watch`, and an
+/// executor's `create`/`delete` grants are a deliberately separate escalation. Two
+/// ports keep that separation visible in the type system rather than only in a
+/// manifest.
+///
+/// Every call is **outbound**. Nothing here accepts a connection or is handed
+/// anything by another process; the orchestrator talks to an API it does not own,
+/// which is why remote execution adds no coordination surface.
+///
+/// No method is an `async fn`: each returns an anonymous future, so an
+/// implementation supplies its own and this crate spawns nothing, sleeps on
+/// nothing, and depends on no runtime to describe the port.
+pub trait PodLifecycle: Send + Sync + 'static {
+    /// Create the pod `spec` describes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiFailure`] when the pod was not created — a quota rejection, an
+    /// admission webhook, or a transport failure. The caller charges the failure to
+    /// the *infrastructure* budget, never to the node's retry budget: nothing ran.
+    fn create(
+        &self,
+        spec: &crate::executor::PodSpec,
+    ) -> impl Future<Output = Result<CreatedPod, ApiFailure>> + Send;
+
+    /// Delete the pod named `name`, if it still exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiFailure`] when the delete could not be issued. An already-absent
+    /// pod is **not** an error: delete is idempotent, because the cancellation and
+    /// cleanup paths must be able to run twice without inventing a failure.
+    fn delete(&self, name: &str) -> impl Future<Output = Result<(), ApiFailure>> + Send;
+
+    /// The pod named `name`, or [`None`] when there is none.
+    ///
+    /// This is the adoption probe: a resubmission for an attempt key whose pod is
+    /// already live adopts it rather than creating a second one (ADR 115 §5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiFailure`] when the read failed. A *missing* pod is `Ok(None)`,
+    /// not an error — absence is the answer the caller is asking about.
+    fn get(
+        &self,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<PodSnapshot>, ApiFailure>> + Send;
 }

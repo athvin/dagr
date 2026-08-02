@@ -54,14 +54,33 @@ that process.
   in-cluster (service account, when the orchestrator is itself a pod), resolved
   by one explicit precedence; neither present is an actionable error naming every
   path and variable it looked for.
+- **The executor's pure half** — what pod to ask for, when a pod has already
+  failed *before it started*, and what a terminal pod's status means. The pod
+  never restarts itself, so the platform can never duplicate an attempt, and a
+  configuration asking it to retry is refused naming the hazard. A pre-start
+  failure is read off **two** surfaces — a known-fatal container waiting reason,
+  and an unschedulable `PodScheduled` condition that has no container status at
+  all — because a pod that never starts reaches **no terminal phase**: an
+  unpullable image sits in `Pending` indefinitely while the platform retries the
+  pull, so a caller awaiting a terminal phase waits forever. Terminal state comes
+  from pod status with **both** `reason` fields read (an out-of-memory kill
+  appears on the container, an eviction on the pod), and every reason travels as
+  a **diagnostic string**: dagr's nine-state terminal taxonomy is closed and
+  gains no member from anything the platform says.
 
 ## What it is not
 
 It is **not** a server, a controller, or a coordinator. dagr opens no inbound
 port under any executor: this crate makes **outbound** calls to an API it does
-not own, and nothing hands off to it. It does not submit pods, build pod specs,
-own a retry budget, adopt orphans, or stream logs — those are separate,
-later concerns. It watches status.
+not own, and nothing hands off to it.
+
+It **describes** a pod and **classifies** one, and it does neither of the things
+that need a process: it never submits, waits, retries, reads a shard or replays
+anything. Those belong to `dagr_cli::k8s_runner`, which owns the attempt loop and
+the two retry budgets, for the same reason the observer's task lives there —
+that is where the orchestrator process and its runtime are. Orphan adoption
+across a restart, and log streaming, are separate later concerns and are not
+here either.
 
 It is also **not** a runtime, and does not bring one. Nothing here spawns, sleeps
 or reads a clock; a caller that owns a runtime drives it.

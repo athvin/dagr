@@ -54,6 +54,13 @@ pub mod graph;
 /// which compile no HTTP or TLS crate at all.
 #[cfg(feature = "k8s")]
 pub use dagr_k8s;
+/// The **Kubernetes node runner** (M10, T108, ADR 115): one more implementation of
+/// [`driver::NodeRunner`], which happens to submit a pod — record, submit, await,
+/// read the attempt shard, replay it, return a `TerminalState`. Gated behind the
+/// default-off `k8s` feature (which turns on `blob`, because the shard's address is
+/// a blob-container path). No driver code path is special-cased for remoteness.
+#[cfg(feature = "k8s")]
+pub mod k8s_runner;
 pub mod logging;
 /// The `dagr metastore init` verb (M7, T83, ADR 097). Gated behind the default-off
 /// `metastore` feature so `--no-default-features` (and any default build) drops the
@@ -92,6 +99,13 @@ pub mod scale_bench;
 pub mod shard;
 pub mod signals;
 pub mod structure_snapshot;
+/// The **submission log** (M10, T108, ADR 115 §9): the run's sequence authority, so
+/// a write-ahead `attempt-submitted` record can be made durable *before* the pod
+/// exists without giving the run a second event-stream writer. Gated behind the
+/// default-off `k8s` feature and installed only under a remote executor, which is
+/// the other half of why a local run's stream stays byte-identical to a pre-M10 one.
+#[cfg(feature = "k8s")]
+pub mod submission_log;
 #[cfg(feature = "test-kit")]
 pub mod t63_demo;
 pub mod temp;

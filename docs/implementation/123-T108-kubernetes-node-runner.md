@@ -260,3 +260,181 @@ Implement the executor as a `NodeRunner`, with no change to the driver.
   inbound API, and pods never touch the run index. dagr remains not a scheduler, a
   coordinating metadata store, a web interface, a DSL, or a backfill orchestrator, and
   the graph's shape never changes at runtime — a placed node is one node.
+
+## Open questions — resolved
+
+`docs/tasks.md` carries **no `T108` entry** (it enumerates M0–M4 only), so there are
+no `Q:` items beyond this file's own two. Both are answered below, together with the
+decisions the implementation had to make that the ticket did not name.
+
+### 1. Bare Pod or Job with `backoffLimit=0`? → **A bare Pod.**
+
+ADR 115 §2 permits either and forbids cluster-side retry. The bare Pod is chosen
+because it makes the invariant **unbreakable by construction** rather than by a
+correctly-set field: `PodSpec::restart_policy` is a `&'static str` pinned to
+`"Never"`, so there is no configuration in which the platform can start a second
+container for the same attempt. A Job would bring the cluster's own cleanup, but
+`backoffLimit` is a value someone can change, a Job's controller can create a
+replacement Pod on node loss, and an executor whose central invariant depends on a
+number staying zero is one edit away from duplicating execution.
+
+T101's findings support it: nothing the spike measured needed a Job. All four kill
+modes (OOM, eviction, `SIGKILL`, killed-before-writing) reported terminal state
+through the **pod's own status**, which is what
+`dagr_k8s::executor::classify_terminal` reads; the cleanup a Job would have provided
+is a delete this executor issues itself on the cancellation and pre-start paths.
+
+The refusal holds either way and is not conditional on the choice:
+`build_pod(.., ClusterRetry::Enabled)` returns `ClusterRetryRefused` naming the
+duplicate-execution hazard, so a later ticket that does move to Jobs inherits a
+gate that already fails when cluster-side retry is switched on.
+
+### 2. How is a pre-start failure detected? → **Not by the shard, and not by a terminal phase: by two pod-status surfaces under the runner's own bound.**
+
+The ticket proposes dagr's equivalent of Airflow's signal as *"no attempt record has
+been observed from the shard yet"*. That is **not implementable as stated**, for the
+reason T101 recorded: an unpullable image never reaches a terminal phase, so there is
+no moment at which "the shard is still empty" becomes decidable — the shard is empty
+for a pod that has not finished yet, and for a pod that will never start, and nothing
+distinguishes them. A runner waiting for the shard to settle waits forever, which is
+exactly the hang the ticket's own ⚠ warns about.
+
+What ships is T101's corrected mechanism, in `dagr_k8s::executor::classify_pre_start`:
+
+1. `containerStatuses[].state.waiting.reason` in a known-fatal set —
+   `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`,
+   `InvalidImageName` (`FATAL_WAITING_REASONS`);
+2. `conditions[PodScheduled].status == False` with `reason == Unschedulable`, which
+   has **no container status entry at all** and which a waiting-reason check alone
+   therefore cannot see;
+
+and, over both, the runner's **own bound** (`RemoteAttemptConfig::pre_start_bound`,
+default 60 s), because the platform retries indefinitely rather than failing the pod.
+Both are gated on `phase == Pending`: once a container has run, whatever goes wrong
+afterwards belongs to the node's retry budget, and the two budgets are only separable
+because "the container ran" is decidable. T101's third surface — `phase == Failed`
+with a pod `reason` — is *post*-start by definition and is classified by
+`classify_terminal`, not here.
+
+The bound stands down when the pod recovers (a registry briefly unreachable produces
+`ErrImagePull` and then succeeds), and re-arms only when the *reason* changes, so a
+repeated report of the same trouble does not keep resetting it.
+
+### 3. Where does the write-ahead record become durable, given that `AttemptEventSink` buffers? → **A `SubmissionLog` that is the run's sequence authority.**
+
+The ticket asserts an ordering the existing seams cannot express, and the conflict is
+real rather than incidental. `NodeRunner::run` emits through a **buffering**
+`AttemptEventSink` that the driver drains into the authoritative writer only *after
+the attempt returns* — correct for an attempt's own records, and fatal for a record
+whose entire purpose is to be durable *before* a pod is created. A second
+`EventStreamWriter` over the same file is equally unavailable: two writers means two
+sequence counters, and C19's gapless-`seq` criterion is an acceptance criterion.
+
+`dagr_cli::submission_log::SubmissionLog` resolves it by owning the counter. Driver
+lines pass through re-stamped with its `seq`; a submission record written through its
+handle takes the next number and is flushed immediately. One process, one mutex, one
+counter — the orchestrator is still the single writer, and **the driver is
+untouched**, which is the DoD line this had to be reconciled with. Re-stamping goes
+through the same canonicalization that produced the line, so a run with no
+submissions is byte-identical to one written straight to the sink; that is asserted
+(`submission_log.rs`) rather than assumed, because every byte-identity guarantee in
+the repo would otherwise rest on an unexamined round trip. The log is installed only
+under a remote executor, which is the other half of why a local run's stream stays
+byte-identical to a pre-M10 one.
+
+### 4. Intent and reality in one record, or two? → **Two records, and the schema already allows it.**
+
+ADR 115 §9 requires the intended target name *before* creation and the platform's
+actual name, UID and host *"additively after"*. An append-only stream cannot mutate a
+record it has already flushed — which is the whole point of flushing it — so
+"additively" means a second `attempt-submitted` carrying the same identity plus the
+`observed_*` fields. The published `@1.3` conditional requires only
+`node`/`attempt`/`inputs`, so both shapes validate, and a reader takes the last
+record for an attempt key as the fullest picture.
+
+### 5. What re-arms the observer after a launch retry? → **Object identity, not the attempt key.**
+
+An infrastructure retry deletes a pod that never started and submits another one for
+the **same** attempt key. T107's observer retires a key once its final observation is
+delivered, so the second pod's transitions were silently swallowed and the runner
+hung — found by this ticket's own suite, not in review. Retirement is now recorded
+*per object* (the platform's `uid` when it has one, else the name): the same object
+observed again is still the duplicate the set exists to absorb, while a different
+object under the same key re-arms. Relatedly, the non-terminal de-duplication is now
+keyed on the object's `resourceVersion` rather than on its phase alone — `Pending` →
+`Pending` + `ImagePullBackOff` does not change phase and changes everything the
+executor cares about, and keying on the phase made T101's only-ever-transition
+invisible.
+
+### 6. Does `--dagr.executor=k8s` stop refusing? → **No, and that is T112's, not this ticket's.**
+
+T105 made the `k8s` executor a recognized stub that refuses at bootstrap, for a
+stated reason: *"if only the verb refused, a `RunConfig::executor(Kubernetes)` would
+run every node in-process while the operator believed their placement was honoured —
+the one outcome worse than refusing."* That reason has not gone away. Lifting the
+refusal requires the flow-level wiring that turns a `RunnableFlow`'s placed nodes into
+`K8sNodeRunner`s — which needs cluster access, the orchestrator's own published image
+digest, a namespace, and a blob container both sides can reach. Every one of those is
+provisioned by **T112**, which this ticket's Out-of-scope list already assigns "the
+real-cluster end-to-end demo, RBAC beyond T107's watch permissions, and the acceptance
+gate".
+
+What this ticket owes is its DoD's first line — *"`K8sNodeRunner` implements
+`NodeRunner` and drives record → submit → await → read shard → replay →
+`TerminalState` … **no driver change**"* — and that is delivered and proven through
+the real `drive()` loop: `a_mixed_pipeline_runs_end_to_end_through_the_unchanged_driver`
+puts a `K8sNodeRunner` and a local runner in one `RunPlan`, runs it, and asserts the
+readiness cascade, the admission ledger, the attempt-outcome recording and the
+durable-reference hook all behave identically for both. Lifting the stub with no
+runner behind it would have been the silent substitution T105 refused; lifting it with
+the wiring would have been T112's ticket.
+
+### 7. Where is remote eligibility enforced? → **At the placement-taking registrars, as a `Payload` bound.**
+
+`RunnableFlow::register_source_placed` / `register_placed` take the `Placement`
+explicitly and carry `T::Output: Payload`, so a placed node whose payload types cannot
+cross a process boundary is a **compile error** naming the type and the missing bound
+(`tests/ui/placed_node/fail/placed_source_without_payload.rs`), rather than an
+assembly that runs and then discovers at submission time that there is nothing to
+send. `NodePolicy::placement` remains reachable from `dagr-core` without the bound —
+core has no registrar and no view of a codec — so the executor keeps a runtime
+backstop: a node whose references cannot be assembled fails with a classified
+`RemoteLaunchError` **before** anything is launched or recorded.
+
+### 8. What is the pre-start bound, and is it an operator knob? → **60 s, and no.**
+
+It follows T107's `stall_bound` precedent exactly: a settable field
+(`RemoteAttemptConfig::pre_start_bound`, default `DEFAULT_PRE_START_BOUND`) rather
+than a `--dagr.*` flag, because being wrong on the high side costs a late launch
+retry and being wrong on the low side costs one extra submission — both cheap. It
+becomes a flag only if T112's demo shows it needs to be. The *budget* it is spent
+against **is** an operator knob, because that one is a policy decision about someone
+else's cluster: `--dagr.pod-launch-retries` (`DAGR_POD_LAUNCH_RETRIES`), default 2.
+
+### 9. How does a *remote* attempt honour `NodePolicy::timeout`? → **The cancellable half of C14, because a remote wait really is cancellable.**
+
+C14 splits timeout semantics honestly by execution class: an await-bound attempt is
+*truly* cancelled (its future is dropped, its permit releases at the mark), while a
+blocking or compute attempt can only be *marked* and left running. A remote attempt
+is await-bound by construction — the orchestrator is doing nothing but waiting on a
+watch — so it takes the first half: the wait is abandoned and **the pod is deleted**.
+That is the one cancellation dagr can actually perform on remote work, and it is why
+no `AttemptFate` hand-off is needed and the driver's isolated deadline is not
+involved. The budget bounds the whole attempt, launch retries included: a node that
+declares thirty seconds means thirty seconds, not thirty seconds per submission.
+
+### 10. Does the `PodLifecycle` port get a real backend here, or in T112? → **Here.**
+
+A port with no implementation is a stub, and ADR 115 §2's whole claim is that the
+orchestrator *submits* through the Kubernetes API. `KubePodApi` therefore implements
+`PodLifecycle` as well as `PodApi`, behind the same default-off `client` feature the
+read side already lives behind, translating the executor's `PodSpec` into the API's
+own object at the one boundary that has those types. The spec stays a dagr type
+rather than a Kubernetes one for the reason the whole crate is shaped around: a spec
+that named `k8s_openapi` would drag the HTTP/TLS tree into every build that wanted to
+reason about placement.
+
+What stays T112's is everything that needs a *cluster*: the RBAC grants for
+`create`/`delete` (T107's manifest is deliberately `get`/`list`/`watch` only, and its
+own test fails if a write verb appears), the published image, the shared blob volume,
+and lifting T105's bootstrap refusal on `--dagr.executor=k8s`.

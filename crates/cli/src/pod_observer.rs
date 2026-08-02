@@ -372,7 +372,7 @@ async fn observe<A: PodApi>(
                     }
                     item = tokio::time::timeout(stall_deadline, open.next()) => {
                         match item {
-                            Ok(Some(delivery)) => ObserverInput::Delivered(delivery),
+                            Ok(Some(delivery)) => ObserverInput::Delivered(Box::new(delivery)),
                             Ok(None) => ObserverInput::StreamEnded,
                             Err(_elapsed) => ObserverInput::Tick,
                         }

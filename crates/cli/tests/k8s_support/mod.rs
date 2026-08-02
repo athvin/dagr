@@ -97,5 +97,9 @@ pub fn bare_pod(
         pod_reason: None,
         container_reason: None,
         exit_code: None,
+        uid: None,
+        host: None,
+        waiting_reason: None,
+        scheduling_refusal: None,
     }
 }

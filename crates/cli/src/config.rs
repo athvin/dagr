@@ -110,6 +110,19 @@ pub const DAGR_EXECUTOR: &str = "DAGR_EXECUTOR";
 /// own and leaves the pool unconstrained until an operator states one.
 pub const DAGR_MAX_PODS: &str = "DAGR_MAX_PODS";
 
+/// Environment fallback for `--dagr.pod-launch-retries` (the **infrastructure**
+/// retry budget, M10, T108 — ADR 115 §6).
+///
+/// It counts a different thing from `NodePolicy::retries`, which is why it is a
+/// different knob. A pod that never *started* — unschedulable, an image that will
+/// not pull, a quota rejection — executed nothing, and charging it against the
+/// node's retry budget would let a cluster at capacity burn that budget without
+/// running the task once. Launches charged here emit **no user-visible attempt**:
+/// the driver never sees a failed attempt and the artifact shows no phantom try.
+///
+/// The default is [`POD_LAUNCH_RETRIES_DEFAULT`].
+pub const DAGR_POD_LAUNCH_RETRIES: &str = "DAGR_POD_LAUNCH_RETRIES";
+
 // ===========================================================================
 // The strict, never-silent parse error
 // ===========================================================================
@@ -743,6 +756,21 @@ pub const MAX_PODS_FLAG: &str = "--dagr.max-pods";
 /// [unconstrained](dagr_core::admission::PoolCapacities::new) default.
 pub const MAX_PODS_DEFAULT: u32 = u32::MAX;
 
+/// The library-owned flag setting the **infrastructure** retry budget
+/// (`--dagr.pod-launch-retries`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const POD_LAUNCH_RETRIES_FLAG: &str = "--dagr.pod-launch-retries";
+
+/// The default number of *extra* launches a pod that never started may have.
+///
+/// Finite, and small. Unbounded would be a hang with extra steps — a permanently
+/// unpullable image would retry forever and the run would never report. Zero would
+/// fail a node on a single unlucky scheduling decision, which is exactly the
+/// transient the separate budget exists to absorb. Two retries covers the
+/// short-lived capacity and registry blips T101 observed while still reaching a
+/// verdict in seconds.
+pub const POD_LAUNCH_RETRIES_DEFAULT: u32 = 2;
+
 /// Resolve which **executor** runs this invocation by `flag > env > default`
 /// (default [`Local`](crate::executor::ExecutorKind::Local)): a present
 /// `--dagr.executor` flag wins outright (the env is never read); with no flag,
@@ -800,6 +828,33 @@ pub fn parse_executor_flag(
 /// Returns the diagnostic message when the value is not a non-negative integer.
 pub fn parse_max_pods_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, String> {
     parse_valued_flag(argv, MAX_PODS_FLAG)
+}
+
+/// Resolve the **infrastructure** retry budget by `flag > env > default` (default
+/// [`POD_LAUNCH_RETRIES_DEFAULT`]): a present `--dagr.pod-launch-retries` flag wins
+/// outright; with no flag, [`DAGR_POD_LAUNCH_RETRIES`] is read and parsed; with
+/// neither, a pod that never starts gets [`POD_LAUNCH_RETRIES_DEFAULT`] extra
+/// launches before the node fails with a classified infrastructure error.
+///
+/// `0` is legitimate and means *submit once*: a pod that does not start on the first
+/// try fails its node immediately, naming the cause.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_POD_LAUNCH_RETRIES`] when its value is
+/// not a non-negative integer.
+pub fn resolve_pod_launch_retries(flag: Option<u32>) -> Result<u32, EnvParseError> {
+    resolve(flag, DAGR_POD_LAUNCH_RETRIES, POD_LAUNCH_RETRIES_DEFAULT)
+}
+
+/// Parse `--dagr.pod-launch-retries` out of a raw invocation, in the same two
+/// grammars as [`parse_executor_flag`].
+///
+/// # Errors
+/// Returns the diagnostic message when the value is not a non-negative integer, or
+/// when the flag is present with no value at all.
+pub fn parse_pod_launch_retries_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, String> {
+    parse_valued_flag(argv, POD_LAUNCH_RETRIES_FLAG)
 }
 
 /// Read a **value-taking** library flag out of a raw invocation, accepting both
@@ -938,6 +993,47 @@ mod tests {
         assert_eq!(
             got, 13,
             "with neither flag nor env, the default is returned"
+        );
+    }
+
+    /// T108 · the **infrastructure** retry budget resolves by the one precedence
+    /// rule, and an unparseable value fails loudly rather than falling back.
+    ///
+    /// It resolves against the real `DAGR_POD_LAUNCH_RETRIES` name (the resolver
+    /// hardcodes it), so it takes the module's env lock across its whole
+    /// set → read → remove window like every other real-name test here.
+    #[test]
+    fn pod_launch_retries_resolves_flag_then_env_then_default() {
+        let g = env_lock();
+        unset_env(&g, DAGR_POD_LAUNCH_RETRIES);
+        assert_eq!(
+            resolve_pod_launch_retries(None).expect("the default path never errors"),
+            POD_LAUNCH_RETRIES_DEFAULT,
+            "unset falls through to the default"
+        );
+
+        set_env(&g, DAGR_POD_LAUNCH_RETRIES, "5");
+        let from_env = resolve_pod_launch_retries(None);
+        let from_flag = resolve_pod_launch_retries(Some(2));
+        set_env(&g, DAGR_POD_LAUNCH_RETRIES, "not-a-number");
+        let bad = resolve_pod_launch_retries(None);
+        unset_env(&g, DAGR_POD_LAUNCH_RETRIES);
+
+        assert_eq!(
+            from_env.expect("a valid env value parses"),
+            5,
+            "with no flag the env var is read"
+        );
+        assert_eq!(
+            from_flag.expect("the flag path never errors"),
+            2,
+            "a present flag wins outright and the env var is never read"
+        );
+        let err = bad.expect_err("an unparseable budget fails loudly");
+        assert_eq!(err.kind, EnvParseErrorKind::Parse);
+        assert!(
+            err.to_string().contains(DAGR_POD_LAUNCH_RETRIES),
+            "the diagnostic names the variable: {err}"
         );
     }
 

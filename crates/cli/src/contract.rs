@@ -452,6 +452,7 @@ fn flag_takes_value(flag: &str) -> bool {
             | "dagr.pool.blocking-threads"
             | "dagr.pool.memory"
             | "dagr.headroom-fraction"
+            | "dagr.pod-launch-retries"
             | "data-interval"
             // The `exec-node` verb's own value-taking arguments (T106). They are
             // listed here for one reason only: so a value like `--node etl` is never
@@ -670,7 +671,11 @@ pub fn banner_suppressed_by_env() -> bool {
 /// as are the M10 placement knobs `dagr.executor` (`DAGR_EXECUTOR`) and
 /// `dagr.max-pods` (`DAGR_MAX_PODS`) — the latter is reserved even though its
 /// remote-slot ceiling only binds once an executor honours placement, so the
-/// namespace does not shift under a pipeline when that executor ships.
+/// namespace does not shift under a pipeline when that executor ships. The M10
+/// infrastructure retry budget `dagr.pod-launch-retries`
+/// (`DAGR_POD_LAUNCH_RETRIES`, T108) is reserved on the same rule, and is always
+/// reserved even though the executor that spends it is behind the default-off
+/// `k8s` cargo feature.
 #[must_use]
 pub fn reserved_flag_names() -> &'static [&'static str] {
     &[
@@ -690,6 +695,7 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "dagr.force-roundtrip",
         "dagr.executor",
         "dagr.max-pods",
+        "dagr.pod-launch-retries",
         "data-interval",
         "force",
         "run",
