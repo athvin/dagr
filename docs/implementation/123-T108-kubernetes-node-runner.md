@@ -410,3 +410,31 @@ retry and being wrong on the low side costs one extra submission — both cheap.
 becomes a flag only if T112's demo shows it needs to be. The *budget* it is spent
 against **is** an operator knob, because that one is a policy decision about someone
 else's cluster: `--dagr.pod-launch-retries` (`DAGR_POD_LAUNCH_RETRIES`), default 2.
+
+### 9. How does a *remote* attempt honour `NodePolicy::timeout`? → **The cancellable half of C14, because a remote wait really is cancellable.**
+
+C14 splits timeout semantics honestly by execution class: an await-bound attempt is
+*truly* cancelled (its future is dropped, its permit releases at the mark), while a
+blocking or compute attempt can only be *marked* and left running. A remote attempt
+is await-bound by construction — the orchestrator is doing nothing but waiting on a
+watch — so it takes the first half: the wait is abandoned and **the pod is deleted**.
+That is the one cancellation dagr can actually perform on remote work, and it is why
+no `AttemptFate` hand-off is needed and the driver's isolated deadline is not
+involved. The budget bounds the whole attempt, launch retries included: a node that
+declares thirty seconds means thirty seconds, not thirty seconds per submission.
+
+### 10. Does the `PodLifecycle` port get a real backend here, or in T112? → **Here.**
+
+A port with no implementation is a stub, and ADR 115 §2's whole claim is that the
+orchestrator *submits* through the Kubernetes API. `KubePodApi` therefore implements
+`PodLifecycle` as well as `PodApi`, behind the same default-off `client` feature the
+read side already lives behind, translating the executor's `PodSpec` into the API's
+own object at the one boundary that has those types. The spec stays a dagr type
+rather than a Kubernetes one for the reason the whole crate is shaped around: a spec
+that named `k8s_openapi` would drag the HTTP/TLS tree into every build that wanted to
+reason about placement.
+
+What stays T112's is everything that needs a *cluster*: the RBAC grants for
+`create`/`delete` (T107's manifest is deliberately `get`/`list`/`watch` only, and its
+own test fails if a write verb appears), the published image, the shared blob volume,
+and lifting T105's bootstrap refusal on `--dagr.executor=k8s`.
