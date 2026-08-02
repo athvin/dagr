@@ -17,9 +17,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-
 use crate::identity::AttemptIdentity;
 
 /// A pod's lifecycle phase, as the platform reports it.
@@ -239,58 +236,26 @@ impl fmt::Display for ApiFailure {
 
 impl std::error::Error for ApiFailure {}
 
-/// An open watch, and the guarantee that closing it closes everything behind it.
+/// An open watch, and the guarantee that dropping it closes everything behind it.
 ///
-/// A watch may be backed by a task pumping somebody's stream into this channel.
-/// Dropping the handle aborts that task, so "the observer's watch is torn down
-/// and its task does not outlive the run" is a property of the type rather than
-/// of remembering to call something.
-#[derive(Debug)]
-pub struct PodWatch {
-    receiver: mpsc::Receiver<WatchDelivery>,
-    pump: Option<JoinHandle<()>>,
-}
-
-impl PodWatch {
-    /// A watch fed directly, with no task behind it.
-    #[must_use]
-    pub fn from_channel(receiver: mpsc::Receiver<WatchDelivery>) -> Self {
-        Self {
-            receiver,
-            pump: None,
-        }
-    }
-
-    /// A watch fed by `pump`, which is aborted when this handle is dropped.
-    #[must_use]
-    pub fn pumped(receiver: mpsc::Receiver<WatchDelivery>, pump: JoinHandle<()>) -> Self {
-        Self {
-            receiver,
-            pump: Some(pump),
-        }
-    }
-
+/// A *trait* rather than a concrete channel, because the concrete thing differs
+/// per backend — the kube adapter holds somebody's `Stream`, the fake holds a
+/// scripted queue — and because a channel is a runtime's type. Keeping the port
+/// abstract is what lets this crate name no async runtime at all: it describes
+/// the two calls and the shape of what they hand back, and the caller that owns
+/// a runtime drives them.
+///
+/// Whatever backs an implementation goes away when the value is dropped, so "the
+/// observer's watch is torn down and does not outlive the run" is a property of
+/// the type rather than of remembering to call something.
+pub trait PodWatch: Send + 'static {
     /// The next delivery, or `None` when the stream has ended.
-    pub async fn next(&mut self) -> Option<WatchDelivery> {
-        self.receiver.recv().await
-    }
+    ///
+    /// A stream that ends is not an error: it is the shape a transport failure
+    /// and a server-side idle timeout both leave behind, and the observer
+    /// classifies it.
+    fn next(&mut self) -> impl Future<Output = Option<WatchDelivery>> + Send;
 }
-
-impl Drop for PodWatch {
-    fn drop(&mut self) {
-        if let Some(pump) = self.pump.take() {
-            pump.abort();
-        }
-    }
-}
-
-/// How many deliveries a watch buffers before the producer waits.
-///
-/// The observer drains promptly and a delivery is small, so this exists to keep a
-/// burst from blocking rather than to smooth a sustained rate. Bounded rather
-/// than unbounded on purpose: an unbounded channel turns a wedged consumer into a
-/// memory leak, which is a worse failure than back-pressure on a watch.
-pub const WATCH_BUFFER: usize = 64;
 
 /// Read access to one namespace's pods: the two calls the observer makes, and
 /// nothing else.
@@ -299,7 +264,14 @@ pub const WATCH_BUFFER: usize = 64;
 /// request, or is handed anything by another process — the observer talks to an
 /// API it does not own, which is why remote execution adds no coordination
 /// surface.
+///
+/// Neither method is an `async fn`: both return an anonymous future, so an
+/// implementation supplies its own and this crate spawns nothing, sleeps on
+/// nothing, and depends on no runtime to describe the port.
 pub trait PodApi: Send + Sync + 'static {
+    /// The watch this API hands back.
+    type Watch: PodWatch;
+
     /// Every pod matching `selector`, right now, with the version to watch from.
     ///
     /// # Errors
@@ -318,5 +290,5 @@ pub trait PodApi: Send + Sync + 'static {
         &self,
         selector: &str,
         resource_version: &str,
-    ) -> impl Future<Output = Result<PodWatch, ApiFailure>> + Send;
+    ) -> impl Future<Output = Result<Self::Watch, ApiFailure>> + Send;
 }

@@ -35,19 +35,18 @@
 //! classification here is aimed at those observations. The recorded frames in
 //! this module's tests are the ones it captured.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::OnceLock;
 
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams, WatchParams};
 use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::core::WatchEvent;
-use tokio::sync::mpsc;
 
 use crate::access::ClusterAccess;
-use crate::api::{
-    ApiFailure, PodApi, PodListing, PodPhase, PodSnapshot, PodWatch, WATCH_BUFFER, WatchDelivery,
-};
+use crate::api::{ApiFailure, PodApi, PodListing, PodPhase, PodSnapshot, PodWatch, WatchDelivery};
 use crate::observer::{ObserverLimits, WATCH_TIMEOUT_CEILING_SECS};
 
 /// The crypto provider is installed once per process, and the outcome is
@@ -183,7 +182,49 @@ fn clamped_watch_timeout(limits: &ObserverLimits) -> u32 {
         .min(WATCH_TIMEOUT_CEILING_SECS - 1)
 }
 
+/// One open watch over a real API server: kube's own stream, translated item by
+/// item.
+///
+/// The stream is held **directly** rather than pumped into a channel by a
+/// spawned task. That is what lets this crate name no runtime: there is nothing
+/// here to spawn onto, and the future the observer awaits is the client's own.
+/// Teardown keeps its guarantee for free — dropping this value drops the
+/// underlying connection, so a torn-down watch closes rather than being asked to.
+pub struct KubeWatch {
+    stream: Pin<Box<dyn Stream<Item = Result<WatchEvent<Pod>, kube::Error>> + Send>>,
+}
+
+impl std::fmt::Debug for KubeWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KubeWatch").finish_non_exhaustive()
+    }
+}
+
+impl PodWatch for KubeWatch {
+    async fn next(&mut self) -> Option<WatchDelivery> {
+        let item = self.stream.next().await?;
+        Some(match item {
+            Ok(event) => delivery(event),
+            Err(error) => {
+                let classified = failure(error);
+                match classified.code {
+                    Some(code) => WatchDelivery::ApiError {
+                        code,
+                        reason: classified.reason,
+                        message: classified.message,
+                    },
+                    None => WatchDelivery::Transport {
+                        message: classified.message,
+                    },
+                }
+            }
+        })
+    }
+}
+
 impl PodApi for KubePodApi {
+    type Watch = KubeWatch;
+
     fn list(
         &self,
         selector: &str,
@@ -207,7 +248,7 @@ impl PodApi for KubePodApi {
         &self,
         selector: &str,
         resource_version: &str,
-    ) -> impl std::future::Future<Output = Result<PodWatch, ApiFailure>> + Send {
+    ) -> impl Future<Output = Result<Self::Watch, ApiFailure>> + Send {
         let pods = self.pods.clone();
         // Bookmarks are requested (they are on by default) because they are the
         // cheap resume point during an idle stretch. Nothing is scheduled off
@@ -222,32 +263,9 @@ impl PodApi for KubePodApi {
                 .watch(&params, &resource_version)
                 .await
                 .map_err(failure)?;
-            let (sender, receiver) = mpsc::channel(WATCH_BUFFER);
-            let pump = tokio::spawn(async move {
-                let mut stream = std::pin::pin!(stream);
-                while let Some(item) = stream.next().await {
-                    let delivery = match item {
-                        Ok(event) => delivery(event),
-                        Err(error) => {
-                            let classified = failure(error);
-                            match classified.code {
-                                Some(code) => WatchDelivery::ApiError {
-                                    code,
-                                    reason: classified.reason,
-                                    message: classified.message,
-                                },
-                                None => WatchDelivery::Transport {
-                                    message: classified.message,
-                                },
-                            }
-                        }
-                    };
-                    if sender.send(delivery).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            Ok(PodWatch::pumped(receiver, pump))
+            Ok(KubeWatch {
+                stream: Box::pin(stream),
+            })
         }
     }
 }

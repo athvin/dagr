@@ -9,11 +9,21 @@
 # (Airflow, Prefect) shipped and then removed.
 #
 # Dependency direction (the boundary this crate keeps):
-#   * dagr-k8s -> tokio                    — the async runtime the shared observer
-#                                            task runs on. The SAME tokio the
-#                                            workspace already commits to as a
-#                                            supported public dependency (arch.md
-#                                            C13); it is not an HTTP or TLS stack.
+#   * dagr-k8s -> (NO async runtime)       — ADR 004 places tokio in the crate that
+#                                            owns the run loop, and every other
+#                                            crate must justify a runtime edge or
+#                                            not have one. This one does not have
+#                                            one: the port's two methods return an
+#                                            anonymous future rather than being
+#                                            `async fn`s over a runtime's channel,
+#                                            the discipline is a state machine that
+#                                            reads no clock, and the fake is a queue
+#                                            behind a `std` mutex with `std` wakers.
+#                                            The task that owns the one watch, its
+#                                            timer and its waiters is
+#                                            `dagr_cli::pod_observer`, where the
+#                                            orchestrator process — and the runtime
+#                                            — already is.
 #   * dagr-k8s -> kube, k8s-openapi,       — ONLY behind the default-OFF `client`
 #                 rustls, futures-util       feature. See the feature table below:
 #                                            this is the quarantine ADR 115
@@ -93,15 +103,20 @@ test-kit = []
 client = ["dep:kube", "dep:k8s-openapi", "dep:rustls", "dep:futures-util"]
 
 [dependencies]
-# tokio — the shared observer is one spawned task owning one watch, so it needs a
-# runtime, a timer (the stall bound and the reconnect backoff), channels (the
-# per-attempt waiters and the command seam), and `select!`. The feature set is
-# minimal and matches the workspace's existing posture: NOT `full`, no `net`, no
-# `fs`, no `process`. This crate opens nothing and reads no file of its own — the
-# cluster-access resolution below probes for *existence* through `std`, and every
-# byte on the wire is the client adapter's, behind the default-off `client`
-# feature.
-tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros"] }
+# NO async runtime, and that is the point of this table being as short as it is.
+#
+# ADR 004 places tokio in `dagr-cli` (and ADR 097 §5 in `dagr-metastore`), and
+# `scripts/check-async-runtime-adr.sh` / `check-timeout-and-permit-adr.sh` enforce
+# that placement across every workspace member. Rather than move the boundary for
+# this crate, the crate was written not to need it: the `PodApi`/`PodWatch` port
+# returns anonymous futures, `ObserverCore` is a state machine over a monotonic
+# offset a caller supplies, `access` probes the filesystem through `std`, and
+# `fake` is a queue behind a `std::sync::Mutex` with `std::task::Waker`s. The
+# spawned task, the stall timer and the reconnect backoff live in
+# `dagr_cli::pod_observer`.
+#
+# The client tree below is the only dependency this crate has at all, and it is
+# optional.
 
 # --- The quarantined client tree (behind `client`) ---------------------------
 # kube — the client T101's spike chose, against measured behaviour rather than a
@@ -132,12 +147,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 futures-util = { version = "0.3", default-features = false, optional = true }
 
 [dev-dependencies]
-# tokio's `test-util` gives the paused clock. The observer's whole subject is
-# timing — a stall bound measured in tens of seconds, an exponential reconnect
-# backoff, a shutdown budget — and a suite that slept through those would be both
-# slow and flaky. With `start_paused = true` the tests assert the SCHEDULE rather
-# than race it, and the 90-second stall bound is exercised in microseconds.
-tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros", "test-util"] }
+# No tokio here either — not even for tests. A dev-dependency is a real edge (the
+# ADR checkers read the dev table too, and correctly: it resolves the runtime into
+# this crate's build), so the suites that need a paused clock are the driver's,
+# and they live with the driver in `dagr-cli`. What is tested here needs no
+# runtime: the state machine, the identity encoding, the cluster-access decision,
+# the RBAC manifest, and the recorded-frame decoding below.
 
 # serde_json — used only by the `client`-gated decode tests, which push RECORDED
 # watch frames (including the verbatim 410 body T101 captured off a real API

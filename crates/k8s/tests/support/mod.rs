@@ -1,20 +1,16 @@
-//! Shared fixtures for the observer suites: one canonical identity, and pod
-//! snapshots built from it.
+//! Shared fixtures for this crate's suites: one canonical identity for one run.
 //!
-//! Every suite in this crate speaks about the same run, so the fixture lives once
-//! and the tests differ only in what happens to the pods.
+//! The pod *snapshots* built from it live with the suites that drive the observer
+//! task — `crates/cli/tests/k8s_support/` — because that is where the task and its
+//! runtime are. What is shared across the two is the run itself, so a reader
+//! comparing them sees the same ids.
 //!
 //! `allow(dead_code)`: this module is compiled separately into each integration
-//! test binary, and no single one of them uses every fixture. The alternative is
-//! four near-identical copies of the same run.
+//! test binary, and no single one of them uses every fixture.
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
-
-use dagr_k8s::api::{PodPhase, PodSnapshot};
 use dagr_k8s::identity::{AttemptIdentity, AttemptKey};
-use dagr_k8s::observer::RunSelector;
 
 /// The run every suite observes. A real 36-character `UUIDv7`, because the
 /// 63-character label ceiling only bites at that length.
@@ -27,11 +23,6 @@ pub const FINGERPRINT: &str = "sf-2f1c9a4b7e0d5638";
 /// The policy hash carried alongside it.
 pub const POLICY_HASH: &str = "ph-88c1042ea9b3f7d0";
 
-/// The selector under test.
-pub fn selector() -> RunSelector {
-    RunSelector::new(RUN_ID, FINGERPRINT)
-}
-
 /// A full identity for one attempt of one node.
 pub fn identity(node: &str, attempt: u32) -> AttemptIdentity {
     AttemptIdentity {
@@ -43,59 +34,5 @@ pub fn identity(node: &str, attempt: u32) -> AttemptIdentity {
         image_digest: "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
             .to_string(),
         owner: "orchestrator-01".to_string(),
-    }
-}
-
-/// A pod for `node`/`attempt` in `phase`, named after the two, carrying the
-/// canonical labels and annotations.
-pub fn pod(node: &str, attempt: u32, phase: PodPhase, resource_version: &str) -> PodSnapshot {
-    let id = identity(node, attempt);
-    let mut snapshot = PodSnapshot::new(
-        format!("dagr-{node}-{attempt}"),
-        resource_version.to_string(),
-        phase,
-        &id,
-    );
-    if phase == PodPhase::Failed {
-        snapshot.container_reason = Some("Error".to_string());
-        snapshot.exit_code = Some(1);
-    }
-    snapshot
-}
-
-/// The same pod, but with one annotation overridden — the only way to build a
-/// pod that is *shaped* like ours and is not ours.
-pub fn pod_with_annotation(
-    node: &str,
-    attempt: u32,
-    phase: PodPhase,
-    resource_version: &str,
-    key: &str,
-    value: &str,
-) -> PodSnapshot {
-    let mut snapshot = pod(node, attempt, phase, resource_version);
-    snapshot
-        .annotations
-        .insert(key.to_string(), value.to_string());
-    snapshot
-}
-
-/// A pod carrying arbitrary labels and annotations — used to prove that an
-/// unidentifiable pod is reported rather than attributed.
-pub fn bare_pod(
-    name: &str,
-    resource_version: &str,
-    labels: BTreeMap<String, String>,
-    annotations: BTreeMap<String, String>,
-) -> PodSnapshot {
-    PodSnapshot {
-        name: name.to_string(),
-        resource_version: resource_version.to_string(),
-        phase: PodPhase::Running,
-        labels,
-        annotations,
-        pod_reason: None,
-        container_reason: None,
-        exit_code: None,
     }
 }

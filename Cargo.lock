@@ -356,7 +356,6 @@ dependencies = [
  "kube",
  "rustls",
  "serde_json",
- "tokio",
 ]
 
 [[package]]

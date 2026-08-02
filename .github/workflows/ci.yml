@@ -427,13 +427,21 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-blob-feature-gating.sh
       # === M10 remote execution: the shared pod observer =======================
-      # The observer's OWN suites — the reconnect discipline, identity, cluster
-      # access, the RBAC manifest — need NO feature: `dagr-k8s` is a normal
-      # workspace member whose default surface is client-free, so the plain
-      # `cargo nextest run --workspace` above runs all of them on BOTH tiers. That
-      # is deliberate and is where the T107 DoD's ubuntu + macOS line is met: the
-      # observer is task/timer/channel code and the access resolution is temp-dir
-      # and path code, both of which differ between the platforms.
+      # The library half's OWN suites — the deterministic reconnect discipline,
+      # identity, cluster access, the RBAC manifest — need NO feature: `dagr-k8s`
+      # is a normal workspace member whose default surface is client-free AND
+      # runtime-free, so the plain `cargo nextest run --workspace` above runs all
+      # of them on BOTH tiers.
+      #
+      # The TASK half lives in `dagr-cli` behind the default-off `k8s` feature
+      # (ADR 004 places the async runtime there), so its suites need that feature
+      # turned on. They run on BOTH tiers, which is where the T107 DoD's
+      # ubuntu + macOS line is met: the task is timer/channel code whose scheduling
+      # differs between the platforms.
+      - name: shared pod observer — the task half (T107, --features k8s)
+        run: cargo nextest run -p dagr-cli --features k8s --test pod_observer_task --test pod_observer_shutdown
+      - name: shared pod observer — clippy over the task half (T107)
+        run: cargo clippy -p dagr-cli --features k8s --all-targets -- -D warnings
       #
       # The step below turns on the quarantined client, which is the ONE part of
       # the crate the default build does not compile. It is Linux tier-1 only: the

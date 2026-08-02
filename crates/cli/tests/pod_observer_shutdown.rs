@@ -5,15 +5,21 @@
 //! observer whose task outlived the run, or whose teardown took an unbounded
 //! amount of time, would spend somebody else's budget.
 
-mod support;
+//! The whole file is `#![cfg(feature = "k8s")]`: the observer task lives behind
+//! the default-off `k8s` feature, so a bare `cargo test --workspace` compiles this
+//! to nothing and CI's dedicated `--features k8s` step is what runs it.
+#![cfg(feature = "k8s")]
+
+mod k8s_support;
 
 use std::time::Duration;
 
+use dagr_cli::pod_observer::PodObserver;
 use dagr_k8s::api::{PodPhase, WatchDelivery};
 use dagr_k8s::fake::fake_api;
 use dagr_k8s::identity::AttemptKey;
-use dagr_k8s::observer::{ObserverLimits, PodObserver};
-use support::{RUN_ID, pod, selector};
+use dagr_k8s::observer::ObserverLimits;
+use k8s_support::{RUN_ID, pod, selector};
 
 fn limits() -> ObserverLimits {
     ObserverLimits::default()

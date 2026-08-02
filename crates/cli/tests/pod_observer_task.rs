@@ -12,17 +12,22 @@
 //! stall, a duplicate delivery, and a watch that fails on every reconnect. A fake
 //! that could not induce those would not be testing this ticket.
 
-mod support;
+//! The whole file is `#![cfg(feature = "k8s")]`: the observer task lives behind
+//! the default-off `k8s` feature, so a bare `cargo test --workspace` compiles this
+//! to nothing and CI's dedicated `--features k8s` step is what runs it.
+#![cfg(feature = "k8s")]
 
+mod k8s_support;
+
+use std::sync::Arc;
 use std::time::Duration;
 
+use dagr_cli::pod_observer::{PodObserver, WaiterEvent};
 use dagr_k8s::api::{ApiFailure, PodPhase, WatchDelivery};
-use dagr_k8s::fake::fake_api;
+use dagr_k8s::fake::{fake_api, fake_api_with_clock};
 use dagr_k8s::identity::{ANNOTATION_STRUCTURAL_FINGERPRINT, AttemptKey, LABEL_RUN_ID};
-use dagr_k8s::observer::{
-    ForeignReason, ObserverLimits, PodObserver, TerminationCause, WaiterEvent,
-};
-use support::{RUN_ID, bare_pod, identity, pod, pod_with_annotation, selector};
+use dagr_k8s::observer::{ForeignReason, ObserverLimits, TerminationCause};
+use k8s_support::{RUN_ID, bare_pod, identity, pod, pod_with_annotation, selector};
 
 /// Test limits: the same shape as the shipped defaults, with the clock-driven
 /// bounds shrunk so a paused-clock test asserts the schedule rather than the
@@ -190,7 +195,10 @@ async fn a_silent_watch_is_detected_within_the_bound_and_reconnected() {
 /// waiter — never an infinite quiet retry.
 #[tokio::test(start_paused = true)]
 async fn repeated_termination_backs_off_and_fails_with_a_classified_error() {
-    let (api, control) = fake_api();
+    // The one scenario that asserts *when* something happened rather than only
+    // what: the fake reads the paused runtime clock, so the gaps below are the
+    // schedule the observer chose and not the wall time the test spent.
+    let (api, control) = fake_api_with_clock(Arc::new(|| tokio::time::Instant::now().into_std()));
     control.upsert(pod("extract", 1, PodPhase::Pending, "100"));
     for _ in 0..12 {
         control.fail_next_watch(ApiFailure::transport(

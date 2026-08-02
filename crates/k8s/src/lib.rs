@@ -6,9 +6,12 @@
 //! crates.io landing page and this front page are one file. What follows is the
 //! map of where each piece lives.
 //!
-//! - [`observer`] — the shared [`PodObserver`](observer::PodObserver), its
-//!   deterministic [`ObserverCore`](observer::ObserverCore), the reconnect
-//!   discipline, and the per-attempt waiters.
+//! - [`observer`] — the deterministic [`ObserverCore`](observer::ObserverCore):
+//!   the reconnect discipline, the demultiplexing and the exactly-once
+//!   bookkeeping, as a state machine with no I/O and no clock of its own. The
+//!   task that drives it — one watch per orchestrator process, its timer and its
+//!   per-attempt waiters — is `dagr_cli::pod_observer`, because that is where the
+//!   process and its async runtime are (ADR 004).
 //! - [`identity`] — the label/annotation encoding and its inverse: labels are
 //!   lossy selectors, annotations are authoritative.
 //! - [`api`] — the [`PodApi`] port the observer watches through,
@@ -43,9 +46,9 @@ pub mod identity;
 pub mod observer;
 
 pub use access::{AccessProbe, ClusterAccess, NoClusterAccess, resolve};
-pub use api::{PodApi, PodListing, PodPhase, PodSnapshot, WatchDelivery};
+pub use api::{PodApi, PodListing, PodPhase, PodSnapshot, PodWatch, WatchDelivery};
 pub use identity::{AttemptIdentity, AttemptKey, ObservedIdentity};
 pub use observer::{
-    AttemptWaiter, ObserverFailure, ObserverLimits, ObserverReport, PodObservation, PodObserver,
-    RunSelector,
+    Delivery, ObserverAction, ObserverCore, ObserverFailure, ObserverInput, ObserverLimits,
+    ObserverStats, PodObservation, RunSelector, Step,
 };

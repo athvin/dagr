@@ -12,15 +12,27 @@ This crate is **opt-in** and **quarantined**. It has **no dependency edge onto
 `--no-default-features` build compile **no HTTP or TLS stack at all**.
 `dagr-cli` reaches this crate only behind its own default-off `k8s` feature.
 
+It also names **no async runtime**. ADR 004 places tokio in the crate that owns
+the run loop and requires every other crate to justify a runtime edge or not have
+one; this crate does not have one. The port's two calls hand back anonymous
+futures, the discipline is a state machine over a monotonic offset its caller
+supplies, and the fake is a queue behind a `std` mutex. The **task** that owns the
+one watch, its stall/backoff timer and its per-attempt waiters is
+`dagr_cli::pod_observer` — "one watch per orchestrator *process*" is a property of
+that process.
+
 ## What it is
 
-- **`PodObserver`** — one spawned task owning **one** watch, selected by label,
-  routing phase transitions to per-attempt waiters keyed by
-  `(run id, node, attempt)`. A terminal transition reaches its waiter **exactly
-  once**, however many times the API server reports it and however many
-  reconnects happen in between. One watch per process is a rule, not a tuning
-  choice: a watch per pod multiplies API-server connections by graph width and
-  gives every node its own reconnect bug.
+- **`ObserverCore`** — the reconnect discipline, the demultiplexing and the
+  exactly-once bookkeeping as a **deterministic state machine**: an input and a
+  monotonic offset in, the deliveries to route and the next action out. No I/O, no
+  clock, nothing spawned, so every reconnect scenario is a sequence of function
+  calls. Driven by one task over one watch, it routes phase transitions to
+  per-attempt waiters keyed by `(run id, node, attempt)`, and a terminal
+  transition reaches its waiter **exactly once**, however many times the API
+  server reports it and however many reconnects happen in between. One watch per
+  process is a rule, not a tuning choice: a watch per pod multiplies API-server
+  connections by graph width and gives every node its own reconnect bug.
 - **The reconnect discipline** — a four-class termination taxonomy (`Expired`,
   transport, transient API, **silence**), re-**list**-then-watch on a `410 Gone`,
   resume-from-the-last-known-`resourceVersion` on a transport end, exponential
@@ -50,6 +62,9 @@ port under any executor: this crate makes **outbound** calls to an API it does
 not own, and nothing hands off to it. It does not submit pods, build pod specs,
 own a retry budget, adopt orphans, or stream logs — those are separate,
 later concerns. It watches status.
+
+It is also **not** a runtime, and does not bring one. Nothing here spawns, sleeps
+or reads a clock; a caller that owns a runtime drives it.
 
 ## RBAC
 

@@ -164,7 +164,13 @@ blob = ["dep:dagr-blob"]
 # `k8s` executor is still the recognized stub `crates/cli/src/executor.rs`
 # refuses. This feature ships the observer and the boundary around it; the runner
 # arrives with the ticket that stub names.
-k8s = ["dep:dagr-k8s"]
+#
+# `tokio/macros` rides with it, and only with it: the observer task is a
+# `select!` between its command inbox and its watch (with the stall bound as the
+# other arm), which is the one place in this crate that needs the macro. The
+# default surface keeps tokio's minimal feature set — the driver still builds its
+# runtimes by hand and there is still no `#[tokio::main]`.
+k8s = ["dep:dagr-k8s", "tokio/macros"]
 
 [dependencies]
 dagr-core = { path = "../core", version = "0.0.0" }
@@ -352,6 +358,30 @@ inventory = { version = "0.3", optional = true }
 # serde_derive), so it adds NO new licence surface — `cargo deny`/`cargo audit` stay
 # green. It is already a dev-dependency of `dagr-macros`, so it is in the lockfile.
 trybuild = "1"
+
+# dagr-k8s WITH its default-on `test-kit` feature — the in-process fake API
+# surface (T107). The pod-observer task in `src/pod_observer.rs` is driven against
+# it under a paused clock: an in-stream 410, a silent stall, a duplicate delivery
+# and a permanently broken watch are all inducible there and none of them is
+# inducible against a cluster.
+#
+# It is NOT optional, because Cargo forbids optional dev-dependencies, and it does
+# not need to be: a dev-dependency is absent from `cargo tree -e normal` at every
+# feature setting, so the default and `--no-default-features` RUNTIME resolutions
+# are untouched, and `default-features = false` on the shipping edge above still
+# keeps the fake out of a pipeline binary. `client` is off here, so this edge
+# compiles no HTTP or TLS crate; the suites themselves are behind
+# `#![cfg(feature = "k8s")]`, so a default `cargo test -p dagr-cli` skips them.
+dagr-k8s = { path = "../k8s", version = "0.0.0" }
+
+# tokio's `test-util` gives the paused clock, and `macros` gives `#[tokio::test]`.
+# The pod-observer suites' whole subject is timing — a 90-second stall bound, an
+# exponential reconnect backoff, a shutdown budget — and a suite that slept
+# through those would be both slow and flaky. With `start_paused = true` they
+# assert the SCHEDULE rather than race it, in microseconds. A dev-dependency's
+# features reach the test build only, so the shipped library and binary keep the
+# minimal feature set documented above.
+tokio = { version = "1", default-features = false, features = ["macros", "test-util"] }
 
 # libc — T36 (046) only. The C16 signal test proves the *end-to-end* OS-signal
 # path without killing the test-runner by `fork`ing a controlled child that

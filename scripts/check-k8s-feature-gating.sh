@@ -12,9 +12,15 @@
 #   * `cargo build --all` and `--no-default-features` pull NO HTTP/TLS stack. This
 #     is the strong form, and it is why the Kubernetes client sits behind a
 #     default-off feature INSIDE this crate rather than being an unconditional
-#     dependency of it: `dagr-k8s`'s default resolution is `dagr-k8s` + `tokio`,
-#     and every one of hyper / rustls / kube / ring is absent from the whole
+#     dependency of it: `dagr-k8s`'s default resolution is `dagr-k8s` and NOTHING
+#     ELSE, and every one of hyper / rustls / kube / ring is absent from the whole
 #     workspace resolution until a feature asks for it.
+#   * `dagr-k8s` carries no async-runtime edge, and the task half that needs one
+#     lives in `dagr-cli` behind the `k8s` feature. ADR 004 places tokio in the
+#     crate that owns the run loop; `check-async-runtime-adr.sh` and
+#     `check-timeout-and-permit-adr.sh` enforce that allowlist across every
+#     workspace member, and the assertions here are the positive half — that the
+#     driver the split produced actually exists and is gated.
 #   * The `k8s` cli feature is DEFAULT-OFF and its dependency optional, so the
 #     default and `--no-default-features` cli resolutions reach neither the crate
 #     nor a client; `--features k8s` reaches both (the non-vacuity leg).
@@ -117,6 +123,38 @@ else
   bad "cli: dagr-k8s dependency is not marked optional"
 fi
 
+# --- 3b. The runtime half of the split landed where the ADR puts a runtime ----
+#
+# `dagr-k8s` carries no async-runtime edge because the task that needs one was
+# put in the crate ADR 004 places tokio in, not because the observer was left
+# undriven. The two ADR checkers assert the ABSENCE; these two assert the
+# PRESENCE, so a later ticket that quietly re-added `tokio` to `dagr-k8s` and
+# deleted the driver would fail here as well as there.
+for dep in tokio tokio-util rayon; do
+  if grep -qE "^[[:space:]]*${dep}[[:space:]]*=" "$km"; then
+    bad "k8s: declares a $dep edge — ADR 004 places the runtime in dagr-cli; the task half belongs there (see check-async-runtime-adr.sh)"
+  else
+    pass "k8s: declares no $dep edge (the crate names no async runtime)"
+  fi
+done
+observer_task="crates/cli/src/pod_observer.rs"
+if [ -f "$observer_task" ]; then
+  pass "cli: the pod-observer task lives at $observer_task"
+  if grep -qE '^#\[cfg\(feature = "k8s"\)\]' -A 1 crates/cli/src/lib.rs \
+     && grep -qE '^pub mod pod_observer;' crates/cli/src/lib.rs; then
+    pass "cli: the pod-observer task module is declared and feature-gated"
+  else
+    bad "cli: pod_observer.rs exists but is not declared behind #[cfg(feature = \"k8s\")] in lib.rs"
+  fi
+  if grep -qE 'tokio::(spawn|select|time)' "$observer_task"; then
+    pass "cli: the task half is where the runtime is used (spawn/select/timer)"
+  else
+    bad "cli: $observer_task uses no runtime — the split moved a name, not the machinery"
+  fi
+else
+  bad "cli: the pod-observer task is missing at $observer_task — dagr-k8s has no driver"
+fi
+
 # --- 4. dagr-core holds no knowledge of the observer -------------------------
 core_mentions=$(grep -rln 'dagr_k8s\|dagr-k8s' crates/core/src 2>/dev/null || true)
 if [ -z "$core_mentions" ]; then
@@ -149,8 +187,8 @@ if command -v cargo >/dev/null 2>&1; then
     printf '%s' "$_found"
   }
 
-  # 5a. The k8s crate's DEFAULT resolution: itself plus tokio's minimal tree, and
-  #     no HTTP/TLS crate anywhere in it.
+  # 5a. The k8s crate's DEFAULT resolution: itself and nothing else — no runtime,
+  #     no HTTP/TLS crate, no other dagr crate.
   k8s_tree=$(tree dagr-k8s)
   if [ -z "$k8s_tree" ]; then
     bad "k8s(tree): cargo tree produced nothing — the assertion would be vacuous"
