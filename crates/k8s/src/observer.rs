@@ -66,7 +66,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::api::{ApiFailure, PodListing, PodPhase, PodSnapshot, WatchDelivery};
-use crate::identity::{AttemptKey, IdentityError, ObservedIdentity, identify, run_selector};
+use crate::identity::{AttemptKey, IdentityError, ObservedIdentity, identify};
 
 /// The default bound on silence: how long a watch may say nothing before the
 /// observer stops believing it.
@@ -115,9 +115,17 @@ impl RunSelector {
     }
 
     /// The label selector the watch and the list are narrowed by.
+    ///
+    /// The **same** selector adoption discovers with
+    /// ([`adoption_selector`](crate::adoption::adoption_selector)), and one
+    /// constant rather than two that have to be kept in step: this run's pods,
+    /// minus the ones whose outcome has already been consumed. A pod carrying the
+    /// completion tombstone is finished business — its attempt is in the record —
+    /// and keeping it in the watch would let its terminal phase retire a waiter
+    /// registered for a *new* pod of the same attempt.
     #[must_use]
     pub fn label_selector(&self) -> String {
-        run_selector(&self.run_id)
+        crate::adoption::adoption_selector(&self.run_id)
     }
 }
 
@@ -768,6 +776,16 @@ impl ObserverCore {
             Ok(identity) => identity,
             Err(foreign) => return vec![Delivery::Foreign(foreign)],
         };
+        // A pod whose outcome has already been consumed (T109's completion
+        // tombstone) is finished business, not this run's live work. The selector
+        // excludes it server-side; this is the same decision made client-side,
+        // because a selector is a request to a server and this is a guarantee. It
+        // matters most on a restart: the terminal phase of a pod somebody already
+        // read would otherwise retire the waiter registered for the *new* pod of
+        // the same attempt.
+        if identity.complete {
+            return Vec::new();
+        }
         let key = identity.key.clone();
         self.seen
             .insert(key.clone(), (pod.name.clone(), identity.clone()));

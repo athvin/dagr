@@ -17,6 +17,13 @@
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
 
+/// **Orphan adoption, tombstones and ownership revocation** (M10, T109,
+/// ADR 115 §5): the startup pass that reclaims the pods a dead orchestrator left
+/// running, revokes the duplicates, and hands the survivors to
+/// [`k8s_runner`](mod@k8s_runner). Behind the default-off `k8s` feature; the
+/// decisions it acts on are `dagr_k8s::adoption`'s, for ADR 004's reason.
+#[cfg(feature = "k8s")]
+pub mod adoption;
 /// The **blob-backed durable-output bridge** (M10, T104, ADR 115 §8): `Blob<T>`,
 /// a `DurableOutput` over any `dagr_core::Payload`, stored through the
 /// `dagr_blob::BlobStore` port. Gated behind the default-off `blob` feature so a

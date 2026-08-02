@@ -100,7 +100,13 @@ test-kit = []
 # cluster-access resolution all live OUTSIDE this feature, on purpose: they are
 # the parts with the hard failure modes, and they are tested against the fake
 # with no client in the way.
-client = ["dep:kube", "dep:k8s-openapi", "dep:rustls", "dep:futures-util"]
+client = [
+    "dep:kube",
+    "dep:k8s-openapi",
+    "dep:rustls",
+    "dep:futures-util",
+    "dep:serde_json",
+]
 
 [dependencies]
 # NO async runtime, and that is the point of this table being as short as it is.
@@ -145,6 +151,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring"], opti
 # futures-util — the `Stream` the kube watch hands back is consumed with
 # `StreamExt::next`. `default-features = false` keeps it to the combinators.
 futures-util = { version = "0.3", default-features = false, optional = true }
+
+# serde_json — the ownership patch body (T109). A labels-only merge patch has to
+# be able to send an explicit JSON `null` to REMOVE a label, which is how
+# revocation clears the owner key; the typed `ObjectMeta.labels` is a
+# `BTreeMap<String, String>` and cannot express that at all. Optional and pulled
+# in by `client` only, so it stays inside the quarantine — kube already resolves
+# it, so this adds nothing to the lockfile.
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 # No tokio here either — not even for tests. A dev-dependency is a real edge (the

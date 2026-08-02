@@ -69,6 +69,7 @@ enum CreateOutcome {
 struct LifecycleState {
     created: Vec<String>,
     deleted: Vec<String>,
+    patched: Vec<String>,
     script: Vec<CreateOutcome>,
     live: BTreeMap<String, PodSnapshot>,
 }
@@ -196,6 +197,37 @@ impl PodLifecycle for ScriptedLifecycle {
             .get(name)
             .cloned();
         async move { Ok(found) }
+    }
+
+    /// The labels-only patch T109's ownership acts write. Applied to the fake
+    /// world so the observer sees what a real patch would have done; `None`
+    /// removes, exactly as the merge-patch null does.
+    fn patch_labels(
+        &self,
+        name: &str,
+        labels: &BTreeMap<String, Option<String>>,
+    ) -> impl std::future::Future<Output = Result<(), ApiFailure>> + Send {
+        let patched = {
+            let mut guard = self.state.lock().expect("lifecycle mutex");
+            guard.patched.push(name.to_string());
+            guard.live.get_mut(name).map(|pod| {
+                for (key, value) in labels {
+                    match value {
+                        Some(value) => {
+                            pod.labels.insert(key.clone(), value.clone());
+                        }
+                        None => {
+                            pod.labels.remove(key);
+                        }
+                    }
+                }
+                pod.clone()
+            })
+        };
+        if let Some(pod) = patched {
+            self.control.upsert(pod);
+        }
+        async move { Ok(()) }
     }
 }
 

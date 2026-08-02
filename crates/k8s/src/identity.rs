@@ -55,7 +55,15 @@ pub const LABEL_NODE: &str = "dagr.io/node";
 /// one *is* authoritative by construction.
 pub const LABEL_ATTEMPT: &str = "dagr.io/attempt";
 /// Label: the owner key. Adoption after an orchestrator restart is a labels-only
-/// patch of this key; this crate ships the key, not the mechanism.
+/// patch of this key ([`crate::adoption`]).
+///
+/// Its **absence** is meaningful and is required by [`identify`]: revocation
+/// clears the key before deleting the pod, so an unowned pod no longer identifies
+/// as an attempt's. That is deliberate on both counts — it is what a watcher reads
+/// to tell an orchestrator-initiated teardown from an external deletion
+/// ([`crate::adoption::deletion_origin`]), and it is what keeps a revoked
+/// duplicate's disappearance from retiring the waiter of the pod that *was*
+/// adopted for the same attempt.
 pub const LABEL_OWNER: &str = "dagr.io/owner";
 /// Label: the completion tombstone. Present with [`TOMBSTONE_VALUE`] on a pod
 /// that has been retired, so an adoption selector can filter it out. This crate
