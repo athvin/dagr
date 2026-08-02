@@ -22,6 +22,26 @@
 #                                           feature; the DurableOutput bridge lives
 #                                           in cli, the one place both sides are
 #                                           visible.)
+#   k8s      -> (nothing; kube behind an      (the opt-in shared pod observer's
+#               OFF-by-default `client`        LIBRARY half: the reconnect
+#               feature)                       discipline as a deterministic state
+#                                              machine, the `PodApi` port, the
+#                                              label/annotation identity encoding
+#                                              and the cluster-access decision,
+#                                              ADR 115 §2/§4 / T107. NO edge onto
+#                                              core or cli — the same C24-style
+#                                              boundary render/metastore/blob keep
+#                                              — and NO async runtime: ADR 004
+#                                              places tokio in cli, so the task
+#                                              that owns the one watch, its timer
+#                                              and its waiters is
+#                                              `dagr_cli::pod_observer`. The
+#                                              Kubernetes client and its whole
+#                                              HTTP/TLS tree sit behind that
+#                                              default-off feature, so `cargo build
+#                                              --all` and `--no-default-features`
+#                                              compile neither. cli reaches it only
+#                                              behind a default-off `k8s` feature.)
 #   metastore-> artifact, libsql, tokio      (the opt-in run index; artifact-only
 #                                           workspace edge, NO edge onto core — the
 #                                           same C24-style boundary as render, ADR
@@ -55,6 +75,7 @@ members = [
     "crates/render",
     "crates/metastore",
     "crates/blob",
+    "crates/k8s",
     "crates/cli",
 ]
 

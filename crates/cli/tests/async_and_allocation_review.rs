@@ -431,6 +431,18 @@ const SPAWN_INVENTORY: &[(&str, usize, &str)] = &[
          returns, and the thread is disarmed the moment that attempt completes",
     ),
     (
+        "crates/cli/src/pod_observer.rs",
+        3,
+        "the shared pod observer's ONE task (T107), plus the two lines naming the \
+         `JoinHandle` that owns it. The handle lives in `PodObserver`, which joins \
+         it inside an explicit shutdown budget and ABORTS it on `Drop` — so the \
+         watch is torn down whether the caller shuts the observer down or merely \
+         drops it, and \"the observer's task does not outlive the run\" is a \
+         property of the type. It is one task per orchestrator PROCESS, never one \
+         per pod, which is the rule ADR 115 §2 exists to state. Behind the \
+         default-off `k8s` feature, so a default build spawns nothing here at all",
+    ),
+    (
         "crates/cli/src/signals.rs",
         2,
         "the two OS-signal listeners, the stated exception: the CancelHandle-driven \

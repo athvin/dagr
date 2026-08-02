@@ -437,3 +437,53 @@ timeout are both unconditional acceptance criteria of the attempt runner, and *"
 panicking task fails only its own node"* is not suspendable for timeout-carrying
 nodes) and to this ticket's recorded resolution "the class decides *who* arms the
 deadline", under the standing autonomous-loop split recorded in the 002 entry above.
+
+---
+
+## 2026-08-01 · 122 (T107) — the client's own self-healing watcher is not used, and `deny.toml` gains no licence
+
+**Affected artifact.** `docs/implementation/116-T101-remote-execution-spike.md`,
+the spike's downstream-corrections list: *"**T107** — add backoff to
+`runtime::watcher`, bound silence, reconcile by periodic LIST, never resume from
+a 410's resourceVersion, and allow `Zlib` in `deny.toml`."*
+
+**Deviation.** Two of those five are done differently. dagr's reconnect discipline
+is implemented over the client's **primitive** `list` / `watch` calls rather than
+over its self-healing `runtime::watcher`, so `kube`'s `runtime` feature is off —
+and with it the `kube-runtime → hashbrown → foldhash` path that was the *sole*
+justification for the `Zlib` licence id. `deny.toml` therefore gains **no** new
+SPDX id; it gains the audit that found none needed, and a note telling the next
+ticket what turning `runtime` on would cost. The other three corrections — bound
+silence, reconcile by periodic LIST, never resume from a 410's resourceVersion —
+are implemented exactly as written.
+
+**Rationale.** T107's own Definition of done requires dagr to implement *"cause
+classification, re-list-then-watch, bookmark handling, and stall detection"* and
+its Test plan requires all of it to be exercised against a fake API surface in
+which an expiry, a silent stall and a duplicate delivery are inducible. A
+self-healing watcher consumes exactly the observations the classification is
+defined over — an expiry arrives inside it as a decoded frame and is never
+re-emitted — so with it in the loop, three of those four DoD clauses would be
+claims about somebody else's code with no way to assert them. Worse, it takes a
+concrete `Api` backed by a real client, so faking it means standing up an HTTP
+fixture inside a project whose boundary claim is that it opens no inbound port.
+Over the primitive calls the fake is a trait implementation and every scenario is
+a function call.
+
+Nothing the spike *established* is re-derived: its error taxonomy is written in
+terms of the primitive stream (a `410` as a decoded `type: ERROR` frame; a
+transport failure as one error item then the end of the stream), which is the
+level this implementation consumes, and the recorded frames in
+`crates/k8s/src/client.rs`'s tests are the spike's own. The spike's rule 4 also
+permits dagr's own backoff in as many words — *"apply kube-rs's
+`WatchStreamExt::backoff` (**or its own**)"* — and rules 1, 2, 3 and 5 all
+describe work at this level. The licence outcome follows mechanically from the
+feature choice rather than from any relaxation of the gate: `cargo deny check`
+passes on the new ~140-crate tree with the allow-list unchanged, and `cargo audit`
+is clean.
+
+**Operator decision.** Traces to ADR 115 §2 (one shared watch per orchestrator
+process, with reconnection and demultiplexing as dagr's own responsibility) and to
+T107's Definition of done, under the standing autonomous-loop split recorded in
+the 002 entry above. No boundary moves: the client is quarantined more tightly
+than the ticket asks, not less.

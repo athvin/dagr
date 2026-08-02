@@ -55,6 +55,31 @@ version = 2
 #     These are review-gated additions (arch.md "Stability"), scoped to the
 #     default-off `metastore` feature's transitive tree — a plain `cargo build`
 #     pulls none of them — not a loosening of the MIT-only posture to a wildcard.
+#
+# --- The M10 Kubernetes client tree (T107, ADR 115 §2) — REVIEWED, NO ADDITION -
+# The shared pod observer's client (`kube` + `k8s-openapi` + a TLS backend) is the
+# largest dependency addition in the project's history: it roughly doubles the
+# lockfile. Its licences were audited crate by crate against this allow-list, and
+# the finding is that it needs NO new SPDX id — every one of the ~140 crates
+# resolves into the five above, and `cargo deny check licenses` passes unchanged.
+# The expressions encountered are `MIT OR Apache-2.0`, `MIT`, `Apache-2.0 OR MIT`,
+# `Apache-2.0`, `Apache-2.0 OR ISC OR MIT`, `ISC`, `Unlicense OR MIT`,
+# `MIT/Apache-2.0`, `(MIT OR Apache-2.0) AND Unicode-3.0`,
+# `BSD-2-Clause OR Apache-2.0 OR MIT`, `Apache-2.0 AND ISC` (the TLS backend's
+# cryptography), and `BSD-3-Clause`. NO COPYLEFT ANYWHERE. `cargo audit` is clean
+# across the tree, so no advisory ignore is needed either.
+#
+# The T101 spike predicted ONE addition — `Zlib`, required by `foldhash` under
+# `hashbrown` under `kube-runtime`. That crate is NOT in dagr's tree, because
+# `kube`'s `runtime` feature is deliberately off: dagr implements its own
+# list/watch discipline (see `crates/k8s/src/client.rs` for why), so the
+# self-healing watcher and its subtree are never compiled. The prediction was
+# correct about the mechanism and is moot about the outcome — recorded here rather
+# than dropped, because the next ticket to reach for `kube`'s `runtime` feature
+# needs to know that doing so requires allowing `Zlib` and re-running the audit.
+#
+# The whole tree is behind TWO default-off features (`dagr-cli`'s `k8s` and
+# `dagr-k8s`'s `client`), so a plain `cargo build --all` compiles none of it.
 allow = ["MIT", "Unicode-3.0", "Apache-2.0", "BSD-3-Clause", "ISC"]
 # A crate whose declared license does not resolve to an SPDX id in `allow`
 # fails; this confidence threshold keeps that resolution strict.

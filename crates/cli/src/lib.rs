@@ -45,6 +45,15 @@ pub mod flow_builder;
 #[cfg(feature = "test-kit")]
 pub mod full_pipeline;
 pub mod graph;
+/// The **shared pod observer**'s library half (M10, T107, ADR 115 §2/§4),
+/// re-exported here behind the default-off `k8s` feature: the deterministic
+/// reconnect discipline, the `PodApi` port, the label/annotation identity
+/// encoding, and the cluster-access decision. That crate names no async runtime;
+/// the task that drives it is [`pod_observer`] in this crate, which is where ADR
+/// 004 places one. Absent from a default build and from `--no-default-features`,
+/// which compile no HTTP or TLS crate at all.
+#[cfg(feature = "k8s")]
+pub use dagr_k8s;
 pub mod logging;
 /// The `dagr metastore init` verb (M7, T83, ADR 097). Gated behind the default-off
 /// `metastore` feature so `--no-default-features` (and any default build) drops the
@@ -58,6 +67,14 @@ pub mod metastore;
 /// edge entirely.
 #[cfg(feature = "metastore")]
 pub mod metastore_tee;
+/// The **pod-observer task** (M10, T107, ADR 115 §2): the runtime half of the
+/// shared observer — one spawned task owning one watch, its stall/backoff timer,
+/// and the per-attempt waiters it demultiplexes to. Gated behind the default-off
+/// `k8s` feature, and living here rather than in [`dagr_k8s`] because ADR 004
+/// places the async runtime in the crate that owns the run loop, and "one watch
+/// per orchestrator *process*" is a property of this process.
+#[cfg(feature = "k8s")]
+pub mod pod_observer;
 pub mod prelude;
 pub mod registry;
 /// The `inventory`-backed DAG auto-discovery entrypoint (M6, ADR 092). Gated behind
