@@ -1143,9 +1143,15 @@ fn terminal_str(t: TerminalState) -> &'static str {
 // ===========================================================================
 
 /// `prune`: delete old runs by `--keep <N>` (count) or `--older-than <nanos>`
-/// (age) under `--store <base>`. Deletes NOTHING implicitly. Age is a per-run
-/// numeric marker (`age.txt`) the acceptance suite plants, so pruning is
-/// deterministic (no wall clock).
+/// (age) under `--store <base>`, then — only when asked — reclaim intermediate
+/// blobs no retained run artifact still references. Deletes NOTHING implicitly.
+/// Age is a per-run numeric marker (`age.txt`) the acceptance suite plants, so
+/// pruning is deterministic (no wall clock).
+///
+/// The two halves run in this order on purpose: retention decides which run
+/// artifacts survive, and those artifacts are exactly what defines reachability
+/// for the blob half. Reclaiming first would compute reachability against runs
+/// that are about to be deleted.
 fn prune_dispatch<W: Write>(sample: &Sample, flags: &Flags, out: &mut W) -> ExitCode {
     let Some(base) = flags.get("store") else {
         let _ = writeln!(out, "prune needs --store <base>");
@@ -1155,6 +1161,7 @@ fn prune_dispatch<W: Write>(sample: &Sample, flags: &Flags, out: &mut W) -> Exit
     let mut runs = list_runs(&pipeline_dir);
     runs.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
 
+    let mut retained = false;
     if let Some(keep) = flags.get("keep").and_then(|s| s.parse::<usize>().ok()) {
         if runs.len() > keep {
             let to_delete = runs.len() - keep;
@@ -1162,17 +1169,48 @@ fn prune_dispatch<W: Write>(sample: &Sample, flags: &Flags, out: &mut W) -> Exit
                 let _ = std::fs::remove_dir_all(dir);
             }
         }
-        return ExitCode::Success;
-    }
-    if let Some(threshold) = flags.get("older-than").and_then(|s| s.parse::<u64>().ok()) {
+        retained = true;
+    } else if let Some(threshold) = flags.get("older-than").and_then(|s| s.parse::<u64>().ok()) {
         for (dir, age) in &runs {
             if *age >= threshold {
                 let _ = std::fs::remove_dir_all(dir);
             }
         }
+        retained = true;
+    }
+
+    if flags.has("reclaim-blobs") {
+        return reclaim_blobs(out);
+    }
+    if retained {
         return ExitCode::Success;
     }
-    let _ = writeln!(out, "prune needs --keep <N> or --older-than <nanos>");
+    let _ = writeln!(
+        out,
+        "prune needs --keep <N>, --older-than <nanos>, or --reclaim-blobs <dry-run|delete>"
+    );
+    ExitCode::InvalidUsage
+}
+
+/// The blob half of `prune`, or the recognized-stub diagnostic a build without a
+/// blob backend answers with.
+///
+/// The flag is recognized unconditionally — an operator must get the same answer
+/// from every dagr binary about what a flag *is* — but its body needs the store
+/// the default-off `blob` feature provides, exactly as `exec-node`'s does.
+#[cfg(feature = "blob")]
+fn reclaim_blobs<W: Write>(out: &mut W) -> ExitCode {
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+    dagr_cli::blob_gc::reclaim_blobs_verb(&argv, out)
+}
+
+#[cfg(not(feature = "blob"))]
+fn reclaim_blobs<W: Write>(out: &mut W) -> ExitCode {
+    let _ = writeln!(
+        out,
+        "dagr prune: this build has no blob backend compiled in, and `--reclaim-blobs` reclaims \
+         from one; rebuild `dagr-cli` with the `blob` feature. Nothing was deleted",
+    );
     ExitCode::InvalidUsage
 }
 

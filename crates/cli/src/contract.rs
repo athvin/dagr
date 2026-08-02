@@ -464,6 +464,13 @@ fn flag_takes_value(flag: &str) -> bool {
             | "input"
             | "image-digest"
             | "expect-structural"
+            // The M10 object-store location knobs (T110) and `prune`'s blob-reclaim
+            // mode, all value-taking for the same reason as everything above it.
+            | "dagr.blob.endpoint"
+            | "dagr.blob.bucket"
+            | "dagr.blob.region"
+            | "dagr.blob.prefix"
+            | "reclaim-blobs"
     )
 }
 
@@ -696,6 +703,18 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         "dagr.executor",
         "dagr.max-pods",
         "dagr.pod-launch-retries",
+        // The M10 object-store location knobs (T110). Reserved on the same rule as
+        // `dagr.max-pods`: the namespace must not shift under a pipeline depending
+        // on which cargo feature a binary was built with, so they are reserved
+        // unconditionally even though the client that uses them is behind the
+        // default-off `blob-s3` feature.
+        "dagr.blob.endpoint",
+        "dagr.blob.bucket",
+        "dagr.blob.region",
+        "dagr.blob.prefix",
+        // `prune`'s blob-reclaim mode (T110). Reserved rather than left to the
+        // pipeline because it is the flag that authorizes a deletion.
+        "reclaim-blobs",
         "data-interval",
         "force",
         "run",

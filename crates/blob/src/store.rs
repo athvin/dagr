@@ -458,6 +458,52 @@ pub trait BlobStore {
     }
 }
 
+/// The **reclaim half** of the port: enumerate what a container holds, and remove
+/// one blob from it.
+///
+/// It is a separate trait from [`BlobStore`] on purpose. `put` / `get` / `head`
+/// are what a *run* does; enumerating and deleting are what an **operator** does,
+/// through `prune`. Keeping them apart means a node runner is handed a type that
+/// structurally cannot delete anything, and it keeps the trait a remote task's
+/// side of the world implements as small as it was.
+///
+/// # The criterion these two operations exist for is reachability, never age
+///
+/// A key is the digest of its bytes and nothing else, so **the same value
+/// produced by two runs is one blob**. Reclaiming "the blobs of runs older than
+/// T" would therefore delete blobs a *newer* run still references — including one
+/// a resume needs to rehydrate. The only sound criterion is that no retained run
+/// artifact references the blob, and answering that needs exactly these two
+/// operations: what is here, and remove this one.
+pub trait BlobReclaim {
+    /// Every blob this store's container holds.
+    ///
+    /// A container is not only blobs — attempt shards share it, and an
+    /// interrupted write leaves temp debris — so an implementation enumerates
+    /// **content-addressed objects only**, and never reports anything a caller
+    /// would then be entitled to delete.
+    ///
+    /// # Errors
+    ///
+    /// [`Transient`](BlobErrorClass::Transient) when the container could not be
+    /// enumerated. An implementation never reports an empty listing for a store
+    /// it could not read: to a reaper, "nothing is stored" and "I could not look"
+    /// differ by every live blob in the container.
+    fn list(&self) -> Result<Vec<BlobKey>, BlobError>;
+
+    /// Remove `key`'s object.
+    ///
+    /// **Idempotent:** a key that is already gone is a success, not an error. Two
+    /// operators (or an interrupted reclaim and its retry) reaching the same blob
+    /// both wanted it gone, and it is.
+    ///
+    /// # Errors
+    ///
+    /// [`Transient`](BlobErrorClass::Transient) when the object exists and could
+    /// not be removed.
+    fn delete(&self, key: &BlobKey) -> Result<(), BlobError>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BlobKey, BlobRef, BlobRefError, REFERENCE_SCHEME_PREFIX};

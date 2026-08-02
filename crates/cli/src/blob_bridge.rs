@@ -59,16 +59,19 @@
 
 use std::ops::Deref;
 
-use dagr_blob::{BlobError, BlobRef, BlobStore, LocalFsBlob};
+use dagr_blob::{BlobError, BlobRef, BlobStat, BlobStore, LocalFsBlob};
 use dagr_core::assembly::{DurableOutput, DurableReferenceMeta};
 use dagr_core::error::RehydrateError;
 use dagr_core::payload::Payload;
 use dagr_core::resume::ReferenceExistence;
 
-/// The backend name this build can open a store for. The object-store backend
-/// lands behind the same port later; until it does, a reference naming it is
-/// honestly "cannot determine" rather than a lie in either direction.
+/// The local filesystem backend's name in a reference.
 const LOCAL_BACKEND: &str = "file";
+
+/// The object-store backend's name in a reference. A build without the
+/// `blob-s3` feature has no client for it, and says so honestly — "cannot
+/// determine", never "absent".
+const OBJECT_BACKEND: &str = "s3";
 
 /// A `Payload` value **and the blob it lives in** — the durable output a
 /// remote-eligible node produces.
@@ -135,6 +138,41 @@ impl<T: Payload> Blob<T> {
     pub fn size_bytes(&self) -> u64 {
         self.size_bytes
     }
+
+    /// Fetch and decode the blob `reference` names **from a store the caller
+    /// supplies**, rather than from the one the reference implies.
+    ///
+    /// [`rehydrate`](DurableOutput::rehydrate) is a static method with no store
+    /// parameter, so it opens the store the reference names, from ambient
+    /// configuration. That is right for a pod rehydrating an input, and wrong for
+    /// a test — which needs to drive a store it can perturb — so the store-taking
+    /// form is the primitive and the ambient one is a thin wrapper over it.
+    ///
+    /// # Errors
+    ///
+    /// The same [`RehydrateError`] mapping: absent when the referent is gone,
+    /// transient when the store could not be read, corruption when the bytes are
+    /// not what the key names or do not decode.
+    pub fn rehydrate_from<S: BlobStore + ?Sized>(
+        store: &S,
+        reference: &str,
+    ) -> Result<Self, RehydrateError> {
+        let parsed = parse_reference(reference)?;
+        let bytes = store.get(parsed.key()).map_err(rehydrate_error)?;
+        let value = T::decode(&bytes).map_err(|err| {
+            RehydrateError::corruption(format!(
+                "the blob at `{reference}` did not decode as `{}`: {err}",
+                T::STABLE_NAME
+            ))
+            .with_source(err)
+        })?;
+        let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        Ok(Self {
+            value,
+            reference: parsed,
+            size_bytes,
+        })
+    }
 }
 
 impl<T> Deref for Blob<T> {
@@ -153,20 +191,7 @@ impl<T: Payload> DurableOutput for Blob<T> {
     fn rehydrate(reference: &str) -> Result<Self, RehydrateError> {
         let parsed = parse_reference(reference)?;
         let store = open_store(&parsed)?;
-        let bytes = store.get(parsed.key()).map_err(rehydrate_error)?;
-        let value = T::decode(&bytes).map_err(|err| {
-            RehydrateError::corruption(format!(
-                "the blob at `{reference}` did not decode as `{}`: {err}",
-                T::STABLE_NAME
-            ))
-            .with_source(err)
-        })?;
-        let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        Ok(Self {
-            value,
-            reference: parsed,
-            size_bytes,
-        })
+        Self::rehydrate_from(&store, reference)
     }
 
     fn durable_reference_meta(&self) -> Option<DurableReferenceMeta> {
@@ -207,34 +232,64 @@ pub fn reference_existence(
     let Ok(parsed) = BlobRef::parse(reference) else {
         return ReferenceExistence::CannotDetermine;
     };
-    if parsed.backend() != LOCAL_BACKEND {
+    let Ok(store) = open_store(&parsed) else {
+        return ReferenceExistence::CannotDetermine;
+    };
+    reference_existence_in(&store, reference, expected_content_hash)
+}
+
+/// The same probe, against **a store the caller supplies**.
+///
+/// [`reference_existence`] opens the store the reference names from ambient
+/// configuration, which is what `plan_resume` needs in production and what a test
+/// cannot use — the interesting cases (unreachable, overwritten out-of-band) are
+/// reachable only against a store the test controls. So this is the primitive and
+/// the ambient probe is a wrapper over it.
+///
+/// A reference naming a **different container** than `store` addresses is
+/// [`CannotDetermine`](ReferenceExistence::CannotDetermine), never `Absent`: this
+/// store simply cannot see it, which is not evidence that anything was deleted.
+#[must_use]
+pub fn reference_existence_in<S: BlobStore + ?Sized>(
+    store: &S,
+    reference: &str,
+    expected_content_hash: Option<&str>,
+) -> ReferenceExistence {
+    let Ok(parsed) = BlobRef::parse(reference) else {
+        return ReferenceExistence::CannotDetermine;
+    };
+    if parsed.backend() != store.backend() || parsed.container() != store.container() {
         return ReferenceExistence::CannotDetermine;
     }
-    let store = LocalFsBlob::open(parsed.container());
     match store.head(parsed.key()) {
-        Ok(stat) => {
-            // The recorded hash is what the prior run wrote down; the reference's
-            // own content address is the same digest by construction, so an
-            // absent recorded hash still leaves the key to compare against.
-            let expected =
-                expected_content_hash.map_or_else(|| parsed.key().to_string(), str::to_string);
-            if stat.content_hash() == expected {
-                ReferenceExistence::Present
-            } else if expected_content_hash.is_some() {
-                ReferenceExistence::Changed {
-                    actual: stat.content_hash().to_string(),
-                }
-            } else {
-                // No hash was recorded, so `Changed` is not this probe's to
-                // return (it is defined as the recorded-hash mismatch, and the
-                // refusal it drives names a recorded hash there is none of).
-                // The mismatch is not lost: `get` refuses these bytes as corrupt
-                // at rehydration, naming both digests.
-                ReferenceExistence::CannotDetermine
-            }
-        }
+        Ok(stat) => classify_stat(&stat, &parsed, expected_content_hash),
         Err(err) if err.is_absent() => ReferenceExistence::Absent,
         Err(_) => ReferenceExistence::CannotDetermine,
+    }
+}
+
+/// Turn a measured [`BlobStat`] into the probe's verdict.
+fn classify_stat(
+    stat: &BlobStat,
+    parsed: &BlobRef,
+    expected_content_hash: Option<&str>,
+) -> ReferenceExistence {
+    // The recorded hash is what the prior run wrote down; the reference's own
+    // content address is the same digest by construction, so an absent recorded
+    // hash still leaves the key to compare against.
+    let expected = expected_content_hash.map_or_else(|| parsed.key().to_string(), str::to_string);
+    if stat.content_hash() == expected {
+        ReferenceExistence::Present
+    } else if expected_content_hash.is_some() {
+        ReferenceExistence::Changed {
+            actual: stat.content_hash().to_string(),
+        }
+    } else {
+        // No hash was recorded, so `Changed` is not this probe's to return (it is
+        // defined as the recorded-hash mismatch, and the refusal it drives names a
+        // recorded hash there is none of). The mismatch is not lost: `get` refuses
+        // these bytes as corrupt at rehydration, naming both digests.
+        ReferenceExistence::CannotDetermine
     }
 }
 
@@ -269,16 +324,95 @@ fn parse_reference(reference: &str) -> Result<BlobRef, RehydrateError> {
     })
 }
 
-/// Open the store a reference names, refusing a backend this build has none for.
-fn open_store(reference: &BlobRef) -> Result<LocalFsBlob, RehydrateError> {
-    if reference.backend() != LOCAL_BACKEND {
-        return Err(RehydrateError::transient(format!(
-            "no `{}` blob backend is compiled into this build, so `{reference}` cannot be \
-             fetched here — the value may well still exist",
-            reference.backend()
-        )));
+/// Any store this build can open **from a reference alone** — the situation
+/// [`DurableOutput::rehydrate`] is in, having no store parameter.
+///
+/// A reference names its backend and its container, and that is deliberately all
+/// it names: an endpoint and a region are *this process's* view of how to reach a
+/// bucket, and a reference that carried them would stop resolving when the network
+/// changed and the storage did not. So the container comes from the reference and
+/// the reach — endpoint, region, credentials — comes from the ambient
+/// environment, which is also what makes a reference meaningful in a pod that
+/// shares only a volume or a bucket.
+enum AmbientStore {
+    /// The local filesystem backend, rooted at the container.
+    Local(LocalFsBlob),
+    /// The object-store backend, over the real HTTP client.
+    #[cfg(feature = "blob-s3")]
+    Object(Box<dagr_blob::S3Blob<crate::blob_s3::HttpsTransport>>),
+}
+
+impl BlobStore for AmbientStore {
+    fn backend(&self) -> &str {
+        match self {
+            Self::Local(store) => store.backend(),
+            #[cfg(feature = "blob-s3")]
+            Self::Object(store) => store.backend(),
+        }
     }
-    Ok(LocalFsBlob::open(reference.container()))
+
+    fn container(&self) -> String {
+        match self {
+            Self::Local(store) => store.container(),
+            #[cfg(feature = "blob-s3")]
+            Self::Object(store) => store.container(),
+        }
+    }
+
+    fn put(&self, bytes: &[u8]) -> Result<dagr_blob::BlobKey, BlobError> {
+        match self {
+            Self::Local(store) => store.put(bytes),
+            #[cfg(feature = "blob-s3")]
+            Self::Object(store) => store.put(bytes),
+        }
+    }
+
+    fn get(&self, key: &dagr_blob::BlobKey) -> Result<Vec<u8>, BlobError> {
+        match self {
+            Self::Local(store) => store.get(key),
+            #[cfg(feature = "blob-s3")]
+            Self::Object(store) => store.get(key),
+        }
+    }
+
+    fn head(&self, key: &dagr_blob::BlobKey) -> Result<BlobStat, BlobError> {
+        match self {
+            Self::Local(store) => store.head(key),
+            #[cfg(feature = "blob-s3")]
+            Self::Object(store) => store.head(key),
+        }
+    }
+}
+
+/// Open the store a reference names, refusing a backend this build has none for.
+///
+/// The refusal is **transient**, never absent: a build without the object-store
+/// client cannot see an `s3` blob, and "I cannot look" is not "it is gone". That
+/// distinction is what keeps a resume from being refused up front over a value
+/// that is very probably still there.
+fn open_store(reference: &BlobRef) -> Result<AmbientStore, RehydrateError> {
+    match reference.backend() {
+        LOCAL_BACKEND => Ok(AmbientStore::Local(LocalFsBlob::open(
+            reference.container(),
+        ))),
+        #[cfg(feature = "blob-s3")]
+        OBJECT_BACKEND => crate::blob_s3::open_ambient(reference.container())
+            .map(|store| AmbientStore::Object(Box::new(store)))
+            .map_err(|err| {
+                RehydrateError::transient(format!(
+                    "the object store holding `{reference}` could not be opened: {err}"
+                ))
+            }),
+        other => Err(RehydrateError::transient(format!(
+            "no `{other}` blob backend is compiled into this build, so `{reference}` cannot be \
+             fetched here — the value may well still exist{}",
+            if other == OBJECT_BACKEND {
+                " (rebuild `dagr-cli` with the `blob-s3` feature)"
+            } else {
+                ""
+            }
+        ))),
+    }
 }
 
 /// Map the port's classification onto the contract's — the identity, because the

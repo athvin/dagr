@@ -141,6 +141,35 @@ metastore = ["dep:dagr-metastore"]
 # (`scripts/check-blob-feature-gating.sh` asserts both halves).
 blob = ["dep:dagr-blob"]
 
+# --- The M10 object-store client feature (T110), OFF by default --------------
+# `blob-s3` turns on `dagr_cli::blob_s3` — the HTTPS transport the object-store
+# backend's sans-IO protocol is executed over — and with it the ONLY network
+# dependency M10's storage half adds.
+#
+# The split is the point. `dagr-blob` holds the whole S3 protocol (canonical
+# requests, SigV4 signing over its in-tree SHA-256/HMAC, status classification,
+# paged listing, the bounded retry) with an EMPTY dependency table, so
+# `cargo build --all` compiles the backend and no HTTP or TLS crate. This feature
+# adds the socket, and only the socket:
+#
+#   * `cargo build --all`, `cargo build -p dagr-cli --no-default-features` and
+#     even `cargo build -p dagr-cli --features blob` compile NO HTTP/TLS crate —
+#     the same containment `dagr-k8s`'s `client` feature keeps, and stronger than
+#     the metastore's (whose libsql is unconditional in its own crate).
+#   * `dagr-core` is untouched at every feature setting.
+#
+# It implies `blob`, because a transport with no port to serve is nothing.
+#
+# The dependency set is three crates and was chosen against the licence budget:
+# every transitive licence resolves into deny.toml's existing allow-list, so this
+# feature adds NO new SPDX id (the same finding T107 recorded for the Kubernetes
+# client). `rustls`, `ring`, `httparse`, `http` and most of the rest are already
+# in the lockfile via that client; `ureq` and `rustls-native-certs` are the new
+# names. `webpki-roots` is deliberately NOT used — its CA bundle is
+# CDLA-Permissive-2.0, an id the allow-list does not carry — which is why roots
+# come from the platform trust store instead.
+blob-s3 = ["blob", "dep:ureq", "dep:rustls", "dep:rustls-native-certs"]
+
 # --- The M10 shared-pod-observer feature (T107, ADR 115 §2/§4), OFF by default -
 # `k8s` turns on the optional `dagr-k8s` dependency edge — the shared pod
 # observer, its reconnect discipline, and the label/annotation identity encoding
@@ -201,7 +230,13 @@ dagr-metastore = { path = "../metastore", version = "0.0.0", optional = true }
 # `dagr-core` never sees it. It is a normal workspace member, so
 # `cargo test --workspace` still builds and tests it directly; this edge is what
 # the cli reaches it through, and only under the feature.
-dagr-blob = { path = "../blob", version = "0.0.0", optional = true }
+#
+# `default-features = false` drops the crate's default-on `test-kit` feature — the
+# in-process S3-compatible fixture the backend's suites drive — so it never ships
+# in a pipeline binary. The dev-dependency below takes it WITH the fixture, which
+# is how this crate's own suites reach it (the same shape the `dagr-k8s` edges
+# use).
+dagr-blob = { path = "../blob", version = "0.0.0", optional = true, default-features = false }
 
 # dagr-k8s — the OPTIONAL M10 shared-pod-observer crate (T107, ADR 115 §2/§4),
 # pulled ONLY behind the default-off `k8s` feature above, and with
@@ -350,7 +385,60 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 # is the first dependency added since that set was vetted).
 inventory = { version = "0.3", optional = true }
 
+# --- The quarantined object-store client tree (behind `blob-s3`, T110) --------
+# ureq — a synchronous HTTP client, which is what the blob port needs: `put` /
+# `get` / `head` are blocking calls (the local backend already pays two fsyncs on
+# the caller's thread), so an async client would mean a `block_on` inside a
+# synchronous trait method — a deadlock waiting for the first caller that is
+# already on a runtime. `default-features = false` + `rustls-no-provider` takes
+# the request path and rustls WITHOUT `webpki-roots`, whose bundled CA list is
+# CDLA-Permissive-2.0 and would be the only new SPDX id this whole feature needed;
+# roots come from the platform trust store instead (see `rustls-native-certs`).
+# `gzip` is off: object bodies are opaque content-addressed bytes and a transfer
+# encoding that rewrote them would break the digest check that verifies them.
+ureq = { version = "3", default-features = false, features = [
+    "rustls-no-provider",
+], optional = true }
+
+# rustls — the TLS backend, pinned to the same `ring` provider `dagr-k8s` uses so
+# one process installing both features has one provider, not a conflict. It is
+# named here (rather than left to ureq) for T101's build trap 2: rustls 0.23 does
+# not install a process-level crypto provider by itself and PANICS on the first
+# handshake if none was chosen, and a panic on first use is not an acceptable
+# failure mode for an opt-in feature. `dagr_cli::blob_s3` installs it explicitly.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+], optional = true }
+
+# rustls-native-certs — the platform trust store, instead of a bundled CA list.
+# Two reasons, in order: an operator's private CA (the normal case for an
+# in-cluster MinIO or gateway) then works by being trusted where everything else
+# on the host trusts it, with no dagr-specific configuration; and it keeps the
+# licence surface inside deny.toml's existing allow-list. `Apache-2.0 OR ISC OR
+# MIT`, and its platform tree (openssl-probe, security-framework, schannel)
+# resolves the same way.
+rustls-native-certs = { version = "0.8", optional = true }
+
 [dev-dependencies]
+# dagr-blob WITH its default-on `test-kit` feature — the in-process
+# S3-compatible fixture (`dagr_blob::s3::fake::FakeS3`) the object-store suites
+# drive. An unreachable store, a bounded run of failures, a specific status and an
+# object overwritten out-of-band are all inducible there and none of them is
+# inducible against a real endpoint.
+#
+# It is NOT optional, because Cargo forbids optional dev-dependencies, and it does
+# not need to be: a dev-dependency is absent from `cargo tree -e normal` at every
+# feature setting, so the default and `--no-default-features` RUNTIME resolutions
+# are untouched, and `default-features = false` on the shipping edge above still
+# keeps the fixture out of a pipeline binary. It pulls no third-party crate — this
+# crate has none — so it costs the test build nothing. The suites themselves are
+# behind `#![cfg(feature = "blob")]`, so a default `cargo test -p dagr-cli` skips
+# them. (The same shape the `dagr-k8s` dev-dependency below uses, for the same
+# reason.)
+dagr-blob = { path = "../blob", version = "0.0.0" }
+
 # trybuild — the `FlowBuilder` façade's compile-time safety corpus (T78,
 # tests/flow_builder_compile_fail.rs). The façade returns the real `Handle<T>` and
 # forwards to the stable-name-aware registrars, so its guarantees (wrong-type

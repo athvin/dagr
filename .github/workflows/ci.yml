@@ -413,11 +413,19 @@ jobs:
       # fsync + rename, and the shutdown budget are all exercised per platform.
       # No cluster is involved anywhere in it — a local-filesystem blob store is
       # the whole of its infrastructure.
+      # T110's suite rides the SAME `--features blob` build: the object-store
+      # backend is compiled by every build (its protocol has no dependencies) and
+      # its tests drive the in-process S3-compatible fixture, so proving the
+      # bridge, the four ReferenceExistence outcomes and the reachability GC over
+      # it needs no network and no extra feature. BOTH tiers, for the same reason
+      # the bridge is on both: the reclaim walks a real run store and deletes real
+      # files.
       - name: blob DurableOutput bridge + exec-node verb and shard (T104/T106, --features blob)
         run: |
           cargo nextest run -p dagr-cli --features blob \
             --test blob_bridge \
-            --test exec_node_verb_and_shard_writer
+            --test exec_node_verb_and_shard_writer \
+            --test s3_backend_and_blob_gc
       # The lineage leg needs BOTH default-off features at once (the bridge and the
       # run index) — it proves an M8 lineage row carries a blob URI and hash through
       # the EXISTING projection, with `crates/metastore/src/mapping.rs` untouched.
@@ -431,7 +439,20 @@ jobs:
       # core's reverse-dependency tree, the default and --no-default-features cli
       # resolutions carry no edge to it, --features blob does, and core's runtime
       # dependency set is still empty at every feature setting.
-      - name: blob feature-gating and crate boundary (T104)
+      # The object-store CLIENT (T110) is the one module a `--features blob` build
+      # does not compile: the protocol lives in `dagr-blob` with no dependencies,
+      # and only the HTTPS transport sits behind `blob-s3`. Clippy runs over the
+      # DEFAULT feature set, so without this step the transport — the only code in
+      # the workspace that touches a socket — would never be linted, and it would
+      # only be COMPILED by the all-features leg on the feature-matrix job. T104,
+      # T106 and T107 each learned this class of gap the expensive way.
+      #
+      # Linux tier-1: the adapter has no filesystem, process or clock behaviour to
+      # differ by platform, while building it costs a TLS tree with a C toolchain.
+      - name: object-store client — clippy over the quarantined transport (T110, --features blob-s3)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy -p dagr-cli --features blob-s3 --all-targets -- -D warnings
+      - name: blob feature-gating and crate boundary (T104/T110)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-blob-feature-gating.sh
       # === M10 remote execution: the shared pod observer =======================

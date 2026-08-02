@@ -38,20 +38,40 @@
 //!
 //! # What is deliberately absent
 //!
-//! There is no `delete`, no listing, and no lifecycle: reclaiming intermediate
-//! blobs is garbage collection, it belongs with the object-store backend, and it
-//! interacts with content addressing in a way worth deciding once — a purely
-//! content-addressed key shared across runs cannot be reclaimed by run age, only
-//! by reachability. There is also no network client here at all; the object-store
-//! backend lands behind this same port, which is what keeps that dependency out of
-//! a build that does not ask for it.
+//! There is no lifecycle here — no expiry, no replication, no bucket
+//! provisioning. Reclaiming intermediate blobs *is* here, as [`BlobReclaim`], and
+//! it is a **separate trait** from [`BlobStore`] because enumerating and deleting
+//! are an operator's operations rather than a run's: a node runner is handed a
+//! type that structurally cannot delete anything. The criterion the two
+//! operations serve is **reachability, never age** — a key is the digest of its
+//! bytes, so the same value produced by two runs is one blob, and reclaiming "old
+//! runs' blobs" would delete blobs a newer run still references. `dagr-cli`'s
+//! `prune` owns that walk.
+//!
+//! # The object-store backend, and where its HTTP client is not
+//!
+//! [`S3Blob`] implements the same port over an S3-compatible bucket, and every
+//! build compiles it — because it contains **no HTTP client**. The protocol
+//! (canonical requests, `SigV4` signing, status classification, paged listing, the
+//! bounded retry) lives here, written against the sans-IO
+//! [`HttpTransport`](s3::HttpTransport) port; the client that moves the bytes,
+//! with its TLS stack and its certificate verification, lives in `dagr-cli`
+//! behind a default-off feature. So this crate's dependency table stays empty,
+//! `cargo build --all` compiles no HTTP or TLS crate at all, and every
+//! interesting failure — an unreachable store, a 403, a 500 that clears on the
+//! third try — is inducible in-process instead of raced against an endpoint.
 
 pub mod digest;
+pub mod hmac;
 pub mod local;
+pub mod retry;
+pub mod s3;
 pub mod store;
 
 pub use local::LocalFsBlob;
+pub use retry::{RetryBudget, Sleeper, ThreadSleeper};
+pub use s3::{S3Blob, S3Config, S3Credentials};
 pub use store::{
-    BlobError, BlobErrorClass, BlobKey, BlobRef, BlobRefError, BlobStat, BlobStore,
+    BlobError, BlobErrorClass, BlobKey, BlobReclaim, BlobRef, BlobRefError, BlobStat, BlobStore,
     REFERENCE_SCHEME_PREFIX,
 };

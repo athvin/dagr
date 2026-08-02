@@ -44,6 +44,15 @@ use dagr_artifact::event_stream::{EVENTS_FILE_NAME, EventSink, MonotonicClock};
 /// one-flow case runnable with no flag.
 pub const DEFAULT_STORE_BASE: &str = "./dagr-runs";
 
+/// The reserved name of the **C22 run artifact** inside a run directory, beside
+/// the event stream it was folded from (`<base>/<pipeline>/<run-id>/run.json`).
+///
+/// Promoted to library surface by T110: the blob reaper's whole notion of
+/// reachability is "the references in the retained run artifacts", so it needs to
+/// recognize one on disk, and a second string literal for the same reserved name
+/// is exactly the drift the run-store contract exists to prevent.
+pub const RUN_ARTIFACT_FILE_NAME: &str = "run.json";
+
 /// A minimal **append-only local-file event sink**: appends each complete record
 /// line to the run's `events.jsonl` and flushes it to the OS.
 ///

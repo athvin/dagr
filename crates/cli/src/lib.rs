@@ -32,6 +32,19 @@ pub mod adoption;
 /// edge onto `dagr-core`.
 #[cfg(feature = "blob")]
 pub mod blob_bridge;
+/// **Intermediate-blob garbage collection** (M10, T110): `prune`'s blob half,
+/// which reclaims a blob exactly when no retained run artifact references it.
+/// Content addressing makes the same value produced by two runs one blob, so age
+/// is never the criterion — reachability is. Gated behind the same default-off
+/// `blob` feature the port is.
+#[cfg(feature = "blob")]
+pub mod blob_gc;
+/// The **HTTPS client** the object-store backend's sans-IO protocol is executed
+/// over (M10, T110). Gated behind the default-off `blob-s3` feature — the whole
+/// of M10's network dependency — so `cargo build --all`, `--no-default-features`
+/// and even `--features blob` compile no HTTP or TLS crate.
+#[cfg(feature = "blob-s3")]
+pub mod blob_s3;
 pub mod config;
 pub mod contract;
 pub(crate) mod dispatch;
