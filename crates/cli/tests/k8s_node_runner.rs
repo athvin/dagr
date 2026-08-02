@@ -337,7 +337,6 @@ fn write_shard(
 fn terminal_token(state: TerminalState) -> &'static str {
     match state {
         TerminalState::Succeeded => "succeeded",
-        TerminalState::Failed => "failed",
         TerminalState::TimedOut => "timed-out",
         TerminalState::Cancelled => "cancelled",
         _ => "failed",
@@ -401,7 +400,7 @@ fn limits() -> ObserverLimits {
         backoff_initial: Duration::from_millis(250),
         backoff_max: Duration::from_secs(30),
         max_consecutive_failures: 4,
-        failure_window: Duration::from_secs(300),
+        failure_window: Duration::from_mins(5),
         watch_timeout_secs: 270,
     }
 }
@@ -912,6 +911,53 @@ async fn an_oom_killed_pod_is_a_failed_attempt_carrying_a_diagnostic() {
 // ===========================================================================
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shard_claiming_success_is_not_believed_over_a_pod_that_did_not_succeed() {
+    // The pod is the platform's own evidence and outranks the trailer: a container
+    // killed after its task returned but before it exited cleanly did not succeed,
+    // however cheerful the shard it managed to write.
+    let h = harness(None);
+    let mut r = runner(&h, "extract", config(&h.root));
+    let mut sink = Recorder::default();
+    let ctx = dagr_core::context::RunContext::for_test();
+
+    let control = h.control.clone();
+    let root = h.root.clone();
+    let driver = tokio::spawn(async move {
+        control.await_watch().await;
+        write_shard(&root, "extract", 1, TerminalState::Succeeded, None);
+        transition(&control, "extract", 1, PodPhase::Failed, |pod| {
+            pod.container_reason = Some("OOMKilled".to_string());
+            pod.exit_code = Some(137);
+        })
+        .await;
+    });
+
+    let state = r.run(&ctx, &mut sink).await;
+    driver.await.expect("the driver task completes");
+
+    assert_eq!(state, TerminalState::Failed);
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, AttemptEvent::AttemptSucceeded { .. })),
+        "the disbelieved success is never replayed, so the records emitted and the \
+         terminal reported cannot disagree: {:?}",
+        sink.events()
+    );
+    assert!(
+        r.diagnostics().iter().any(|d| d.contains("OOMKilled")),
+        "the platform's reason is still carried: {:?}",
+        r.diagnostics()
+    );
+    assert!(
+        r.durable_reference().is_none(),
+        "and no output reference is stamped from a shard that was not believed"
+    );
+    let _ = h.observer.shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_shards_records_are_replayed_and_its_output_reference_reaches_the_existing_hooks() {
     let h = harness(None);
     let mut r = runner(&h, "extract", config(&h.root));
@@ -1223,6 +1269,14 @@ impl dagr_artifact::event_stream::EventSink for StreamSink {
 /// records land in stream order with gapless `seq`, and the folded artifact does
 /// not distinguish the two nodes.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario: stand up the fake platform, build a two-node \
+              pipeline with one placed runner and one local one, drive the real \
+              loop, then assert over the terminal states, the stream's sequence and \
+              the folded artifact. Splitting it would scatter a single narrative \
+              across helpers that mean nothing apart."
+)]
 fn a_mixed_pipeline_runs_end_to_end_through_the_unchanged_driver() {
     use dagr_core::flow::Flow;
 
@@ -1321,7 +1375,7 @@ fn a_mixed_pipeline_runs_end_to_end_through_the_unchanged_driver() {
     for (i, record) in records.iter().enumerate() {
         assert_eq!(
             record["seq"].as_u64(),
-            Some(i as u64),
+            Some(u64::try_from(i).expect("a record index fits a u64")),
             "gapless, strictly increasing seq across the driver's records and the \
              replayed shard's"
         );
@@ -1335,7 +1389,11 @@ fn a_mixed_pipeline_runs_end_to_end_through_the_unchanged_driver() {
         dagr_artifact::fold::fold_stream(&bytes, &["extract".to_string(), "local".to_string()])
             .expect("the stream folds cleanly");
     assert_eq!(artifact.overall_outcome(), "succeeded");
-    let mut nodes: Vec<&str> = artifact.attempts().iter().map(|a| a.node()).collect();
+    let mut nodes: Vec<&str> = artifact
+        .attempts()
+        .iter()
+        .map(dagr_artifact::fold::AttemptRecord::node)
+        .collect();
     nodes.sort_unstable();
     assert_eq!(
         nodes,

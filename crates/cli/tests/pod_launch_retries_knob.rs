@@ -57,12 +57,14 @@ fn both_flag_grammars_parse() {
 
 #[test]
 fn the_default_is_a_small_finite_budget_rather_than_unbounded() {
-    assert!(
-        POD_LAUNCH_RETRIES_DEFAULT >= 1 && POD_LAUNCH_RETRIES_DEFAULT <= 10,
-        "an infrastructure budget that never gives up is a hang with extra steps; \
-         one that is zero fails a node on a single unlucky scheduling decision — \
-         exactly the transient the separate budget exists to absorb"
-    );
+    const {
+        assert!(
+            POD_LAUNCH_RETRIES_DEFAULT >= 1 && POD_LAUNCH_RETRIES_DEFAULT <= 10,
+            "an infrastructure budget that never gives up is a hang with extra \
+             steps; one that is zero fails a node on a single unlucky scheduling \
+             decision — exactly the transient the separate budget exists to absorb"
+        );
+    }
 }
 
 #[test]
@@ -78,9 +80,11 @@ fn the_launch_budget_is_not_the_nodes_retry_budget() {
         1,
         "a node's default is one attempt and no retries"
     );
-    assert_ne!(
-        u32::from(POD_LAUNCH_RETRIES_DEFAULT == 0),
-        1,
-        "…and the infrastructure budget defaults to something else entirely"
-    );
+    const {
+        assert!(
+            POD_LAUNCH_RETRIES_DEFAULT != 0,
+            "…and the infrastructure budget defaults to a real one, so a single \
+             unlucky scheduling decision does not fail a node"
+        );
+    }
 }

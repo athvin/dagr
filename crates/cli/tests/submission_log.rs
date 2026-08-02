@@ -202,7 +202,7 @@ fn a_submission_record_takes_the_next_sequence_and_the_stream_stays_gapless() {
     for (i, r) in recs.iter().enumerate() {
         assert_eq!(
             r["seq"].as_u64(),
-            Some(i as u64),
+            Some(u64::try_from(i).expect("a record index fits a u64")),
             "gapless and strictly increasing across both writers"
         );
     }

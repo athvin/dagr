@@ -85,7 +85,7 @@ const CANCEL_POLL: Duration = Duration::from_millis(50);
 /// little absorbs that; waiting indefinitely is the hang T101 warned about. Settable
 /// per run and deliberately **not** a `--dagr.*` knob, on T107's stall-bound
 /// precedent — it becomes one only if the acceptance demo shows it needs to be.
-pub const DEFAULT_PRE_START_BOUND: Duration = Duration::from_secs(60);
+pub const DEFAULT_PRE_START_BOUND: Duration = Duration::from_mins(1);
 
 // ===========================================================================
 // Configuration
@@ -605,7 +605,9 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
                 return LaunchEnd::PreStart(failure);
             }
             match tokio::time::timeout(CANCEL_POLL, waiter.next()).await {
-                Err(_elapsed) => continue,
+                // Nothing this tick: go round, re-observe cancellation, re-check
+                // the bound. The poll is the loop's only clock.
+                Err(_elapsed) => {}
                 Ok(None) => {
                     return LaunchEnd::Refused(RemoteLaunchError::ObserverStopped {
                         node: self.node.clone(),
@@ -661,7 +663,7 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
         observation: &PodObservation,
     ) -> TerminalState {
         let verdict = classify_terminal(&PodStatusFacts::from(observation));
-        self.diagnostics = verdict.diagnostics.clone();
+        self.diagnostics.clone_from(&verdict.diagnostics);
 
         let shard = match AttemptShard::read(
             &self.config.blob_container,
@@ -689,6 +691,36 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             }
         };
 
+        for diagnostic in shard.diagnostics() {
+            self.diagnostics.push(diagnostic.clone());
+        }
+
+        // Decide the state BEFORE replaying, so the records emitted and the terminal
+        // reported can never disagree. The pod's own status is evidence, and it
+        // outranks a shard claiming a success the platform did not see — a pod
+        // killed after its task returned but before it exited cleanly is a failed
+        // attempt, however cheerful its trailer.
+        let claimed = terminal_from_token(shard.terminal_state());
+        let disbelieved =
+            verdict.outcome == PodOutcome::Failed && claimed == TerminalState::Succeeded;
+
+        if disbelieved {
+            self.diagnostics.push(format!(
+                "the attempt shard reports `{}` but pod `{}` did not succeed",
+                shard.terminal_state(),
+                observation.pod_name
+            ));
+            sink.emit(AttemptEvent::AttemptStarted {
+                node: self.node.clone(),
+                attempt,
+            });
+            sink.emit(AttemptEvent::AttemptFailed {
+                node: self.node.clone(),
+                attempt,
+            });
+            return TerminalState::Failed;
+        }
+
         // Replay the shard's own records through the INJECTED sink, so the
         // orchestrator stays the single writer and `seq` stays gapless. The shard is
         // parsed and re-emitted, never byte-concatenated: concatenating a shard whose
@@ -700,29 +732,19 @@ impl<L: PodLifecycle> K8sNodeRunner<L> {
             }
         }
 
-        for diagnostic in shard.diagnostics() {
-            self.diagnostics.push(diagnostic.clone());
-        }
-
-        let state = terminal_from_token(shard.terminal_state());
-        if state == TerminalState::Succeeded {
-            if let Some(output) = shard.output() {
-                self.durable_reference = Some(output.uri().to_string());
-                let mut meta = WireMeta::new();
-                meta.content_hash = output.recorded_content_hash().map(str::to_string);
-                meta.size_bytes = output.recorded_size_bytes();
-                meta.scheme = output.recorded_scheme().map(str::to_string);
-                if !meta.is_empty() {
-                    self.durable_reference_meta = Some(meta);
-                }
+        if claimed == TerminalState::Succeeded
+            && let Some(output) = shard.output()
+        {
+            self.durable_reference = Some(output.uri().to_string());
+            let mut meta = WireMeta::new();
+            meta.content_hash = output.recorded_content_hash().map(str::to_string);
+            meta.size_bytes = output.recorded_size_bytes();
+            meta.scheme = output.recorded_scheme().map(str::to_string);
+            if !meta.is_empty() {
+                self.durable_reference_meta = Some(meta);
             }
         }
-        // The pod's own status is evidence, and it outranks a shard that claims a
-        // success the platform did not see.
-        if verdict.outcome == PodOutcome::Failed && state == TerminalState::Succeeded {
-            return TerminalState::Failed;
-        }
-        state
+        claimed
     }
 
     /// A terminal pod with no readable — or no believable — shard.

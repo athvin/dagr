@@ -294,7 +294,7 @@ fn a_stream_carrying_submission_records_still_has_gapless_strictly_increasing_se
     for (i, r) in recs.iter().enumerate() {
         assert_eq!(
             r["seq"].as_u64(),
-            Some(i as u64),
+            Some(u64::try_from(i).expect("a record index fits a u64")),
             "seq is gapless and strictly increasing across the mixed stream"
         );
     }

@@ -168,7 +168,7 @@ pub enum ObserverInput {
     /// A watch could not be opened.
     WatchFailed(ApiFailure),
     /// The open watch produced an item.
-    Delivered(WatchDelivery),
+    Delivered(Box<WatchDelivery>),
     /// The open watch ended.
     StreamEnded,
     /// The silence bound elapsed with nothing delivered.
@@ -525,7 +525,7 @@ impl ObserverCore {
             ObserverInput::StreamEnded => {
                 self.fail(now, ApiFailure::transport("the watch stream ended"), false)
             }
-            ObserverInput::Delivered(delivery) => self.deliver(now, delivery),
+            ObserverInput::Delivered(delivery) => self.deliver(now, *delivery),
             ObserverInput::Tick => {
                 if now.saturating_sub(self.last_progress) < self.limits.stall_bound {
                     return Step {
