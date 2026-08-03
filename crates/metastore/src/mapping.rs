@@ -17,8 +17,9 @@
 //! # Idempotence
 //!
 //! Every write is an **UPSERT** (`INSERT … ON CONFLICT … DO UPDATE`) keyed by
-//! `run_id` (`dag_run`), `(run_id, node_id, try_number)` (`node_attempt`), and
-//! `(run_id, node_id)` (`node_terminal`), and the fold is deterministic — so
+//! `run_id` (`dag_run`), `(run_id, node_id, try_number)` (`node_attempt`),
+//! `(run_id, node_id)` (`node_terminal`), and `(run_id, node_id, attempt[,
+//! position])` (the T111 submission/audit rows), and the fold is deterministic — so
 //! re-syncing a run creates no duplicate rows and leaves counts unchanged. That
 //! is what makes `sync` safe to run repeatedly and safe as a backfill/repair path
 //! for runs that predate the metastore or came from another machine.
@@ -36,7 +37,9 @@
 use std::path::{Path, PathBuf};
 
 use dagr_artifact::event_stream::EVENTS_FILE_NAME;
-use dagr_artifact::fold::{AttemptRecord, ProducedOutput, RunArtifact, fold_stream};
+use dagr_artifact::fold::{
+    AttemptRecord, ProducedOutput, RunArtifact, SubmittedAttempt, fold_stream,
+};
 use serde_json::Value;
 
 use crate::MetaStore;
@@ -329,7 +332,103 @@ fn build_statements(
         }
     }
 
+    // --- Submission / audit projection (T111): what was launched -------------
+    // The write-ahead `attempt-submitted` records, folded onto the artifact, become
+    // one `attempt_submitted` row per submitted attempt plus one
+    // `attempt_submitted_input` row per ORDERED reference. This runs through the
+    // same statement builder as everything above, which is what makes the live tee
+    // and a post-hoc `sync` produce byte-identical rows.
+    //
+    // Deliberately NO `asset_upsert` here: `asset` is the identity endpoint for a
+    // uri a run actually produced or consumed, and a submission records INTENT —
+    // an attempt that never ran consumed nothing. Sighting a uri in a submission
+    // must not manufacture lineage that did not happen.
+    for s in artifact.submissions() {
+        out.push(attempt_submitted_upsert(&run_id, s));
+        for (position, input) in s.inputs().iter().enumerate() {
+            out.push(attempt_submitted_input_upsert(
+                &run_id,
+                s.node(),
+                s.attempt_number(),
+                position,
+                input.uri(),
+                input.content_hash(),
+            ));
+        }
+    }
+
     out
+}
+
+/// The UPSERT for one submitted-attempt audit row, keyed on the executor's own
+/// idempotency triple `(run_id, node_id, attempt)`. FK-free and by value, so the
+/// row outlives the remote work object, the blob, and even the attempt row.
+///
+/// `completed`/`outcome_state` carry the submitted-but-never-completed state
+/// positively: `0`/`NULL` is "no outcome exists", never a failure.
+fn attempt_submitted_upsert(run_id: &str, s: &SubmittedAttempt) -> String {
+    format!(
+        "INSERT INTO attempt_submitted \
+         (run_id, node_id, attempt, executor, target_name, observed_name, observed_uid, \
+          observed_host, structural_fingerprint, policy_hash, tool_version, image_digest, \
+          input_count, submitted_at_offset_ns, completed, outcome_state) \
+         VALUES ('{run_id}', '{node}', {attempt}, {executor}, {target}, {obs_name}, {obs_uid}, \
+          {obs_host}, {structural}, {policy}, {tool}, {image}, \
+          {input_count}, {submitted_at}, {completed}, {outcome}) \
+         ON CONFLICT(run_id, node_id, attempt) DO UPDATE SET \
+          executor=excluded.executor, target_name=excluded.target_name, \
+          observed_name=excluded.observed_name, observed_uid=excluded.observed_uid, \
+          observed_host=excluded.observed_host, \
+          structural_fingerprint=excluded.structural_fingerprint, \
+          policy_hash=excluded.policy_hash, tool_version=excluded.tool_version, \
+          image_digest=excluded.image_digest, input_count=excluded.input_count, \
+          submitted_at_offset_ns=excluded.submitted_at_offset_ns, \
+          completed=excluded.completed, outcome_state=excluded.outcome_state",
+        run_id = sql_quote(run_id),
+        node = sql_quote(s.node()),
+        attempt = s.attempt_number(),
+        executor = sql_opt(s.executor()),
+        target = sql_opt(s.target_name()),
+        obs_name = sql_opt(s.observed_name()),
+        obs_uid = sql_opt(s.observed_uid()),
+        obs_host = sql_opt(s.observed_host()),
+        structural = sql_opt(s.structural_fingerprint()),
+        policy = sql_opt(s.policy_hash()),
+        tool = sql_opt(s.tool_version()),
+        image = sql_opt(s.image_digest()),
+        input_count = sql_u64(
+            s.input_count()
+                .map(|n| u64::try_from(n).unwrap_or(u64::MAX))
+        ),
+        submitted_at = s.submitted_at_offset_ns(),
+        completed = i32::from(s.completed()),
+        outcome = sql_opt(s.outcome_state()),
+    )
+}
+
+/// The UPSERT for one **positional** submitted-input row. `position` is part of the
+/// conflict target because the declared order is the fact being recorded: the
+/// reference at index *k* is what the attempt was handed at index *k*.
+fn attempt_submitted_input_upsert(
+    run_id: &str,
+    node: &str,
+    attempt: u32,
+    position: usize,
+    uri: &str,
+    content_hash: Option<&str>,
+) -> String {
+    format!(
+        "INSERT INTO attempt_submitted_input (run_id, node_id, attempt, position, uri, content_hash) \
+         VALUES ('{run_id}', '{node}', {attempt}, {position}, '{uri}', {content_hash}) \
+         ON CONFLICT(run_id, node_id, attempt, position) DO UPDATE SET \
+          uri=excluded.uri, content_hash=excluded.content_hash",
+        run_id = sql_quote(run_id),
+        node = sql_quote(node),
+        attempt = attempt,
+        position = position,
+        uri = sql_quote(uri),
+        content_hash = sql_opt(content_hash),
+    )
 }
 
 /// The UPSERT for one produced-output lineage row. Append-only and FK-free: the

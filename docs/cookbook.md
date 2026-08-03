@@ -716,6 +716,78 @@ GROUP BY a.uri
 ORDER BY a.uri;
 ```
 
+**4. Auditing what a placed attempt was launched with.** When a node runs on remote
+compute, the orchestrator writes an `attempt-submitted` record **before** it creates
+the remote work object — so "what was this task launched with, and did it read what we
+told it to?" is answerable after the pod is gone, and a submission whose attempt never
+reported still leaves a trace. Those records project into two M10 tables (T111):
+`attempt_submitted` (one row per submitted attempt — `run_id`, `node_id`, `attempt`,
+`executor`, the **intended** `target_name`, the **observed** `observed_name` /
+`observed_uid` / `observed_host`, `structural_fingerprint`, `policy_hash`,
+`tool_version`, `image_digest`, `input_count`, `submitted_at_offset_ns`, `completed`,
+`outcome_state`) and `attempt_submitted_input` (one row per reference the attempt was
+handed, keyed by its declared **`position`** — dagr binds inputs positionally, so the
+order is the fact being recorded).
+
+Read three columns carefully. **`completed`/`outcome_state`** carry
+*submitted-but-never-completed* as a first-class state: `completed = 0` with a NULL
+`outcome_state` means no attempt outcome ever arrived — that is a crashed
+orchestrator, not a failure, and dagr's nine-state terminal taxonomy gains no tenth
+member for it. **`input_count`** is `0` for a consume-nothing source and `NULL` when
+the record never stated its inputs, so "zero" and "unknown" never blur. And
+**`target_name` vs `observed_name`** are intent and reality kept apart, because they
+diverge and a post-mortem needs both. Like the lineage tables, these carry every value
+inline with **no foreign key** to anything — an audit row still resolves after its
+referent, its pod, and even its attempt row are gone.
+
+```sql
+-- What was attempt 1 of node `extract` launched with — the ordered references,
+-- their content hashes, and the image it ran.
+SELECT i.position, i.uri, i.content_hash, s.image_digest, s.tool_version
+FROM attempt_submitted s
+JOIN attempt_submitted_input i
+  ON i.run_id = s.run_id AND i.node_id = s.node_id AND i.attempt = s.attempt
+WHERE s.node_id = 'extract' AND s.attempt = 1
+ORDER BY s.run_id, i.position;
+
+-- Which attempts were SUBMITTED but never COMPLETED — what a crashed
+-- orchestrator left behind, with the pod identity to go looking for.
+SELECT run_id, node_id, attempt, target_name, observed_name, observed_host
+FROM attempt_submitted
+WHERE completed = 0
+ORDER BY run_id, node_id, attempt;
+
+-- Which attempts READ a reference whose content hash differs from the one they
+-- were SUBMITTED with — an out-of-band overwrite between launch and read.
+-- (`IS NOT` compares NULL-safely, so a missing hash on either side shows up.)
+SELECT s.run_id, s.node_id, s.attempt, s.position, s.uri,
+       s.content_hash AS submitted_hash,
+       c.content_hash AS read_hash
+FROM attempt_submitted_input s
+JOIN input_consumed c
+  ON c.run_id = s.run_id AND c.node_id = s.node_id
+ AND c.attempt = s.attempt AND c.uri = s.uri
+WHERE c.content_hash IS NOT s.content_hash
+ORDER BY s.run_id, s.node_id, s.attempt, s.position;
+
+-- Which runs were LAUNCHED against a given uri, joined BY VALUE to the lineage
+-- tables: who produced it, and whether the attempt actually consumed it.
+SELECT s.run_id, s.node_id, s.attempt, s.position,
+       count(DISTINCT p.run_id) AS produced_by_runs,
+       count(DISTINCT c.run_id) AS consumed_by_runs
+FROM attempt_submitted_input s
+LEFT JOIN output_produced p ON p.uri = s.uri
+LEFT JOIN input_consumed  c ON c.uri = s.uri AND c.run_id = s.run_id
+WHERE s.uri = 's3://bucket/dataset'
+GROUP BY s.run_id, s.node_id, s.attempt, s.position
+ORDER BY s.run_id, s.position;
+```
+
+A local run emits no submission records at all, so these tables stay empty until you
+run with a remote executor — and the divergence question stays a **query**, not a new
+verb: it is a join, it lives beside the other cross-run queries, and a verb would grow
+the command surface for something SQL already answers.
+
 **Live now, backfill later — the two write paths.** The toggle above is the
 **guaranteed live** tee: a run writes its index rows *as it executes*, and a metastore
 write is as durable as an event-stream write — a failed index write surfaces as the
@@ -736,5 +808,10 @@ because both are the same guaranteed projection of the same event stream.
 > and lineage projected as a by-value / no-FK index, never an asset scheduler. The
 > lineage projection itself is proven in
 > `crates/metastore/tests/lineage_projection.rs` (T91: reconcile + live tee, the
-> no-FK cross-run join, and the M7→T91 forward-migration/additivity path). Both run
-> on `ubuntu-latest` and `macos-latest`.
+> no-FK cross-run join, and the M7→T91 forward-migration/additivity path), and the
+> submission/audit projection in
+> `crates/metastore/tests/submission_projection.rs` (T111: live-equals-sync byte
+> identity, idempotent re-sync, in-place upgrade, and the four audit queries above
+> run against real submitted attempts) over
+> `crates/artifact/tests/attempt_submitted_fold.rs` (the fold that surfaces a
+> submission with no outcome). Both run on `ubuntu-latest` and `macos-latest`.

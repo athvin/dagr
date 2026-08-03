@@ -71,6 +71,25 @@
 //! `interrupted` enum token) is **deferred to a schema revision** (`dagr.run@2`),
 //! since it would widen a *closed* enum.
 //!
+//! # Submissions: the one thing folded from an attempt with no outcome
+//!
+//! Everything above reduces *terminal outcomes* — a fold input is a finished
+//! attempt. The `attempt-submitted` record is the exception, and the exception is
+//! its whole point: it is written **before** remote work is created, so an attempt
+//! that never reported still leaves a trace. [`RunArtifact::submissions`] surfaces
+//! those records, **including** submissions with no matching `attempt-outcome`,
+//! which is exactly what a crashed orchestrator leaves behind
+//! ([`SubmittedAttempt::completed`] is then `false` and
+//! [`SubmittedAttempt::outcome_state`] is `None` — an absence of outcome is never
+//! dressed up as a failure).
+//!
+//! Submissions are surfaced on the artifact **type**, not as a new key in the
+//! artifact **document**: [`RunArtifact::to_value`] is unchanged, so a stream
+//! carrying submission records still folds to byte-identically the same published
+//! artifact as one without them — the additivity guarantee the record shipped
+//! under. The consumer that needs them is the run-index projection, which reads
+//! the folded value, not the serialized document.
+//!
 //! # Open-question resolutions
 //!
 //! - **Canonical phase list** — the fold names four phases that *partition* an
@@ -422,6 +441,7 @@ pub struct RunArtifact {
     attempts: Vec<AttemptRecord>,
     summary: Option<RunSummary>,
     outputs: Vec<ProducedOutput>,
+    submissions: Vec<SubmittedAttempt>,
 }
 
 /// One **produced durable output** (T90) on a folded run artifact: an explicit,
@@ -511,11 +531,182 @@ impl ProducedOutput {
     }
 }
 
+/// One **submitted attempt** folded from the stream's `attempt-submitted`
+/// write-ahead records — what the orchestrator intended to launch for one remote
+/// attempt, and (additively) what the platform actually created.
+///
+/// Three properties are load-bearing rather than decorative:
+///
+/// - **A submission with no outcome is still a submission.** [`completed`] is
+///   `false` and [`outcome_state`] is `None` when the stream carries no
+///   `attempt-outcome` for this `(node, attempt)` — the crashed-orchestrator case
+///   the record exists for. No terminal state is invented, so an attempt that
+///   never reported is never mistaken for a failure.
+/// - **Input order is positional and preserved.** dagr binds inputs by position,
+///   so a list that loses its order loses its meaning. [`input_at`] recovers the
+///   reference at position *k*.
+/// - **Zero inputs and unknown inputs are different facts.** A consume-nothing
+///   source has [`input_count`] `Some(0)`; a record that never stated its inputs
+///   has `None`. The published writer always emits the array, so `None` only ever
+///   comes from a minimal or foreign producer — but conflating the two would make
+///   an arity mismatch undetectable, which is the whole reason the empty array is
+///   the required encoding.
+///
+/// Every field is carried **by value**; there is no foreign key to anything, so an
+/// audit row outlives garbage collection of what it references.
+///
+/// [`completed`]: Self::completed
+/// [`outcome_state`]: Self::outcome_state
+/// [`input_at`]: Self::input_at
+/// [`input_count`]: Self::input_count
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmittedAttempt {
+    node: String,
+    attempt: u32,
+    /// `None` when the record carried no `inputs` field at all (unknown);
+    /// `Some(vec![])` for a consume-nothing source (known to be zero).
+    inputs: Option<Vec<Value>>,
+    executor: Option<String>,
+    target_name: Option<String>,
+    observed_name: Option<String>,
+    observed_uid: Option<String>,
+    observed_host: Option<String>,
+    structural_fingerprint: Option<String>,
+    policy_hash: Option<String>,
+    tool_version: Option<String>,
+    image_digest: Option<String>,
+    submitted_at_offset_ns: u64,
+    outcome_state: Option<String>,
+}
+
+impl SubmittedAttempt {
+    /// The submitted node's author-declared identity.
+    #[must_use]
+    pub fn node(&self) -> &str {
+        &self.node
+    }
+    /// The 1-based attempt number this submission is for. With the run identity
+    /// and [`node`](Self::node) this is the `(run_id, node, attempt)` idempotency
+    /// key the executor submits under.
+    #[must_use]
+    pub fn attempt_number(&self) -> u32 {
+        self.attempt
+    }
+    /// The **ordered, positional** references the attempt was handed. Empty both
+    /// for a consume-nothing source and for a record whose inputs are unknown —
+    /// [`input_count`](Self::input_count) tells the two apart.
+    #[must_use]
+    pub fn inputs(&self) -> Vec<ConsumedInputRef<'_>> {
+        self.inputs
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|value| ConsumedInputRef { value })
+            .collect()
+    }
+    /// How many references the attempt was handed: `Some(0)` for a consume-nothing
+    /// source (known), `None` when the record never stated its inputs (unknown).
+    #[must_use]
+    pub fn input_count(&self) -> Option<usize> {
+        self.inputs.as_ref().map(Vec::len)
+    }
+    /// The reference at positional index `position`, if there is one.
+    #[must_use]
+    pub fn input_at(&self, position: usize) -> Option<ConsumedInputRef<'_>> {
+        self.inputs
+            .as_deref()?
+            .get(position)
+            .map(|value| ConsumedInputRef { value })
+    }
+    /// The executor that submitted the attempt.
+    #[must_use]
+    pub fn executor(&self) -> Option<&str> {
+        self.executor.as_deref()
+    }
+    /// The **intended** name of the remote work object, recorded before creation.
+    #[must_use]
+    pub fn target_name(&self) -> Option<&str> {
+        self.target_name.as_deref()
+    }
+    /// The name the platform actually created. It can differ from
+    /// [`target_name`](Self::target_name), and both are kept.
+    #[must_use]
+    pub fn observed_name(&self) -> Option<&str> {
+        self.observed_name.as_deref()
+    }
+    /// The platform's own unique identifier for the created object.
+    #[must_use]
+    pub fn observed_uid(&self) -> Option<&str> {
+        self.observed_uid.as_deref()
+    }
+    /// The host the platform scheduled the work onto. Diagnostic only.
+    #[must_use]
+    pub fn observed_host(&self) -> Option<&str> {
+        self.observed_host.as_deref()
+    }
+    /// The structural fingerprint the attempt was launched under.
+    #[must_use]
+    pub fn structural_fingerprint(&self) -> Option<&str> {
+        self.structural_fingerprint.as_deref()
+    }
+    /// The policy hash the attempt was launched under.
+    #[must_use]
+    pub fn policy_hash(&self) -> Option<&str> {
+        self.policy_hash.as_deref()
+    }
+    /// The tool version that launched the attempt.
+    #[must_use]
+    pub fn tool_version(&self) -> Option<&str> {
+        self.tool_version.as_deref()
+    }
+    /// The image digest the attempt was launched with.
+    #[must_use]
+    pub fn image_digest(&self) -> Option<&str> {
+        self.image_digest.as_deref()
+    }
+    /// The monotonic offset (nanoseconds from run start) of the **write-ahead
+    /// point** — the first record for this submission, not the later additive one
+    /// that carries the observed identity.
+    #[must_use]
+    pub fn submitted_at_offset_ns(&self) -> u64 {
+        self.submitted_at_offset_ns
+    }
+    /// The terminal state of this attempt's `attempt-outcome`, or `None` when the
+    /// stream carries none — **submitted, never completed**.
+    #[must_use]
+    pub fn outcome_state(&self) -> Option<&str> {
+        self.outcome_state.as_deref()
+    }
+    /// Whether this submission's attempt produced an outcome at all. `false` is the
+    /// crashed-orchestrator case, and it is a fact in its own right rather than an
+    /// absence.
+    #[must_use]
+    pub fn completed(&self) -> bool {
+        self.outcome_state.is_some()
+    }
+}
+
 impl RunArtifact {
     /// The attempt records — one per attempt, in stream (`seq`) order.
     #[must_use]
     pub fn attempts(&self) -> &[AttemptRecord] {
         &self.attempts
+    }
+    /// The **submitted attempts** folded from the stream's `attempt-submitted`
+    /// write-ahead records, in stream (`seq`) order — **including** submissions
+    /// with no matching `attempt-outcome`, which is the case the record exists for.
+    ///
+    /// Empty for a local run and for any pre-`@1.3` stream: the record is emitted
+    /// only by a remote executor, and the fold tolerates its absence. The two
+    /// records one submission produces (the write-ahead one, then the additive one
+    /// carrying the observed identity) merge into a single entry keyed on
+    /// `(node, attempt)`.
+    ///
+    /// These do **not** appear in [`to_value`](Self::to_value): the published
+    /// artifact document is unchanged by their presence.
+    #[must_use]
+    pub fn submissions(&self) -> &[SubmittedAttempt] {
+        &self.submissions
     }
     /// The **produced durable outputs** (T90) — the append-only lineage record of
     /// what this run produced (and, on resume, carried forward), one per
@@ -817,15 +1008,20 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
         "assembly-failed" | "bootstrap-failed"
     );
 
-    let (attempts, summary, outputs) = if pre_execution {
-        (Vec::new(), None, Vec::new())
+    let (attempts, summary, outputs, submissions) = if pre_execution {
+        (Vec::new(), None, Vec::new(), Vec::new())
     } else {
         let attempts = assemble_attempts(&records, graph_nodes);
         let summary = Some(assemble_summary(&records, &attempts));
         // Append-only produced-output lineage (T90): fold every output-produced
         // record, in stream order. A pre-T90 stream carries none ⇒ empty.
         let outputs = assemble_outputs(&records);
-        (attempts, summary, outputs)
+        // Write-ahead submissions (T108's record, T111's projection): folded from
+        // the records themselves rather than from `attempts`, because the interesting
+        // case is precisely a submission with NO attempt. A pre-@1.3 stream, and
+        // every local run, carries none ⇒ empty.
+        let submissions = assemble_submissions(&records);
+        (attempts, summary, outputs, submissions)
     };
 
     Ok(RunArtifact {
@@ -837,7 +1033,133 @@ pub fn fold_stream(stream_bytes: &[u8], graph_nodes: &[String]) -> Result<RunArt
         attempts,
         summary,
         outputs,
+        submissions,
     })
+}
+
+/// Fold every `attempt-submitted` record into the submitted-attempt list, in
+/// stream (`seq`) order.
+///
+/// Two things this does that the other assemblers do not:
+///
+/// * **It merges.** One submission produces two records — the write-ahead one and
+///   the additive one carrying the observed identity once creation returns — and
+///   they are one submission. Merging keys on `(node, attempt)`, keeps the first
+///   record's offset (the write-ahead point is the interesting instant), and lets
+///   a later record fill fields the earlier one left absent. A later record never
+///   erases a value with an absence.
+/// * **It resolves the outcome from the records, not from `attempts`.** The
+///   assembled attempt list synthesizes coverage rows for never-ran nodes (all at
+///   try 1), so matching against it would claim an outcome for a submission that
+///   never produced one — inverting the exact fact this list exists to carry.
+fn assemble_submissions(records: &[Value]) -> Vec<SubmittedAttempt> {
+    // The terminal state of every attempt that genuinely reported one, keyed on
+    // the submission's own identity pair.
+    let mut outcomes: BTreeMap<(String, u32), String> = BTreeMap::new();
+    for rec in records {
+        if kind_of(rec) != Some("attempt-outcome") {
+            continue;
+        }
+        let (Some(node), Some(attempt)) = (record_node(rec), record_attempt(rec)) else {
+            continue;
+        };
+        if let Some(status) = rec.get("status").and_then(Value::as_str) {
+            outcomes.insert((node, attempt), status.to_string());
+        }
+    }
+
+    // Merge in stream order, preserving first-seen order of the submissions.
+    let mut order: Vec<(String, u32)> = Vec::new();
+    let mut merged: BTreeMap<(String, u32), SubmittedAttempt> = BTreeMap::new();
+    for rec in records {
+        if kind_of(rec) != Some("attempt-submitted") {
+            continue;
+        }
+        let (Some(node), Some(attempt)) = (record_node(rec), record_attempt(rec)) else {
+            continue;
+        };
+        let key = (node.clone(), attempt);
+        // A second record for a key already seen is the additive observed-identity
+        // one: fold it onto the submission rather than starting another.
+        if let Some(existing) = merged.get_mut(&key) {
+            merge_submission(existing, rec);
+            continue;
+        }
+        order.push(key.clone());
+        merged.insert(
+            key.clone(),
+            SubmittedAttempt {
+                node,
+                attempt,
+                inputs: submission_inputs(rec),
+                executor: string_field(rec, "executor"),
+                target_name: string_field(rec, "target_name"),
+                observed_name: string_field(rec, "observed_name"),
+                observed_uid: string_field(rec, "observed_uid"),
+                observed_host: string_field(rec, "observed_host"),
+                structural_fingerprint: string_field(rec, "structural_fingerprint"),
+                policy_hash: string_field(rec, "policy_hash"),
+                tool_version: string_field(rec, "tool_version"),
+                image_digest: string_field(rec, "image_digest"),
+                submitted_at_offset_ns: offset_of(rec),
+                outcome_state: outcomes.get(&key).cloned(),
+            },
+        );
+    }
+
+    order
+        .into_iter()
+        .filter_map(|key| merged.remove(&key))
+        .collect()
+}
+
+/// Fold a later `attempt-submitted` record for an already-seen `(node, attempt)`
+/// onto the submission it belongs to: a present field wins, an absent one changes
+/// nothing, and the write-ahead offset is never moved.
+fn merge_submission(into: &mut SubmittedAttempt, rec: &Value) {
+    if let Some(inputs) = submission_inputs(rec) {
+        into.inputs = Some(inputs);
+    }
+    for (slot, field) in [
+        (&mut into.executor, "executor"),
+        (&mut into.target_name, "target_name"),
+        (&mut into.observed_name, "observed_name"),
+        (&mut into.observed_uid, "observed_uid"),
+        (&mut into.observed_host, "observed_host"),
+        (&mut into.structural_fingerprint, "structural_fingerprint"),
+        (&mut into.policy_hash, "policy_hash"),
+        (&mut into.tool_version, "tool_version"),
+        (&mut into.image_digest, "image_digest"),
+    ] {
+        if let Some(value) = string_field(rec, field) {
+            *slot = Some(value);
+        }
+    }
+}
+
+/// The record's `node` name, when it carries one.
+fn record_node(record: &Value) -> Option<String> {
+    record.get("node").and_then(Value::as_str).map(String::from)
+}
+
+/// The record's 1-based `attempt` number, when it carries one.
+fn record_attempt(record: &Value) -> Option<u32> {
+    record
+        .get("attempt")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+}
+
+/// A string field of a record, when present.
+fn string_field(record: &Value, field: &str) -> Option<String> {
+    record.get(field).and_then(Value::as_str).map(String::from)
+}
+
+/// The submission's ordered input references: `Some` (possibly empty) when the
+/// record carries an `inputs` array, `None` when it carries none at all — the
+/// known-zero versus unknown distinction.
+fn submission_inputs(record: &Value) -> Option<Vec<Value>> {
+    record.get("inputs").and_then(Value::as_array).cloned()
 }
 
 /// Fold every `output-produced` record into the append-only, FK-free `outputs[]`,

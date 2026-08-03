@@ -176,6 +176,8 @@ pub fn migrations() -> Vec<String> {
     // additive migrations (kept in their own function so `migrations` stays within
     // the pedantic line budget and the M8 addition is auditable in one place).
     m.extend(lineage_migrations());
+    // The T111 submission/audit tables, likewise forward and additive.
+    m.extend(submission_migrations());
     m
 }
 
@@ -250,6 +252,98 @@ fn lineage_migrations() -> Vec<String> {
     ]
 }
 
+/// The M10 submission/audit migrations (T111): the `attempt_submitted` row per
+/// remote attempt the orchestrator launched, and the `attempt_submitted_input`
+/// child carrying its **ordered, positional** references. Both idempotent
+/// (`CREATE … IF NOT EXISTS`), so a pre-T111 store gains them in place and a
+/// re-open is a no-op.
+///
+/// Two shape decisions are load-bearing.
+///
+/// **No foreign keys — not to `attempt_submitted`, not to `node_attempt`, not to
+/// `asset`.** An audit row's whole purpose is to answer "what was this launched
+/// with?" *after* the thing it names is gone: the remote work object is garbage
+/// collected by the platform, the blob is collected by `prune`, and the attempt
+/// row may never have existed at all (a submission with no outcome). Every
+/// reference is by value, exactly as the lineage tables do it.
+///
+/// **Submitted-but-never-completed is a first-class state, not an absence.**
+/// `completed` is a 0/1 flag and `outcome_state` is `NULL` until an
+/// `attempt-outcome` exists, so `WHERE completed = 0` is the direct query for what
+/// a crashed orchestrator left behind. `outcome_state` is `CHECK`-constrained to
+/// the same **nine** canonical terminal states as everywhere else — the taxonomy is
+/// closed and gains no tenth member for "submitted"; that fact lives in `completed`.
+/// `input_count` is likewise `NULL` for unknown and `0` for a consume-nothing
+/// source, because conflating them would make an arity mismatch undetectable.
+fn submission_migrations() -> Vec<String> {
+    let quoted: Vec<String> = NODE_TERMINAL_STATES
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect();
+    let outcome_check = format!(
+        "CHECK (outcome_state IS NULL OR outcome_state IN ({}))",
+        quoted.join(", ")
+    );
+    vec![
+        // --- attempt_submitted: one row per submitted remote attempt ----------
+        // Keyed on the executor's own idempotency triple (run_id, node_id, attempt),
+        // so a re-projection of the same submission updates rather than duplicates.
+        // Intent (`target_name`) and reality (`observed_*`) are separate columns
+        // because they diverge and a post-mortem needs both.
+        format!(
+            "CREATE TABLE IF NOT EXISTS attempt_submitted (
+            run_id                 TEXT NOT NULL,
+            node_id                TEXT NOT NULL,
+            attempt                INTEGER NOT NULL,
+            executor               TEXT,
+            target_name            TEXT,
+            observed_name          TEXT,
+            observed_uid           TEXT,
+            observed_host          TEXT,
+            structural_fingerprint TEXT,
+            policy_hash            TEXT,
+            tool_version           TEXT,
+            image_digest           TEXT,
+            input_count            INTEGER,
+            submitted_at_offset_ns INTEGER,
+            completed              INTEGER NOT NULL DEFAULT 0,
+            outcome_state          TEXT {outcome_check},
+            PRIMARY KEY (run_id, node_id, attempt)
+        )"
+        ),
+        // --- attempt_submitted_input: the ordered references, one row each -----
+        // `position` is the declared positional index dagr binds by, and it is part
+        // of the key: order is load-bearing, so a row set that loses it loses the
+        // audit's meaning. Normalized rather than encoded in one column because the
+        // audit queries filter on individual references (the divergence join).
+        "CREATE TABLE IF NOT EXISTS attempt_submitted_input (
+            run_id       TEXT NOT NULL,
+            node_id      TEXT NOT NULL,
+            attempt      INTEGER NOT NULL,
+            position     INTEGER NOT NULL,
+            uri          TEXT NOT NULL,
+            content_hash TEXT,
+            PRIMARY KEY (run_id, node_id, attempt, position)
+        )"
+        .to_string(),
+        // --- Audit indexes ----------------------------------------------------
+        // Filter by run, find the stranded submissions, and join a reference back
+        // to the lineage tables by value (uri / content_hash).
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_run_id ON attempt_submitted (run_id)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_completed ON attempt_submitted (completed)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_node_id ON attempt_submitted (node_id)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_input_run_id ON attempt_submitted_input (run_id)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_input_uri ON attempt_submitted_input (uri)"
+            .to_string(),
+        "CREATE INDEX IF NOT EXISTS idx_attempt_submitted_input_content_hash ON attempt_submitted_input (content_hash)"
+            .to_string(),
+    ]
+}
+
 /// The five M7 table names, in creation order. Public so a test (and the `init`
 /// verb) can assert every one exists via `sqlite_master`.
 pub const TABLES: [&str; 5] = [
@@ -267,6 +361,13 @@ pub const TABLES: [&str; 5] = [
 /// store gains them in place on the next open, and a store with no lineage data has
 /// them empty.
 pub const LINEAGE_TABLES: [&str; 3] = ["output_produced", "input_consumed", "asset"];
+
+/// The two M10 submission/audit table names T111 adds: the per-attempt submission
+/// row and its ordered-input child. Public so a test can assert every one exists
+/// via `sqlite_master`. Forward, additive migrations (`CREATE TABLE IF NOT
+/// EXISTS`): a pre-T111 store gains them in place on the next open, and a store
+/// that has indexed only local runs has them empty.
+pub const SUBMISSION_TABLES: [&str; 2] = ["attempt_submitted", "attempt_submitted_input"];
 
 /// Additive `(table, column, type-affinity)` columns the T84 mapping projects
 /// into that the T83 `CREATE TABLE` shapes did not name. Applied idempotently by

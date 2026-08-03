@@ -137,10 +137,50 @@ guarantee.
   audit queries need to filter on individual references, but it is decided in-PR
   against the queries the cookbook actually ships — the queries are the requirement,
   the normalisation is not.
+
+  **Resolved: the child table.** Decided against the shipped queries, as the question
+  asks. Two of the four cookbook queries filter and join on an **individual
+  reference**: the divergence query joins `attempt_submitted_input` to
+  `input_consumed` on `(run_id, node_id, attempt, uri)` and compares hashes per
+  reference, and the lineage query selects a single `uri` and joins it by value to
+  `output_produced`/`input_consumed`. Neither is expressible against an opaque
+  encoded column without JSON-unnesting inside the join, which is exactly the
+  "unwieldy to document honestly" case the second question guards against. Position
+  is part of the child's primary key (`run_id, node_id, attempt, position`), so the
+  order dagr binds by is recorded as a fact rather than as an array's incidental
+  ordering, and `WHERE position = k` recovers reference *k* directly. The parent row
+  keeps `input_count` so a consume-nothing source (`0`) stays distinguishable from a
+  record that never stated its inputs (`NULL`) — a distinction a bare child-row count
+  cannot make. Neither table carries a foreign key, to the other or to anything else.
 - **Does the divergence query belong in SQL or as a verb?** SQL first: it is a join, the
   cookbook is where the other cross-run queries live, and adding a verb would grow the
   command surface for something a query answers. Revisit only if the query is too
   unwieldy to document honestly.
+
+  **Resolved: SQL, in the cookbook.** The shipped query is a single join with one
+  `IS NOT` predicate (`docs/cookbook.md`, "Auditing what a placed attempt was launched
+  with"), documented honestly in full and executed verbatim against a real store by
+  `crates/cli/tests/metastore_example_and_docs.rs`. Nothing about it needed a verb, and
+  adding one would have grown the command surface for a join. No revisit condition was
+  triggered.
+
+Two further decisions this ticket had to make, recorded here rather than picked
+silently:
+
+- **Submissions are surfaced on the `RunArtifact` type, not in the artifact
+  document.** T108 shipped, and CI asserts, that a stream carrying `attempt-submitted`
+  records folds to a **byte-identical** `RunArtifact::to_value()` as one without them
+  (`crates/artifact/tests/attempt_submitted_record.rs`). That is a merged guarantee
+  this ticket does not own, and this ticket's DoD asks for the records "on the
+  `RunArtifact`" — so `RunArtifact::submissions()` surfaces them on the *type*, which
+  is what `mapping::build_statements` reads, and `to_value()` is untouched. Both
+  guarantees hold simultaneously; neither was traded away.
+- **Submitted-but-never-completed is `completed = 0` plus a NULL `outcome_state`, not
+  a tenth state token.** arch.md's terminal taxonomy is closed at nine members and
+  `outcome_state`'s `CHECK` is generated from that same list, so the projection cannot
+  invent a "submitted" terminal state. The positive, queryable fact lives in the
+  `completed` flag (`WHERE completed = 0`), which is what makes the state first-class
+  rather than an absence — and it is never rendered as a failure.
 
 ## Out of scope
 
