@@ -118,7 +118,9 @@ fn the_cookbook_documents_the_shipped_knobs_and_their_defaults() {
         "the section states the launch-retry default ({POD_LAUNCH_RETRIES_DEFAULT})"
     );
     assert!(
-        lower.contains("unlimited") || lower.contains("unconstrained") || lower.contains("uncapped"),
+        lower.contains("unlimited")
+            || lower.contains("unconstrained")
+            || lower.contains("uncapped"),
         "the section says the pod ceiling is unpinned by default"
     );
 }
@@ -155,11 +157,15 @@ fn the_cookbook_states_the_latency_caveat_and_the_policy_not_class_rule() {
 fn the_cookbook_states_the_shared_volume_versus_object_store_choice() {
     let section = normalize_ws(&cookbook_remote_section()).to_lowercase();
     assert!(
-        section.contains("rwx") || section.contains("readwritemany") || section.contains("shared volume"),
+        section.contains("rwx")
+            || section.contains("readwritemany")
+            || section.contains("shared volume"),
         "the shared-volume option is named"
     );
     assert!(
-        section.contains("s3") || section.contains("object store") || section.contains("object storage"),
+        section.contains("s3")
+            || section.contains("object store")
+            || section.contains("object storage"),
         "…and so is the object-store option"
     );
 }
@@ -229,13 +235,28 @@ fn the_remote_docs_claim_nothing_unshipped() {
 
     // (a) Hard-forbidden substrings: never acceptable, in any framing.
     let forbidden: &[(&str, &str)] = &[
-        ("tcplistener", "the orchestrator opens no listener (ADR 115)"),
+        (
+            "tcplistener",
+            "the orchestrator opens no listener (ADR 115)",
+        ),
         ("::bind(", "no socket is bound anywhere in the run path"),
         (".serve(", "there is no server to serve"),
-        ("backofflimit", "cluster-side retry is refused: two retry loops duplicate an attempt"),
-        ("restartpolicy: always", "the pod's restartPolicy is pinned to Never"),
-        ("helm", "dagr is invoked, not installed — no chart, no operator, no CRD"),
-        ("crd", "a CRD plus a controller is a control plane outliving a run"),
+        (
+            "backofflimit",
+            "cluster-side retry is refused: two retry loops duplicate an attempt",
+        ),
+        (
+            "restartpolicy: always",
+            "the pod's restartPolicy is pinned to Never",
+        ),
+        (
+            "helm",
+            "dagr is invoked, not installed — no chart, no operator, no CRD",
+        ),
+        (
+            "crd",
+            "a CRD plus a controller is a control plane outliving a run",
+        ),
         ("webhook", "nothing calls dagr inbound"),
     ];
     for (haystack, name) in [(&cookbook, "cookbook"), (&readme, "README")] {
@@ -252,11 +273,20 @@ fn the_remote_docs_claim_nothing_unshipped() {
     let conditional: &[(&str, &[&str])] = &[
         (
             "scheduler",
-            &["not a scheduler", "no scheduler", "never a scheduler", "is not a scheduler"],
+            &[
+                "not a scheduler",
+                "no scheduler",
+                "never a scheduler",
+                "is not a scheduler",
+            ],
         ),
         (
             "control plane",
-            &["no control plane", "not a control plane", "never a control plane"],
+            &[
+                "no control plane",
+                "not a control plane",
+                "never a control plane",
+            ],
         ),
         (
             "distributed execution",
@@ -269,7 +299,12 @@ fn the_remote_docs_claim_nothing_unshipped() {
         ),
         (
             "credential",
-            &["no credential", "never a credential", "holds no credential", "carries no credential"],
+            &[
+                "no credential",
+                "never a credential",
+                "holds no credential",
+                "carries no credential",
+            ],
         ),
     ];
     for (haystack, name) in [(&cookbook, "cookbook"), (&readme, "README")] {

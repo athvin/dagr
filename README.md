@@ -303,6 +303,40 @@ launched with, and did it read what we told it to" — including attempts that w
 submitted and **never completed** — under the same by-value, no-foreign-key
 discipline.
 
+## Remote execution
+
+One node in a graph sometimes wants infrastructure the laptop running the rest of it
+does not have — 64 GiB for a join, a GPU for an inference step. dagr can place *that
+node's attempts* on Kubernetes while every other node keeps running in the
+orchestrator's own process, from the **same binary and the same pipeline** (ADR 115).
+
+It is **opt-in twice over**, and both are deliberate. The `k8s` cargo feature is
+**default-off**, so a build that never asks for remote execution compiles no
+Kubernetes client and no HTTP or TLS stack at all; and the executor is selected per
+invocation with `--dagr.executor=k8s` (default `local`). A build without the feature
+**refuses** the flag, naming the feature — it never quietly runs your placed nodes
+here instead.
+
+```sh
+cargo run --features k8s --example placed_pipeline -- \
+    run placed_pipeline --store ./runs --dagr.executor=k8s --run-id my-run-1
+```
+
+What does *not* change is the part people expect to: dagr **opens no listener** under
+either executor, installs nothing in the cluster, and exits when the run ends. The
+orchestrator makes outbound calls and holds one watch; nothing calls in. One process
+still owns the graph and the event stream, so a placed run's artifacts have the same
+shape as a local one's, and placement is node **policy** — a run started locally
+resumes remotely, and back, with a printed policy diff rather than a refusal.
+
+The costs are real and worth knowing before you reach for it: a placed node attempt
+starts in **~0.9 s co-located, ~2.3 s across a network**, against dagr's sub-millisecond
+local overhead, so placing a graph of sub-second nodes one pod at a time is a bad
+trade. Placed nodes also need somewhere to exchange payloads (a shared volume or an
+S3-compatible bucket) and a namespaced RBAC grant an operator applies. The cookbook's
+[*Placing a node on remote compute*](docs/cookbook.md#placing-a-node-on-remote-compute)
+has the numbers, the storage choice, the manifest, and the authoring rules.
+
 ## When not to use this
 
 A three-node script that runs one thing after another does not need a framework.

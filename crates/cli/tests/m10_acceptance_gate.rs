@@ -36,8 +36,15 @@
 //!
 //! Nothing here talks to a cluster, and that is a property of the gate rather than a
 //! limitation of it: every invariant above is a fact about the *build*, and a
-//! cluster cannot make one of them true or false. The cluster-requiring half of the
-//! ticket's test plan is the manually-dispatched `remote-cluster` workflow.
+//! cluster cannot make one of them true or false.
+//!
+//! The cluster-requiring half of the ticket's test plan — a placed node running end
+//! to end on kind, the kill-restart proof against real pods, the OOM-kill case — is
+//! **not covered anywhere yet**, and the ticket file records why: the shipped pod
+//! spec (`dagr_k8s::executor::PodSpec`, translated by `dagr_k8s::client::pod_object`)
+//! has no volume field, so a pod cannot be given the blob container it must write
+//! its output and shard into. That is T108's mechanism to add, not this gate's, and
+//! a cluster job that asserted less than it claimed would be worse than none.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -97,7 +104,10 @@ fn workspace_deps(extra: &[&str]) -> Vec<String> {
         .args(extra)
         .output()
         .expect("cargo tree runs");
-    assert!(out.status.success(), "cargo tree --workspace {extra:?} failed");
+    assert!(
+        out.status.success(),
+        "cargo tree --workspace {extra:?} failed"
+    );
     let names: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| l.split_whitespace().next())
@@ -154,7 +164,14 @@ fn dagr_cores_runtime_dependency_set_is_still_empty() {
     // And at the adversarial setting, where every optional feature in the workspace
     // is on.
     let all = resolved_deps("dagr-core", &["--all-features"]);
-    for forbidden in ["dagr-k8s", "dagr-blob", "dagr-metastore", "kube", "rustls", "ureq"] {
+    for forbidden in [
+        "dagr-k8s",
+        "dagr-blob",
+        "dagr-metastore",
+        "kube",
+        "rustls",
+        "ureq",
+    ] {
         assert!(
             !all.iter().any(|n| n == forbidden),
             "dagr-core reached {forbidden} under --all-features"
@@ -258,7 +275,11 @@ fn the_reserved_open_modes_are_still_unimplemented_stubs() {
         store.contains("ModeNotImplemented"),
         "a non-local open mode still resolves to ModeNotImplemented, never a server client"
     );
-    for wired in ["embedded_replica(", "sync_from_remote", "Database::open_remote"] {
+    for wired in [
+        "embedded_replica(",
+        "sync_from_remote",
+        "Database::open_remote",
+    ] {
         assert!(
             !store.contains(wired),
             "the seam must not have acquired a real remote client call ({wired})"
@@ -277,7 +298,7 @@ fn the_reserved_open_modes_are_still_unimplemented_stubs() {
 /// changes *where* a node runs and nothing else.
 #[test]
 fn the_terminal_taxonomy_and_trigger_rules_are_unchanged() {
-    use dagr_core::assembly::TriggerRule;
+    use dagr_core::TriggerRule;
     use dagr_core::context::TerminalState;
 
     let terminal = [
@@ -409,7 +430,16 @@ fn m10_added_no_numbered_criterion_and_both_matrices_are_still_complete() {
         );
     }
     for sl in [
-        "SL1", "SL2", "SL3", "SL4a", "SL4b", "SL4c", "SL5", "SL6", "SL7", "SL8machine",
+        "SL1",
+        "SL2",
+        "SL3",
+        "SL4a",
+        "SL4b",
+        "SL4c",
+        "SL5",
+        "SL6",
+        "SL7",
+        "SL8machine",
         "SL8human",
     ] {
         let row = format!("| {sl} |");
@@ -520,13 +550,19 @@ fn the_demo_runs_locally_with_no_cluster_and_says_nothing_about_one() {
         );
     }
 
-    // And it left a real run behind: an event stream that folds.
+    // And it left a real run behind: an event stream that folds, with both of the
+    // demo's nodes in it — the placed one having run **here**, which is what
+    // "recorded and ignored" means.
     let events = find_events(&store).expect("the demo wrote an events.jsonl");
     let bytes = std::fs::read(&events).expect("the stream is readable");
-    let artifact = dagr_artifact::fold::fold_stream(&bytes[..]).expect("the stream folds");
+    let graph_nodes = ["sample".to_string(), "summarise".to_string()];
+    let artifact =
+        dagr_artifact::fold::fold_stream(&bytes[..], &graph_nodes).expect("the stream folds");
+    let attempted: std::collections::BTreeSet<&str> =
+        artifact.attempts().iter().map(|a| a.node()).collect();
     assert!(
-        !artifact.nodes.is_empty(),
-        "the folded artifact carries the demo's nodes"
+        attempted.contains("sample") && attempted.contains("summarise"),
+        "the folded artifact carries the demo's nodes: {attempted:?}"
     );
     let _ = std::fs::remove_dir_all(&store);
 }

@@ -487,6 +487,21 @@ jobs:
             --test k8s_node_runner \
             --test submission_log \
             --test pod_launch_retries_knob
+      # The WIRED run path (T112): `RunnableFlow::run_placed` — the flow-level
+      # wiring T108 and T109 both deferred here. It drives the same in-process fake
+      # API surface as the steps above, and asserts the properties that are
+      # decidable from the API's observable behaviour: a restart ADOPTS rather than
+      # resubmits (every node executed exactly once, no pod recreated), a `403`
+      # names the missing verb instead of hanging, and the local and remote
+      # artifacts differ only by policy-derived fields. What genuinely needs a
+      # cluster — an image pull, a real OOM kill, real scheduling latency — is the
+      # `remote-cluster` workflow's, not this job's.
+      #
+      # BOTH tiers. The run path is timer/channel/filesystem code like T108's, and
+      # macOS is where the non-cluster half of T112's platform line is met (the
+      # cluster job is Linux-only, a documented platform divergence).
+      - name: wired remote run path — adoption, dual mode, RBAC (T112, --features k8s)
+        run: cargo nextest run -p dagr-cli --features k8s --test m10_remote_execution
       - name: shared pod observer — clippy over the task half (T107)
         run: cargo clippy -p dagr-cli --features k8s --all-targets -- -D warnings
       #
@@ -518,6 +533,24 @@ jobs:
       - name: k8s feature-gating and crate boundary (T107)
         if: matrix.os == 'ubuntu-latest'
         run: bash scripts/check-k8s-feature-gating.sh
+      # The STRUCTURAL half of the T112 milestone gate. ADR 115 moved a boundary
+      # arch.md calls PERMANENT, and the only thing keeping that carve-out at the
+      # width it was granted is a check that fails when it widens. Crate-graph and
+      # diff facts a unit test cannot reach: core's runtime dependency set is still
+      # empty at every setting; a build that did not ask for remote execution
+      # compiles no HTTP/TLS stack, no Kubernetes client and no object-store
+      # transport (with a non-vacuity leg proving the same query DOES see them
+      # under `--features k8s` / `--features blob-s3`); the pod path links no
+      # metastore and carries no database credential; the reserved open modes are
+      # still `ModeNotImplemented`; the M9->M10 shipped-source diff adds no
+      # listener, server framework or scheduler type; the taxonomy is still nine
+      # states and three trigger rules; both matrices are complete; and the shipped
+      # Role is still namespaced and still six verbs. Composes the T107 and T104
+      # feature-gating scripts. Crate-graph facts are platform-independent, so
+      # Linux tier-1 is enough.
+      - name: M10 acceptance boundary — crate graph + no new surface (T112)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-m10-acceptance-boundary.sh
       # --- Acceptance-criteria coverage matrix (system criterion 8) ------------
       # Verifies that every machine-classed criterion in the partition is bound to
       # an existing test (or an explicitly-deferred `unmapped` placeholder) in the
