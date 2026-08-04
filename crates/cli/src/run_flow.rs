@@ -1089,6 +1089,13 @@ impl RunnableFlow {
     /// or the run's pods could not be listed, so what is already in flight is
     /// unknown. A failure *during* the run is reported through the run's outcome and
     /// terminal states like any other.
+    ///
+    /// # Panics
+    ///
+    /// Only on a **framework defect**: a placed node's name is read back out of the
+    /// pipeline it was collected from, and its codec is read after the refusal above
+    /// has already rejected a placed node that has none. Neither can be absent
+    /// without the assembly having produced two different graphs from one flow.
     #[cfg(feature = "k8s")]
     pub fn run_placed<A, L, S, C>(
         self,
@@ -1191,16 +1198,16 @@ impl RunnableFlow {
                         .find(|n| n.name() == name)
                         .expect("the placed name came from this pipeline");
                     let codec = codec.expect("a placed node without a codec was refused above");
-                    wiring.runner(
+                    wiring.runner(crate::remote::PlacedNode {
                         node,
                         pipeline_name,
-                        &structural,
-                        &policy_hash,
-                        *placement,
-                        log.handle(),
-                        Arc::clone(&timer),
-                        slot_filler(&registry, id, codec),
-                    )
+                        structural_fingerprint: &structural,
+                        policy_hash: &policy_hash,
+                        placement: *placement,
+                        submissions: log.handle(),
+                        timer: Arc::clone(&timer),
+                        fill: slot_filler(&registry, id, codec),
+                    })
                 }
                 None => factory(&registry, &timer, AttemptDiscipline::NodePolicy),
             };

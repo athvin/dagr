@@ -49,6 +49,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use dagr_artifact::fold::AttemptRecord;
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -316,7 +318,7 @@ fn the_terminal_taxonomy_and_trigger_rules_are_unchanged() {
     // Exhaustiveness, so a tenth variant is a compile error here rather than a
     // silently-uncounted one: the match below must cover the enum.
     for state in terminal {
-        let _class = match state {
+        match state {
             TerminalState::Succeeded
             | TerminalState::SatisfiedFromPrior
             | TerminalState::Skipped
@@ -326,7 +328,7 @@ fn the_terminal_taxonomy_and_trigger_rules_are_unchanged() {
             | TerminalState::UpstreamFailed
             | TerminalState::Cancelled
             | TerminalState::Abandoned => (),
-        };
+        }
     }
 
     let rules = [
@@ -392,7 +394,8 @@ fn the_least_privilege_rbac_manifests_ship() {
 /// M10 introduced **no new numbered criterion**: ADR 115 amended C5, C12, C26, the
 /// operational model, the performance envelope and system-level criterion 7 in
 /// place, and arch.md's criterion id set is still exactly `C1`–`C28` plus the eight
-/// system-level ids. So the duty this DoD line creates is to prove that claim rather
+/// system-level ids. So the duty this Definition-of-done line creates is to prove that
+/// claim rather
 /// than to add rows — a claim that is false the moment somebody adds a `C29`, which
 /// is precisely when a row would be owed.
 #[test]
@@ -461,7 +464,188 @@ fn m10_added_no_numbered_criterion_and_both_matrices_are_still_complete() {
 }
 
 // ===========================================================================
-// 6. The capability proof an operator can read
+// 6. Dual mode: placement is policy, so a resume crosses executors
+// ===========================================================================
+
+/// **Test plan: a run started under one executor resumes under the other with a
+/// printed policy diff and no structural refusal — and the reverse direction
+/// likewise.**
+///
+/// This is ADR 115 §7's payoff, and it exists *because* placement is node policy
+/// rather than an execution class. Moving a node onto remote compute — or back —
+/// changes the **policy hash** and never the **structural fingerprint**, so the
+/// resume gate proceeds with a diff instead of refusing.
+///
+/// It needs no cluster and no `k8s` feature, and that is the point being asserted
+/// rather than a convenience: the decision is a pure function of the two
+/// fingerprints, so an executor cannot influence it. `resume_verb` is the whole
+/// decision (the driver re-executes; this verb plans), so driving it over the two
+/// pipeline variants *is* the test.
+#[test]
+fn moving_a_node_between_local_and_placed_is_a_policy_diff_resume_proceeds_through() {
+    use dagr_cli::contract::{ResumeOptions, ResumeOutcome, resume_verb};
+    use dagr_core::resume::ReferenceExistence;
+
+    let unplaced = dual::pipeline(dual::Placed::No);
+    let placed = dual::pipeline(dual::Placed::Yes);
+
+    // The claim, before the resume: same structure, different policy.
+    assert_eq!(
+        unplaced.fingerprint().structural(),
+        placed.fingerprint().structural(),
+        "placement never reaches the structural fingerprint — otherwise every \
+         cross-executor resume would refuse"
+    );
+    assert_ne!(
+        unplaced.fingerprint().policy(),
+        placed.fingerprint().policy(),
+        "…and it does reach the policy hash, so the diff below is a real one"
+    );
+
+    // Both directions: local→placed and placed→local.
+    for (from, to, direction) in [
+        (
+            &unplaced,
+            &placed,
+            "local run resumed under the remote executor",
+        ),
+        (
+            &placed,
+            &unplaced,
+            "placed run resumed under the local executor",
+        ),
+    ] {
+        let prior = dual::prior_artifact(from);
+        let bytes = serde_json::to_vec(&prior).expect("the prior artifact serializes");
+        let options = ResumeOptions {
+            new_run_id: "resumed-run".to_string(),
+            tool_version: dual::TOOL_VERSION.to_string(),
+            store_present: true,
+            force: false,
+            param_overrides: std::collections::BTreeMap::new(),
+            interval_override: None,
+        };
+        let outcome = resume_verb(to, &bytes, &options, |_n, _r, _h| {
+            ReferenceExistence::Present
+        });
+        match outcome {
+            ResumeOutcome::Resumed { plan, .. } => {
+                let diff = plan.policy_diff().unwrap_or_else(|| {
+                    panic!("{direction}: the policy hash moved, so a diff is owed")
+                });
+                assert_ne!(
+                    diff.prior, diff.current,
+                    "{direction}: the printed diff names both hashes"
+                );
+                assert!(
+                    !format!("{diff}").is_empty(),
+                    "{direction}: the diff is printable"
+                );
+            }
+            ResumeOutcome::Refused { message, .. } => {
+                panic!("{direction}: resume must proceed, not refuse: {message}");
+            }
+        }
+    }
+}
+
+/// The two pipeline variants the test above compares: the **same** graph, with one
+/// node placed in one of them and not in the other.
+mod dual {
+    use dagr_cli::run_flow::RunnableFlow;
+    use dagr_core::assembly::{NodePolicy, Placement};
+    use dagr_core::context::RunContext;
+    use dagr_core::flow::Pipeline;
+    use dagr_core::task::Task;
+    use dagr_core::{Payload, StableName, TaskError};
+    use serde_json::{Value, json};
+
+    /// The comparability token both legs carry. v1 makes no cross-tool-version
+    /// resume promise, so the two legs must agree on it or the gate refuses for a
+    /// reason that has nothing to do with placement.
+    pub const TOOL_VERSION: &str = "dagr@t112-dual";
+
+    #[derive(Clone, Copy, StableName, Payload)]
+    pub struct Sample {
+        rows: u64,
+    }
+
+    #[derive(StableName)]
+    pub struct Take;
+    impl Task for Take {
+        type Input = ();
+        type Output = Sample;
+        async fn run(&mut self, _c: &RunContext, _i: ()) -> Result<Sample, TaskError> {
+            Ok(Sample { rows: 1 })
+        }
+    }
+
+    #[derive(StableName)]
+    pub struct Fold;
+    impl Task for Fold {
+        type Input = Sample;
+        type Output = Sample;
+        async fn run(&mut self, _c: &RunContext, i: Sample) -> Result<Sample, TaskError> {
+            Ok(Sample { rows: i.rows + 1 })
+        }
+    }
+
+    /// Whether the source node declares a placement.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Placed {
+        Yes,
+        No,
+    }
+
+    /// The pipeline, in the requested variant. Same names, same types, same edges,
+    /// **and the same registrar** — the only difference is the placement, which is
+    /// what makes the fingerprint comparison below mean what it says.
+    pub fn pipeline(placed: Placed) -> Pipeline {
+        let mut flow = RunnableFlow::new();
+        let take = match placed {
+            Placed::Yes => flow.register_source_placed(
+                "take",
+                Take,
+                NodePolicy::new(),
+                Placement::new().cpu("500m").memory("512Mi"),
+            ),
+            Placed::No => flow.register_source_payload_with("take", Take, NodePolicy::new()),
+        };
+        let _ = flow.register_payload("fold", Fold, take);
+        flow.into_pipeline()
+    }
+
+    /// A folded-style prior artifact for `pipeline`: both nodes succeeded, so the
+    /// resume is a pure gate decision with nothing to re-execute.
+    pub fn prior_artifact(pipeline: &Pipeline) -> Value {
+        let fp = pipeline.fingerprint();
+        json!({
+            "header": {
+                "run_id": "prior-run",
+                "pipeline": "dual-mode",
+                "fingerprint_structural": format!("fnv:{:016x}", fp.structural()),
+                "fingerprint_policy": format!("fnv:{:016x}", fp.policy()),
+                "fingerprint_algorithm_version": fp.algorithm_version(),
+                "tool_version": TOOL_VERSION,
+                "parameters": {},
+                "data_interval": Value::Null,
+                "captured_environment": {},
+                "resume_lineage": Value::Null,
+                "overall_outcome": "succeeded",
+            },
+            "attempts": [
+                { "node": "take", "attempt": 1, "status": "succeeded",
+                  "phase_durations_ns": { "executing": 10 }, "worker": "compute#1" },
+                { "node": "fold", "attempt": 1, "status": "succeeded",
+                  "phase_durations_ns": { "executing": 10 }, "worker": "compute#1" },
+            ],
+            "summary": Value::Null,
+        })
+    }
+}
+
+// ===========================================================================
+// 7. The capability proof an operator can read
 // ===========================================================================
 
 /// The example's name, so the assertions below and the docs cannot drift.
@@ -558,8 +742,11 @@ fn the_demo_runs_locally_with_no_cluster_and_says_nothing_about_one() {
     let graph_nodes = ["sample".to_string(), "summarise".to_string()];
     let artifact =
         dagr_artifact::fold::fold_stream(&bytes[..], &graph_nodes).expect("the stream folds");
-    let attempted: std::collections::BTreeSet<&str> =
-        artifact.attempts().iter().map(|a| a.node()).collect();
+    let attempted: std::collections::BTreeSet<&str> = artifact
+        .attempts()
+        .iter()
+        .map(AttemptRecord::node)
+        .collect();
     assert!(
         attempted.contains("sample") && attempted.contains("summarise"),
         "the folded artifact carries the demo's nodes: {attempted:?}"

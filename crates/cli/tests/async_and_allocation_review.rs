@@ -443,6 +443,20 @@ const SPAWN_INVENTORY: &[(&str, usize, &str)] = &[
          default-off `k8s` feature, so a default build spawns nothing here at all",
     ),
     (
+        "crates/cli/src/remote.rs",
+        5,
+        "the `Pinned` forwarder's four cluster calls (create / delete / get / \
+         patch_labels), plus the line naming the `JoinHandle` each one awaits. \
+         Every one is a spawn onto the CLUSTER runtime and is awaited immediately \
+         by the caller that made it, so none of them is a task left running: the \
+         spawn exists to move the call onto the reactor the client was built on \
+         (a tokio I/O resource belongs to its own reactor), not to make it \
+         concurrent. The runtime they land on is `RemoteWiring`'s, which is \
+         dropped by `finish()` after the observer's task has been joined, so a \
+         forwarded call cannot outlive the run either. Behind the default-off \
+         `k8s` feature, so a default build spawns nothing here at all",
+    ),
+    (
         "crates/cli/src/signals.rs",
         2,
         "the two OS-signal listeners, the stated exception: the CancelHandle-driven \

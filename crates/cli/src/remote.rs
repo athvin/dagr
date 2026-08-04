@@ -569,19 +569,47 @@ pub(crate) fn stand_up<A: PodApi, L: PodLifecycle + Clone>(
     })
 }
 
+/// Everything about **one placed node** that its runner needs and the wiring does
+/// not already hold.
+///
+/// A struct rather than eight more parameters: the run-wide facts (namespace, image,
+/// owner, observer, lifecycle) live on the [`RemoteWiring`] and the per-node ones
+/// live here, which is also the boundary a reader has to know anyway.
+pub(crate) struct PlacedNode<'a> {
+    /// The node itself — its name, policy, and declared input arity.
+    pub(crate) node: &'a dagr_core::flow::PipelineNode,
+    /// The pipeline's stable name, recorded as an annotation.
+    pub(crate) pipeline_name: &'a str,
+    /// The run's structural fingerprint. A shard reporting a different one is
+    /// refused rather than replayed.
+    pub(crate) structural_fingerprint: &'a str,
+    /// The run's policy hash.
+    pub(crate) policy_hash: &'a str,
+    /// The author-declared placement, carried through as opaque strings.
+    pub(crate) placement: Placement,
+    /// The write-ahead submission log's handle.
+    pub(crate) submissions: crate::submission_log::SubmissionHandle,
+    /// The injected wait seam the retry backoff and the attempt deadline measure
+    /// through.
+    pub(crate) timer: Arc<dyn crate::run_flow::AttemptTimer>,
+    /// The return half of the data path: decode what the pod produced into this
+    /// node's own output slot.
+    pub(crate) fill: SlotFill,
+}
+
 impl<L: PodLifecycle + Clone> RemoteWiring<L> {
     /// Build the runner for one placed node.
-    pub(crate) fn runner(
-        &self,
-        node: &dagr_core::flow::PipelineNode,
-        pipeline_name: &str,
-        structural_fingerprint: &str,
-        policy_hash: &str,
-        placement: Placement,
-        submissions: crate::submission_log::SubmissionHandle,
-        timer: Arc<dyn crate::run_flow::AttemptTimer>,
-        fill: SlotFill,
-    ) -> Box<dyn NodeRunner> {
+    pub(crate) fn runner(&self, placed: PlacedNode<'_>) -> Box<dyn NodeRunner> {
+        let PlacedNode {
+            node,
+            pipeline_name,
+            structural_fingerprint,
+            policy_hash,
+            placement,
+            submissions,
+            timer,
+            fill,
+        } = placed;
         let policy = node.policy();
         let config = RemoteAttemptConfig {
             pipeline: pipeline_name.to_string(),
@@ -644,7 +672,7 @@ impl<L: PodLifecycle + Clone> RemoteWiring<L> {
                         &failure.last_message,
                     ) {
                         Some(missing) => {
-                            diagnostics.push(format!("the pod observer stopped: {missing}"))
+                            diagnostics.push(format!("the pod observer stopped: {missing}"));
                         }
                         None => diagnostics.push(format!(
                             "the pod observer stopped after {} consecutive failures over {:?}: {}",

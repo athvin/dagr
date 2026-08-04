@@ -10,7 +10,7 @@
 //! cargo run --example placed_pipeline -- run placed_pipeline --store ./runs --dagr.executor=local
 //!
 //! # Placed — `sample` becomes one pod with those requests; `summarise` stays here.
-//! # Needs a build that compiled the default-off `k8s` feature, and the three
+//! # Needs a build that compiled the default-off `k8s` feature, and the four
 //! # deployment facts below.
 //! DAGR_DEMO_NAMESPACE=dagr \
 //! DAGR_DEMO_IMAGE=localhost/dagr-placed-demo:latest \
@@ -196,11 +196,18 @@ mod remote {
     const BLOBS: &str = "DAGR_DEMO_BLOBS";
 
     /// Whether this invocation asked for the remote executor.
+    ///
+    /// Flag first, then the environment — the same `flag > env > default`
+    /// precedence every other `DAGR_*` knob follows, and both spellings come from
+    /// the shipped constants so a rename cannot leave this example behind.
     pub fn selected(argv: &[OsString]) -> bool {
-        matches!(
-            dagr_cli::config::parse_executor_flag(argv),
-            Ok(Some(ExecutorKind::Kubernetes))
-        ) || std::env::var("DAGR_EXECUTOR").as_deref() == Ok("k8s")
+        match dagr_cli::config::parse_executor_flag(argv) {
+            Ok(Some(kind)) => kind == ExecutorKind::Kubernetes,
+            _ => {
+                std::env::var(dagr_cli::config::DAGR_EXECUTOR).as_deref()
+                    == Ok(ExecutorKind::Kubernetes.as_str())
+            }
+        }
     }
 
     /// Read one required environment variable, or say which one is missing.

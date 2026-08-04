@@ -79,12 +79,12 @@ struct Extract;
 impl dagr_core::task::Task for Extract {
     type Input = ();
     type Output = Reading;
-    fn run(
+    async fn run(
         &mut self,
         _ctx: &dagr_core::context::RunContext,
         _input: Self::Input,
-    ) -> impl std::future::Future<Output = Result<Self::Output, TaskError>> + Send {
-        async move { Ok(Reading { n: 7 }) }
+    ) -> Result<Self::Output, TaskError> {
+        Ok(Reading { n: 7 })
     }
 }
 
@@ -94,12 +94,12 @@ struct Report;
 impl dagr_core::task::Task for Report {
     type Input = Reading;
     type Output = Reading;
-    fn run(
+    async fn run(
         &mut self,
         _ctx: &dagr_core::context::RunContext,
         input: Self::Input,
-    ) -> impl std::future::Future<Output = Result<Self::Output, TaskError>> + Send {
-        async move { Ok(Reading { n: input.n * 2 }) }
+    ) -> Result<Self::Output, TaskError> {
+        Ok(Reading { n: input.n * 2 })
     }
 }
 
@@ -233,17 +233,15 @@ impl PodLifecycle for ScriptedLifecycle {
         }
         let control = self.control.clone();
         async move {
-            match refusal {
-                Some(failure) => Err(failure),
-                None => {
-                    control.upsert(pod);
-                    Ok(CreatedPod {
-                        name,
-                        uid: Some(uid),
-                        host: Some("kind-worker".to_string()),
-                    })
-                }
+            if let Some(failure) = refusal {
+                return Err(failure);
             }
+            control.upsert(pod);
+            Ok(CreatedPod {
+                name,
+                uid: Some(uid),
+                host: Some("kind-worker".to_string()),
+            })
         }
     }
 
@@ -641,8 +639,11 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
         &[PLACED.to_string(), LOCAL.to_string()],
     )
     .expect("the event stream folds");
-    let attempted: std::collections::BTreeSet<&str> =
-        artifact.attempts().iter().map(|a| a.node()).collect();
+    let attempted: std::collections::BTreeSet<&str> = artifact
+        .attempts()
+        .iter()
+        .map(dagr_artifact::fold::AttemptRecord::node)
+        .collect();
     assert!(
         attempted.contains(PLACED) && attempted.contains(LOCAL),
         "the folded artifact carries both nodes' attempts: {attempted:?}"

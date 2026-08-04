@@ -147,7 +147,7 @@ fn the_observer_only_manifest_is_still_read_only_and_still_ships() {
 }
 
 /// The two manifests must not collide when both are applied: they bind the **same**
-/// ServiceAccount (an operator who applies the wide one alone still has an
+/// `ServiceAccount` (an operator who applies the wide one alone still has an
 /// identity), but they must be distinct `Role`/`RoleBinding` objects or the second
 /// apply silently replaces the first.
 #[test]

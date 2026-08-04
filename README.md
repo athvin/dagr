@@ -218,7 +218,10 @@ fails the build if any of them disagrees.
 - **Tier 1 — Linux containers.** Everything works; the full test suite runs in
   CI here.
 - **Dev-supported — macOS.** Compiles and runs; documented divergences only
-  (no cgroups; different fsync semantics). A CI job runs the core suite.
+  (no cgroups; different fsync semantics). A CI job runs the core suite, and the
+  [remote executor](#remote-execution)'s own suite runs there too — it drives an
+  in-process fake of the Kubernetes API, so it needs no cluster and is not a
+  Linux-only capability.
 - **Windows — unsupported in v1.** The signal and process models differ enough
   that pretending otherwise would mean untested promises. Revisit on demand.
 
