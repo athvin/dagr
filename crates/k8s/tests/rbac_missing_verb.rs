@@ -50,14 +50,8 @@ fn every_missing_verb_is_named_in_the_diagnostic() {
             rendered.contains(verb.as_str()),
             "the diagnostic names the missing verb: {rendered}"
         );
-        assert!(
-            rendered.contains("pods"),
-            "…and the resource: {rendered}"
-        );
-        assert!(
-            rendered.contains("dagr"),
-            "…and the namespace: {rendered}"
-        );
+        assert!(rendered.contains("pods"), "…and the resource: {rendered}");
+        assert!(rendered.contains("dagr"), "…and the namespace: {rendered}");
         assert!(
             rendered.contains(ORCHESTRATOR_RBAC_MANIFEST),
             "…and the manifest that grants it: {rendered}"
@@ -70,8 +64,8 @@ fn every_missing_verb_is_named_in_the_diagnostic() {
 /// request, a proxy) still reports the truth rather than the guess.
 #[test]
 fn the_verb_comes_from_the_servers_own_message_when_it_names_one() {
-    let missing = classify(PodVerb::Get, "dagr", &forbidden("watch"))
-        .expect("a 403 is a missing permission");
+    let missing =
+        classify(PodVerb::Get, "dagr", &forbidden("watch")).expect("a 403 is a missing permission");
     assert_eq!(
         missing.verb,
         PodVerb::Watch,

@@ -1,0 +1,96 @@
+# The COMPLETE least-privilege RBAC a dagr orchestrator needs (M10, T112, ADR 115).
+#
+# T107 shipped `pod-observer-rbac.yaml`, which grants `get`/`list`/`watch` and
+# nothing else, and its own test fails if a write verb appears there. That file is
+# still the right one to apply if all you want is to WATCH a run: the read grant and
+# the write grant are separate ports in the type system (`PodApi` vs `PodLifecycle`)
+# precisely so they can be separate grants here.
+#
+# This file is what an orchestrator that actually SUBMITS work needs. It is the
+# observer's three verbs plus the three writes, on one resource, in one namespace:
+#
+#   * `create` — submit one attempt's pod. One pod per node attempt; the executor
+#     never creates anything else.
+#   * `delete` — remove a pod dagr owns: the per-attempt timeout, cancellation, the
+#     pre-start failure path, and the revocation half of adoption. dagr deletes only
+#     pods it can prove are its own (run id, structural fingerprint, tool version and
+#     image digest all agree); an unrecognized pod is reported and LEFT RUNNING.
+#   * `patch` — rewrite `metadata.labels`, in place, and nothing else. This is the
+#     whole of orphan adoption: an orchestrator that died left pods running, and the
+#     restarted one reclaims them by moving a label rather than by recreating the
+#     object. Recreating it would run the attempt twice, which is the outcome
+#     adoption exists to prevent. The patch is a JSON merge patch scoped to
+#     `metadata.labels`; a `null` value removes a key, which is how revocation clears
+#     the owner.
+#
+# Apply into the namespace the run's pods live in, and point the orchestrator at that
+# same namespace. Substitute `dagr` for your namespace in all three objects.
+#
+# Deliberately ABSENT, and each absence is load-bearing:
+#   * `update` — a full object replace races whatever the platform wrote to `status`
+#     since the read. `patch` on `metadata.labels` is the narrowest write that does
+#     the job, so it is the only one granted.
+#   * `deletecollection` — dagr deletes pods one at a time, by name, after proving
+#     each is its own. A bulk delete is a blast radius with no use case here.
+#   * `pods/log` — dagr does not stream logs from pods. Aggregation is the cluster's
+#     job, consistent with the refusal of push-export from inside the process.
+#   * `pods/exec`, `pods/attach`, `pods/portforward` — the re-entrant same-image
+#     design needs no sidecar handshake and no channel into a running container.
+#   * `events`, `nodes` — an `Unschedulable` condition and both `reason` fields are on
+#     the pod object itself, so the diagnostics dagr reports need no second read and
+#     no cluster-scoped resource.
+#   * `jobs`, `cronjobs` — dagr submits a bare Pod with `restartPolicy: Never`. A Job
+#     would let the platform retry, and dagr-level retry running alongside
+#     cluster-level retry duplicates an attempt; a CronJob would be a control plane
+#     that outlives a run, which ADR 115 does not permit.
+#   * `configmaps`, `secrets`, `persistentvolumeclaims` — payloads travel through the
+#     blob store, never through the API server, and no run-index credential is ever
+#     handed to a pod.
+#   * anything cluster-scoped — this is a namespaced `Role`, never a `ClusterRole`.
+#     Watching or submitting across namespaces is out of scope by decision, not by
+#     omission.
+#
+# `crates/k8s/tests/rbac_orchestrator_manifest.rs` fails if any of the above appears,
+# and `dagr_k8s::rbac::PodVerb::ALL` is the same six-verb list, asserted against this
+# file — so the grant, the code, and the diagnostic an operator sees cannot drift.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dagr-orchestrator
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dagr-orchestrator-pods
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+rules:
+  # One rule, one resource, six verbs. A second rule is a second grant, whatever it
+  # says, so there is exactly one.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "patch", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dagr-orchestrator-pods
+  namespace: dagr
+  labels:
+    app.kubernetes.io/name: dagr
+    app.kubernetes.io/component: orchestrator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dagr-orchestrator-pods
+subjects:
+  - kind: ServiceAccount
+    name: dagr-orchestrator
+    namespace: dagr
