@@ -197,6 +197,33 @@ where
     Ok(())
 }
 
+/// A **one-node filler** over `id`'s slot: hand it the bytes a remote attempt
+/// produced and it decodes them into that slot, so the node's local consumers read
+/// the value exactly as they would after a local run.
+///
+/// It captures a one-entry registry rather than the whole one because the whole
+/// registry is moved into the [`RunReport`] at the end of the run and the filler has
+/// to outlive that move; a single `Arc` clone of the slot is all it needs, and
+/// narrowing it means a filler for one node cannot touch another's.
+///
+/// The error is a `String` because it crosses into [`crate::remote`], which is
+/// `k8s`-gated and must not name the codec's own error type — the *classification*
+/// is done here, where the type is in scope.
+#[cfg(feature = "k8s")]
+fn slot_filler(registry: &SlotRegistry, id: NodeId, codec: NodeCodec) -> crate::remote::SlotFill {
+    let mut only: SlotRegistry = HashMap::new();
+    if let Some(slot) = registry.get(&id) {
+        only.insert(id, Arc::clone(slot));
+    }
+    let fill = codec.fill;
+    let stable_name = codec.stable_name;
+    Box::new(move |bytes: &[u8]| {
+        fill(&only, id, bytes).map_err(|err| {
+            format!("the bytes the attempt produced are not a valid `{stable_name}`: {err}")
+        })
+    })
+}
+
 /// Encode whatever the slot registered under `id` holds, or `None` when it holds
 /// nothing (the attempt did not succeed, or released its value already).
 fn encode_slot<V>(registry: &SlotRegistry, id: NodeId) -> Option<Vec<u8>>
@@ -1032,6 +1059,164 @@ impl RunnableFlow {
         Ok(RunReport {
             inner: report,
             slots: registry,
+        })
+    }
+
+    /// **Assemble and run** the whole flow with its **placed** nodes on remote
+    /// compute (M10, T112, ADR 115) — the wired counterpart to [`run`](Self::run).
+    ///
+    /// This is what T108 and T109 both deferred to T112: the flow-level wiring that
+    /// turns a placed node into a `K8sNodeRunner`, and the startup discovery pass
+    /// that reclaims a killed orchestrator's pods before anything is submitted.
+    ///
+    /// The shape is deliberately the same as [`run`](Self::run)'s — one plan, one
+    /// `drive()` call, no driver change — because that is ADR 115's central claim:
+    /// `NodeRunner` was *already* the "where does this node run" seam, so remoteness
+    /// is one more implementation of it and the readiness cascade, admission ledger,
+    /// teardown phase, resume path and exit-code precedence are untouched.
+    ///
+    /// Unplaced nodes run **in this process**, exactly as they always did. That is
+    /// the point of the pair: iterate locally at full speed, then give the one node
+    /// whose work wants 64 GiB the infrastructure it actually needs.
+    ///
+    /// # Errors
+    ///
+    /// Every [`RemoteRunError`](crate::remote::RemoteRunError) is a **bootstrap**
+    /// condition — nothing has been submitted and no node has run:
+    /// the flow does not assemble; the configuration carries no explicit run id
+    /// (adoption after a restart is scoped to one); the observer's runtime could not
+    /// be built; a placed node consumes upstream values this executor cannot bind;
+    /// or the run's pods could not be listed, so what is already in flight is
+    /// unknown. A failure *during* the run is reported through the run's outcome and
+    /// terminal states like any other.
+    #[cfg(feature = "k8s")]
+    pub fn run_placed<A, L, S, C>(
+        self,
+        pipeline_name: &str,
+        config: &RunConfig,
+        sink: S,
+        clock: C,
+        cluster: crate::remote::RemoteCluster<A, L>,
+    ) -> Result<crate::remote::PlacedRun, crate::remote::RemoteRunError>
+    where
+        A: dagr_k8s::api::PodApi,
+        L: dagr_k8s::api::PodLifecycle + Clone,
+        S: EventSink + 'static,
+        C: MonotonicClock + 'static,
+    {
+        use crate::remote::RemoteRunError;
+
+        let run_id = config
+            .effective_run_id()
+            .ok_or(RemoteRunError::NoRunId)?
+            .to_string();
+
+        let RunnableFlow {
+            flow,
+            runners,
+            timer,
+            force_roundtrip: _,
+            resources: _,
+        } = self;
+        let pipeline = flow.finish();
+        let artifact = pipeline.assemble().map_err(RemoteRunError::Assembly)?;
+        let fp = artifact.fingerprint();
+        let structural = crate::graph::format_fingerprint_structural(&fp);
+        let policy_hash = crate::graph::format_fingerprint_policy(&fp);
+
+        // Which nodes are placed, and can this executor actually bind their inputs?
+        // A remote attempt is bound to references it is *given*; nothing in the
+        // shipped path turns a local upstream's in-memory value into one, so a placed
+        // node with data edges is refused by name rather than run in the wrong place.
+        let mut placed: BTreeMap<String, dagr_core::assembly::Placement> = BTreeMap::new();
+        for node in pipeline.nodes() {
+            if let Some(placement) = node.policy().placement_spec() {
+                if !node.data_edges().is_empty() {
+                    return Err(RemoteRunError::UnboundInputs {
+                        node: node.name().to_string(),
+                        arity: node.data_edges().len(),
+                    });
+                }
+                placed.insert(node.name().to_string(), placement);
+            }
+        }
+
+        // Local slots and local runners first: the placed nodes' slots still exist
+        // (their consumers read them through the ordinary registry), and the local
+        // factories are what every unplaced node runs through.
+        //
+        // The **codec** is kept alongside each recipe because a placed node's value
+        // has to make the return trip: the pod encodes it into the blob container,
+        // and this process has to decode it back into the node's own slot or its
+        // local consumers read an unfilled slot. That is the mirror image of
+        // `prepare_attempt`'s `fill_input`, and it uses the same captured `fn`
+        // pointer, so the two directions cannot disagree about the encoding.
+        let mut registry: SlotRegistry = HashMap::new();
+        let mut factories: Vec<(String, NodeId, RunnerFactory, Option<NodeCodec>)> =
+            Vec::with_capacity(runners.len());
+        for r in runners {
+            let consumers = artifact.consumer_count(r.id).unwrap_or(0);
+            registry.insert(r.id, (r.make_slot)(consumers));
+            factories.push((r.name, r.id, r.factory, r.codec));
+        }
+
+        // A placed node with no codec provably cannot cross a process boundary, so it
+        // is refused here rather than submitted to a pod whose bytes nothing could
+        // decode. `register_source_placed` makes this unreachable by bound; a
+        // placement attached through a non-`Payload` registrar's `NodePolicy` is the
+        // path that reaches it.
+        for (name, _, _, codec) in &factories {
+            if placed.contains_key(name) && codec.is_none() {
+                return Err(RemoteRunError::NotRemoteEligible { node: name.clone() });
+            }
+        }
+
+        let must_run: std::collections::BTreeSet<String> =
+            factories.iter().map(|(name, ..)| name.clone()).collect();
+        let wiring = crate::remote::stand_up(cluster, &run_id, &structural, must_run)?;
+
+        // The submission log owns the run's sequence counter: a write-ahead
+        // submission record must be durable *before* its pod is created, and the
+        // driver's buffering attempt sink drains only after an attempt returns. One
+        // process, one mutex, one counter — the orchestrator is still single-writer.
+        let log = crate::submission_log::SubmissionLog::over(sink, &run_id, pipeline_name);
+
+        let mut node_runners: BTreeMap<String, Box<dyn crate::driver::NodeRunner>> =
+            BTreeMap::new();
+        for (name, id, factory, codec) in factories {
+            let runner = match placed.get(&name) {
+                Some(placement) => {
+                    let node = pipeline
+                        .nodes()
+                        .find(|n| n.name() == name)
+                        .expect("the placed name came from this pipeline");
+                    let codec = codec.expect("a placed node without a codec was refused above");
+                    wiring.runner(
+                        node,
+                        pipeline_name,
+                        &structural,
+                        &policy_hash,
+                        *placement,
+                        log.handle(),
+                        Arc::clone(&timer),
+                        slot_filler(&registry, id, codec),
+                    )
+                }
+                None => factory(&registry, &timer, AttemptDiscipline::NodePolicy),
+            };
+            node_runners.insert(name, runner);
+        }
+
+        let plan = crate::driver::RunPlan::new(pipeline, node_runners).remote_wired(true);
+        let report = drive(config, pipeline_name, Ok(plan), &[], log.sink(), clock);
+        let (discovery, diagnostics) = wiring.finish();
+        Ok(crate::remote::PlacedRun {
+            report: RunReport {
+                inner: report,
+                slots: registry,
+            },
+            discovery,
+            diagnostics,
         })
     }
 

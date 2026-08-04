@@ -18,9 +18,12 @@
 //! properties asserted here — that a restart adopts rather than resubmits, that a
 //! `403` names its verb, that the local and remote artifacts differ only by policy —
 //! are decidable from the API's observable behaviour, and a real cluster would make
-//! them slower and less deterministic without making them stronger. What genuinely
-//! needs a cluster (an image pull, a real OOM kill, real scheduling latency) is the
-//! manually-dispatched `remote-cluster` workflow's, and is named there.
+//! them slower and less deterministic without making them stronger.
+//!
+//! What genuinely needs a cluster — an image pull, a real OOM kill, real scheduling
+//! latency — is **not covered yet**: the shipped pod spec cannot mount the blob
+//! container a pod must write into, so no real pod can report. The ticket file
+//! records the gap and names T108 as its owner.
 
 #![cfg(feature = "k8s")]
 
@@ -33,9 +36,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
+use dagr_blob::{BlobStore, LocalFsBlob};
 use dagr_cli::driver::RunConfig;
 use dagr_cli::executor::ExecutorKind;
-use dagr_cli::remote::{RemoteCluster, RemoteRunError, RemoteTarget};
+use dagr_cli::remote::{RemoteCluster, RemoteTarget};
 use dagr_cli::run_flow::RunnableFlow;
 use dagr_cli::shard::{AttemptShard, ConsumedRef, ShardIdentity, ShardOutput};
 use dagr_core::context::TerminalState;
@@ -75,17 +79,12 @@ struct Extract;
 impl dagr_core::task::Task for Extract {
     type Input = ();
     type Output = Reading;
-    fn class(&self) -> dagr_core::task::ExecutionClass {
-        dagr_core::task::ExecutionClass::AwaitBound
-    }
     fn run(
         &mut self,
-        _input: Self::Input,
         _ctx: &dagr_core::context::RunContext,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Output, TaskError>> + Send + '_>,
-    > {
-        Box::pin(async move { Ok(Reading { n: 7 }) })
+        _input: Self::Input,
+    ) -> impl std::future::Future<Output = Result<Self::Output, TaskError>> + Send {
+        async move { Ok(Reading { n: 7 }) }
     }
 }
 
@@ -95,17 +94,12 @@ struct Report;
 impl dagr_core::task::Task for Report {
     type Input = Reading;
     type Output = Reading;
-    fn class(&self) -> dagr_core::task::ExecutionClass {
-        dagr_core::task::ExecutionClass::AwaitBound
-    }
     fn run(
         &mut self,
-        input: Self::Input,
         _ctx: &dagr_core::context::RunContext,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Output, TaskError>> + Send + '_>,
-    > {
-        Box::pin(async move { Ok(Reading { n: input.n * 2 }) })
+        input: Self::Input,
+    ) -> impl std::future::Future<Output = Result<Self::Output, TaskError>> + Send {
+        async move { Ok(Reading { n: input.n * 2 }) }
     }
 }
 
@@ -143,6 +137,9 @@ struct LifecycleState {
     deleted: Vec<String>,
     patched: Vec<String>,
     live: BTreeMap<String, PodSnapshot>,
+    /// Every spec the platform was asked to create, so a test can read the declared
+    /// size back off the object rather than out of the runner's configuration.
+    specs: Vec<PodSpec>,
     /// A verb the fake platform refuses with a `403`, as a Role with that verb
     /// removed would.
     forbidden: Option<PodVerb>,
@@ -193,6 +190,10 @@ impl ScriptedLifecycle {
         self.state.lock().expect("lifecycle mutex").patched.clone()
     }
 
+    fn specs(&self) -> Vec<PodSpec> {
+        self.state.lock().expect("lifecycle mutex").specs.clone()
+    }
+
     fn refuses(&self, verb: PodVerb) -> Option<ApiFailure> {
         let guard = self.state.lock().expect("lifecycle mutex");
         (guard.forbidden == Some(verb)).then(|| forbidden_failure(verb))
@@ -222,10 +223,13 @@ impl PodLifecycle for ScriptedLifecycle {
         let uid = format!("uid-{}", self.next_uid.fetch_add(1, Ordering::SeqCst));
         pod.uid = Some(uid.clone());
         pod.host = Some("kind-worker".to_string());
-        if refusal.is_none() {
+        {
             let mut guard = self.state.lock().expect("lifecycle mutex");
-            guard.created.push(name.clone());
-            guard.live.insert(name.clone(), pod.clone());
+            guard.specs.push(spec.clone());
+            if refusal.is_none() {
+                guard.created.push(name.clone());
+                guard.live.insert(name.clone(), pod.clone());
+            }
         }
         let control = self.control.clone();
         async move {
@@ -367,11 +371,11 @@ impl MemorySink {
 }
 
 impl EventSink for MemorySink {
-    fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+    fn append_line(&mut self, line: &[u8]) -> std::io::Result<()> {
         self.lines
             .lock()
             .expect("sink mutex")
-            .push(line.to_string());
+            .push(String::from_utf8_lossy(line).into_owned());
         Ok(())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -385,8 +389,8 @@ struct TickClock {
 }
 
 impl MonotonicClock for TickClock {
-    fn now_millis(&self) -> u64 {
-        self.now.fetch_add(1, Ordering::Relaxed)
+    fn elapsed_ns(&self) -> u64 {
+        self.now.fetch_add(1_000, Ordering::Relaxed)
     }
 }
 
@@ -430,8 +434,19 @@ fn write_shard(root: &Path, run_id: &str, node: &str, attempt: u32, state: Termi
     .with_inputs(Vec::<ConsumedRef>::new())
     .with_records(dagr_cli::shard::records_for(run_id, &events));
     if state == TerminalState::Succeeded {
+        // The pod really does store the encoded value and record a reference to it
+        // (`exec_node.rs`: `store.put(&bytes)` then `store.reference(&key)`), and the
+        // orchestrator really does fetch it back to fill the node's slot — otherwise
+        // a local consumer downstream of a placed node reads an unfilled slot. A
+        // fixture that recorded a reference to bytes nobody wrote would assert the
+        // return half of the data path away, so this writes the bytes.
+        let bytes = Reading { n: 7 }.encode_to_vec();
+        let store = LocalFsBlob::open(root);
+        let key = store.put(&bytes).expect("the value is stored");
         shard = shard.with_output(
-            ShardOutput::new("dagr-blob+local://blobs/sha256/reading").content_hash("sha256:read"),
+            ShardOutput::new(store.reference(&key).to_string())
+                .content_hash(key.to_string())
+                .size_bytes(bytes.len() as u64),
         );
     }
     shard
@@ -556,7 +571,6 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
 
     let (api, control) = fake_api();
     let lifecycle = ScriptedLifecycle::new(control.clone());
-    let seen_specs: Arc<Mutex<Vec<PodSpec>>> = Arc::new(Mutex::new(Vec::new()));
 
     let shard_root = blobs.clone();
     let driver = {
@@ -575,11 +589,16 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
     let config = RunConfig::new(store.to_string_lossy().to_string())
         .run_id(RUN_ID)
         .executor(ExecutorKind::Kubernetes);
-    let cluster = RemoteCluster::new(api, lifecycle.clone(), target(&blobs))
-        .inspect_specs(Arc::clone(&seen_specs));
+    let cluster = RemoteCluster::new(api, lifecycle.clone(), target(&blobs));
 
     let placed = build_flow()
-        .run_placed(PIPELINE, &config, sink.clone(), TickClock::default(), cluster)
+        .run_placed(
+            PIPELINE,
+            &config,
+            sink.clone(),
+            TickClock::default(),
+            cluster,
+        )
         .expect("the placed run drives");
 
     rt.block_on(driver).expect("the platform driver finishes");
@@ -604,7 +623,7 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
     );
 
     // The declared size travelled, verbatim, as an opaque string.
-    let specs = seen_specs.lock().expect("spec mutex").clone();
+    let specs = lifecycle.specs();
     let spec = specs.first().expect("the create carried a spec");
     assert_eq!(spec.cpu.as_deref(), Some("500m"));
     assert_eq!(spec.memory.as_deref(), Some("512Mi"));
@@ -616,10 +635,18 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
 
     // The stream folds, and its `seq` is gapless — the single-writer guarantee holds
     // with a submission record interleaved into it.
-    let joined = placed.report_lines(&sink);
-    let artifact =
-        dagr_artifact::fold::fold_stream(joined.as_bytes()).expect("the event stream folds");
-    assert!(!artifact.nodes.is_empty());
+    let joined = sink.lines().join("\n") + "\n";
+    let artifact = dagr_artifact::fold::fold_stream(
+        joined.as_bytes(),
+        &[PLACED.to_string(), LOCAL.to_string()],
+    )
+    .expect("the event stream folds");
+    let attempted: std::collections::BTreeSet<&str> =
+        artifact.attempts().iter().map(|a| a.node()).collect();
+    assert!(
+        attempted.contains(PLACED) && attempted.contains(LOCAL),
+        "the folded artifact carries both nodes' attempts: {attempted:?}"
+    );
 }
 
 // ===========================================================================
@@ -737,7 +764,12 @@ fn the_same_pipeline_run_locally_and_remotely_agrees_on_everything_but_policy() 
         .run_id(RUN_ID)
         .executor(ExecutorKind::Local);
     let local = build_flow()
-        .run(PIPELINE, &local_config, local_sink.clone(), TickClock::default())
+        .run(
+            PIPELINE,
+            &local_config,
+            local_sink.clone(),
+            TickClock::default(),
+        )
         .expect("the flow assembles");
 
     // --- the remote leg ----------------------------------------------------
@@ -790,16 +822,42 @@ fn the_same_pipeline_run_locally_and_remotely_agrees_on_everything_but_policy() 
 
     // The structural fingerprint is identical; the policy hash is where placement
     // lives, and both runs declare the same placement, so it matches too — what the
-    // test pins is that placement never reaches the *structural* half.
+    // test pins is that placement never reaches the *structural* half. Read out of
+    // the two headers rather than compared against a recomputed constant, so the
+    // assertion is about the two runs agreeing rather than about a format.
+    let local_header = local_sink.lines().first().expect("a header").clone();
+    let remote_header = remote_sink.lines().first().expect("a header").clone();
+    let local_structural = header_field(&local_header, "fingerprint_structural");
+    let remote_structural = header_field(&remote_header, "fingerprint_structural");
+    assert_eq!(
+        local_structural, remote_structural,
+        "both legs record the same structural fingerprint"
+    );
+    assert_eq!(
+        header_field(&local_header, "fingerprint_policy"),
+        header_field(&remote_header, "fingerprint_policy"),
+        "…and the same policy hash, because both legs declare the same placement"
+    );
+    // Non-vacuity: the extractor really found the field, and it is this build's.
     let fp = build_flow().into_pipeline().fingerprint();
-    let structural = dagr_cli::graph::format_fingerprint_structural(&fp);
-    for lines in [local_sink.lines(), remote_sink.lines()] {
-        let header = lines.first().expect("a run-started header").clone();
-        assert!(
-            header.contains(&structural),
-            "both legs record the same structural fingerprint: {header}"
-        );
-    }
+    assert!(
+        dagr_cli::graph::format_fingerprint_structural(&fp).ends_with(&local_structural),
+        "the recorded structural fingerprint is this build's ({local_structural})"
+    );
+}
+
+/// One string field of a `run-started` header line.
+fn header_field(line: &str, key: &str) -> String {
+    let needle = format!("\"{key}\":\"");
+    let start = line
+        .find(&needle)
+        .unwrap_or_else(|| panic!("the header carries `{key}`: {line}"))
+        + needle.len();
+    let end = line[start..]
+        .find('"')
+        .expect("the field's value is terminated")
+        + start;
+    line[start..end].to_string()
 }
 
 // ===========================================================================

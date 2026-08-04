@@ -171,6 +171,11 @@ pub struct DiscoveryReport {
     pub unpatched: Vec<String>,
     /// Every refusal's message, keyed by the attempt it occupies.
     refusals: BTreeMap<AttemptKey, String>,
+    /// Why each [`unpatched`](Self::unpatched) pod could not be claimed, keyed by
+    /// pod name — the platform's own words, kept so a caller can classify them (a
+    /// missing `patch` grant reads very differently from a transient `500`, and only
+    /// one of them is worth telling an operator to fix).
+    unpatched_reasons: BTreeMap<String, String>,
 }
 
 impl DiscoveryReport {
@@ -178,6 +183,30 @@ impl DiscoveryReport {
     #[must_use]
     pub fn report_for(&self, key: &AttemptKey) -> Option<String> {
         self.refusals.get(key).cloned()
+    }
+
+    /// Why `pod` appears in [`unpatched`](Self::unpatched), in the platform's own
+    /// words.
+    #[must_use]
+    pub fn unpatched_reason(&self, pod: &str) -> Option<&str> {
+        self.unpatched_reasons.get(pod).map(String::as_str)
+    }
+
+    /// Every refusal message, keyed by **pod name** — the operator-facing view of
+    /// [`refused`](Self::refused).
+    #[must_use]
+    pub fn refusal_messages(&self) -> BTreeMap<String, String> {
+        self.refusals
+            .values()
+            .filter_map(|message| {
+                // The message is `refusing to adopt pod \`<name>\`: …`; the pod name
+                // is the one field a caller has to key on, and it is already in the
+                // sentence rather than duplicated beside it.
+                let start = message.find('`')? + 1;
+                let end = message[start..].find('`')? + start;
+                Some((message[start..end].to_string(), message.clone()))
+            })
+            .collect()
     }
 
     /// Whether the pass changed nothing — no pod was reclaimed, revoked or
@@ -240,6 +269,9 @@ pub async fn discover<A: PodApi, L: PodLifecycle>(
                     "could not take ownership of a discovered pod; falling back to \
                      the submission probe"
                 );
+                report
+                    .unpatched_reasons
+                    .insert(pod.name.clone(), failure.to_string());
                 report.unpatched.push(pod.name);
             }
         }

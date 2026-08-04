@@ -104,6 +104,13 @@ pub mod metastore_tee;
 pub mod pod_observer;
 pub mod prelude;
 pub mod registry;
+/// The **remote executor, wired into the run path** (M10, T112, ADR 115): the
+/// cluster target an operator states, the two ports, and the startup pass that
+/// reclaims a killed orchestrator's pods before anything is submitted. Behind the
+/// default-off `k8s` feature, which is where the executor itself lives.
+#[cfg(feature = "k8s")]
+pub mod remote;
+pub mod remote_guard;
 /// The `inventory`-backed DAG auto-discovery entrypoint (M6, ADR 092). Gated behind
 /// the default-on `dag` feature so `--no-default-features` drops the `inventory`
 /// runtime dependency edge entirely (`dagr-core` never sees it).
