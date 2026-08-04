@@ -749,8 +749,9 @@ struct Reporting<L: PodLifecycle> {
 impl<L: PodLifecycle> Reporting<L> {
     /// Fetch the bytes the attempt produced and decode them into the node's slot.
     ///
-    /// `Ok(())` when there was nothing to land: an attempt that did not succeed
-    /// produces no value, and the driver propagates its failure the ordinary way.
+    /// Called only after a **success**, so a shard that recorded no output reference
+    /// is an error rather than a no-op: a node that succeeded and produced nothing
+    /// its consumers can read has not, from the graph's point of view, succeeded.
     fn land_output(&self) -> Result<(), String> {
         let Some(uri) = self.inner.durable_reference() else {
             return Err(format!(
