@@ -14,11 +14,23 @@
 //! - **T108/T109 both deferred the complete RBAC.** A missing verb must fail
 //!   *naming the verb*, not hang and not report a generic error.
 //!
-//! Every test drives T107's fake API surface. That is not a compromise: the
-//! properties asserted here — that a restart adopts rather than resubmits, that a
-//! `403` names its verb, that the local and remote artifacts differ only by policy —
-//! are decidable from the API's observable behaviour, and a real cluster would make
-//! them slower and less deterministic without making them stronger.
+//! Every test drives T107's fake API surface, and what that buys differs by test —
+//! so read each claim at its own strength rather than the module's:
+//!
+//! - **The RBAC classification and the dual-mode parity** are decidable from the
+//!   API's observable behaviour. A real cluster would make them slower and less
+//!   deterministic without making them stronger.
+//! - **Adoption across a restart is weaker here than it reads.** Pod identity is a
+//!   test-controlled struct: the fake hands back the labels and annotations the
+//!   submission put there, so "the restart recognised its own pod" is asserted
+//!   against data this file wrote. Against real pods the same assertion would also
+//!   cover the API server's own round-tripping of labels, annotations and UIDs, and
+//!   the timing of a live watch. That is a genuinely stronger test, and it is not
+//!   this one. (What it does prove, and what no cluster is needed for, is that the
+//!   run path *calls* `list` and `patch_labels` instead of creating a second pod.)
+//! - **Nothing here observes a pod actually running.** The attempt shard a placed
+//!   node reports through is written by the test, into the orchestrator's own blob
+//!   directory. See the note below on why no pod can write one.
 //!
 //! What genuinely needs a cluster — an image pull, a real OOM kill, real scheduling
 //! latency — is **not covered yet**: the shipped pod spec cannot mount the blob
@@ -200,7 +212,12 @@ impl ScriptedLifecycle {
     }
 }
 
-/// The message a real API server sends when a Role is missing a verb.
+/// The **fixture** denial message for a missing verb: the documented shape of a
+/// Kubernetes RBAC `403`, hand-written, byte-identical to the one
+/// `crates/k8s/tests/rbac_missing_verb.rs` builds. Not recorded from a live API
+/// server — nothing here has contacted one — so what the test below proves is that
+/// dagr's classifier parses *this pinned shape*, not that it parses whatever a
+/// particular cluster emits.
 fn forbidden_failure(verb: PodVerb) -> ApiFailure {
     ApiFailure::api(
         dagr_k8s::rbac::FORBIDDEN_CODE,
@@ -551,11 +568,19 @@ fn an_unplaced_pipeline_runs_under_the_remote_executor_with_no_cluster() {
 // 2. The capability proof: a placed node runs through the wired path
 // ===========================================================================
 
-/// **Test plan: every node reaches `succeeded`, one pod per placed node attempt was
-/// created, and the pod carried the declared resource requests (read back from the
-/// API).**
+/// **What this proves:** a placed pipeline drives to completion through the wired
+/// run path, one pod is submitted per placed node attempt and none for an unplaced
+/// one, and the `PodSpec` handed to `create` carries the declared size verbatim.
+///
+/// **What it does not prove**, and what the ticket's own wording — *"the pods carried
+/// the declared resource requests (read back from the API)"* — asks for: the size is
+/// read off the spec this process submitted, not off a `Pod` object fetched back from
+/// an API server, and the attempt shard the placed node reports through is written
+/// **by this test** (`write_shard`) into the orchestrator's own blob directory. No
+/// pod writes it, because no pod can: the spec has no volume field to mount that
+/// directory with. So this is the wired path end to end, not the *system* end to end.
 #[test]
-fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
+fn a_placed_pipeline_drives_to_completion_and_its_submitted_spec_carries_the_declared_size() {
     let tmp = TempRoot::new("e2e");
     let blobs = tmp.path().join("blobs");
     std::fs::create_dir_all(&blobs).expect("blob container");
@@ -662,6 +687,14 @@ fn a_placed_pipeline_runs_end_to_end_and_the_pod_carries_the_declared_size() {
 /// The restart is modelled by starting a run whose placed attempt's pod **already
 /// exists** — which is exactly the state a killed orchestrator leaves behind, and
 /// the only state the restarting process can observe.
+///
+/// Read the strength carefully. The pod this recognises is a struct this test built,
+/// so what is proven is that the run path *takes the adoption branch*: it lists,
+/// matches on identity, patches the ownership label, and creates nothing. Against
+/// real pods the same assertion would additionally cover the API server's own
+/// round-tripping of labels, annotations and UIDs, and a live watch's timing — and
+/// that half needs no shared blob container, so it is provable on a cluster the day
+/// one is wired up, unlike the "runs to completion from the artifact" half.
 #[test]
 fn a_restart_adopts_the_live_pod_instead_of_resubmitting_it() {
     let tmp = TempRoot::new("adopt");

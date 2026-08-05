@@ -19,8 +19,16 @@
 use dagr_k8s::api::ApiFailure;
 use dagr_k8s::rbac::{FORBIDDEN_CODE, ORCHESTRATOR_RBAC_MANIFEST, PodVerb, classify};
 
-/// The message a real API server sends. Recorded verbatim from the shape
-/// `kube` surfaces, so the parse is tested against the platform's own words.
+/// The **fixture** denial message the parser is tested against — the documented
+/// shape of a Kubernetes RBAC `403`, hand-written here.
+///
+/// It is *not* recorded from a live API server: nothing in this repository has been
+/// run against a cluster, so no such recording exists to point at. Say so plainly,
+/// because "recorded verbatim" would claim a provenance the file cannot back, and a
+/// reader who believed it would over-trust the parse. `crates/cli/tests/
+/// m10_remote_execution.rs` builds the byte-identical string for the same reason,
+/// which makes this the one shape both sides are pinned to — if the platform's
+/// wording differs, both move together and neither is evidence about the other.
 fn forbidden(verb: &str) -> ApiFailure {
     ApiFailure::api(
         FORBIDDEN_CODE,

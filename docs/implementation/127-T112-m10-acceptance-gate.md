@@ -189,9 +189,14 @@ Prove the milestone end to end, and pin its boundaries structurally.
   - **Registry** — none needed. The image is built in-job from the workspace and
     loaded straight into the node's image store with `kind load docker-image`, which
     is also the answer to the "does the demo image get published" question below.
-  - **Pod-to-pod storage** — a `kind` `extraMounts` host directory, which is a real
-    shared filesystem across every pod on a single-node cluster and needs no RWX
-    class and no bucket. T101 Run B used exactly this at `/dagr-blobs`.
+  - **Pod-to-pod storage** — needs **no RWX class and no bucket** on a single-node
+    `kind` cluster, but it is *not* free the way the first pass of this note
+    claimed. A `kind` `extraMounts` entry mounts a host directory **into the node**,
+    not into a pod; making it visible to a container still needs a `hostPath`
+    volume plus a `volumeMount` in the pod spec. T101 Run B's `/dagr-blobs` was the
+    node-side half of exactly that pair. So the infrastructure is satisfiable
+    without operator provisioning; the **pod-spec half is missing from the shipped
+    code**, which is the blocker recorded immediately below.
   - **Headroom** — a fresh single-node `kind` cluster has no other work on it, so
     the reference cluster's 102%-memory worst node is not in the picture.
   So the *stated* prerequisite is not what blocks this ticket.
@@ -216,18 +221,42 @@ Prove the milestone end to end, and pin its boundaries structurally.
   This is **mechanism work, and this ticket's §Out of scope forbids it**: "Any
   mechanism work — T101–T110 own it. A failure here is fixed in the owning ticket."
   The owning ticket is T108 (the node runner and the pod spec it builds); a volume
-  seam on `PodSpec` plus its translation in `pod_object` is the missing piece. Until
-  that lands, the cluster half of this gate's Test plan (a placed node running end to
-  end on kind, the kill-and-restart proof against real pods, the OOM-kill case) is
-  **unimplementable without faking it**, which the prerequisite block explicitly
-  refuses. The non-cluster half — every boundary invariant, the wired run path
-  against T107's fake API surface, RBAC, dual-mode parity, the docs claims and the
-  local demo — is complete and green.
+  seam on `PodSpec` plus its translation in `pod_object` is the missing piece.
+
+  **Exactly what is blocked, and what is not.** The blocker is *reporting*: anything
+  that has to read a placed attempt's own artifact needs the pod and the
+  orchestrator to share a blob container. So these three, and only these three, are
+  unimplementable without faking them, which the prerequisite block explicitly
+  refuses:
+
+  - a placed node **running to completion** on a real cluster,
+  - **terminal states** and the folded run artifact for a placed node,
+  - **"every node executed exactly once"** evidenced from that artifact — including
+    the OOM-kill case and the retry-with-backoff case, which are attempt outcomes
+    read back the same way.
+
+  What is **not** blocked, and is worth stating so the deferral does not grow: the
+  adoption half of the kill-and-restart guarantee. `crates/cli/src/adoption.rs` uses
+  only `api.list` and `patch_labels` and never touches a shard, so *"the restarted
+  orchestrator adopted the live pod, did not resubmit it, and recreated no pod"* —
+  asserted from pod UIDs and creation timestamps read back from the API — is
+  provable against **real pods today**, and against real pods it is a strictly
+  stronger assertion than the in-process fake's, because the identity it matches on
+  has round-tripped through an API server. Only the *"…and the run then completes"*
+  clause needs the missing seam.
+
+  **The cluster job stays deferred regardless**, because standing it up is part of
+  the operator decision this ticket is halted on, not something to improvise. The
+  non-cluster half — every boundary invariant, the wired run path against T107's
+  fake API surface, RBAC, dual-mode parity, the docs claims and the local demo — is
+  complete and green.
 - **kind or k3s in CI, and how long does the job take? — RESOLVED: kind, and the
   cluster job is deferred with the blocker above.** T101 recorded kind for
   measurement (Run B), and the same choice is right here: `kind load docker-image`
-  removes the registry prerequisite entirely, and a single-node cluster makes the
-  `extraMounts` host directory a genuine shared container. Wall clock, from T101's
+  removes the registry prerequisite entirely, and on a single-node cluster an
+  `extraMounts` host directory plus a `hostPath` volume in the pod spec would be a
+  genuine shared container — the second half of that pair being precisely what does
+  not exist. Wall clock, from T101's
   own timings: ~2m46s to create the cluster cold, plus the image build. That is too
   slow for every PR, so the intended shape — to be written by whoever unblocks the
   ticket — is a separate `remote-cluster` workflow on `workflow_dispatch` plus a

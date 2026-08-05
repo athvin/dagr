@@ -669,23 +669,33 @@ requirement of the operational story, not a tuning tip. Place a node when its ow
 work dominates ~1–2.5 s; do not place a graph of sub-second nodes one attempt at a
 time.
 
-### Somewhere for the pods to put things
+### Somewhere for the pods to put things — not wired yet
 
 A placed attempt reports by writing an attempt shard and its output where the
 orchestrator can read them, so both sides need one container they can both reach.
-Pick one before the first remote run:
+**The shipped code cannot yet give a pod one.** This is the honest current state,
+not a choice you make at provisioning time:
 
-- **A shared volume** — a `ReadWriteMany` (RWX) storage class mounted at the same
-  path in the orchestrator and in every pod. Simplest when your cluster offers RWX.
-  Many do not: a single-class RWO cluster cannot do this.
-- **An S3-compatible object store** — the `blob-s3` feature's backend. The portable
-  answer, and the only one available on an RWO-only cluster.
+- The pod side writes through a **local filesystem path**, and `exec-node` **refuses
+  an input reference that names any backend other than the local one** — so the
+  `blob-s3` backend is not openable from inside a pod.
+- The pod spec dagr builds carries an image, a command, the declared size, its
+  identity labels and annotations, `restartPolicy: Never`, node selectors and
+  tolerations. It has **no volume, no volumeMount and no environment field**, so a
+  host path, an RWX claim, or a bucket's endpoint cannot be attached to it at all.
 
-Payloads travel through that container, never through the API server: no `ConfigMap`
-smuggling, no 1 MiB ceiling. A reference that carries a signed query string is
-refused rather than written into a pod's arguments, and a pod carries no credential
-for dagr's own run index — the index is the orchestrator's, and the pod never links
-it.
+So a placed node runs end to end against dagr's in-process API fake, and **cannot
+yet run against a real cluster**: the pod would start and have nowhere to report to.
+Adding that seam is mechanism work owned by the node-runner ticket (T108). When it
+lands, the shape is the usual one — an RWX volume mounted at the same path on both
+sides, or the S3-compatible backend once `exec-node` can open it — and this section
+becomes a choice rather than a gap.
+
+What does **not** change when it lands: payloads travel through that container,
+never through the API server, so there is no `ConfigMap` smuggling and no 1 MiB
+ceiling. A reference that carries a signed query string is refused rather than
+written into a pod's arguments, and a pod carries no credential for dagr's own run
+index — the index is the orchestrator's, and the pod never links it.
 
 ### The RBAC an operator applies
 
@@ -703,8 +713,11 @@ nothing else:
 | `patch` | Rewrite `metadata.labels` in place — the whole of orphan adoption. |
 | `delete` | Remove a pod dagr owns: a timeout, a cancellation, a revocation. |
 
-Remove one and the failure **names the missing verb** and points at the manifest,
-rather than hanging or reporting a generic API error. Deliberately absent: `update`
+Remove one and dagr **names the missing verb** and points at the manifest, rather
+than retrying a denial that will never succeed or reporting a generic API error.
+Read that at the strength it is proven at: the classifier is tested against a
+**pinned fixture** of the denial message a Kubernetes API server sends, not against
+a live cluster — nothing in this repository has been run against one. Deliberately absent: `update`
 (a full replace races the platform's own `status` writes), `deletecollection`,
 `pods/log`, `pods/exec`, and anything cluster-scoped. dagr submits a bare Pod with
 `restartPolicy: Never` and does its own retrying — letting the platform retry too

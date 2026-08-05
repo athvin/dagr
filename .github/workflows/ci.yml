@@ -493,13 +493,20 @@ jobs:
       # decidable from the API's observable behaviour: a restart ADOPTS rather than
       # resubmits (every node executed exactly once, no pod recreated), a `403`
       # names the missing verb instead of hanging, and the local and remote
-      # artifacts differ only by policy-derived fields. What genuinely needs a
-      # cluster — an image pull, a real OOM kill, real scheduling latency — is the
-      # `remote-cluster` workflow's, not this job's.
+      # artifacts differ only by policy-derived fields.
       #
-      # BOTH tiers. The run path is timer/channel/filesystem code like T108's, and
-      # macOS is where the non-cluster half of T112's platform line is met (the
-      # cluster job is Linux-only, a documented platform divergence).
+      # What genuinely needs a cluster — an image pull, a real OOM kill, real
+      # scheduling latency — is NOT covered anywhere, in this workflow or any other:
+      # `.github/workflows/` holds this file and nothing else. The shipped pod spec
+      # has no volume field, so a pod cannot be given the blob container it must
+      # write its shard and output into, and a cluster job that ran without one
+      # would assert less than it claimed. T112's ticket file records the gap and
+      # names T108 as its owner; the job lands when that seam does.
+      #
+      # BOTH tiers, therefore — there is no Linux-only cluster job to diverge from
+      # yet. The run path is timer/channel/filesystem code like T108's, and every
+      # one of those differs enough between the platforms to be worth asserting on
+      # each.
       - name: wired remote run path — adoption, dual mode, RBAC (T112, --features k8s)
         run: cargo nextest run -p dagr-cli --features k8s --test m10_remote_execution
       - name: shared pod observer — clippy over the task half (T107)

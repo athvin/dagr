@@ -321,7 +321,13 @@ invocation with `--dagr.executor=k8s` (default `local`). A build without the fea
 here instead.
 
 ```sh
-cargo run --features k8s --example placed_pipeline -- \
+# The four deployment facts are the example's own, not `--dagr.*` knobs: a
+# namespace and an image digest are facts about how this binary was deployed.
+DAGR_DEMO_NAMESPACE=dagr \
+DAGR_DEMO_IMAGE=localhost/dagr-placed-demo:latest \
+DAGR_DEMO_IMAGE_DIGEST=sha256:… \
+DAGR_DEMO_BLOBS=/dagr-blobs \
+  cargo run --features k8s --example placed_pipeline -- \
     run placed_pipeline --store ./runs --dagr.executor=k8s --run-id my-run-1
 ```
 
@@ -332,13 +338,20 @@ still owns the graph and the event stream, so a placed run's artifacts have the 
 shape as a local one's, and placement is node **policy** — a run started locally
 resumes remotely, and back, with a printed policy diff rather than a refusal.
 
-The costs are real and worth knowing before you reach for it: a placed node attempt
-starts in **~0.9 s co-located, ~2.3 s across a network**, against dagr's sub-millisecond
-local overhead, so placing a graph of sub-second nodes one pod at a time is a bad
-trade. Placed nodes also need somewhere to exchange payloads (a shared volume or an
-S3-compatible bucket) and a namespaced RBAC grant an operator applies. The cookbook's
+The costs are real and worth knowing before you reach for it. The **M10 measurement
+spike** clocked pod start at ~0.9 s p50 co-located and ~2.5 s p50 across a network,
+against dagr's sub-millisecond local overhead — so placing a graph of sub-second
+nodes one pod at a time is a bad trade. Those are the spike's numbers for its own
+client against a cluster; they are **not** a measurement of the shipped executor,
+which has not been run against one.
+
+Two things an operator needs, and one of them is missing today. The namespaced RBAC
+grant ships as a manifest to apply. Somewhere for a pod to exchange payloads and
+attempt shards with the orchestrator does **not**: the pod spec dagr builds has no
+volume, volumeMount or environment field, so a placed attempt cannot yet report from
+a real pod. The cookbook's
 [*Placing a node on remote compute*](docs/cookbook.md#placing-a-node-on-remote-compute)
-has the numbers, the storage choice, the manifest, and the authoring rules.
+has the numbers, that gap in full, the manifest, and the authoring rules.
 
 ## When not to use this
 
