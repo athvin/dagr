@@ -151,23 +151,113 @@ fn the_cookbook_states_the_latency_caveat_and_the_policy_not_class_rule() {
     );
 }
 
-/// The storage choice an operator has to make before the first remote run is stated,
-/// because a placed node cannot report without one.
+/// The storage a placed attempt needs is stated **as it actually stands**, which is
+/// that it is not wireable yet.
+///
+/// The earlier wording offered the operator a choice — an RWX volume "mounted at the
+/// same path in the orchestrator and in every pod", or the `blob-s3` backend — and
+/// neither is reachable from the shipped code: the pod side writes through
+/// `LocalFsBlob` and `exec-node` refuses any reference naming another backend, while
+/// the pod spec has no volume, no volumeMount and no environment field to attach one
+/// with. Documenting a choice that cannot be made frames a blocking defect as
+/// operator provisioning, so the section must name the gap instead.
 #[test]
-fn the_cookbook_states_the_shared_volume_versus_object_store_choice() {
+fn the_cookbook_says_the_pod_storage_seam_is_not_wired_yet() {
     let section = normalize_ws(&cookbook_remote_section()).to_lowercase();
+
     assert!(
-        section.contains("rwx")
-            || section.contains("readwritemany")
-            || section.contains("shared volume"),
-        "the shared-volume option is named"
+        section.contains("not wired") || section.contains("cannot yet"),
+        "the section says the pod-storage seam is not wired yet"
     );
     assert!(
-        section.contains("s3")
-            || section.contains("object store")
-            || section.contains("object storage"),
-        "…and so is the object-store option"
+        section.contains("no volume"),
+        "…and names the missing field: the pod spec carries no volume"
     );
+    assert!(
+        section.contains("volumemount"),
+        "…and no volumeMount either"
+    );
+    assert!(
+        section.contains("local backend") || section.contains("local one"),
+        "…and that `exec-node` refuses any reference naming a non-local backend, \
+         which closes the object-store route too"
+    );
+    // The choice may still be described — as the shape the seam will take, never as
+    // something an operator can pick today.
+    if section.contains("rwx") || section.contains("s3") {
+        assert!(
+            section.contains("when it lands") || section.contains("once"),
+            "the volume/object-store choice may only be described as future shape"
+        );
+    }
+}
+
+/// The four deployment facts the demo requires are the four the README prints. The
+/// list is read out of the example's own source, so renaming one fails here rather
+/// than leaving a README invocation that exits `BootstrapFailure` as printed.
+#[test]
+fn the_readme_invocation_carries_every_variable_the_demo_requires() {
+    let demo = read_doc("crates/cli/examples/placed_pipeline.rs");
+    let names = demo_env_vars(&demo);
+    assert_eq!(
+        names.len(),
+        4,
+        "the demo reads four `DAGR_DEMO_*` deployment facts; found {names:?}"
+    );
+
+    let readme = readme_remote_section();
+    let index = read_doc("crates/cli/examples/README.md");
+    for name in &names {
+        assert!(
+            readme.contains(name),
+            "the README's remote invocation sets `{name}` — without it the demo exits \
+             at bootstrap, and the printed command is a lie"
+        );
+        assert!(
+            index.contains(name) || index.contains("DAGR_DEMO_*"),
+            "the examples index names `{name}` too"
+        );
+    }
+}
+
+/// Every `DAGR_DEMO_*` identifier the example's source mentions, in first-seen order.
+fn demo_env_vars(source: &str) -> Vec<String> {
+    const PREFIX: &str = "DAGR_DEMO_";
+    let mut names: Vec<String> = Vec::new();
+    let mut rest = source;
+    while let Some(at) = rest.find(PREFIX) {
+        let tail = &rest[at..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(tail.len());
+        let name = tail[..end].to_string();
+        if name != PREFIX && !names.contains(&name) {
+            names.push(name);
+        }
+        rest = &tail[end..];
+    }
+    names
+}
+
+/// The README's latency figures are **T101's spike measurements**, of the spike's own
+/// client against a cluster — not a measured property of the shipped executor, which
+/// has never been run against one. Printing them unattributed reads as the latter.
+#[test]
+fn the_readme_attributes_its_latency_figures_to_the_spike_that_measured_them() {
+    let section = normalize_ws(&readme_remote_section());
+    let lower = section.to_lowercase();
+    let quotes_a_figure =
+        lower.contains(" s co-located") || lower.contains(" s across") || lower.contains("latency");
+    if quotes_a_figure {
+        assert!(
+            lower.contains("spike"),
+            "the README attributes its numbers to the spike that measured them"
+        );
+        assert!(
+            lower.contains("not") && lower.contains("shipped executor"),
+            "…and says they are not a measurement of the shipped executor"
+        );
+    }
 }
 
 /// The RBAC an operator must apply is named, verb for verb, and the file is named
@@ -180,15 +270,28 @@ fn the_docs_name_the_rbac_verbs_and_the_manifest_to_apply() {
         "the cookbook names the manifest an operator applies"
     );
     for verb in dagr_k8s::rbac::PodVerb::ALL {
+        // Delimited, whole-token. Bare substring matching made two of the six
+        // assertions vacuous: `get` was satisfied by the word "budget" elsewhere in
+        // the section, and `delete` by the `deletecollection` sitting in the
+        // section's own list of what is deliberately NOT granted.
+        let token = format!("`{}`", verb.as_str());
         assert!(
-            cookbook.contains(verb.as_str()),
-            "the cookbook names the `{verb}` grant"
+            cookbook.contains(&token),
+            "the cookbook names the `{verb}` grant as a code token of its own"
         );
     }
     let lower = cookbook.to_lowercase();
     assert!(
         lower.contains("one namespace") || lower.contains("single namespace"),
         "…and says the grant is scoped to one namespace"
+    );
+
+    // What a removed verb actually buys the operator, stated at the strength the
+    // code supports: the classifier is proven against a pinned fixture of the API
+    // server's denial message, and nothing here has been run against a live cluster.
+    assert!(
+        lower.contains("fixture"),
+        "the missing-verb claim says the denial shape it parses is a pinned fixture"
     );
 }
 

@@ -154,50 +154,115 @@ fi
 # constructs the container it runs in, are where a metastore edge or a
 # credential would have to appear.
 podside="crates/cli/src/exec_node.rs crates/cli/src/shard.rs crates/k8s/src/executor.rs"
+
+# Every shipped file that CONSTRUCTS a Kubernetes API object, discovered rather
+# than hand-listed. This is the correction to a real hole: the scans below used to
+# name `crates/k8s/src/executor.rs` alone, and `crates/k8s/src/client.rs`'s
+# `pod_object` — the ONLY translation of a `PodSpec` into a `Pod` the API server
+# ever sees — was unscanned, so an `EnvVar` planted there kept both assertions
+# green. Discovery by `k8s_openapi` reference means a NEW builder file is covered
+# the day it lands rather than the day somebody remembers to add it here.
+apiobjects=$(grep -rlI 'k8s_openapi' crates/*/src 2>/dev/null | sort)
+
+# The SHIPPED half of a source file: everything above its `#[cfg(test)]` module.
+# A file's own tests name the very surfaces these scans forbid — in order to assert
+# their absence — so scanning them would fail the gate on its own coverage.
+shipped_half() { awk '/^#\[cfg\(test\)\]/{exit} {print}' "$1"; }
+
+# grep an extended regex over the shipped half of each file, keeping `file:line:`.
+scan_shipped() {
+  re=$1
+  shift
+  for f in "$@"; do
+    shipped_half "$f" | grep -nEI "$re" | sed "s|^|$f:|"
+  done
+}
+
+if [ -z "$apiobjects" ]; then
+  bad "no file under crates/*/src references k8s_openapi — the API-object scans below would be vacuous"
+elif ! printf '%s\n' "$apiobjects" | grep -q 'crates/k8s/src/client.rs'; then
+  bad "the API-object scan did not find crates/k8s/src/client.rs, which builds the Pod — the discovery is broken"
+else
+  pass "pod spec: the API-object scan covers $(printf '%s\n' "$apiobjects" | wc -l | tr -d ' ') file(s), including the one that builds the Pod"
+fi
+
 missing=""
 for f in $podside; do [ -f "$f" ] || missing="$missing $f"; done
 if [ -n "$missing" ]; then
   bad "the pod-path sources are missing:$missing — the scan below would be vacuous"
 else
-  hits=$(grep -nEI 'dagr_metastore|dagr-metastore|libsql|OpenMode|MetastoreWriter|run_index' $podside)
+  # shellcheck disable=SC2086 # both lists are whitespace-separated paths, by design
+  hits=$(scan_shipped 'dagr_metastore|dagr-metastore|libsql|OpenMode|MetastoreWriter|run_index' $podside $apiobjects)
   if [ -z "$hits" ]; then
-    pass "pod path: the \`exec-node\` verb, the shard writer and the pod spec builder reach NO metastore"
+    # NARROW, and stated at the strength it is checked at. This is a scan of three
+    # named files plus every API-object builder, NOT a link-graph fact: the pod
+    # re-enters the SAME binary, so at link granularity a `--features metastore`
+    # build genuinely does contain the metastore, and the claim can only ever be
+    # about what the pod-side code PATH names. The module-edge pin below is what
+    # keeps that narrowness honest.
+    pass "pod path: the \`exec-node\` verb, the shard writer and every pod/API-object builder NAME no metastore symbol"
   else
-    bad "pod path: a metastore symbol is reachable from the pod path:"
+    bad "pod path: a metastore symbol is named on the pod path:"
     printf '%s\n' "$hits"
   fi
 
-  # And no credential: nothing on the pod path names a run-index database URL, a
-  # DSN, or an auth token it would have to pass into a container. Deliberately
-  # narrow — `crates/k8s/src/executor.rs` carries a list of credential MARKERS it
-  # refuses, and a scan that read those as leaks would be asserting the opposite
-  # of the invariant.
-  creds=$(grep -nEI 'DATABASE_URL|LIBSQL_URL|DAGR_METASTORE|libsql://|postgres://|\bdsn\b' $podside)
-  if [ -z "$creds" ]; then
-    pass "pod path: no database credential is plumbed into a pod"
+  # The module-edge pin. A file scan cannot see a wrapper — `crate::index::record(
+  # &cfg.endpoint, &cfg.token)` names no metastore symbol and no credential — so the
+  # set of crate-internal modules the pod path reaches is pinned instead. A new edge
+  # is a gate failure that a reviewer clears by re-pinning, having looked at what
+  # the new module does.
+  pinned_edges="config contract driver graph registry run_flow run_store shard signals"
+  actual_edges=$(grep -ohE 'crate::[a-z_][a-z0-9_]*' crates/cli/src/exec_node.rs crates/cli/src/shard.rs 2>/dev/null \
+                   | sed 's/^crate:://' | sort -u | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+  if [ "$actual_edges" = "$pinned_edges" ]; then
+    pass "pod path: reaches exactly the pinned crate-internal modules ($pinned_edges)"
   else
-    bad "pod path: a database-credential symbol appears on the pod path:"
+    bad "pod path: its crate-internal module edges changed — review what the new one does, then re-pin"
+    printf 'pinned: %s\nactual: %s\n' "$pinned_edges" "$actual_edges"
+  fi
+
+  # And no credential: nothing on the pod path or in an API object names a run-index
+  # database URL, a DSN, or an auth token it would have to pass into a container.
+  # Deliberately narrow on the SYMBOLS — `crates/k8s/src/executor.rs` carries a list
+  # of credential MARKERS it refuses, and a scan that read those as leaks would be
+  # asserting the opposite of the invariant.
+  # shellcheck disable=SC2086 # both lists are whitespace-separated paths, by design
+  creds=$(scan_shipped 'DATABASE_URL|LIBSQL_URL|DAGR_METASTORE|libsql://|postgres://|\bdsn\b' $podside $apiobjects)
+  if [ -z "$creds" ]; then
+    pass "pod path: no database credential is plumbed into a pod (the pod path and every API-object builder)"
+  else
+    bad "pod path: a database-credential symbol appears on the pod path or in an API object:"
     printf '%s\n' "$creds"
   fi
 
   # The positive half, and the reason the scan above can be narrow: the pod spec
   # builder REFUSES a credential-bearing reference outright, so a payload URI
   # that carries one never reaches a container's argv.
-  if grep -q 'reject_credential_bearing' crates/k8s/src/executor.rs; then
-    pass "pod path: a credential-bearing reference is refused before it can reach a container's argv"
+  #
+  # Asserted BEHAVIOURALLY. A `grep -q` for the function's name was a name-presence
+  # check: inverting the body to `return Ok(())` kept it green, which is exactly the
+  # regression the claim exists to catch. The suite below is `dagr-k8s`'s default
+  # feature set, so it costs no HTTP/TLS tree.
+  if cargo test -q -p dagr-k8s --test pod_executor -- \
+       a_presigned_or_otherwise_secret_bearing_url_is_rejected_before_it_can_be_recorded \
+       an_opaque_blob_reference_carries_no_credential_and_is_accepted >/dev/null 2>&1; then
+    pass "pod path: a credential-bearing reference is REFUSED (behaviour, not the presence of a function name)"
   else
-    bad "pod path: the credential-bearing-reference refusal is gone from the pod spec builder"
+    bad "pod path: the credential-bearing-reference refusal does not hold — rerun \`cargo test -p dagr-k8s --test pod_executor\` for the detail"
   fi
 fi
 
 # The pod's own container spec must carry no environment-variable plumbing that
 # could smuggle one: `PodSpec` states the image, the command, the size and the
-# labels, and that is the whole of it.
-if [ -f crates/k8s/src/executor.rs ]; then
-  if grep -qEI 'EnvVar|env_vars|envFrom|secretKeyRef|configMapKeyRef' crates/k8s/src/executor.rs; then
-    bad "pod spec: the builder grew an environment/secret plumbing surface — a pod's inputs are references it is GIVEN, never a credential"
+# labels, and the emitted `Pod` states exactly that and nothing more.
+if [ -n "$apiobjects" ]; then
+  # shellcheck disable=SC2086 # a whitespace-separated path list, by design
+  env_hits=$(scan_shipped 'EnvVar|env_vars|env_from|envFrom|secretKeyRef|configMapKeyRef|SecretKeySelector|ConfigMapKeySelector|volume_mounts|volumeMounts|VolumeMount|image_pull_secrets|imagePullSecrets|service_account_name|serviceAccountName' $apiobjects)
+  if [ -z "$env_hits" ]; then
+    pass "pod spec: no environment, secret, configmap or volume plumbing in any API-object builder (payloads travel through the blob store, never through the API server)"
   else
-    pass "pod spec: no environment, secret or configmap plumbing (payloads travel through the blob store, never through the API server)"
+    bad "pod spec: an API-object builder grew an environment/secret/volume plumbing surface — a pod's inputs are references it is GIVEN, never a credential"
+    printf '%s\n' "$env_hits"
   fi
 fi
 
@@ -212,7 +277,11 @@ if [ -f "$store" ]; then
   else
     bad "metastore: the reserved open-mode seam lost its ModeNotImplemented guard"
   fi
-  wired=$(grep -nEI 'embedded_replica\(|sync_from_remote|Database::open_remote' "$store")
+  # libSQL's remote surface, spelled every way the crate offers it. The first list
+  # named three calls and missed the API a real wiring would most likely use —
+  # `libsql::Builder::new_remote(..)` — which is the whole failure mode this check
+  # exists to prevent, so the builder constructors are named explicitly.
+  wired=$(shipped_half "$store" | grep -nEI 'embedded_replica\(|sync_from_remote|Database::open_remote|Builder::new_remote|new_remote\(|new_remote_replica|new_synced_database|new_local_replica|open_with_remote_sync|remote_writes|SyncedDatabase|sync_interval\(')
   if [ -z "$wired" ]; then
     pass "metastore: the seam acquired no real remote client call while M10 was adding one for Kubernetes"
   else
@@ -226,40 +295,59 @@ fi
 # ---------------------------------------------------------------------------
 # 5. NO LISTENER: the M9->M10 shipped-source diff
 # ---------------------------------------------------------------------------
+# Every way a process can start accepting: the socket TYPES (so a listener built
+# by `from_std`, `from_raw_fd` or any other constructor is caught, not only one
+# built by `::bind(`), and the accept/serve verbs.
+#
+# Two alternation gaps were proven and are closed here: a Unix-domain listener
+# (`tokio::net::UnixListener::from_std`) matched nothing, and a scheduler type
+# whose name did not END in `Scheduler` (`struct GlobalScheduler2;`) slipped the
+# suffix-bound pattern. Sockets are named by TYPE as well as by constructor, so a
+# listener built by any constructor is caught.
+listener_types='TcpListener|UdpSocket|UnixListener|UnixDatagram|TcpSocket|NamedPipeServer|::bind\(|\.serve\(|\.serve_|\.listen\(|\.incoming\('
+forbidden_all="$listener_types"'|axum|actix|warp::|hyper::(Server|server)|tonic::|pgwire|(struct|enum|trait|impl)[[:space:]]+[A-Za-z_0-9]*Scheduler[A-Za-z_0-9]*'
 # The base is the last M9 commit (the T99 done-marker), an immutable ancestor of
 # this branch. In CI `actions/checkout` makes a shallow clone that holds only the
 # tip, so DEEPEN it until the marker is in the local object store — the same
 # treatment `check-metastore-acceptance-boundary.sh` applies, and for the same
 # reason: the diff base must be byte-identical to the dev box's.
+#
+# There is NO fallback base, deliberately. Falling back to `origin/main` narrowed
+# the scan window to whatever this branch alone added, while the non-vacuity guard
+# below still passed — so the section reported a green it had not earned. An
+# unreachable marker is a SETUP failure and says so.
 m9_marker=d11de14
 if ! git rev-parse --verify --quiet "${m9_marker}^{commit}" >/dev/null 2>&1 \
    && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
-  git fetch --quiet --deepen=200 origin >/dev/null 2>&1 || true
+  git fetch --quiet --deepen=500 origin >/dev/null 2>&1 || true
 fi
 m9_base=""
-for cand in "$m9_marker" origin/main main; do
-  if git rev-parse --verify --quiet "${cand}^{commit}" >/dev/null 2>&1; then
-    m9_base="$cand"; break
-  fi
-done
+if git rev-parse --verify --quiet "${m9_marker}^{commit}" >/dev/null 2>&1; then
+  m9_base=$m9_marker
+fi
 
 if [ -z "$m9_base" ]; then
-  bad "could not resolve an M9 base commit for the diff-surface check (neither the T99 marker nor main is reachable)"
+  bad "the M9 marker ${m9_marker} is unreachable, so the M9->M10 diff cannot be taken. REFUSING to fall back to main: that silently narrows the scan window to this branch while every guard below still passes. Deepen the clone (\`git fetch --deepen=500 origin\`) and rerun."
 else
   # Added lines only (`^+`), over SHIPPED source (`crates/*/src/*`) — never tests
   # or examples, because a gate's own test naturally mentions these words in
   # negation. A REAL violation is a bound socket, a served endpoint, a server
   # framework, or a scheduler type. dagr's Kubernetes client makes OUTBOUND calls
   # and holds ONE watch; it accepts nothing.
-  forbidden='TcpListener|UdpSocket|::bind\(|\.serve\(|\.listen\(|axum|actix|warp::|hyper::(Server|server)|tonic::|pgwire|struct[[:space:]]+[A-Za-z_]*Scheduler|impl[[:space:]]+[A-Za-z_]*Scheduler|trait[[:space:]]+[A-Za-z_]*Scheduler'
-  diff_lines=$(git diff "$m9_base"..HEAD -- 'crates/*/src/*' 2>/dev/null | grep -cE '^\+' || true)
+  #
+  # The diff runs base..WORKING TREE, not base..HEAD. `..HEAD` could only ever see
+  # committed content, so a violation sitting in the tree was invisible to it — a
+  # gate that a developer cannot make fail before committing is a gate that teaches
+  # nothing. Untracked files are still outside a `git diff`, which is why the
+  # unconditional whole-tree scan below runs the SAME pattern.
+  diff_lines=$(git diff "$m9_base" -- 'crates/*/src/*' 2>/dev/null | grep -cE '^\+' || true)
   if [ "${diff_lines:-0}" -lt 100 ]; then
     bad "the M9->M10 shipped-source diff from ${m9_base} added only ${diff_lines:-0} lines — the scan would be near-vacuous; is the base right?"
   fi
-  hits=$(git diff "$m9_base"..HEAD -- 'crates/*/src/*' 2>/dev/null \
+  hits=$(git diff "$m9_base" -- 'crates/*/src/*' 2>/dev/null \
            | grep -E '^\+' \
            | grep -vE '^\+\+\+' \
-           | grep -EI "$forbidden")
+           | grep -EI "$forbidden_all")
   if [ -z "$hits" ]; then
     pass "M9->M10 diff (from ${m9_base}, ${diff_lines} added shipped-source lines): NO listener, no server framework, no scheduler type"
   else
@@ -268,13 +356,15 @@ else
   fi
 fi
 
-# The unconditional half, independent of any diff base: no shipped source
-# anywhere binds a socket or serves an endpoint.
-listener=$(grep -rnEI 'TcpListener|UdpSocket|::bind\(|\.serve\(|\.listen\(' crates/*/src 2>/dev/null)
+# The unconditional half, independent of any diff base and of git entirely: no
+# shipped source anywhere binds a socket, serves an endpoint, links a server
+# framework or declares a scheduler type. It runs the SAME pattern as the diff
+# above, so an untracked new file — which no `git diff` can see — is covered too.
+listener=$(grep -rnEI "$forbidden_all" crates/*/src 2>/dev/null)
 if [ -z "$listener" ]; then
-  pass "shipped source (whole tree): binds no socket and serves no endpoint under either executor"
+  pass "shipped source (whole tree, tracked or not): binds no socket, serves no endpoint, links no server framework and declares no scheduler type"
 else
-  bad "shipped source binds a socket or serves an endpoint:"
+  bad "shipped source binds a socket, serves an endpoint, or declares a coordination surface:"
   printf '%s\n' "$listener"
 fi
 
@@ -287,10 +377,18 @@ fi
 # nothing else. (The typed, exhaustive-match form of this is in
 # `crates/cli/tests/m10_acceptance_gate.rs`; the count is asserted here so the
 # gate script alone catches a tenth variant.)
+#
+# The variant pattern counts all three declaration forms — `Name,`, `Name(T),` and
+# `Name {` — because the earlier unit-only form could not see a data-carrying
+# variant at all: `Displaced(String),` and `AnyOf(u8),` were both invisible to it,
+# which made the "the gate script alone catches a tenth variant" claim false as
+# written. Doc lines (`///`) and attributes (`#[`) never start with an uppercase
+# letter, so neither is counted.
+variant='^[[:space:]]+[A-Z][A-Za-z0-9]*[[:space:]]*(,|\(|\{|=)'
 ctx="crates/core/src/context.rs"
 if [ -f "$ctx" ]; then
   n=$(awk '/^pub enum TerminalState/{f=1;next} f&&/^}/{exit} f' "$ctx" \
-        | grep -cE '^[[:space:]]+[A-Z][A-Za-z]*,')
+        | grep -cE "$variant")
   if [ "$n" -eq 9 ]; then
     pass "vocabulary: TerminalState has exactly nine members"
   else
@@ -303,7 +401,7 @@ fi
 asm="crates/core/src/binding.rs"
 if [ -f "$asm" ]; then
   n=$(awk '/^pub enum TriggerRule/{f=1;next} f&&/^}/{exit} f' "$asm" \
-        | grep -cE '^[[:space:]]+[A-Z][A-Za-z]*,')
+        | grep -cE "$variant")
   if [ "$n" -eq 3 ]; then
     pass "vocabulary: TriggerRule has exactly three members"
   else
@@ -366,18 +464,54 @@ fi
 # ---------------------------------------------------------------------------
 rbac="crates/k8s/manifests/dagr-orchestrator-rbac.yaml"
 if [ -f "$rbac" ]; then
-  if grep -qE '^kind: ClusterRole' "$rbac" || grep -qE '^kind: ClusterRoleBinding' "$rbac"; then
-    bad "rbac: the orchestrator manifest declares a cluster-scoped grant — M10 is single-namespace by decision"
+  # The manifest's comments explain what is deliberately ABSENT and therefore name
+  # every forbidden string; scanning them would fail on the file's own rationale.
+  # Body = every non-comment, non-blank line, which is what actually gets applied.
+  rbac_body=$(grep -vE '^[[:space:]]*#' "$rbac" | grep -vE '^[[:space:]]*$')
+
+  # `kind:` is matched WHEREVER it appears, not only at column 0. A `roleRef` names
+  # its kind indented by two spaces, so the old `^kind: ClusterRole` anchor could
+  # not see a binding that pointed at `ClusterRole/cluster-admin` — the single most
+  # effective way to turn a least-privilege manifest into a cluster-admin grant.
+  if printf '%s\n' "$rbac_body" | grep -qE '\bkind:[[:space:]]*ClusterRole'; then
+    bad "rbac: the orchestrator manifest names a cluster-scoped kind (a ClusterRole object, or a roleRef pointing at one) — M10 is single-namespace by decision"
+    printf '%s\n' "$rbac_body" | grep -nE '\bkind:[[:space:]]*ClusterRole'
   else
-    pass "rbac: the orchestrator grant is namespaced (Role + RoleBinding), never cluster-scoped"
+    pass "rbac: the orchestrator grant is namespaced (Role + RoleBinding), and its roleRef points at a Role"
   fi
-  widened=$(grep -nE 'deletecollection|"\*"|pods/(log|exec|attach|portforward)|configmaps|secrets|persistentvolumeclaims|jobs|cronjobs|"update"|nodes|events' "$rbac" \
-              | grep -vE '^[0-9]+:#')
+
+  # A wildcard in ANY quoting. The old `"\*"` matched double quotes only, so
+  # `verbs: ['*']` — valid YAML, and a grant of every verb — passed.
+  if printf '%s\n' "$rbac_body" | grep -qE '\*'; then
+    bad "rbac: the shipped Role contains a wildcard:"
+    printf '%s\n' "$rbac_body" | grep -nE '\*'
+  else
+    pass "rbac: no wildcard verb, resource or apiGroup, in any quoting"
+  fi
+
+  widened=$(printf '%s\n' "$rbac_body" \
+              | grep -nE "deletecollection|pods/(log|exec|attach|portforward|status|eviction|ephemeralcontainers)|configmaps|secrets|persistentvolumeclaims|serviceaccounts|endpoints|jobs|cronjobs|nodes|events|['\"](update|bind|escalate|impersonate)['\"]")
   if [ -z "$widened" ]; then
     pass "rbac: no widened verb or second resource in the shipped Role"
   else
     bad "rbac: the shipped Role widened beyond pods + six verbs:"
     printf '%s\n' "$widened"
+  fi
+
+  # An ALLOW-list, which a deny-list cannot replace: a second rule granting
+  # `pods/status` plus `serviceaccounts` plus `endpoints` is refused by the list
+  # above, but a second rule granting something nobody thought to forbid is not.
+  # Exactly one rule, one resource list, one verb list, each spelled exactly.
+  rules=$(printf '%s\n' "$rbac_body" | grep -cE '^[[:space:]]*-[[:space:]]*apiGroups:')
+  resources=$(printf '%s\n' "$rbac_body" | grep -cE '^[[:space:]]*resources:')
+  verbs=$(printf '%s\n' "$rbac_body" | grep -cE '^[[:space:]]*verbs:')
+  exact_resources=$(printf '%s\n' "$rbac_body" | grep -cF 'resources: ["pods"]')
+  exact_verbs=$(printf '%s\n' "$rbac_body" | grep -cF 'verbs: ["create", "delete", "get", "list", "patch", "watch"]')
+  if [ "$rules" -eq 1 ] && [ "$resources" -eq 1 ] && [ "$verbs" -eq 1 ] \
+     && [ "$exact_resources" -eq 1 ] && [ "$exact_verbs" -eq 1 ]; then
+    pass "rbac: exactly one rule, granting exactly [\"pods\"] and exactly the six verbs"
+  else
+    bad "rbac: the Role is no longer one rule of six verbs on pods (rules=$rules resources=$resources verbs=$verbs exact_resources=$exact_resources exact_verbs=$exact_verbs)"
   fi
 else
   bad "rbac: $rbac does not ship"
