@@ -684,8 +684,9 @@ not a choice you make at provisioning time:
   tolerations. It has **no volume, no volumeMount and no environment field**, so a
   host path, an RWX claim, or a bucket's endpoint cannot be attached to it at all.
 
-So a placed node runs end to end against dagr's in-process API fake, and **cannot
-yet run against a real cluster**: the pod would start and have nowhere to report to.
+So a placed node drives to completion against dagr's in-process API fake — with the
+test supplying the shard a pod would have written — and **cannot yet run against a
+real cluster**: the pod would start and have nowhere to report to.
 Adding that seam is mechanism work owned by the node-runner ticket (T108). When it
 lands, the shape is the usual one — an RWX volume mounted at the same path on both
 sides, or the S3-compatible backend once `exec-node` can open it — and this section
@@ -717,7 +718,9 @@ Remove one and dagr **names the missing verb** and points at the manifest, rathe
 than retrying a denial that will never succeed or reporting a generic API error.
 Read that at the strength it is proven at: the classifier is tested against a
 **pinned fixture** of the denial message a Kubernetes API server sends, not against
-a live cluster — nothing in this repository has been run against one. Deliberately absent: `update`
+a live cluster — nothing in this repository has been run against one.
+
+Deliberately absent: `update`
 (a full replace races the platform's own `status` writes), `deletecollection`,
 `pods/log`, `pods/exec`, and anything cluster-scoped. dagr submits a bare Pod with
 `restartPolicy: Never` and does its own retrying — letting the platform retry too

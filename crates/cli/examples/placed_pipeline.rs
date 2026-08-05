@@ -46,8 +46,13 @@
 //! what makes one binary genuinely both.
 //!
 //! Read `docs/cookbook.md`'s *Placing a node on remote compute* before the first real
-//! run: it has the RBAC an operator must apply, the shared-volume versus object-store
-//! choice, and the latency caveat that decides whether placement is worth it at all.
+//! run: it has the RBAC an operator must apply, the latency caveat that decides
+//! whether placement is worth it at all, and — read this one first — the reason the
+//! remote invocation above cannot complete against a real cluster today. A placed
+//! attempt reports by writing an attempt shard into a container the orchestrator can
+//! read, and the shipped pod spec has no volume field to mount one with, so
+//! `DAGR_DEMO_BLOBS` is a path only the orchestrator side can see. Under
+//! `--dagr.executor=local` the demo is entirely real.
 
 use std::process::ExitCode;
 
