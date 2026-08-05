@@ -444,6 +444,12 @@ pub(crate) struct Diagnostics {
 }
 
 impl Diagnostics {
+    /// Record one operator-facing line.
+    ///
+    /// Poison policy: **recover**. This list is a report, not run state — a node
+    /// whose attempt panicked is exactly the run that most needs its diagnostics
+    /// printed, so poisoning here must not escalate into a second panic and take
+    /// the report down with it.
     fn push(&self, line: String) {
         self.lines
             .lock()
@@ -451,6 +457,11 @@ impl Diagnostics {
             .push(line);
     }
 
+    /// Take everything collected so far, leaving the list empty.
+    ///
+    /// Poison policy: **recover**, for the same reason as
+    /// [`push`](Self::push) — the drain happens at run end, which is the one
+    /// moment the lines are about to be shown to somebody.
     fn drain(&self) -> Vec<String> {
         let mut guard = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
         std::mem::take(&mut *guard)

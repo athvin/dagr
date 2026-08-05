@@ -12,8 +12,10 @@
 //! It ships the **selection**: the closed set of executor names, the parse, and the
 //! availability check. There is no Kubernetes client here, no pod spec, and no
 //! cluster call — the executor itself lives behind the default-off
-//! [`k8s`](REMOTE_EXECUTOR_FEATURE) feature, in [`crate::k8s_runner`] and
-//! [`crate::remote`], and this module only asks whether it was linked.
+//! [`k8s`](REMOTE_EXECUTOR_FEATURE) feature, in `crate::k8s_runner` and
+//! `crate::remote`, and this module only asks whether it was linked. (Those two are
+//! named rather than linked: a default build does not compile them, so a link would
+//! be broken in exactly the documentation most readers generate.)
 //!
 //! [`ensure_available`](ExecutorKind::ensure_available) refuses the
 //! [`Kubernetes`](ExecutorKind::Kubernetes) executor in a build that did not compile

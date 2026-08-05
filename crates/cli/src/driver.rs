@@ -1069,7 +1069,7 @@ impl RunPlan {
 
     /// Declare that this plan's placed nodes are wired to a **remote executor**.
     ///
-    /// Set by [`RunnableFlow::run_placed`](crate::run_flow::RunnableFlow::run_placed)
+    /// Set by `RunnableFlow::run_placed` (behind the default-off `k8s` feature)
     /// and by nothing else. It is what the bootstrap guard reads: a plan that says
     /// `false` while the executor honours placement and the pipeline declares one is
     /// refused, because running those nodes in this process is the silent

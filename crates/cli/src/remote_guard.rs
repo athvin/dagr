@@ -18,7 +18,7 @@
 //! well under a remote executor: there is nothing to place, so there is nothing to
 //! substitute, and refusing it would be theatre.
 //!
-//! It lives outside the `k8s`-gated [`crate::remote`] module on purpose: the guard
+//! It lives outside the `k8s`-gated `crate::remote` module on purpose: the guard
 //! must exist in **every** build, including the ones that compiled no executor,
 //! because the diagnostic those builds print is the one an operator reads first.
 
