@@ -4,9 +4,16 @@
 //! the graph artifact and the structure snapshot, and the `--dagr.executor` /
 //! `--dagr.max-pods` knobs that select an executor and cap in-flight remote work.
 //!
-//! Nothing here talks to a cluster. The `k8s` executor is a **refusing stub** that
-//! names the ticket implementing it — so selecting it is a loud, actionable
-//! bootstrap failure and never a silent local run.
+//! Nothing here talks to a cluster, at any feature setting. Selecting the `k8s`
+//! executor is a loud, actionable bootstrap failure and never a silent local run —
+//! but *which* refusal it is depends on what the build compiled. Without the
+//! default-off `k8s` feature (this crate's default, and the setting the file was
+//! written at) there is no remote executor at all, and the refusal names the feature
+//! and the ticket that wired it. With the feature on, the executor exists and the
+//! refusal moves one layer down, to the placement-wiring guard that fires when a
+//! placed pipeline was handed no cluster — asserted, with the rest of the wired path,
+//! in `tests/m10_remote_execution.rs`. Assertions that read one of those two messages
+//! are gated to the setting that produces it; everything else here holds at both.
 //!
 //! What this file pins:
 //!
@@ -17,8 +24,10 @@
 //!   fingerprint but not the structural one;
 //! - both knobs follow `flag > env > default`, live in the reserved library-flag
 //!   namespace, and reject an unknown value loudly;
-//! - the `k8s` executor refuses; the `local` executor runs, records the placement,
-//!   ignores it, and says nothing about a cluster.
+//! - selecting the `k8s` executor refuses — with zero attempts and the
+//!   bootstrap-failure exit code, whichever of the two refusals this build reaches;
+//!   the `local` executor runs, records the placement, ignores it, and says nothing
+//!   about a cluster.
 //!
 //! # Hermeticity
 //!
@@ -38,7 +47,10 @@ use dagr_cli::config::{
 };
 use dagr_cli::contract::{ExitCode, ParamSpec, check_reserved_collision, reserved_flag_names};
 use dagr_cli::driver::RunConfig;
-use dagr_cli::executor::{ExecutorKind, REMOTE_EXECUTOR_TICKET};
+use dagr_cli::executor::ExecutorKind;
+// Only a build that compiled no remote executor renders the refusal that names it.
+#[cfg(not(feature = "k8s"))]
+use dagr_cli::executor::{REMOTE_EXECUTOR_FEATURE, REMOTE_EXECUTOR_TICKET};
 use dagr_cli::graph::{BuildProvenance, build_artifact};
 use dagr_cli::registry::{FlowRegistry, run_registry_to};
 use dagr_cli::run_flow::RunnableFlow;
@@ -489,28 +501,44 @@ fn a_pipeline_parameter_named_after_a_knob_is_a_hard_collision() {
 }
 
 // ===========================================================================
-// Executor selection — the refusing stub
+// Executor selection — the refusal, and what it is made of
 // ===========================================================================
 
-/// The `k8s` executor is a **recognized stub**: selecting it is refused with an
-/// actionable error naming the ticket that implements it. Not a panic.
+/// The `local` executor is available in **every** build: it is the one this whole
+/// testing surface is built around, and no feature can take it away.
 #[test]
-fn the_kubernetes_executor_is_a_refusing_stub_naming_its_ticket() {
+fn the_local_executor_is_available_in_every_build() {
     ExecutorKind::Local
         .ensure_available()
-        .expect("the local executor is what this build ships");
+        .expect("the local executor is what every build ships");
+}
 
+/// A build that did **not** compile the default-off `k8s` feature has no remote
+/// executor at all, and says so: an actionable error naming the executor, the feature
+/// that would supply it, the ticket that wired it, and the flag to change. Not a
+/// panic, and not a silent local run.
+///
+/// The complementary setting — a build that *did* compile it, where
+/// `ensure_available` succeeds and the refusal that matters is the placement-wiring
+/// guard's — is `tests/m10_remote_execution.rs`, which needs the executor linked.
+#[cfg(not(feature = "k8s"))]
+#[test]
+fn the_kubernetes_executor_is_refused_by_a_build_that_did_not_compile_it() {
     let refusal = ExecutorKind::Kubernetes
         .ensure_available()
-        .expect_err("the remote executor is reserved but not built");
+        .expect_err("a build without the `k8s` feature has no remote executor");
     let rendered = refusal.to_string();
     assert!(
         rendered.contains("k8s"),
         "the refusal names the selected executor: {rendered}"
     );
     assert!(
+        rendered.contains(&format!("--features {REMOTE_EXECUTOR_FEATURE}")),
+        "and how to get one that can — the feature to rebuild with: {rendered}"
+    );
+    assert!(
         rendered.contains(REMOTE_EXECUTOR_TICKET),
-        "and the ticket that implements it: {rendered}"
+        "and the ticket that wired it: {rendered}"
     );
     assert!(
         rendered.contains(EXECUTOR_FLAG),
@@ -519,7 +547,10 @@ fn the_kubernetes_executor_is_a_refusing_stub_naming_its_ticket() {
 }
 
 /// A run configured for the remote executor **fails bootstrap** — it does not
-/// quietly run every node locally.
+/// quietly run every node locally. This is the property both refusals exist for, so
+/// it is asserted at **both** feature settings: without the executor compiled in the
+/// build itself refuses; with it, this placed pipeline was handed no cluster and the
+/// placement-wiring guard refuses. Zero attempts either way.
 #[test]
 fn a_run_configured_for_kubernetes_fails_bootstrap_rather_than_running_locally() {
     let base = TempBase::new("placement-k8s");
@@ -534,7 +565,8 @@ fn a_run_configured_for_kubernetes_fails_bootstrap_rather_than_running_locally()
     assert_eq!(
         report.outcome(),
         RunOutcome::BootstrapFailed,
-        "selecting an executor this build does not ship is a bootstrap failure"
+        "selecting the remote executor for a placed pipeline with no cluster wired is a \
+         bootstrap failure"
     );
     assert!(
         report.driver_report().terminal_states.is_empty(),
@@ -546,8 +578,16 @@ fn a_run_configured_for_kubernetes_fails_bootstrap_rather_than_running_locally()
     );
 }
 
-/// The `run` verb refuses the same way, with the bootstrap-failure exit code and a
-/// diagnostic naming the implementing ticket.
+/// The `run` verb refuses the same way, with the bootstrap-failure exit code.
+///
+/// The **exit code** is the verb's contract at every feature setting, and it is what
+/// an operator's shell reads. The diagnostic behind it differs: a build without the
+/// executor refuses at the verb, before a store directory exists, on the verb's own
+/// output — so the ticket assertion below is gated to that build. A build *with* the
+/// executor gets one layer further in and is refused by the placement-wiring guard,
+/// which reports on stderr rather than through the verb's writer; that message is
+/// `dagr_cli::remote_guard::unwired_refusal`, covered under the feature by
+/// `tests/m10_remote_execution.rs`.
 #[test]
 fn the_run_verb_refuses_the_kubernetes_executor() {
     let base = TempBase::new("placement-verb-k8s");
@@ -567,9 +607,10 @@ fn the_run_verb_refuses_the_kubernetes_executor() {
     );
     let printed = String::from_utf8(out).expect("utf-8 diagnostics");
     assert_eq!(code, ExitCode::BootstrapFailure, "printed: {printed}");
+    #[cfg(not(feature = "k8s"))]
     assert!(
         printed.contains(REMOTE_EXECUTOR_TICKET),
-        "the refusal names its implementing ticket: {printed}"
+        "the refusal names the ticket that wired the executor: {printed}"
     );
 }
 
