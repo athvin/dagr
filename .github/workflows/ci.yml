@@ -201,7 +201,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
+      # FULL history, deliberately (this job only). Two acceptance-gate scripts
+      # (scripts/check-m10-acceptance-boundary.sh, deepen=500, and
+      # scripts/check-metastore-acceptance-boundary.sh, deepen=200) diff HEAD
+      # against pinned marker commits; on the default shallow (depth-1) clone
+      # each runs its own best-effort `git fetch --deepen` to reach its marker.
+      # nextest runs their calling tests (m10_acceptance_gate) as CONCURRENT
+      # processes over the ONE shared .git, so the two fetches race on git's
+      # shallow/ref locks — the loser's failure is swallowed by `|| true`, its
+      # marker stays unresolvable, and the gate fails "could not resolve an M6
+      # base commit" (observed: macOS leg, run 31176223029). With full history
+      # both markers are ancestors already present, `--is-shallow-repository`
+      # is false, neither script fetches at all, and the race is unreachable —
+      # tests also stop depending on the network. The whole repo packs at
+      # ~2.3 MiB over ~272 commits, so the cost is negligible; every other job
+      # keeps the default depth-1 checkout.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # The designated WRITER for this key (see BUILD-CACHE SCHEME above). This job
       # compiles more than any other — every target, plus the `schema-validation`
       # and `metastore` feature builds — so the entry it stores is the one that
@@ -1040,8 +1057,18 @@ jobs:
       # run, an inbound listener, a served database, a pod touching the run index,
       # runtime graph expansion). It also holds the substrate decisions T101–T112
       # inherit, so a later ticket cannot re-decide one of them in passing.
+      #
+      # ADR 128 (T113) moved the other permanent clause — C26's "no config file
+      # or DSL" — for the config-file half only. Its checker pins the same two
+      # halves: the permitted shape (a bootstrap-read TOML of run-level knobs
+      # with named profiles, beneath the environment in precedence) and the
+      # still-excluded list (a file describing the graph, flow selection,
+      # policy/placement reach, an assembly-time read, a file-only knob,
+      # secrets, any DSL), plus the decisions T114–T118 inherit.
       - name: ADR content contracts (boundary amendments)
-        run: bash scripts/check-remote-execution-scope-adr.sh
+        run: |
+          bash scripts/check-remote-execution-scope-adr.sh
+          bash scripts/check-profiles-config-file-adr.sh
 
   # --- The SYSTEM ACCEPTANCE GATE (system-level acceptance, T65) --------------
   # The terminal required gate. It is RED unless every constituent is green: the
