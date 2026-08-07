@@ -1169,7 +1169,10 @@ pub fn parse_grace_flag(argv: &[std::ffi::OsString]) -> Result<Option<Duration>,
 pub fn parse_teardown_deadline_flag(
     argv: &[std::ffi::OsString],
 ) -> Result<Option<Duration>, String> {
-    Ok(parse_valued_flag::<EnvDuration>(argv, TEARDOWN_DEADLINE_FLAG)?.map(EnvDuration::into_inner))
+    Ok(
+        parse_valued_flag::<EnvDuration>(argv, TEARDOWN_DEADLINE_FLAG)?
+            .map(EnvDuration::into_inner),
+    )
 }
 
 /// Parse `--failure-mode` out of a raw invocation.
@@ -1177,10 +1180,11 @@ pub fn parse_teardown_deadline_flag(
 /// # Errors
 /// The diagnostic message when the value is neither `continue-independent` nor
 /// `stop-on-first-failure`, or the flag is present with no value.
-pub fn parse_failure_mode_flag(
-    argv: &[std::ffi::OsString],
-) -> Result<Option<FailureMode>, String> {
-    Ok(parse_valued_flag::<EnvFailureMode>(argv, FAILURE_MODE_FLAG)?.map(EnvFailureMode::into_inner))
+pub fn parse_failure_mode_flag(argv: &[std::ffi::OsString]) -> Result<Option<FailureMode>, String> {
+    Ok(
+        parse_valued_flag::<EnvFailureMode>(argv, FAILURE_MODE_FLAG)?
+            .map(EnvFailureMode::into_inner),
+    )
 }
 
 /// Parse the three `--dagr.pool.*` pins out of a raw invocation into the
@@ -1231,7 +1235,11 @@ pub fn parse_store_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, S
 /// fallible signature is kept so a validation rule (as other knobs grew) is not
 /// a breaking change.
 pub fn resolve_store_base(flag: Option<String>) -> Result<String, EnvParseError> {
-    resolve::<String>(flag, DAGR_STORE, crate::run_store::DEFAULT_STORE_BASE.to_string())
+    resolve::<String>(
+        flag,
+        DAGR_STORE,
+        crate::run_store::DEFAULT_STORE_BASE.to_string(),
+    )
 }
 
 /// The resolved pool-sizing knobs: the three pins, the headroom fraction, and
@@ -1289,8 +1297,10 @@ impl PoolSizing {
     pub fn capacities(
         &self,
         probe: dagr_core::limits::ContainerLimitProbe,
-    ) -> Result<Option<dagr_core::admission::PoolCapacities>, dagr_core::limits::CapacityBootstrapFailure>
-    {
+    ) -> Result<
+        Option<dagr_core::admission::PoolCapacities>,
+        dagr_core::limits::CapacityBootstrapFailure,
+    > {
         if !self.engaged {
             return Ok(None);
         }
@@ -1775,8 +1785,13 @@ mod tests {
             Some(Duration::from_secs(40))
         );
         assert_eq!(
-            parse_failure_mode_flag(&argv(&["dagr", "run", "--failure-mode", "stop-on-first-failure"]))
-                .expect("mode token"),
+            parse_failure_mode_flag(&argv(&[
+                "dagr",
+                "run",
+                "--failure-mode",
+                "stop-on-first-failure"
+            ]))
+            .expect("mode token"),
             Some(FailureMode::StopOnFirstFailure)
         );
         let pins = parse_pool_pin_flags(&argv(&[
@@ -1800,8 +1815,14 @@ mod tests {
             Some("./elsewhere".to_string())
         );
         // Absent flags fall through to the env tier untouched.
-        assert_eq!(parse_grace_flag(&argv(&["dagr", "run"])).expect("absent"), None);
-        assert_eq!(parse_store_flag(&argv(&["dagr", "run"])).expect("absent"), None);
+        assert_eq!(
+            parse_grace_flag(&argv(&["dagr", "run"])).expect("absent"),
+            None
+        );
+        assert_eq!(
+            parse_store_flag(&argv(&["dagr", "run"])).expect("absent"),
+            None
+        );
     }
 
     /// A malformed value and a valueless flag are both loud scanner errors —
@@ -1813,10 +1834,16 @@ mod tests {
         };
         let err = parse_grace_flag(&argv(&["dagr", "run", "--grace", "soon"]))
             .expect_err("a non-duration is rejected");
-        assert!(err.contains("--grace"), "the diagnostic names the flag: {err}");
+        assert!(
+            err.contains("--grace"),
+            "the diagnostic names the flag: {err}"
+        );
         let err = parse_store_flag(&argv(&["dagr", "run", "--store"]))
             .expect_err("a valueless --store is rejected");
-        assert!(err.contains("--store"), "the diagnostic names the flag: {err}");
+        assert!(
+            err.contains("--store"),
+            "the diagnostic names the flag: {err}"
+        );
     }
 
     /// The store base resolves `flag > env > default` through the shared helper.
@@ -1894,8 +1921,7 @@ mod tests {
         let g = env_lock();
         unset_env(&g, DAGR_HEADROOM);
         set_env(&g, DAGR_POOL_MEMORY, "2048");
-        let sizing =
-            resolve_pool_sizing(PoolPinFlags::default(), None).expect("pin resolves");
+        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("pin resolves");
         unset_env(&g, DAGR_POOL_MEMORY);
         assert!(sizing.engaged(), "a supplied pin engages the probe");
         let caps = sizing
@@ -1930,10 +1956,12 @@ mod tests {
             unset_env(&g, k);
         }
         set_env(&g, DAGR_HEADROOM, "0.5");
-        let sizing =
-            resolve_pool_sizing(PoolPinFlags::default(), None).expect("headroom resolves");
+        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("headroom resolves");
         unset_env(&g, DAGR_HEADROOM);
-        assert!(sizing.engaged(), "an explicit DAGR_HEADROOM engages the probe");
+        assert!(
+            sizing.engaged(),
+            "an explicit DAGR_HEADROOM engages the probe"
+        );
         let caps = sizing
             .capacities(
                 ContainerLimitProbe::from_root("/nonexistent-root-for-t114").with_host_cores(8),
@@ -1949,7 +1977,10 @@ mod tests {
         // The flag spelling of the default value also engages sizing.
         let sizing = resolve_pool_sizing(PoolPinFlags::default(), Some(HEADROOM_DEFAULT))
             .expect("flag headroom resolves");
-        assert!(sizing.engaged(), "a flag headroom equal to the default still engages");
+        assert!(
+            sizing.engaged(),
+            "a flag headroom equal to the default still engages"
+        );
     }
 
     // --- The metastore live-tee toggle (T86) -----------------------------

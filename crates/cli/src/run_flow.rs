@@ -1268,15 +1268,16 @@ impl RunnableFlow {
         let base = base.as_ref();
         // Resolve the environment tier BEFORE the store is opened: a run that
         // cannot be configured must not leave a run directory behind.
-        let sized = crate::config::resolve_pool_sizing(crate::config::PoolPinFlags::default(), None)
-            .map_err(RunToStoreError::Config)?
-            .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
-            .map_err(|failure| {
-                // `detect` is documented never to fail today; if a probe validation
-                // ever appears, an unusable machine reading is a store-level fault
-                // for this one-call path (there is no bootstrap record yet).
-                RunToStoreError::Store(std::io::Error::other(failure.to_string()))
-            })?;
+        let sized =
+            crate::config::resolve_pool_sizing(crate::config::PoolPinFlags::default(), None)
+                .map_err(RunToStoreError::Config)?
+                .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
+                .map_err(|failure| {
+                    // `detect` is documented never to fail today; if a probe validation
+                    // ever appears, an unusable machine reading is a store-level fault
+                    // for this one-call path (there is no bootstrap record yet).
+                    RunToStoreError::Store(std::io::Error::other(failure.to_string()))
+                })?;
         let config = RunConfig::new(base)
             .grace_from_env(None)
             .and_then(|c| c.teardown_deadline_from_env(None))

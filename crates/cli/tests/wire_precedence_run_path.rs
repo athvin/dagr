@@ -144,10 +144,7 @@ fn sole_run_stream(base: &str, flow: &str) -> Option<String> {
 #[test]
 fn grace_env_reaches_the_shutdown_budget_banner() {
     let base = TempBase::new("t114-grace-env");
-    let run = run_one_dag(
-        &[("DAGR_GRACE", "30s")],
-        &["run", "--store", base.as_str()],
-    );
+    let run = run_one_dag(&[("DAGR_GRACE", "30s")], &["run", "--store", base.as_str()]);
     assert_eq!(run.code, 0, "the run succeeds, output:\n{}", run.combined());
     assert!(
         run.stderr
@@ -497,9 +494,9 @@ fn failure_mode_and_memory_pin_env_reach_a_registry_run() {
     let stream = sole_run_stream(base.as_str(), "wired")
         .expect("the run wrote an event stream under the store");
     let terminal = |node: &str, state: &str| {
-        stream.lines().any(|l| {
-            l.contains("node-terminal") && l.contains(node) && l.contains(state)
-        })
+        stream
+            .lines()
+            .any(|l| l.contains("node-terminal") && l.contains(node) && l.contains(state))
     };
     assert!(
         terminal("c-boom", "failed"),
