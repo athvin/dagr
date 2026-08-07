@@ -1379,7 +1379,10 @@ mod tests {
     // --- The DAGR_* constants --------------------------------------------
 
     #[test]
-    fn dagr_env_name_constants_match_adr_089() {
+    fn dagr_env_name_constants_cover_every_knob() {
+        // The documented spelling of every shipped knob, so a constant cannot
+        // silently drift from its table row. This list is the complete knob set —
+        // a knob added without a line here fails review by construction.
         assert_eq!(DAGR_GRACE, "DAGR_GRACE");
         assert_eq!(DAGR_TEARDOWN_DEADLINE, "DAGR_TEARDOWN_DEADLINE");
         assert_eq!(DAGR_FAILURE_MODE, "DAGR_FAILURE_MODE");
@@ -1387,7 +1390,15 @@ mod tests {
         assert_eq!(DAGR_POOL_BLOCKING_THREADS, "DAGR_POOL_BLOCKING_THREADS");
         assert_eq!(DAGR_POOL_MEMORY, "DAGR_POOL_MEMORY");
         assert_eq!(DAGR_HEADROOM, "DAGR_HEADROOM");
+        assert_eq!(DAGR_METASTORE, "DAGR_METASTORE");
         assert_eq!(DAGR_FORCE_ROUNDTRIP, "DAGR_FORCE_ROUNDTRIP");
+        assert_eq!(DAGR_EXECUTOR, "DAGR_EXECUTOR");
+        assert_eq!(DAGR_MAX_PODS, "DAGR_MAX_PODS");
+        assert_eq!(DAGR_POD_LAUNCH_RETRIES, "DAGR_POD_LAUNCH_RETRIES");
+        assert_eq!(DAGR_BLOB_ENDPOINT, "DAGR_BLOB_ENDPOINT");
+        assert_eq!(DAGR_BLOB_BUCKET, "DAGR_BLOB_BUCKET");
+        assert_eq!(DAGR_BLOB_REGION, "DAGR_BLOB_REGION");
+        assert_eq!(DAGR_BLOB_PREFIX, "DAGR_BLOB_PREFIX");
     }
 
     // --- Pool pins + headroom resolvers ----------------------------------
