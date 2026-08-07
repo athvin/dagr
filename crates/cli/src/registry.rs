@@ -565,43 +565,12 @@ fn run_selected_flow<W: Write>(
     // The remaining runtime knobs the tables document — the store base, grace,
     // teardown deadline, failure mode, the three pool pins, and the headroom
     // fraction — each resolved `flag > env > default` and validated BEFORE the
-    // store is opened: a bad value must not leave a run directory behind. A
-    // malformed or valueless flag is invalid usage; a resolver error carries its
-    // own exit-code split (parse → invalid usage, out-of-range → bootstrap
-    // failure), so the diagnostic and the code both name the actual fault.
-    let knobs = match resolve_run_knobs(argv) {
-        Ok(knobs) => knobs,
+    // store is opened: a bad value must not leave a run directory behind.
+    let (base, config) = match resolve_run_config(argv, executor, max_pods) {
+        Ok(resolved) => resolved,
         Err((code, detail)) => {
             let _ = writeln!(out, "dagr run {name}: {detail}");
             return code;
-        }
-    };
-    let base = knobs.base;
-
-    // The admission-pool capacities: probe-derived when a pool knob was supplied
-    // (pins verbatim, un-pinned pools detected with the resolved headroom), the
-    // historical unconstrained set otherwise — plus the remote-slot ceiling,
-    // which has no machine to derive from and is pinned directly.
-    let capacities = knobs
-        .sized
-        .unwrap_or_else(dagr_core::admission::PoolCapacities::new)
-        .remote_slots(max_pods);
-
-    // Fold grace / teardown-deadline / failure-mode into the run configuration
-    // through the opt-in env-fallback builders (`RunConfig::new` itself stays
-    // infallible and environment-free — the resolution is this call site's).
-    let config = crate::driver::RunConfig::new(&base)
-        .executor(executor)
-        .capacities(capacities);
-    let config = match config
-        .grace_from_env(knobs.grace)
-        .and_then(|c| c.teardown_deadline_from_env(knobs.teardown_deadline))
-        .and_then(|c| c.failure_mode_from_env(knobs.failure_mode))
-    {
-        Ok(config) => config,
-        Err(err) => {
-            let _ = writeln!(out, "dagr run {name}: {err}");
-            return err.exit_code();
         }
     };
 
@@ -667,29 +636,27 @@ fn run_selected_flow<W: Write>(
     }
 }
 
-/// The `run <flow>` invocation's resolved runtime knobs: the store base, the
-/// three duration/mode flags handed onward to the `RunConfig` env-fallback
-/// builders, and the sized capacities (present iff a pool knob was supplied).
-struct RunKnobs {
-    /// The run-store base (`--store` > `DAGR_STORE` > the default).
-    base: String,
-    /// The `--grace` flag value, if supplied (the env tier is the builder's).
-    grace: Option<std::time::Duration>,
-    /// The `--teardown-deadline` flag value, if supplied.
-    teardown_deadline: Option<std::time::Duration>,
-    /// The `--failure-mode` flag value, if supplied.
-    failure_mode: Option<dagr_core::flow::FailureMode>,
-    /// Probe-derived capacities when a pool pin or an explicit headroom was
-    /// supplied; [`None`] keeps the historical unconstrained set.
-    sized: Option<dagr_core::admission::PoolCapacities>,
-}
-
-/// Scan `argv` for the reserved runtime flags and resolve every knob that must be
-/// settled before the store is opened. The scanners live beside the other
-/// reserved-flag scanners in [`crate::config`]; this helper only sequences them
-/// and maps each failure to its `(exit code, diagnostic)` pair — a malformed flag
-/// is invalid usage, a resolver error keeps its own parse/out-of-range split.
-fn resolve_run_knobs(argv: &[std::ffi::OsString]) -> Result<RunKnobs, (ExitCode, String)> {
+/// Scan `argv` for the reserved runtime flags, resolve every knob that must be
+/// settled before the store is opened, and build the run's configuration:
+/// the store base (`--store` > `DAGR_STORE` > the default), grace, the teardown
+/// deadline, the failure mode (each `flag > env > default` through the
+/// `RunConfig` env-fallback builders — `RunConfig::new` itself stays infallible
+/// and environment-free), and the admission capacities. Capacities are
+/// probe-derived when a pool pin or an explicit headroom was supplied (pins
+/// verbatim, un-pinned pools detected with the resolved headroom) and the
+/// historical unconstrained set otherwise, plus the remote-slot ceiling, which
+/// has no machine to derive from and is pinned directly.
+///
+/// The scanners live beside the other reserved-flag scanners in
+/// [`crate::config`]; this helper sequences them and maps each failure to its
+/// `(exit code, diagnostic)` pair — a malformed or valueless flag is invalid
+/// usage, a resolver error keeps its own parse/out-of-range split — so the
+/// diagnostic and the code both name the actual fault.
+fn resolve_run_config(
+    argv: &[std::ffi::OsString],
+    executor: crate::executor::ExecutorKind,
+    max_pods: u32,
+) -> Result<(String, crate::driver::RunConfig), (ExitCode, String)> {
     let invalid = |detail: String| (ExitCode::InvalidUsage, detail);
     let env_err = |e: crate::config::EnvParseError| (e.exit_code(), e.to_string());
 
@@ -701,16 +668,20 @@ fn resolve_run_knobs(argv: &[std::ffi::OsString]) -> Result<RunKnobs, (ExitCode,
     let store = crate::config::parse_store_flag(argv).map_err(invalid)?;
 
     let base = crate::config::resolve_store_base(store).map_err(env_err)?;
-    let sized = crate::config::resolve_pool_sizing(pool_flags, headroom)
+    let capacities = crate::config::resolve_pool_sizing(pool_flags, headroom)
         .map_err(env_err)?
         .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
-        .map_err(|failure| (ExitCode::BootstrapFailure, failure.to_string()))?;
+        .map_err(|failure| (ExitCode::BootstrapFailure, failure.to_string()))?
+        .unwrap_or_else(dagr_core::admission::PoolCapacities::new)
+        .remote_slots(max_pods);
 
-    Ok(RunKnobs {
-        base,
-        grace,
-        teardown_deadline,
-        failure_mode,
-        sized,
-    })
+    let config = crate::driver::RunConfig::new(&base)
+        .executor(executor)
+        .capacities(capacities)
+        .grace_from_env(grace)
+        .and_then(|c| c.teardown_deadline_from_env(teardown_deadline))
+        .and_then(|c| c.failure_mode_from_env(failure_mode))
+        .map_err(env_err)?;
+
+    Ok((base, config))
 }
