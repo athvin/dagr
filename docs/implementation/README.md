@@ -205,7 +205,7 @@ The milestone opens with a prerequisite rather than the loader, because the audi
 
 Work in order: the ADR (T113), wiring the existing precedence (T114), the loader and the `file` tier (T115), config-error sources and strict `DAGR_LOG_FORMAT` (T116), the checked knob table (T117), and the acceptance gate (T118).
 
-- [ ] **128** · [T113 — ADR: named-profile configuration file and the `file` precedence tier](128-T113-profiles-config-file-adr.md) · S · decision
+- [x] **128** · [T113 — ADR: named-profile configuration file and the `file` precedence tier](128-T113-profiles-config-file-adr.md) · S · decision
 - [ ] **129** · [T114 — wire the existing precedence into the run path](129-T114-wire-precedence-into-the-run-path.md) · M · feature — after T113
 - [ ] **130** · [T115 — the TOML loader, profile layering, and the `file` precedence tier](130-T115-toml-loader-and-file-tier.md) · M · feature — after T114
 - [ ] **131** · [T116 — a source discriminator for config errors, and strict `DAGR_LOG_FORMAT`](131-T116-error-source-discriminator-and-strict-log-format.md) · M · feature — after T115
