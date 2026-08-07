@@ -511,6 +511,16 @@ impl RunConfig {
         self
     }
 
+    /// The operator-supplied run id, or [`None`] when this run will mint one.
+    ///
+    /// Read by a caller that needs the id **before** the run starts — a placed run
+    /// does, because adoption after a restart is scoped to one and the discovery
+    /// pass happens before any node is submitted.
+    #[must_use]
+    pub fn effective_run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
+    }
+
     /// Set the cooperative **grace period** (default [`DEFAULT_GRACE`], 10 s). It
     /// bounds *both* the zombie wait at natural run end and the cancellation drain
     /// wait for in-flight cooperative work, and it drives the printed
@@ -987,6 +997,15 @@ pub struct RunPlan {
     /// driver). **Empty for a non-resume run** — the loop is then byte-for-byte the
     /// non-resume run.
     pre_satisfied: BTreeMap<String, Option<String>>,
+    /// Whether this plan's placed nodes were actually wired to a remote executor.
+    ///
+    /// `false` for every plan built by the ordinary local path, which is what makes
+    /// the bootstrap guard possible: an executor that *honours* placement, a
+    /// pipeline that *declares* one, and a plan that was given no cluster is the
+    /// silent-substitution shape T105 refused, and it is refused here instead of at
+    /// the executor's availability check (which now answers a different question —
+    /// whether this build compiled the executor in at all).
+    remote_wired: bool,
 }
 
 impl RunPlan {
@@ -1001,6 +1020,7 @@ impl RunPlan {
             runners,
             ordering: BTreeMap::new(),
             pre_satisfied: BTreeMap::new(),
+            remote_wired: false,
         }
     }
 
@@ -1025,6 +1045,7 @@ impl RunPlan {
             runners,
             ordering,
             pre_satisfied: BTreeMap::new(),
+            remote_wired: false,
         }
     }
 
@@ -1043,6 +1064,19 @@ impl RunPlan {
     #[must_use]
     pub fn with_resume(mut self, pre_satisfied: BTreeMap<String, Option<String>>) -> Self {
         self.pre_satisfied = pre_satisfied;
+        self
+    }
+
+    /// Declare that this plan's placed nodes are wired to a **remote executor**.
+    ///
+    /// Set by `RunnableFlow::run_placed` (behind the default-off `k8s` feature)
+    /// and by nothing else. It is what the bootstrap guard reads: a plan that says
+    /// `false` while the executor honours placement and the pipeline declares one is
+    /// refused, because running those nodes in this process is the silent
+    /// substitution an operator has no way to notice.
+    #[must_use]
+    pub fn remote_wired(mut self, wired: bool) -> Self {
+        self.remote_wired = wired;
         self
     }
 }
@@ -1333,6 +1367,7 @@ where
         runners,
         ordering,
         pre_satisfied,
+        remote_wired,
     } = plan;
     let artifact = pipeline
         .assemble()
@@ -1368,6 +1403,34 @@ where
             cancellation_origin: None,
             shutdown_exit: select_shutdown_exit(RunOutcome::BootstrapFailed, None, flush_ok),
         };
+    }
+
+    // --- The placement-wiring check. Lifting T105's bootstrap refusal did not lift
+    // the reason for it: an executor that HONOURS placement, a pipeline that
+    // DECLARES one, and a plan that was handed no cluster is exactly the shape where
+    // every placed node would run in this process while the operator believed
+    // otherwise. So the refusal moved here rather than vanishing, and it is narrower
+    // than the one it replaces — a pipeline with no placed node runs fine under a
+    // remote executor, because there is nothing to place and so nothing to
+    // substitute.
+    if config.executor.honours_placement() && !remote_wired {
+        let placed = crate::remote_guard::placed_node_names(&pipeline);
+        if !placed.is_empty() {
+            eprintln!(
+                "{}",
+                crate::remote_guard::unwired_refusal(config.executor, &placed)
+            );
+            let _ = writer.run_finished(RunOutcome::BootstrapFailed);
+            let flush_ok = finalize_shutdown(&mut writer, &temp_dir);
+            return RunReport {
+                outcome: RunOutcome::BootstrapFailed,
+                terminal_states: BTreeMap::new(),
+                run_id: run_id_str,
+                stream_path,
+                cancellation_origin: None,
+                shutdown_exit: select_shutdown_exit(RunOutcome::BootstrapFailed, None, flush_ok),
+            };
+        }
     }
 
     // How this run's executor charges a placed node: an executor that honours

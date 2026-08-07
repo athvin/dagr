@@ -77,7 +77,8 @@ state classes, and the closed trigger-rule set — lives in
 7. [Two same-typed resources via newtypes](#two-same-typed-resources-via-newtypes)
 8. [Common `#[task]` mistakes](#common-task-mistakes)
 9. [Declaring DAGs with `#[dag]` and running them with one line](#declaring-dags-with-dag-and-running-them-with-one-line)
-10. [Querying run state across DAGs](#querying-run-state-across-dags)
+10. [Placing a node on remote compute](#placing-a-node-on-remote-compute)
+11. [Querying run state across DAGs](#querying-run-state-across-dags)
 
 ---
 
@@ -595,6 +596,145 @@ This is the seam every renderer and the `fold` verb read.
 two revisions: an intended change shows as a reviewable structural diff, and an
 *accidental* rewiring shows up as a diff nobody meant to make — a pure-assembly check
 that needs no run store, network, or database.
+
+## Placing a node on remote compute
+
+**Problem.** One node in your graph wants 64 GiB, or a GPU, or a machine that is not
+this one. Everything else is happy in-process, and you do not want two pipelines, two
+binaries, or two mental models.
+
+**Shape.** Declare a size on that node and select the remote executor at run time.
+The rest of the graph is untouched: same binary, same pipeline, same artifacts.
+`crates/cli/examples/placed_pipeline.rs` is the runnable version of everything below.
+
+```rust,ignore
+let sample = flow.register_source_placed(
+    "sample",
+    TakeSample { rows: 21 },
+    NodePolicy::new(),
+    Placement::new().cpu("500m").memory("512Mi"),
+);
+// No placement: this one runs wherever the invocation runs.
+let _summary = flow.register_payload("summarise", Summarise, sample);
+```
+
+Every resource string is **opaque** — dagr never parses `"500m"` or `"512Mi"`, it
+carries them to the platform verbatim, so a cluster that grows a new unit needs no
+dagr release.
+
+### Turning it on
+
+Remote execution lives behind the **default-off `k8s` cargo feature**. A build that
+did not compile it **refuses** `--dagr.executor=k8s` at bootstrap, naming the feature
+— it never falls back to running your placed nodes here behind your back. A build
+that *did* compile it, but was handed no cluster, refuses too, naming the nodes it
+would have had to substitute.
+
+| Knob | Environment | Default | What it bounds |
+|---|---|---|---|
+| `--dagr.executor` | `DAGR_EXECUTOR` | `local` | Which executor runs node attempts: `local` or `k8s`. |
+| `--dagr.max-pods` | `DAGR_MAX_PODS` | unlimited | Concurrent placed attempts. Unset means uncapped — set it to stay inside a namespace quota. |
+| `--dagr.pod-launch-retries` | `DAGR_POD_LAUNCH_RETRIES` | 2 | Extra *launches* a pod that never started may have. Distinct from `NodePolicy::retries`, which is the node's own budget for work that ran and failed. |
+
+Precedence is the usual `flag > environment > default`. Under `--dagr.executor=local`
+a placement is **recorded and ignored**: it is in the graph artifact, and the node
+runs in-process at full speed on a machine that has never heard of a cluster. That is
+what makes one binary genuinely both.
+
+### Placement is policy, not an execution class
+
+A `Placement` feeds the **policy hash** and never the **structural fingerprint**. So
+moving a node between local and placed is a *policy* change: a resume prints a policy
+diff and proceeds. A run started locally resumes under `--dagr.executor=k8s`, and the
+reverse, with no structural refusal — which is exactly the point of making placement a
+policy rather than a new execution class.
+
+### The cost, measured
+
+Remote start latency is **seconds**, against dagr's sub-millisecond local per-node
+overhead — three orders of magnitude, and entirely outside dagr's control. Measured
+(T101, one shared watch, concurrent submission):
+
+| Condition | p50 | p99 |
+|---|---|---|
+| warm, co-located (kind), n=1 | 0.76 s | 0.76 s |
+| warm, co-located, n=10 | 0.91 s | 0.92 s |
+| warm, co-located, n=50 | 2.30 s | 3.44 s |
+| warm, across a network (k3s), n=10 | 2.49 s | 2.50 s |
+| **cold image pull**, n=50 | **13.03 s** | **24.19 s** |
+
+**The tail is the image pull, not the platform.** Cold and warm differ by ~1.9 s at
+n=1 and by ~20.7 s at p99 for n=50. Pre-pulled images and pinned digests are a
+requirement of the operational story, not a tuning tip. Place a node when its own
+work dominates ~1–2.5 s; do not place a graph of sub-second nodes one attempt at a
+time.
+
+### Somewhere for the pods to put things — not wired yet
+
+A placed attempt reports by writing an attempt shard and its output where the
+orchestrator can read them, so both sides need one container they can both reach.
+**The shipped code cannot yet give a pod one.** This is the honest current state,
+not a choice you make at provisioning time:
+
+- The pod side writes through a **local filesystem path**, and `exec-node` **refuses
+  an input reference that names any backend other than the local one** — so the
+  `blob-s3` backend is not openable from inside a pod.
+- The pod spec dagr builds carries an image, a command, the declared size, its
+  identity labels and annotations, `restartPolicy: Never`, node selectors and
+  tolerations. It has **no volume, no volumeMount and no environment field**, so a
+  host path, an RWX claim, or a bucket's endpoint cannot be attached to it at all.
+
+So a placed node drives to completion against dagr's in-process API fake — with the
+test supplying the shard a pod would have written — and **cannot yet run against a
+real cluster**: the pod would start and have nowhere to report to.
+Adding that seam is mechanism work owned by the node-runner ticket (T108). When it
+lands, the shape is the usual one — an RWX volume mounted at the same path on both
+sides, or the S3-compatible backend once `exec-node` can open it — and this section
+becomes a choice rather than a gap.
+
+What does **not** change when it lands: payloads travel through that container,
+never through the API server, so there is no `ConfigMap` smuggling and no 1 MiB
+ceiling. A reference that carries a signed query string is refused rather than
+written into a pod's arguments, and a pod carries no credential for dagr's own run
+index — the index is the orchestrator's, and the pod never links it.
+
+### The RBAC an operator applies
+
+Apply [`crates/k8s/manifests/dagr-orchestrator-rbac.yaml`](../crates/k8s/manifests/dagr-orchestrator-rbac.yaml),
+substituting your namespace. It is a namespaced `Role` plus its `ServiceAccount` and
+`RoleBinding`, granting six verbs on **one** resource in **one namespace** and
+nothing else:
+
+| Verb | Why the orchestrator needs it |
+|---|---|
+| `create` | Submit one attempt's pod. |
+| `get` | The submission idempotency probe. |
+| `list` | The startup discovery pass, and every resync. |
+| `watch` | The single long-lived stream, one per orchestrator process. |
+| `patch` | Rewrite `metadata.labels` in place — the whole of orphan adoption. |
+| `delete` | Remove a pod dagr owns: a timeout, a cancellation, a revocation. |
+
+Remove one and dagr **names the missing verb** and points at the manifest, rather
+than retrying a denial that will never succeed or reporting a generic API error.
+Read that at the strength it is proven at: the classifier is tested against a
+**pinned fixture** of the denial message a Kubernetes API server sends, not against
+a live cluster — nothing in this repository has been run against one.
+
+Deliberately absent: `update`
+(a full replace races the platform's own `status` writes), `deletecollection`,
+`pods/log`, `pods/exec`, and anything cluster-scoped. dagr submits a bare Pod with
+`restartPolicy: Never` and does its own retrying — letting the platform retry too
+would duplicate an attempt.
+
+### What this is not
+
+dagr is **not a scheduler** and installs **no control plane**: there is no chart, no
+operator, no custom resource, and nothing that outlives the run. The orchestrator
+makes outbound calls, holds one watch, and exits when the run ends. ADR 115 **narrowed**
+one permanent non-goal and moved nothing else: a *distributed execution* system means
+an engine that distributes the graph and its control — cooperating orchestrators,
+work-stealing, cross-run queues — and that is still excluded. One process owns the
+graph, the event stream, and every retry decision.
 
 ## Querying run state across DAGs
 

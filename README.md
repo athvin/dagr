@@ -218,7 +218,10 @@ fails the build if any of them disagrees.
 - **Tier 1 — Linux containers.** Everything works; the full test suite runs in
   CI here.
 - **Dev-supported — macOS.** Compiles and runs; documented divergences only
-  (no cgroups; different fsync semantics). A CI job runs the core suite.
+  (no cgroups; different fsync semantics). A CI job runs the core suite, and the
+  [remote executor](#remote-execution)'s own suite runs there too — it drives an
+  in-process fake of the Kubernetes API, so it needs no cluster and is not a
+  Linux-only capability.
 - **Windows — unsupported in v1.** The signal and process models differ enough
   that pretending otherwise would mean untested promises. Revisit on demand.
 
@@ -302,6 +305,53 @@ asset queues/watchers/partitions). For nodes placed on remote compute, the
 launched with, and did it read what we told it to" — including attempts that were
 submitted and **never completed** — under the same by-value, no-foreign-key
 discipline.
+
+## Remote execution
+
+One node in a graph sometimes wants infrastructure the laptop running the rest of it
+does not have — 64 GiB for a join, a GPU for an inference step. dagr can place *that
+node's attempts* on Kubernetes while every other node keeps running in the
+orchestrator's own process, from the **same binary and the same pipeline** (ADR 115).
+
+It is **opt-in twice over**, and both are deliberate. The `k8s` cargo feature is
+**default-off**, so a build that never asks for remote execution compiles no
+Kubernetes client and no HTTP or TLS stack at all; and the executor is selected per
+invocation with `--dagr.executor=k8s` (default `local`). A build without the feature
+**refuses** the flag, naming the feature — it never quietly runs your placed nodes
+here instead.
+
+```sh
+# The four deployment facts are the example's own, not `--dagr.*` knobs: a
+# namespace and an image digest are facts about how this binary was deployed.
+DAGR_DEMO_NAMESPACE=dagr \
+DAGR_DEMO_IMAGE=localhost/dagr-placed-demo:latest \
+DAGR_DEMO_IMAGE_DIGEST=sha256:… \
+DAGR_DEMO_BLOBS=/dagr-blobs \
+  cargo run --features k8s --example placed_pipeline -- \
+    run placed_pipeline --store ./runs --dagr.executor=k8s --run-id my-run-1
+```
+
+What does *not* change is the part people expect to: dagr **opens no listener** under
+either executor, installs nothing in the cluster, and exits when the run ends. The
+orchestrator makes outbound calls and holds one watch; nothing calls in. One process
+still owns the graph and the event stream, so a placed run's artifacts have the same
+shape as a local one's, and placement is node **policy** — a run started locally
+resumes remotely, and back, with a printed policy diff rather than a refusal.
+
+The costs are real and worth knowing before you reach for it. The **M10 measurement
+spike** clocked pod start at ~0.9 s p50 co-located and ~2.5 s p50 across a network,
+against dagr's sub-millisecond local overhead — so placing a graph of sub-second
+nodes one pod at a time is a bad trade. Those are the spike's numbers for its own
+client against a cluster; they are **not** a measurement of the shipped executor,
+which has not been run against one.
+
+Two things an operator needs, and one of them is missing today. The namespaced RBAC
+grant ships as a manifest to apply. Somewhere for a pod to exchange payloads and
+attempt shards with the orchestrator does **not**: the pod spec dagr builds has no
+volume, volumeMount or environment field, so a placed attempt cannot yet report from
+a real pod. The cookbook's
+[*Placing a node on remote compute*](docs/cookbook.md#placing-a-node-on-remote-compute)
+has the numbers, that gap in full, the manifest, and the authoring rules.
 
 ## When not to use this
 

@@ -645,4 +645,160 @@ mod tests {
         install_crypto_provider();
         install_crypto_provider();
     }
+
+    // =======================================================================
+    // The translation into a real API object
+    // =======================================================================
+
+    /// The spec this module is ever handed, built through the **shipped** builder
+    /// rather than by hand — a literal would drift from what the executor emits and
+    /// the assertions below would then be about a struct nobody submits.
+    ///
+    /// Everything optional is populated, so a field that failed to travel is a
+    /// failure here rather than an untested `None`.
+    fn submitted_spec() -> crate::executor::PodSpec {
+        crate::executor::build_pod(
+            &crate::executor::PodRequest {
+                identity: crate::identity::AttemptIdentity {
+                    key: crate::identity::AttemptKey::new("run-1", "extract", 2),
+                    pipeline: "demo".to_string(),
+                    structural_fingerprint: "structural-abc".to_string(),
+                    policy_hash: "policy-def".to_string(),
+                    tool_version: "dagr@test".to_string(),
+                    image_digest: "sha256:cafebabe".to_string(),
+                    owner: "orchestrator-1".to_string(),
+                },
+                namespace: "dagr".to_string(),
+                image: "registry.example/dagr@sha256:cafebabe".to_string(),
+                command: vec!["dagr".to_string(), "exec-node".to_string()],
+                placement: crate::executor::PodPlacement {
+                    cpu: Some("500m".to_string()),
+                    memory: Some("512Mi".to_string()),
+                    node_selectors: vec![("disktype".to_string(), "ssd".to_string())],
+                    tolerations: vec!["dedicated".to_string()],
+                },
+            },
+            crate::executor::ClusterRetry::Disabled,
+        )
+        .expect("cluster-side retry is disabled, so the build succeeds")
+    }
+
+    /// **The M10 boundary, at the one place it becomes a real object.**
+    ///
+    /// `PodSpec` having no environment or volume field is only half the guarantee —
+    /// this function is the sole translation into a `Pod` the API server sees, and it
+    /// could add one on its own. So the emitted object is asserted to carry no
+    /// environment plumbing (nothing can smuggle a run-index credential), no volume
+    /// or mount (a payload travels through the blob store, and the seam that would
+    /// let it travel any other way does not exist), and no identity or pull secret.
+    ///
+    /// The typed half is checked field by field; the serialized half then scans the
+    /// whole object, so a *future* field that grows one of these surfaces fails here
+    /// without this test having to be extended.
+    #[test]
+    fn the_emitted_pod_carries_no_environment_no_volume_and_no_secret() {
+        let pod = pod_object(&submitted_spec());
+        let spec = pod.spec.as_ref().expect("the pod has a spec");
+
+        assert_eq!(spec.containers.len(), 1, "one container, and only one");
+        let container = &spec.containers[0];
+        assert!(container.env.is_none(), "no environment variables");
+        assert!(container.env_from.is_none(), "no envFrom source");
+        assert!(container.volume_mounts.is_none(), "no volume mounts");
+        assert!(container.volume_devices.is_none(), "no volume devices");
+
+        assert!(spec.volumes.is_none(), "no volumes");
+        assert!(
+            spec.service_account_name.is_none(),
+            "no service account is bound to the pod: it makes no API call"
+        );
+        assert!(
+            spec.image_pull_secrets.is_none(),
+            "no pull secret is attached"
+        );
+        assert!(spec.init_containers.is_none(), "no init container");
+        assert!(
+            spec.ephemeral_containers.is_none(),
+            "no ephemeral container"
+        );
+
+        // The field-agnostic half. Serializing drops every `None`, so what remains is
+        // exactly the surface that reaches the API server.
+        let json = serde_json::to_string(&pod).expect("a Pod serializes");
+        for smuggler in [
+            "\"env\"",
+            "\"envFrom\"",
+            "\"volumeMounts\"",
+            "\"volumes\"",
+            "\"secret\"",
+            "\"secretKeyRef\"",
+            "\"configMap\"",
+            "\"configMapKeyRef\"",
+            "\"serviceAccountName\"",
+            "\"imagePullSecrets\"",
+            "\"hostPath\"",
+            "\"persistentVolumeClaim\"",
+        ] {
+            assert!(
+                !json.contains(smuggler),
+                "the emitted Pod must not carry {smuggler}: {json}"
+            );
+        }
+    }
+
+    /// Non-vacuity for the scan above: the object it looks at is a fully populated
+    /// one, so the absences are absences rather than an empty translation.
+    #[test]
+    fn the_emitted_pod_carries_everything_it_is_supposed_to() {
+        let spec = submitted_spec();
+        let pod = pod_object(&spec);
+
+        let meta = &pod.metadata;
+        assert_eq!(meta.name.as_deref(), Some(spec.name.as_str()));
+        assert_eq!(meta.namespace.as_deref(), Some("dagr"));
+        assert_eq!(
+            meta.labels.as_ref().map(BTreeMap::len),
+            Some(spec.labels.len()),
+            "every selector label travels"
+        );
+        assert_eq!(
+            meta.annotations.as_ref().map(BTreeMap::len),
+            Some(spec.annotations.len()),
+            "every authoritative annotation travels"
+        );
+
+        let pod_spec = pod.spec.as_ref().expect("the pod has a spec");
+        assert_eq!(
+            pod_spec.restart_policy.as_deref(),
+            Some("Never"),
+            "the platform never restarts the work, so it can never duplicate an attempt"
+        );
+        let container = &pod_spec.containers[0];
+        assert_eq!(container.image.as_deref(), Some(spec.image.as_str()));
+        assert_eq!(container.command.as_ref(), Some(&spec.command));
+
+        let requests = container
+            .resources
+            .as_ref()
+            .and_then(|r| r.requests.as_ref())
+            .expect("the declared size travelled");
+        assert_eq!(requests.get("cpu"), Some(&Quantity("500m".to_string())));
+        assert_eq!(requests.get("memory"), Some(&Quantity("512Mi".to_string())));
+
+        assert_eq!(
+            pod_spec
+                .node_selector
+                .as_ref()
+                .and_then(|s| s.get("disktype"))
+                .map(String::as_str),
+            Some("ssd")
+        );
+        let tolerations = pod_spec
+            .tolerations
+            .as_ref()
+            .expect("a toleration travelled");
+        assert_eq!(tolerations.len(), 1);
+        assert_eq!(tolerations[0].key.as_deref(), Some("dedicated"));
+        assert_eq!(tolerations[0].operator.as_deref(), Some("Exists"));
+    }
 }

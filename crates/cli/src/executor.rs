@@ -10,16 +10,20 @@
 //! # What this module ships, and what it does not
 //!
 //! It ships the **selection**: the closed set of executor names, the parse, and the
-//! availability check. It ships **no** remote execution — the
-//! [`Kubernetes`](ExecutorKind::Kubernetes) variant is a **recognized stub**
-//! ([`ensure_available`](ExecutorKind::ensure_available) refuses it, naming the
-//! ticket that implements it), exactly the shape the metastore's reserved-but-
-//! unbuilt open modes already use. There is no Kubernetes client here, no pod spec,
-//! and no cluster call.
+//! availability check. There is no Kubernetes client here, no pod spec, and no
+//! cluster call — the executor itself lives behind the default-off
+//! [`k8s`](REMOTE_EXECUTOR_FEATURE) feature, in `crate::k8s_runner` and
+//! `crate::remote`, and this module only asks whether it was linked. (Those two are
+//! named rather than linked: a default build does not compile them, so a link would
+//! be broken in exactly the documentation most readers generate.)
 //!
-//! That refusal is deliberately **loud**. Silently falling back to a local run
-//! would be the worst possible behaviour: an operator who asked for placed
-//! execution would get a laptop-shaped run reported as a success.
+//! [`ensure_available`](ExecutorKind::ensure_available) refuses the
+//! [`Kubernetes`](ExecutorKind::Kubernetes) executor in a build that did not compile
+//! it, naming the feature and the flag. That refusal is deliberately **loud**:
+//! silently falling back to a local run would be the worst possible behaviour, since
+//! an operator who asked for placed execution would get a laptop-shaped run reported
+//! as a success. The complementary check — a build that *has* the executor but was
+//! handed no cluster — is [`crate::remote_guard`]'s.
 //!
 //! # Placement is separate from selection
 //!
@@ -33,9 +37,15 @@
 use std::fmt;
 use std::str::FromStr;
 
-/// The ticket that implements the remote executor. Named in the refusal so the
-/// diagnostic points somewhere rather than merely saying "no".
-pub const REMOTE_EXECUTOR_TICKET: &str = "T108";
+/// The ticket that wired the remote executor into the run path. Named in the
+/// refusal so the diagnostic points somewhere rather than merely saying "no".
+pub const REMOTE_EXECUTOR_TICKET: &str = "T112";
+
+/// The cargo feature a build needs in order to run under the remote executor.
+///
+/// Named in the refusal, because "this build cannot" and "dagr cannot" are very
+/// different sentences and only one of them is true.
+pub const REMOTE_EXECUTOR_FEATURE: &str = "k8s";
 
 /// Which executor runs this invocation's node attempts.
 ///
@@ -47,9 +57,13 @@ pub enum ExecutorKind {
     /// testing surface is built around. A node's placement is recorded and ignored.
     #[default]
     Local,
-    /// Run **placed** nodes on Kubernetes. A **recognized stub**: this build
-    /// refuses it (see [`ensure_available`](Self::ensure_available)); the executor
-    /// itself is [`REMOTE_EXECUTOR_TICKET`]'s.
+    /// Run **placed** nodes on Kubernetes — one pod per node attempt, with the
+    /// node's declared resource requests, selectors and tolerations (ADR 115).
+    ///
+    /// Available only in a build that compiled the default-off
+    /// [`k8s`](REMOTE_EXECUTOR_FEATURE) feature; a build without it refuses saying
+    /// so rather than running every node locally
+    /// (see [`ensure_available`](Self::ensure_available)).
     Kubernetes,
 }
 
@@ -92,17 +106,29 @@ impl ExecutorKind {
         }
     }
 
-    /// Check that this build can actually run under the selected executor.
+    /// Check that **this build** can run under the selected executor.
+    ///
+    /// This is a question about the binary, not about the run: it answers "was the
+    /// executor compiled in at all". The separate question — "was this *run* given a
+    /// cluster to place its placed nodes on" — is
+    /// [`crate::remote_guard`]'s, and is what actually decides whether a node would
+    /// silently run in this process. Splitting them is what lets a build with the
+    /// executor compiled in run a pipeline that declares no placement under
+    /// `--dagr.executor=k8s` without theatre, while still refusing the one shape that
+    /// matters.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutorRefusal`] for an executor that is a **recognized stub** in
-    /// this build. The caller must not proceed: it prints the refusal and exits
-    /// with the bootstrap-failure code, because running locally instead would be a
-    /// silent substitution the operator never asked for.
+    /// Returns [`ExecutorRefusal`] when the selected executor is not compiled into
+    /// this build. The caller must not proceed: it prints the refusal and exits with
+    /// the bootstrap-failure code, because running locally instead would be a silent
+    /// substitution the operator never asked for.
     pub fn ensure_available(self) -> Result<(), ExecutorRefusal> {
         match self {
             ExecutorKind::Local => Ok(()),
+            #[cfg(feature = "k8s")]
+            ExecutorKind::Kubernetes => Ok(()),
+            #[cfg(not(feature = "k8s"))]
             ExecutorKind::Kubernetes => Err(ExecutorRefusal { kind: self }),
         }
     }
@@ -152,11 +178,12 @@ impl fmt::Display for ExecutorParseError {
 
 impl std::error::Error for ExecutorParseError {}
 
-/// The selected executor is a **recognized stub** this build does not implement.
+/// The selected executor is not compiled into this build.
 ///
-/// A distinct type from a parse failure: the name was valid and understood, and the
-/// build simply cannot honour it yet. It names the executor, the ticket that
-/// implements it, and the flag to change — the three facts an operator needs.
+/// A distinct type from a parse failure: the name was valid and understood, and this
+/// binary simply has no implementation linked. It names the executor, the feature
+/// that would supply it, the ticket that wired it, and the flag to change — the four
+/// facts an operator needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutorRefusal {
     /// The executor that was selected and refused.
@@ -167,11 +194,14 @@ impl fmt::Display for ExecutorRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "executor `{}` is a recognized stub reserved behind the executor seam and is not \
-             implemented in this build (it is implemented by ticket {}); refusing rather than \
-             running every node locally behind your back — pass `{}={}` to run in-process",
+            "executor `{}` is not compiled into this build: it lives behind the default-off \
+             `{}` cargo feature, wired into the run path by ticket {}. Rebuild `dagr-cli` \
+             with `--features {}`, or pass `{}={}` to run every node in this process — \
+             refusing rather than running them locally behind your back",
             self.kind,
+            REMOTE_EXECUTOR_FEATURE,
             REMOTE_EXECUTOR_TICKET,
+            REMOTE_EXECUTOR_FEATURE,
             crate::config::EXECUTOR_FLAG,
             ExecutorKind::Local,
         )

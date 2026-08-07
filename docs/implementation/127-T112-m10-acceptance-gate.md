@@ -180,23 +180,98 @@ Prove the milestone end to end, and pin its boundaries structurally.
 
 ## Open questions
 
-- **Operator infrastructure — BLOCKING, unresolved.** See the prerequisite block in
-  §Why / context. A registry, pod-to-pod storage (S3 or RWX), and a cluster with
-  concurrency headroom must all be provisioned by the operator before this ticket can
-  begin; T101 confirmed two are absent on the reference cluster. The operator has
-  stated they will set this up when the ticket comes up (2026-07-29). **This ticket
-  halts until then** — it is not startable, and no part of it should be faked to make
-  progress.
-- **kind or k3s in CI, and how long does the job take?** T101 recorded the choice for
-  measurement; this ticket must also live inside a tolerable CI wall-clock. If the
-  cluster job is too slow for every PR, it runs on a schedule or on a label with the
-  non-cluster suite still gating merges — decided in-PR and stated in the job's own
-  comment so the coverage boundary is visible rather than assumed.
-- **Does the demo image get published?** No — built in-job from the workspace, so the
-  image digest always matches the orchestrator and the version-skew invariant is
-  automatic. Recorded in-PR.
-- **macOS coverage.** The cluster job is Linux-only; macOS keeps the non-cluster suite.
-  This is a documented platform divergence in the existing style, not a gap to close.
+- **Operator infrastructure — RESOLVED (2026-08-04) by the ticket's own sanctioned
+  alternative, and then superseded by a *different* blocker (see below).** The
+  prerequisite block asks for a registry, pod-to-pod storage, and a cluster with
+  headroom, and §Why / context itself permits "a disposable kind/k3s in CI" for the
+  third. All three are satisfiable without operator provisioning, exactly as T101's
+  Run B demonstrated on this machine:
+  - **Registry** — none needed. The image is built in-job from the workspace and
+    loaded straight into the node's image store with `kind load docker-image`, which
+    is also the answer to the "does the demo image get published" question below.
+  - **Pod-to-pod storage** — needs **no RWX class and no bucket** on a single-node
+    `kind` cluster, but it is *not* free the way the first pass of this note
+    claimed. A `kind` `extraMounts` entry mounts a host directory **into the node**,
+    not into a pod; making it visible to a container still needs a `hostPath`
+    volume plus a `volumeMount` in the pod spec. T101 Run B's `/dagr-blobs` was the
+    node-side half of exactly that pair. So the infrastructure is satisfiable
+    without operator provisioning; the **pod-spec half is missing from the shipped
+    code**, which is the blocker recorded immediately below.
+  - **Headroom** — a fresh single-node `kind` cluster has no other work on it, so
+    the reference cluster's 102%-memory worst node is not in the picture.
+  So the *stated* prerequisite is not what blocks this ticket.
+- **BLOCKING, and NOT the prerequisite the ticket anticipated: the shipped pod spec
+  cannot mount the shared container, so a placed attempt cannot report from a real
+  pod.** Found 2026-08-04 while wiring the cluster job. The pod side
+  (`crates/cli/src/exec_node.rs`) writes its output and its attempt shard to a
+  **local filesystem path** — `LocalFsBlob::open(&args.blob_store)` — and the runner
+  reads them back out of the orchestrator's own `blob_container` path
+  (`RemoteAttemptConfig::blob_container`, a single `PathBuf` documented as "the blob
+  container the pod writes its output and shard into, and this runner reads them out
+  of"). For those to be the same bytes, the pod needs that path mounted. But
+  `dagr_k8s::executor::PodSpec` has **no volume field**, and
+  `dagr_k8s::client::pod_object` — the only translation to a real API object — emits
+  a `Pod` with a container carrying image, command, resources, `restartPolicy`,
+  `nodeSelector` and `tolerations` and **nothing else**: no `volumes`, no
+  `volumeMounts`, no `env`, no `serviceAccountName`. The S3 route is closed too:
+  `exec-node` refuses any reference that does not name the **local** backend, and a
+  pod could not be handed object-store credentials in any case, because there is no
+  environment plumbing to hand them through.
+
+  This is **mechanism work, and this ticket's §Out of scope forbids it**: "Any
+  mechanism work — T101–T110 own it. A failure here is fixed in the owning ticket."
+  The owning ticket is T108 (the node runner and the pod spec it builds); a volume
+  seam on `PodSpec` plus its translation in `pod_object` is the missing piece.
+
+  **Exactly what is blocked, and what is not.** The blocker is *reporting*: anything
+  that has to read a placed attempt's own artifact needs the pod and the
+  orchestrator to share a blob container. So these three, and only these three, are
+  unimplementable without faking them, which the prerequisite block explicitly
+  refuses:
+
+  - a placed node **running to completion** on a real cluster,
+  - **terminal states** and the folded run artifact for a placed node,
+  - **"every node executed exactly once"** evidenced from that artifact — including
+    the OOM-kill case and the retry-with-backoff case, which are attempt outcomes
+    read back the same way.
+
+  What is **not** blocked, and is worth stating so the deferral does not grow: the
+  adoption half of the kill-and-restart guarantee. `crates/cli/src/adoption.rs` uses
+  only `api.list` and `patch_labels` and never touches a shard, so *"the restarted
+  orchestrator adopted the live pod, did not resubmit it, and recreated no pod"* —
+  asserted from pod UIDs and creation timestamps read back from the API — is
+  provable against **real pods today**, and against real pods it is a strictly
+  stronger assertion than the in-process fake's, because the identity it matches on
+  has round-tripped through an API server. Only the *"…and the run then completes"*
+  clause needs the missing seam.
+
+  **The cluster job stays deferred regardless**, because standing it up is part of
+  the operator decision this ticket is halted on, not something to improvise. The
+  non-cluster half — every boundary invariant, the wired run path against T107's
+  fake API surface, RBAC, dual-mode parity, the docs claims and the local demo — is
+  complete and green.
+- **kind or k3s in CI, and how long does the job take? — RESOLVED: kind, and the
+  cluster job is deferred with the blocker above.** T101 recorded kind for
+  measurement (Run B), and the same choice is right here: `kind load docker-image`
+  removes the registry prerequisite entirely, and on a single-node cluster an
+  `extraMounts` host directory plus a `hostPath` volume in the pod spec would be a
+  genuine shared container — the second half of that pair being precisely what does
+  not exist. Wall clock, from T101's
+  own timings: ~2m46s to create the cluster cold, plus the image build. That is too
+  slow for every PR, so the intended shape — to be written by whoever unblocks the
+  ticket — is a separate `remote-cluster` workflow on `workflow_dispatch` plus a
+  nightly schedule, with the non-cluster suite still gating merges and the boundary
+  stated in the job's own comment. **No such workflow ships in this PR**: a cluster
+  job that cannot complete a placed attempt would assert something weaker than it
+  claims, which §Why / context names as unacceptable.
+- **Does the demo image get published? — RESOLVED: no.** Built in-job from the
+  workspace and loaded into the node's image store, so the image digest always
+  matches the orchestrator and the version-skew invariant is automatic.
+- **macOS coverage — RESOLVED: unchanged.** The cluster job is Linux-only; macOS
+  keeps the non-cluster suite. In this PR the whole shipped suite, including the
+  wired remote run path against the fake API surface, runs on both tiers — the
+  `--features k8s` step in `.github/workflows/ci.yml` is not `ubuntu`-gated. The
+  Linux-only divergence begins with the cluster job, which is deferred.
 
 ## Out of scope
 

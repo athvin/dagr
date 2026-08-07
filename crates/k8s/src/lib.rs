@@ -35,6 +35,13 @@
 //!   pulls an HTTP or TLS crate.
 //! - [`fake`] — the in-process fake API surface, behind the default-on
 //!   `test-kit` feature, whose failures are scripted.
+//! - [`rbac`] — the closed verb set the shipped `Role` grants, and the pure
+//!   classification that turns a `403` into a sentence naming the missing verb
+//!   and the manifest that grants it.
+//!
+//! `rbac`'s items are reached by module path rather than re-exported at the crate
+//! root: it has its own `classify`, and [`adoption::classify`] is already exported
+//! there.
 //!
 //! Lint posture is inherited from `[workspace.lints]`; this crate adds no
 //! crate-level lint attributes.
@@ -56,6 +63,7 @@ pub mod executor;
 pub mod fake;
 pub mod identity;
 pub mod observer;
+pub mod rbac;
 
 pub use access::{AccessProbe, ClusterAccess, NoClusterAccess, resolve};
 pub use adoption::{
