@@ -1239,7 +1239,19 @@ impl RunnableFlow {
     /// deterministic clock, or a tuned [`RunConfig`] keep using [`run`](Self::run); this
     /// wraps it and adds no execution logic of its own.
     ///
+    /// The environment tier is honoured here: grace, the teardown deadline, the
+    /// failure mode, the three pool pins, and the headroom fraction resolve
+    /// `env > default` through the same helpers the registry's `run <flow>` path
+    /// uses (there is no argv on this path, so the flag tier is empty), and a
+    /// pool knob engages the container-limit probe exactly as it does there.
+    /// `RunConfig::new` itself stays infallible and environment-free — the
+    /// resolution is this call site's.
+    ///
     /// # Errors
+    /// - [`RunToStoreError::Config`] if a `DAGR_*` value cannot be used (an
+    ///   unparseable or out-of-range knob) — surfaced **before** the store is
+    ///   opened, so a bad environment leaves no run directory behind, and naming
+    ///   the offending variable (a bad value is never silently ignored).
     /// - [`RunToStoreError::Store`] if the run store cannot be opened at `base` (an
     ///   unwritable or inaccessible directory) — surfaced **before** assembly, since
     ///   there is nowhere to record an artifact.
@@ -1254,6 +1266,26 @@ impl RunnableFlow {
         base: impl AsRef<str>,
     ) -> Result<RunReport, RunToStoreError> {
         let base = base.as_ref();
+        // Resolve the environment tier BEFORE the store is opened: a run that
+        // cannot be configured must not leave a run directory behind.
+        let sized = crate::config::resolve_pool_sizing(crate::config::PoolPinFlags::default(), None)
+            .map_err(RunToStoreError::Config)?
+            .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
+            .map_err(|failure| {
+                // `detect` is documented never to fail today; if a probe validation
+                // ever appears, an unusable machine reading is a store-level fault
+                // for this one-call path (there is no bootstrap record yet).
+                RunToStoreError::Store(std::io::Error::other(failure.to_string()))
+            })?;
+        let config = RunConfig::new(base)
+            .grace_from_env(None)
+            .and_then(|c| c.teardown_deadline_from_env(None))
+            .and_then(|c| c.failure_mode_from_env(None))
+            .map_err(RunToStoreError::Config)?;
+        let config = match sized {
+            Some(capacities) => config.capacities(capacities),
+            None => config,
+        };
         // Mint the id ONCE and thread it into both the sink's directory and the
         // `RunConfig`, so the eagerly-created store directory and the driver's
         // resolved stream path agree (the driver builds the path from `config.base`
@@ -1261,7 +1293,7 @@ impl RunnableFlow {
         let run_id = mint_run_id();
         let sink = FileSink::create_in_store(base, pipeline_name, &run_id)
             .map_err(RunToStoreError::Store)?;
-        let config = RunConfig::new(base).run_id(run_id);
+        let config = config.run_id(run_id);
         self.run(pipeline_name, &config, sink, SystemClock::new())
             .map_err(RunToStoreError::Assembly)
     }
@@ -1594,6 +1626,11 @@ impl std::error::Error for PrepareAttemptError {
 /// as the registry's hand-written run path does.
 #[derive(Debug)]
 pub enum RunToStoreError {
+    /// A `DAGR_*` environment value could not be used (unparseable, or outside a
+    /// documented bound) — the run never started and no store directory was
+    /// created. Carries the [`EnvParseError`](crate::config::EnvParseError)
+    /// naming the offending variable.
+    Config(crate::config::EnvParseError),
     /// The run store could not be opened at the given base (an unwritable or
     /// inaccessible directory). Carries the underlying [`std::io::Error`].
     Store(std::io::Error),
@@ -1605,6 +1642,7 @@ pub enum RunToStoreError {
 impl std::fmt::Display for RunToStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Config(err) => write!(f, "the run's configuration could not be resolved: {err}"),
             Self::Store(err) => write!(f, "the run store could not be opened: {err}"),
             Self::Assembly(err) => write!(f, "the flow did not assemble: {err}"),
         }
@@ -1614,6 +1652,7 @@ impl std::fmt::Display for RunToStoreError {
 impl std::error::Error for RunToStoreError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Config(err) => Some(err),
             Self::Store(err) => Some(err),
             Self::Assembly(err) => Some(err),
         }

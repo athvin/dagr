@@ -541,12 +541,13 @@ fn run_to_store_resolves_the_env_tier() {
 // No behaviour change when nothing is set — byte-identical streams
 // ===========================================================================
 
-/// Two graph-emittable sources, registered in a fixed order — the
-/// byte-identical fixture.
-fn build_two_source_flow() -> RunnableFlow {
+/// A single graph-emittable source — the byte-identical fixture. One node, so
+/// every event's position is fully determined and the comparison cannot be
+/// perturbed by the admission interleaving of independent ready nodes (which is
+/// timing-dependent and identically so on both paths).
+fn build_ident_flow() -> RunnableFlow {
     let mut flow = RunnableFlow::new();
     let _a = flow.register_source_named("alpha", WouldSucceed);
-    let _b = flow.register_source_named("beta", WouldSucceed);
     flow
 }
 
@@ -583,7 +584,7 @@ fn empty_environment_streams_are_byte_identical() {
 
     // The wired path: a registry run with nothing set.
     let base_wired = TempBase::new("t114-ident-wired");
-    let registry = FlowRegistry::new().add("ident", build_two_source_flow);
+    let registry = FlowRegistry::new().add("ident", build_ident_flow);
     let mut out = Vec::new();
     let exit = with_env(&[], || {
         run_registry_to(
@@ -610,7 +611,7 @@ fn empty_environment_streams_are_byte_identical() {
         .join("events.jsonl");
     let sink = FileSink::create(&stream_path).expect("reference sink opens");
     let config = RunConfig::new(base_ref.as_str()).run_id(&run_id);
-    let report = build_two_source_flow()
+    let report = build_ident_flow()
         .run("ident", &config, sink, TickClock::default())
         .expect("the reference flow assembles");
     assert_eq!(

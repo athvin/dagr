@@ -453,6 +453,11 @@ fn flag_takes_value(flag: &str) -> bool {
             | "dagr.pool.memory"
             | "dagr.headroom-fraction"
             | "dagr.pod-launch-retries"
+            // The metastore's store path takes a value; omitting it here made
+            // `run --dagr.metastore-store ./x.db etl` treat `./x.db` as the flow
+            // name and fail confusingly. (`dagr.metastore` itself stays out: it
+            // is a bare-or-valued toggle, not an always-valued flag.)
+            | "dagr.metastore-store"
             | "data-interval"
             // The `exec-node` verb's own value-taking arguments (T106). They are
             // listed here for one reason only: so a value like `--node etl` is never
