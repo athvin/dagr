@@ -131,11 +131,46 @@ Make the reference binary honour the precedence it documents.
   pipeline-specific" split). The likely shape is a small reserved-flag scan next to
   the existing `store_base` scan in `registry.rs`, reusing `flag_takes_value`;
   recorded in-PR.
+  - **RESOLVED (this PR): the reserved-flag scan lives in `config.rs`.** Each
+    runtime flag gets a `parse_*_flag(argv)` scanner over the shared
+    `parse_valued_flag` body (the exact shape `--dagr.executor` / `--dagr.max-pods`
+    already use), and `run_selected_flow` calls them next to its existing `--store`
+    scan. `parse_cli` still returns only the verb — no choke point was created —
+    and `flag_takes_value` already listed every flag this ticket parses, so
+    `first_positional` needed no change beyond the `dagr.metastore-store` fix the
+    ticket names.
 - **Do the pool pins belong on the run path at all?** They are pinning knobs an
   operator uses to split a host between concurrent runs. Wiring them is consistent
   with ADR 089's table; if it turns out the probe is constructed too early in
   bootstrap to accept them, the ordering fix is recorded in-PR rather than silently
   skipping the knob.
+  - **RESOLVED (this PR): yes — and the probe is engaged only when a pool knob is
+    supplied.** No ordering problem existed: the run path sizes capacities before
+    `RunConfig` is built, so `resolve_pool_pins` + `resolve_headroom` feed
+    `ContainerLimitProbe::from_host().with_pins(..).with_headroom(..)` directly.
+    The probe runs **iff** at least one pin or an explicit headroom was supplied
+    (flag or env): a pinned pool is the pin verbatim and every unpinned pool derives
+    from detection (the `resolve_opt` tri-state, preserved exactly per ADR 128 §2).
+    With **no** pool knob supplied the capacities stay the historical unconstrained
+    set — the ticket's own byte-identical requirement and its "no default value
+    changes" boundary both forbid silently switching the no-knob default from
+    unconstrained to detection-sized; that switch, if ever wanted, is its own
+    decision.
+- **ADR 089's duration bounds (from the Objective): IMPLEMENTED, not struck.**
+  Grace `≥ 1 ms` and teardown-deadline `≥ 1 s` are enforced in
+  `grace_from_env` / `teardown_deadline_from_env` as `OutOfRange` →
+  `BootstrapFailure`, naming the offending source (`DAGR_GRACE` / `--grace`,
+  `DAGR_TEARDOWN_DEADLINE` / `--teardown-deadline`) — and `arch.md`'s C26 table now
+  carries the same bounds as ADR 089's. Why implement rather than strike: a zero
+  grace makes the printed shutdown budget a lie (no drain window at all), a zero
+  teardown deadline guarantees every teardown attempt is killed before it runs, and
+  both are operator typos far more often than intent — exactly the never-silent
+  posture every other validated knob (headroom's `0.0..=1.0`) already commits to.
+  This ticket's whole theme is making the documented claim true rather than
+  deleting it.
+- **`docs/tasks.md` carries no T114 entry** (the tasks file ends at the original
+  M0–M4 set; the M9–M11 tickets exist only as ticket files), so there are no
+  `Q:` items beyond the two above.
 
 ## Out of scope
 
