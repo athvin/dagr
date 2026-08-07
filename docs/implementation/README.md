@@ -191,7 +191,7 @@ Work in order: the ADR (T100), the spike (T101), the retry/timeout prerequisites
 - [x] **124** · [T109 — orphan adoption, tombstones, and ownership revocation](124-T109-orphan-adoption-and-ownership.md) · M · feature — after T108
 - [x] **125** · [T110 — the S3-compatible backend and intermediate-blob GC](125-T110-s3-backend-and-blob-gc.md) · M · feature — after T104, T108
 - [x] **126** · [T111 — the submission projection and audit surface](126-T111-submission-projection-and-audit.md) · M · feature — after T108
-- [ ] **127** · [T112 — M10 end-to-end demo, RBAC, and acceptance gate](127-T112-m10-acceptance-gate.md) · L · feature (gate) — after T100–T111
+- [x] **127** · [T112 — M10 end-to-end demo, RBAC, and acceptance gate](127-T112-m10-acceptance-gate.md) · L · feature (gate) — after T100–T111
 
 ## M11 — Configuration: named profiles and the `file` precedence tier
 
