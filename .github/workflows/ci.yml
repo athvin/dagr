@@ -1040,8 +1040,18 @@ jobs:
       # run, an inbound listener, a served database, a pod touching the run index,
       # runtime graph expansion). It also holds the substrate decisions T101–T112
       # inherit, so a later ticket cannot re-decide one of them in passing.
+      #
+      # ADR 128 (T113) moved the other permanent clause — C26's "no config file
+      # or DSL" — for the config-file half only. Its checker pins the same two
+      # halves: the permitted shape (a bootstrap-read TOML of run-level knobs
+      # with named profiles, beneath the environment in precedence) and the
+      # still-excluded list (a file describing the graph, flow selection,
+      # policy/placement reach, an assembly-time read, a file-only knob,
+      # secrets, any DSL), plus the decisions T114–T118 inherit.
       - name: ADR content contracts (boundary amendments)
-        run: bash scripts/check-remote-execution-scope-adr.sh
+        run: |
+          bash scripts/check-remote-execution-scope-adr.sh
+          bash scripts/check-profiles-config-file-adr.sh
 
   # --- The SYSTEM ACCEPTANCE GATE (system-level acceptance, T65) --------------
   # The terminal required gate. It is RED unless every constituent is green: the
