@@ -487,3 +487,86 @@ process, with reconnection and demultiplexing as dagr's own responsibility) and 
 T107's Definition of done, under the standing autonomous-loop split recorded in
 the 002 entry above. No boundary moves: the client is quarantined more tightly
 than the ticket asks, not less.
+
+---
+
+## 2026-08-06 · 128 (T113) — the ADR's pinning check lives in `scripts/`, outside the DoD's docs-only line
+
+**Quoted DoD line.** *"The diff is docs-only (no `crates/**`, no `Cargo.lock`)."*
+— and the Test plan's framing bullet, *"**No code.** The diff touches only
+`docs/**`; no `crates/**`, no `Cargo.lock`."*
+
+**Deviation.** This branch also adds `scripts/check-profiles-config-file-adr.sh`
+and one `bash scripts/…` run line in `.github/workflows/ci.yml`. Neither path is
+under `docs/**`.
+
+**Rationale.** The line's *subject* is production code, and that half is honoured
+exactly: no `crates/**` file and no `Cargo.lock` entry changes, and the decision
+ships no loader, no resolver tier, and no profile code (T114–T117 own all of it).
+What the line cannot be read literally to forbid is the ticket's own Test plan,
+which opens *"the 'tests' are mechanical file/content assertions"* and then lists
+six of them — ADR completeness, narrow supersession, the surviving qualified
+prohibitions, the recorded misattribution, the binding purity constraint, the
+docs-only diff. The repo keeps assertions of exactly that shape in
+`scripts/check-*-adr.sh`; thirteen already exist and CI runs them under "ADR
+content contracts", and the sibling boundary amendment recorded the identical
+deviation for the identical line shape (the 2026-07-30 · 115 entry above). The
+`ci.yml` line is not optional: `crates/cli/tests/ci_and_test_hygiene.rs` fails
+any `scripts/check-*.sh` the workflow does not invoke, precisely so a checker
+cannot rot into a comment.
+
+**Operator decision.** Traces to the ADR's own premise — a moved *permanent*
+boundary must be held by something that fails when it widens — and to the
+precedent the operator already accepted for ADR 115's pinning check, under the
+standing autonomous-loop split recorded in the 002 entry above. Scope is
+respected in the other direction too: T118 keeps every *structural* invariant
+over shipped code (purity with a `dagr.toml` present, zero-dep core,
+graph-is-code); this checker asserts only the decision's text.
+
+---
+
+## 2026-08-06 · 128 (T113) — the ADR body, the arch.md C26 amendment, and both supersessions landed in PR #116, ahead of this branch
+
+**Quoted DoD lines (the artifact-producing ones, abbreviated).** *"This file
+contains an ADR with Status / Context / Decision / Consequences / Rejected
+alternatives …"*; *"ADR 089 and ADR 091 are marked superseded-in-part for the
+config-file clause only …"*; *"`arch.md` C26's 'there is no config file or DSL'
+clause is amended …"*; *"The ADR records the four-tier precedence, profile
+selection and layering, the unchanged env spellings plus the mapping-table
+obligation, the run-level-only reach, the bootstrap-only read, the zero-dep-core
+boundary, and TOML."*; *"The ADR records the inert-env-tier finding and names
+T114 as the fix that must land first."*
+
+**Deviation.** Every one of those artifacts already exists on `main`. They were
+authored and merged **ahead of this branch**, in **PR #116** (ticket 111 · T96,
+commit `126cdcb`), alongside the M10/M11 ticket set they belong to: the embedded
+ADR in this ticket file, the `arch.md` C26 amendment, and the two
+partial-supersession notes on ADRs 089 and 091. This branch therefore re-authors
+**none** of them. What it adds is the mechanical pinning check the Test plan
+describes — `scripts/check-profiles-config-file-adr.sh`, wired into CI's "ADR
+content contracts (boundary amendments)" step — plus the one `arch.md` artifact
+PR #116 did *not* include: the Amendment-changelog entry for ADR 128, whose
+sibling entries for ADR 097 and ADR 115 already existed and whose section
+self-describes as listing each boundary move "so the spec's history is readable
+in one place". (The section's header sentence is widened by one clause — "moved
+a *permanent* non-goal **or scope boundary**" — because C26's config-file clause
+was a self-described permanent scope boundary rather than an entry on the
+non-goals list.)
+
+**Rationale.** Nothing was re-decided, re-authored, or rewritten here, which is
+the outcome ticket-conventions §10 wants: merged decision text is never
+rewritten, so re-emitting the ADR body on this branch would have been the
+*worse* option. The substance of each DoD line is satisfied on `main` and is
+now, for the first time, **enforced** rather than merely present — the checker
+fails if either supersession note is dropped, if a qualified prohibition loses
+its qualifier, if a Rejected-alternatives bullet is flipped from excluded to
+permitted, or if the changelog entry disappears. Recorded here because a reader
+diffing this branch against the DoD would otherwise conclude the chartered work
+was skipped.
+
+**Operator decision.** Traces to the operator's dated acceptance of the boundary
+amendment itself on 2026-07-29 ("ya I accept those"), recorded in the ticket's
+§Open questions and the ADR's §Status per ticket-conventions §5. The sequencing
+— M10/M11 ticket authorship landing before the decision ticket that formalises
+it — was the orchestrator's, under the same standing autonomous-loop split
+recorded in the 002 and 115 entries above.
