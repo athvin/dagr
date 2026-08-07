@@ -498,7 +498,13 @@ than the ticket asks, not less.
 
 **Deviation.** This branch also adds `scripts/check-profiles-config-file-adr.sh`
 and one `bash scripts/…` run line in `.github/workflows/ci.yml`. Neither path is
-under `docs/**`.
+under `docs/**`. A CI-fix commit on this branch additionally sets
+`fetch-depth: 0` on the `test` job's checkout: a pre-existing flake surfaced on
+this PR's macOS leg — the M7 and M10 acceptance-boundary scripts each
+`git fetch --deepen` a shallow clone from concurrent nextest test processes and
+race on the one shared `.git`'s locks — and a full-history clone (~2.3 MiB)
+makes both scripts' shallow-fetch path unreachable. Test infrastructure, not
+ticket surface; no `crates/**` file and no `Cargo.lock` entry changes.
 
 **Rationale.** The line's *subject* is production code, and that half is honoured
 exactly: no `crates/**` file and no `Cargo.lock` entry changes, and the decision

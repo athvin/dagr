@@ -201,7 +201,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
+      # FULL history, deliberately (this job only). Two acceptance-gate scripts
+      # (scripts/check-m10-acceptance-boundary.sh, deepen=500, and
+      # scripts/check-metastore-acceptance-boundary.sh, deepen=200) diff HEAD
+      # against pinned marker commits; on the default shallow (depth-1) clone
+      # each runs its own best-effort `git fetch --deepen` to reach its marker.
+      # nextest runs their calling tests (m10_acceptance_gate) as CONCURRENT
+      # processes over the ONE shared .git, so the two fetches race on git's
+      # shallow/ref locks — the loser's failure is swallowed by `|| true`, its
+      # marker stays unresolvable, and the gate fails "could not resolve an M6
+      # base commit" (observed: macOS leg, run 31176223029). With full history
+      # both markers are ancestors already present, `--is-shallow-repository`
+      # is false, neither script fetches at all, and the race is unreachable —
+      # tests also stop depending on the network. The whole repo packs at
+      # ~2.3 MiB over ~272 commits, so the cost is negligible; every other job
+      # keeps the default depth-1 checkout.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # The designated WRITER for this key (see BUILD-CACHE SCHEME above). This job
       # compiles more than any other — every target, plus the `schema-validation`
       # and `metastore` feature builds — so the entry it stores is the one that
