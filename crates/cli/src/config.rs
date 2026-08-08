@@ -77,6 +77,13 @@ pub const DAGR_POOL_MEMORY: &str = "DAGR_POOL_MEMORY";
 /// fraction; default `0.20`, validated `0.0..=1.0`).
 pub const DAGR_HEADROOM: &str = "DAGR_HEADROOM";
 
+/// Environment fallback for `--store` (the run-store base). The store base is the
+/// one piece of infrastructure the tool asks an operator to supply, which makes it
+/// the knob that most needs to be settable once in an orchestrator's environment;
+/// the flag still wins outright and the default
+/// ([`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE)) is unchanged.
+pub const DAGR_STORE: &str = "DAGR_STORE";
+
 /// Environment fallback for `--dagr.metastore` (the M7 live run-index tee toggle,
 /// T86). A truthy value turns the guaranteed live metastore tee sink on; the
 /// **default is off** (no `libsql` activity, no behavior change). Resolved by the
@@ -1065,6 +1072,280 @@ pub fn parse_blob_prefix_flag(argv: &[std::ffi::OsString]) -> Result<Option<Stri
     parse_valued_flag(argv, BLOB_PREFIX_FLAG)
 }
 
+// ===========================================================================
+// The run-path knob wiring — reserved-flag scanners, duration bounds, and the
+// store fallback
+// ===========================================================================
+//
+// The precedence helpers above existed for two milestones with zero non-test
+// callers on the shipped run path: `dagr run <flow>` built its `RunConfig` bare
+// and every documented knob was silently ignored. This section is what the run
+// path (`run_selected_flow`, `RunnableFlow::run_to_store`) consumes to make the
+// documented behaviour real: a scanner per reserved runtime flag (so the *flag*
+// tier exists, not just the env tier), the duration bounds the tables always
+// documented, and the `--store` / `DAGR_STORE` resolution.
+
+/// The library-owned run-store flag (`--store`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const STORE_FLAG: &str = "--store";
+
+/// The library-owned grace flag (`--grace`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const GRACE_FLAG: &str = "--grace";
+
+/// The library-owned teardown-deadline flag (`--teardown-deadline`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const TEARDOWN_DEADLINE_FLAG: &str = "--teardown-deadline";
+
+/// The library-owned failure-mode flag (`--failure-mode`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const FAILURE_MODE_FLAG: &str = "--failure-mode";
+
+/// The library-owned compute-thread pool pin (`--dagr.pool.compute-threads`).
+/// Reserved in [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const POOL_COMPUTE_THREADS_FLAG: &str = "--dagr.pool.compute-threads";
+
+/// The library-owned blocking-thread pool pin (`--dagr.pool.blocking-threads`).
+/// Reserved in [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const POOL_BLOCKING_THREADS_FLAG: &str = "--dagr.pool.blocking-threads";
+
+/// The library-owned memory pool pin (`--dagr.pool.memory`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const POOL_MEMORY_FLAG: &str = "--dagr.pool.memory";
+
+/// The library-owned headroom flag (`--dagr.headroom-fraction`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names).
+pub const HEADROOM_FLAG: &str = "--dagr.headroom-fraction";
+
+/// The smallest accepted grace period: **1 ms**, as both knob tables document.
+/// A zero grace makes the printed shutdown budget a lie — cancellation would get
+/// no drain window at all — and is an operator typo far more often than intent,
+/// so it fails loudly instead of being silently honoured.
+pub const GRACE_MIN: Duration = Duration::from_millis(1);
+
+/// The smallest accepted teardown deadline: **1 s**, as both knob tables
+/// document. A zero deadline guarantees every teardown attempt is killed before
+/// it runs — cleanup that can never happen is a misconfiguration, not a choice.
+pub const TEARDOWN_DEADLINE_MIN: Duration = Duration::from_secs(1);
+
+/// Check a resolved duration against its knob's documented minimum; below it,
+/// an [`out_of_range`](EnvParseError::out_of_range) error naming `source` (the
+/// flag or the environment variable, whichever supplied the value) and the
+/// violated bound — mapping to [`ExitCode::BootstrapFailure`], exactly like the
+/// headroom range check.
+pub(crate) fn validate_duration_min(
+    source: &str,
+    value: Duration,
+    min: Duration,
+    bound: &str,
+) -> Result<Duration, EnvParseError> {
+    if value >= min {
+        Ok(value)
+    } else {
+        Err(EnvParseError::out_of_range(
+            source,
+            format!("{}ms", value.as_millis()),
+            format!("expected a duration of at least {bound}"),
+        ))
+    }
+}
+
+/// Parse `--grace` out of a raw invocation (`--grace 5s` / `--grace=5s`).
+/// Absent → [`None`] (fall through to `DAGR_GRACE` / the default).
+///
+/// # Errors
+/// The diagnostic message when the value is not a `10` / `10s` / `10ms`
+/// duration, or the flag is present with no value.
+pub fn parse_grace_flag(argv: &[std::ffi::OsString]) -> Result<Option<Duration>, String> {
+    Ok(parse_valued_flag::<EnvDuration>(argv, GRACE_FLAG)?.map(EnvDuration::into_inner))
+}
+
+/// Parse `--teardown-deadline` out of a raw invocation, in the same grammars as
+/// [`parse_grace_flag`].
+///
+/// # Errors
+/// The diagnostic message when the value is not a duration, or the flag is
+/// present with no value.
+pub fn parse_teardown_deadline_flag(
+    argv: &[std::ffi::OsString],
+) -> Result<Option<Duration>, String> {
+    Ok(
+        parse_valued_flag::<EnvDuration>(argv, TEARDOWN_DEADLINE_FLAG)?
+            .map(EnvDuration::into_inner),
+    )
+}
+
+/// Parse `--failure-mode` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the value is neither `continue-independent` nor
+/// `stop-on-first-failure`, or the flag is present with no value.
+pub fn parse_failure_mode_flag(argv: &[std::ffi::OsString]) -> Result<Option<FailureMode>, String> {
+    Ok(
+        parse_valued_flag::<EnvFailureMode>(argv, FAILURE_MODE_FLAG)?
+            .map(EnvFailureMode::into_inner),
+    )
+}
+
+/// Parse the three `--dagr.pool.*` pins out of a raw invocation into the
+/// [`PoolPinFlags`] the [`resolve_pool_pins`] resolver consumes. An absent flag
+/// leaves its field [`None`], so the env tier (and the un-pinned tri-state
+/// beneath it) still applies per pool.
+///
+/// # Errors
+/// The diagnostic message when a pin's value is not a non-negative integer, or a
+/// pin flag is present with no value.
+pub fn parse_pool_pin_flags(argv: &[std::ffi::OsString]) -> Result<PoolPinFlags, String> {
+    Ok(PoolPinFlags {
+        compute_threads: parse_valued_flag::<u32>(argv, POOL_COMPUTE_THREADS_FLAG)?,
+        blocking_threads: parse_valued_flag::<u32>(argv, POOL_BLOCKING_THREADS_FLAG)?,
+        memory: parse_valued_flag::<u64>(argv, POOL_MEMORY_FLAG)?,
+    })
+}
+
+/// Parse `--dagr.headroom-fraction` out of a raw invocation. Range validation is
+/// [`resolve_headroom`]'s (which names the flag on an out-of-range value); this
+/// scanner only rejects a value that is not a float at all.
+///
+/// # Errors
+/// The diagnostic message when the value is not a float, or the flag is present
+/// with no value.
+pub fn parse_headroom_flag(argv: &[std::ffi::OsString]) -> Result<Option<f64>, String> {
+    parse_valued_flag::<f64>(argv, HEADROOM_FLAG)
+}
+
+/// Parse `--store` out of a raw invocation.
+///
+/// # Errors
+/// The diagnostic message when the flag is present with no value — a bare
+/// `--store` silently falling back to the default would drop an operator's
+/// instruction on the floor.
+pub fn parse_store_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, String> {
+    parse_valued_flag::<String>(argv, STORE_FLAG)
+}
+
+/// Resolve the **run-store base** by `flag > env > default`: the `--store` value
+/// if present (the env is never read), else [`DAGR_STORE`], else
+/// [`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE).
+///
+/// # Errors
+///
+/// Never fails today — a path string always "parses" — but the resolution runs
+/// through the same fallible [`resolve`] helper as every other knob, and the
+/// fallible signature is kept so a validation rule (as other knobs grew) is not
+/// a breaking change.
+pub fn resolve_store_base(flag: Option<String>) -> Result<String, EnvParseError> {
+    resolve::<String>(
+        flag,
+        DAGR_STORE,
+        crate::run_store::DEFAULT_STORE_BASE.to_string(),
+    )
+}
+
+/// The resolved pool-sizing knobs: the three pins, the headroom fraction, and
+/// whether **any** of them was actually supplied — which is what decides whether
+/// the run sizes its admission pools from the machine at all.
+///
+/// The gate matters because of what the no-knob default is. Admission pools have
+/// been **unconstrained** on the shipped run path since it existed; deriving them
+/// from the machine whenever *nothing* is set would change every run's capacity
+/// behind the operator's back. So the container-limit probe runs **iff** at
+/// least one pin or an explicit headroom was supplied (flag or env): a pinned
+/// pool is then the pin verbatim, every un-pinned pool derives from detection
+/// (the tri-state), and the no-knob run keeps its historical unconstrained set,
+/// byte for byte.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PoolSizing {
+    pins: PinnedPools,
+    headroom: f64,
+    engaged: bool,
+}
+
+impl PoolSizing {
+    /// The resolved pins (a pool without a flag or env value is un-pinned).
+    #[must_use]
+    pub fn pins(&self) -> &PinnedPools {
+        &self.pins
+    }
+
+    /// The resolved headroom fraction (the default when the knob is unset).
+    #[must_use]
+    pub fn headroom(&self) -> f64 {
+        self.headroom
+    }
+
+    /// Whether any pool-sizing knob was supplied — i.e. whether
+    /// [`capacities`](Self::capacities) will consult the probe at all.
+    #[must_use]
+    pub fn engaged(&self) -> bool {
+        self.engaged
+    }
+
+    /// Size the admission pools through `probe` (injected so a test can use a
+    /// deterministic root and core count; the run path passes
+    /// [`ContainerLimitProbe::from_host`](dagr_core::limits::ContainerLimitProbe::from_host)).
+    /// Returns [`None`] when no knob was supplied — the caller keeps the
+    /// historical unconstrained capacities — and the probe-derived set otherwise,
+    /// with pins verbatim and the headroom applied to every detected pool.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`detect`](dagr_core::limits::ContainerLimitProbe::detect)'s
+    /// error type, which is documented never to fail today (sizing always yields
+    /// a capacity set); a caller maps it to a bootstrap failure rather than
+    /// unwrapping, so a future probe validation cannot turn into a panic here.
+    pub fn capacities(
+        &self,
+        probe: dagr_core::limits::ContainerLimitProbe,
+    ) -> Result<
+        Option<dagr_core::admission::PoolCapacities>,
+        dagr_core::limits::CapacityBootstrapFailure,
+    > {
+        if !self.engaged {
+            return Ok(None);
+        }
+        probe
+            .with_pins(self.pins.clone())
+            .with_headroom(self.headroom)
+            .detect()
+            .map(Some)
+    }
+}
+
+/// Resolve the pool pins and the headroom fraction by `flag > env > default`
+/// and record whether **any** of them was supplied — see [`PoolSizing`] for why
+/// that bit is load-bearing.
+///
+/// # Errors
+///
+/// Returns the [`EnvParseError`] of whichever knob failed: an unparseable
+/// `DAGR_POOL_*` / `DAGR_HEADROOM` value (kind
+/// [`Parse`](EnvParseErrorKind::Parse) → [`ExitCode::InvalidUsage`]) or an
+/// out-of-range headroom (kind [`OutOfRange`](EnvParseErrorKind::OutOfRange) →
+/// [`ExitCode::BootstrapFailure`]), each naming the offending source.
+pub fn resolve_pool_sizing(
+    flags: PoolPinFlags,
+    headroom_flag: Option<f64>,
+) -> Result<PoolSizing, EnvParseError> {
+    // Whether the headroom knob was *supplied* is decided before resolution:
+    // `resolve_headroom(None)` returns the same 0.20 for "unset" and for an
+    // explicit `DAGR_HEADROOM=0.2`, and only the supplied case may engage the
+    // probe.
+    let headroom_supplied =
+        headroom_flag.is_some() || std::env::var(DAGR_HEADROOM).is_ok_and(|v| !v.is_empty());
+    let pins = resolve_pool_pins(flags)?;
+    let headroom = resolve_headroom(headroom_flag)?;
+    let engaged = headroom_supplied
+        || pins.memory_pin().is_some()
+        || pins.compute_threads_pin().is_some()
+        || pins.blocking_threads_pin().is_some();
+    Ok(PoolSizing {
+        pins,
+        headroom,
+        engaged,
+    })
+}
+
 /// Read a **value-taking** library flag out of a raw invocation, accepting both
 /// `--flag=value` and `--flag value`.
 ///
@@ -1100,6 +1381,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use dagr_core::limits::ContainerLimitProbe;
 
     // # Env hermeticity, and why mutating it needs `unsafe`
     //
@@ -1379,7 +1662,10 @@ mod tests {
     // --- The DAGR_* constants --------------------------------------------
 
     #[test]
-    fn dagr_env_name_constants_match_adr_089() {
+    fn dagr_env_name_constants_cover_every_knob() {
+        // The documented spelling of every shipped knob, so a constant cannot
+        // silently drift from its table row. This list is the complete knob set —
+        // a knob added without a line here fails review by construction.
         assert_eq!(DAGR_GRACE, "DAGR_GRACE");
         assert_eq!(DAGR_TEARDOWN_DEADLINE, "DAGR_TEARDOWN_DEADLINE");
         assert_eq!(DAGR_FAILURE_MODE, "DAGR_FAILURE_MODE");
@@ -1387,7 +1673,16 @@ mod tests {
         assert_eq!(DAGR_POOL_BLOCKING_THREADS, "DAGR_POOL_BLOCKING_THREADS");
         assert_eq!(DAGR_POOL_MEMORY, "DAGR_POOL_MEMORY");
         assert_eq!(DAGR_HEADROOM, "DAGR_HEADROOM");
+        assert_eq!(DAGR_STORE, "DAGR_STORE");
+        assert_eq!(DAGR_METASTORE, "DAGR_METASTORE");
         assert_eq!(DAGR_FORCE_ROUNDTRIP, "DAGR_FORCE_ROUNDTRIP");
+        assert_eq!(DAGR_EXECUTOR, "DAGR_EXECUTOR");
+        assert_eq!(DAGR_MAX_PODS, "DAGR_MAX_PODS");
+        assert_eq!(DAGR_POD_LAUNCH_RETRIES, "DAGR_POD_LAUNCH_RETRIES");
+        assert_eq!(DAGR_BLOB_ENDPOINT, "DAGR_BLOB_ENDPOINT");
+        assert_eq!(DAGR_BLOB_BUCKET, "DAGR_BLOB_BUCKET");
+        assert_eq!(DAGR_BLOB_REGION, "DAGR_BLOB_REGION");
+        assert_eq!(DAGR_BLOB_PREFIX, "DAGR_BLOB_PREFIX");
     }
 
     // --- Pool pins + headroom resolvers ----------------------------------
@@ -1468,6 +1763,224 @@ mod tests {
         unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
+    }
+
+    // --- The run-path knob wiring: scanners, bounds, store, sizing --------
+
+    /// One representative token per new scanner, in both grammars, plus the
+    /// absent case — proving the flag tier exists for every knob this section
+    /// wires.
+    #[test]
+    fn run_path_flag_scanners_accept_both_grammars() {
+        let argv = |tokens: &[&str]| -> Vec<std::ffi::OsString> {
+            tokens.iter().map(std::ffi::OsString::from).collect()
+        };
+        assert_eq!(
+            parse_grace_flag(&argv(&["dagr", "run", "--grace", "5s"])).expect("space form"),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            parse_teardown_deadline_flag(&argv(&["dagr", "run", "--teardown-deadline=40s"]))
+                .expect("= form"),
+            Some(Duration::from_secs(40))
+        );
+        assert_eq!(
+            parse_failure_mode_flag(&argv(&[
+                "dagr",
+                "run",
+                "--failure-mode",
+                "stop-on-first-failure"
+            ]))
+            .expect("mode token"),
+            Some(FailureMode::StopOnFirstFailure)
+        );
+        let pins = parse_pool_pin_flags(&argv(&[
+            "dagr",
+            "run",
+            "--dagr.pool.compute-threads=2",
+            "--dagr.pool.memory",
+            "4096",
+        ]))
+        .expect("pin forms");
+        assert_eq!(pins.compute_threads, Some(2));
+        assert_eq!(pins.memory, Some(4096));
+        assert_eq!(pins.blocking_threads, None, "an absent pin stays None");
+        assert_eq!(
+            parse_headroom_flag(&argv(&["dagr", "run", "--dagr.headroom-fraction", "0.5"]))
+                .expect("headroom"),
+            Some(0.5)
+        );
+        assert_eq!(
+            parse_store_flag(&argv(&["dagr", "run", "--store", "./elsewhere"])).expect("store"),
+            Some("./elsewhere".to_string())
+        );
+        // Absent flags fall through to the env tier untouched.
+        assert_eq!(
+            parse_grace_flag(&argv(&["dagr", "run"])).expect("absent"),
+            None
+        );
+        assert_eq!(
+            parse_store_flag(&argv(&["dagr", "run"])).expect("absent"),
+            None
+        );
+    }
+
+    /// A malformed value and a valueless flag are both loud scanner errors —
+    /// an operator's instruction is never silently dropped.
+    #[test]
+    fn run_path_flag_scanners_fail_loudly() {
+        let argv = |tokens: &[&str]| -> Vec<std::ffi::OsString> {
+            tokens.iter().map(std::ffi::OsString::from).collect()
+        };
+        let err = parse_grace_flag(&argv(&["dagr", "run", "--grace", "soon"]))
+            .expect_err("a non-duration is rejected");
+        assert!(
+            err.contains("--grace"),
+            "the diagnostic names the flag: {err}"
+        );
+        let err = parse_store_flag(&argv(&["dagr", "run", "--store"]))
+            .expect_err("a valueless --store is rejected");
+        assert!(
+            err.contains("--store"),
+            "the diagnostic names the flag: {err}"
+        );
+    }
+
+    /// The store base resolves `flag > env > default` through the shared helper.
+    #[test]
+    fn store_base_flag_env_default_precedence() {
+        let g = env_lock();
+        set_env(&g, DAGR_STORE, "/env-store");
+        let flag_wins = resolve_store_base(Some("/flag-store".into())).expect("flag path");
+        let env_used = resolve_store_base(None).expect("env path");
+        unset_env(&g, DAGR_STORE);
+        let default = resolve_store_base(None).expect("default path");
+        assert_eq!(flag_wins, "/flag-store", "a present --store wins outright");
+        assert_eq!(env_used, "/env-store", "with no flag, DAGR_STORE is used");
+        assert_eq!(
+            default,
+            crate::run_store::DEFAULT_STORE_BASE,
+            "with neither, the default base is unchanged"
+        );
+    }
+
+    /// The duration bounds the tables document: below the minimum is an
+    /// out-of-range bootstrap failure naming the source and the bound.
+    #[test]
+    fn duration_bound_below_minimum_is_out_of_range() {
+        let err = validate_duration_min(DAGR_GRACE, Duration::ZERO, GRACE_MIN, "1 ms")
+            .expect_err("zero grace violates the bound");
+        assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
+        assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
+        assert!(err.to_string().contains(DAGR_GRACE));
+        assert!(err.to_string().contains("1 ms"));
+        // At the bound is accepted — the minimum itself is legal.
+        assert_eq!(
+            validate_duration_min(GRACE_FLAG, GRACE_MIN, GRACE_MIN, "1 ms").expect("at the bound"),
+            GRACE_MIN
+        );
+        assert_eq!(
+            validate_duration_min(
+                DAGR_TEARDOWN_DEADLINE,
+                Duration::from_millis(999),
+                TEARDOWN_DEADLINE_MIN,
+                "1 s",
+            )
+            .expect_err("999 ms violates the teardown bound")
+            .exit_code(),
+            ExitCode::BootstrapFailure
+        );
+    }
+
+    /// With no pool knob supplied, sizing is **disengaged**: the probe is never
+    /// consulted and the caller keeps the historical unconstrained capacities.
+    #[test]
+    fn pool_sizing_disengaged_when_no_knob_is_supplied() {
+        let g = env_lock();
+        for k in [
+            DAGR_POOL_COMPUTE_THREADS,
+            DAGR_POOL_BLOCKING_THREADS,
+            DAGR_POOL_MEMORY,
+            DAGR_HEADROOM,
+        ] {
+            unset_env(&g, k);
+        }
+        let sizing =
+            resolve_pool_sizing(PoolPinFlags::default(), None).expect("nothing set resolves");
+        assert!(!sizing.engaged(), "no knob supplied → no probe");
+        let caps = sizing
+            .capacities(ContainerLimitProbe::from_root("/nonexistent-root-for-t114"))
+            .expect("sizing never fails");
+        assert!(caps.is_none(), "disengaged sizing yields no capacity set");
+    }
+
+    /// A pinned pool is the pin verbatim and every un-pinned pool derives from
+    /// detection — the tri-state, preserved through the run-path wiring.
+    #[test]
+    fn pool_sizing_pin_overrides_detection_and_the_rest_detect() {
+        let g = env_lock();
+        unset_env(&g, DAGR_HEADROOM);
+        set_env(&g, DAGR_POOL_MEMORY, "2048");
+        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("pin resolves");
+        unset_env(&g, DAGR_POOL_MEMORY);
+        assert!(sizing.engaged(), "a supplied pin engages the probe");
+        let caps = sizing
+            .capacities(
+                ContainerLimitProbe::from_root("/nonexistent-root-for-t114").with_host_cores(4),
+            )
+            .expect("sizing never fails")
+            .expect("engaged sizing yields capacities");
+        assert_eq!(
+            caps.total(dagr_core::admission::Pool::Memory),
+            2048,
+            "the pinned pool is the pin verbatim, not the detected value"
+        );
+        assert_eq!(
+            caps.total(dagr_core::admission::Pool::ComputeThreads),
+            3,
+            "an un-pinned pool derives from detection (4 cores at the 20% default headroom)"
+        );
+    }
+
+    /// An explicit headroom engages the probe even with no pin — including a
+    /// headroom spelled exactly like the default, because "supplied" is what
+    /// engages sizing, not "different".
+    #[test]
+    fn pool_sizing_explicit_headroom_engages_the_probe() {
+        let g = env_lock();
+        for k in [
+            DAGR_POOL_COMPUTE_THREADS,
+            DAGR_POOL_BLOCKING_THREADS,
+            DAGR_POOL_MEMORY,
+        ] {
+            unset_env(&g, k);
+        }
+        set_env(&g, DAGR_HEADROOM, "0.5");
+        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("headroom resolves");
+        unset_env(&g, DAGR_HEADROOM);
+        assert!(
+            sizing.engaged(),
+            "an explicit DAGR_HEADROOM engages the probe"
+        );
+        let caps = sizing
+            .capacities(
+                ContainerLimitProbe::from_root("/nonexistent-root-for-t114").with_host_cores(8),
+            )
+            .expect("sizing never fails")
+            .expect("engaged sizing yields capacities");
+        assert_eq!(
+            caps.total(dagr_core::admission::Pool::ComputeThreads),
+            4,
+            "pools are sized to half the detected limit under DAGR_HEADROOM=0.5"
+        );
+
+        // The flag spelling of the default value also engages sizing.
+        let sizing = resolve_pool_sizing(PoolPinFlags::default(), Some(HEADROOM_DEFAULT))
+            .expect("flag headroom resolves");
+        assert!(
+            sizing.engaged(),
+            "a flag headroom equal to the default still engages"
+        );
     }
 
     // --- The metastore live-tee toggle (T86) -----------------------------

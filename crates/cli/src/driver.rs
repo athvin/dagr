@@ -659,20 +659,41 @@ impl RunConfig {
     ///
     /// # Errors
     ///
-    /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming `DAGR_GRACE`
-    /// (kind `Parse` → [`InvalidUsage`](crate::contract::ExitCode::InvalidUsage))
-    /// when the environment value is not a duration — a bad env value fails loudly
-    /// and is never silently ignored.
+    /// Two loud failures, each naming the offending source:
+    /// - an environment value that is not a duration → an
+    ///   [`EnvParseError`](crate::config::EnvParseError) of kind `Parse` naming
+    ///   `DAGR_GRACE` ([`InvalidUsage`](crate::contract::ExitCode::InvalidUsage));
+    /// - a duration below the documented [`GRACE_MIN`](crate::config::GRACE_MIN)
+    ///   (1 ms) → kind `OutOfRange` naming `--grace` or `DAGR_GRACE`, whichever
+    ///   supplied it ([`BootstrapFailure`](crate::contract::ExitCode::BootstrapFailure)).
+    ///   A zero grace would make the printed shutdown budget a lie — no drain
+    ///   window at all — so it is refused rather than silently honoured.
     pub fn grace_from_env(
         self,
         flag: Option<Duration>,
     ) -> Result<Self, crate::config::EnvParseError> {
-        let resolved = crate::config::resolve::<crate::config::EnvDuration>(
-            flag.map(crate::config::EnvDuration),
-            crate::config::DAGR_GRACE,
-            crate::config::EnvDuration(DEFAULT_GRACE),
+        // Track which source supplied the value so the bound diagnostic names it
+        // (the flag path never reads the environment; the unset-env path resolves
+        // to the default, which satisfies the bound by construction).
+        let (source, resolved) = match flag {
+            Some(value) => (crate::config::GRACE_FLAG, value),
+            None => (
+                crate::config::DAGR_GRACE,
+                crate::config::resolve::<crate::config::EnvDuration>(
+                    None,
+                    crate::config::DAGR_GRACE,
+                    crate::config::EnvDuration(DEFAULT_GRACE),
+                )?
+                .into_inner(),
+            ),
+        };
+        let validated = crate::config::validate_duration_min(
+            source,
+            resolved,
+            crate::config::GRACE_MIN,
+            "1 ms",
         )?;
-        Ok(self.grace(resolved.into_inner()))
+        Ok(self.grace(validated))
     }
 
     /// Set the **teardown deadline** from `flag > env > default`: the already-parsed
@@ -681,19 +702,39 @@ impl RunConfig {
     ///
     /// # Errors
     ///
-    /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming
-    /// `DAGR_TEARDOWN_DEADLINE` (kind `Parse` → `InvalidUsage`) when the environment
-    /// value is not a duration.
+    /// Two loud failures, each naming the offending source:
+    /// - an environment value that is not a duration → an
+    ///   [`EnvParseError`](crate::config::EnvParseError) of kind `Parse` naming
+    ///   `DAGR_TEARDOWN_DEADLINE` (`InvalidUsage`);
+    /// - a duration below the documented
+    ///   [`TEARDOWN_DEADLINE_MIN`](crate::config::TEARDOWN_DEADLINE_MIN) (1 s) →
+    ///   kind `OutOfRange` naming `--teardown-deadline` or
+    ///   `DAGR_TEARDOWN_DEADLINE`, whichever supplied it (`BootstrapFailure`).
+    ///   A zero deadline guarantees every teardown attempt is killed before it
+    ///   runs — cleanup that can never happen is a misconfiguration, not a choice.
     pub fn teardown_deadline_from_env(
         self,
         flag: Option<Duration>,
     ) -> Result<Self, crate::config::EnvParseError> {
-        let resolved = crate::config::resolve::<crate::config::EnvDuration>(
-            flag.map(crate::config::EnvDuration),
-            crate::config::DAGR_TEARDOWN_DEADLINE,
-            crate::config::EnvDuration(DEFAULT_TEARDOWN_DEADLINE),
+        let (source, resolved) = match flag {
+            Some(value) => (crate::config::TEARDOWN_DEADLINE_FLAG, value),
+            None => (
+                crate::config::DAGR_TEARDOWN_DEADLINE,
+                crate::config::resolve::<crate::config::EnvDuration>(
+                    None,
+                    crate::config::DAGR_TEARDOWN_DEADLINE,
+                    crate::config::EnvDuration(DEFAULT_TEARDOWN_DEADLINE),
+                )?
+                .into_inner(),
+            ),
+        };
+        let validated = crate::config::validate_duration_min(
+            source,
+            resolved,
+            crate::config::TEARDOWN_DEADLINE_MIN,
+            "1 s",
         )?;
-        Ok(self.teardown_deadline(resolved.into_inner()))
+        Ok(self.teardown_deadline(validated))
     }
 
     /// Set the run-level **failure mode** from `flag > env > default`: the

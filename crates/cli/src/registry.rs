@@ -93,11 +93,7 @@ use crate::run_flow::RunnableFlow;
 // its streams stay byte-identical.
 #[cfg(not(feature = "metastore"))]
 use crate::run_store::FileSink;
-use crate::run_store::{DEFAULT_STORE_BASE, TickClock, mint_run_id};
-
-/// The library-owned flag naming the run-store base for a `run <flow>` invocation
-/// (the reserved `--store`, [`reserved_flag_names`](crate::contract::reserved_flag_names)).
-const STORE_FLAG: &str = "--store";
+use crate::run_store::{TickClock, mint_run_id};
 
 /// A registered flow's **re-invokable factory** — called once per invocation to
 /// build a **fresh** [`RunnableFlow`] (the flow is consumed by
@@ -516,7 +512,6 @@ fn run_selected_flow<W: Write>(
 ) -> ExitCode {
     // A fresh flow, built now (never reused — `run(self)` consumes it).
     let flow = factory();
-    let base = store_base(argv);
 
     // The local codec check (`--dagr.force-roundtrip` / `DAGR_FORCE_ROUNDTRIP`,
     // default off). The factory built the flow without ever seeing this invocation,
@@ -566,6 +561,18 @@ fn run_selected_flow<W: Write>(
         let _ = writeln!(out, "dagr run {name}: {refusal}");
         return ExitCode::BootstrapFailure;
     }
+
+    // The remaining runtime knobs the tables document — the store base, grace,
+    // teardown deadline, failure mode, the three pool pins, and the headroom
+    // fraction — each resolved `flag > env > default` and validated BEFORE the
+    // store is opened: a bad value must not leave a run directory behind.
+    let (base, config) = match resolve_run_config(argv, executor, max_pods) {
+        Ok(resolved) => resolved,
+        Err((code, detail)) => {
+            let _ = writeln!(out, "dagr run {name}: {detail}");
+            return code;
+        }
+    };
 
     // The run-store event-stream path is `<base>/<pipeline>/<run-id>/events.jsonl`;
     // the run mints its own id, so the id segment is unknown until the run resolves
@@ -617,14 +624,7 @@ fn run_selected_flow<W: Write>(
         }
     };
 
-    // The remote-slot ceiling is the only pool this entrypoint pins: the other three
-    // derive from the machine, and this one has no machine to derive from. Left at
-    // its unconstrained default it is byte-for-byte the capacity set this path
-    // always used.
-    let config = crate::driver::RunConfig::new(base)
-        .run_id(run_id)
-        .executor(executor)
-        .capacities(dagr_core::admission::PoolCapacities::new().remote_slots(max_pods));
+    let config = config.run_id(run_id);
     match flow.run(name, &config, sink, TickClock::default()) {
         Ok(report) => exit_code_for_run(report.driver_report()),
         Err(err) => {
@@ -636,20 +636,52 @@ fn run_selected_flow<W: Write>(
     }
 }
 
-/// The run-store base for a `run <flow>` invocation: the `--store DIR` value if the
-/// operator passed one, else [`DEFAULT_STORE_BASE`]. The store flag lives in the
-/// undifferentiated trailing args the pipeline binary owns; we read only the
-/// library-reserved `--store` from the invocation's `argv`, leaving the rest
-/// untouched.
-fn store_base(argv: &[std::ffi::OsString]) -> String {
-    let store = std::ffi::OsStr::new(STORE_FLAG);
-    let mut it = argv.iter();
-    while let Some(arg) = it.next() {
-        if arg.as_os_str() == store {
-            if let Some(value) = it.next() {
-                return value.to_string_lossy().into_owned();
-            }
-        }
-    }
-    DEFAULT_STORE_BASE.to_string()
+/// Scan `argv` for the reserved runtime flags, resolve every knob that must be
+/// settled before the store is opened, and build the run's configuration:
+/// the store base (`--store` > `DAGR_STORE` > the default), grace, the teardown
+/// deadline, the failure mode (each `flag > env > default` through the
+/// `RunConfig` env-fallback builders — `RunConfig::new` itself stays infallible
+/// and environment-free), and the admission capacities. Capacities are
+/// probe-derived when a pool pin or an explicit headroom was supplied (pins
+/// verbatim, un-pinned pools detected with the resolved headroom) and the
+/// historical unconstrained set otherwise, plus the remote-slot ceiling, which
+/// has no machine to derive from and is pinned directly.
+///
+/// The scanners live beside the other reserved-flag scanners in
+/// [`crate::config`]; this helper sequences them and maps each failure to its
+/// `(exit code, diagnostic)` pair — a malformed or valueless flag is invalid
+/// usage, a resolver error keeps its own parse/out-of-range split — so the
+/// diagnostic and the code both name the actual fault.
+fn resolve_run_config(
+    argv: &[std::ffi::OsString],
+    executor: crate::executor::ExecutorKind,
+    max_pods: u32,
+) -> Result<(String, crate::driver::RunConfig), (ExitCode, String)> {
+    let invalid = |detail: String| (ExitCode::InvalidUsage, detail);
+    let env_err = |e: crate::config::EnvParseError| (e.exit_code(), e.to_string());
+
+    let grace = crate::config::parse_grace_flag(argv).map_err(invalid)?;
+    let teardown_deadline = crate::config::parse_teardown_deadline_flag(argv).map_err(invalid)?;
+    let failure_mode = crate::config::parse_failure_mode_flag(argv).map_err(invalid)?;
+    let pool_flags = crate::config::parse_pool_pin_flags(argv).map_err(invalid)?;
+    let headroom = crate::config::parse_headroom_flag(argv).map_err(invalid)?;
+    let store = crate::config::parse_store_flag(argv).map_err(invalid)?;
+
+    let base = crate::config::resolve_store_base(store).map_err(env_err)?;
+    let capacities = crate::config::resolve_pool_sizing(pool_flags, headroom)
+        .map_err(env_err)?
+        .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
+        .map_err(|failure| (ExitCode::BootstrapFailure, failure.to_string()))?
+        .unwrap_or_else(dagr_core::admission::PoolCapacities::new)
+        .remote_slots(max_pods);
+
+    let config = crate::driver::RunConfig::new(&base)
+        .executor(executor)
+        .capacities(capacities)
+        .grace_from_env(grace)
+        .and_then(|c| c.teardown_deadline_from_env(teardown_deadline))
+        .and_then(|c| c.failure_mode_from_env(failure_mode))
+        .map_err(env_err)?;
+
+    Ok((base, config))
 }

@@ -391,6 +391,38 @@ fn unparseable_grace_env_is_invalid_usage_naming_the_variable() {
 }
 
 #[test]
+fn zero_grace_flag_is_out_of_range_naming_the_flag() {
+    // The documented >= 1 ms bound, applied to the FLAG path: the two paths agree
+    // and the diagnostic names whichever source supplied the value.
+    let temp_base = TempBase::new("t77");
+    let err = with_clean_env(|| {
+        RunConfig::new(temp_base.as_str())
+            .grace_from_env(Some(Duration::ZERO))
+            .expect_err("a zero --grace violates the 1 ms bound")
+    });
+    assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
+    assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
+    assert!(err.to_string().contains("--grace"), "names the flag: {err}");
+}
+
+#[test]
+fn zero_teardown_deadline_env_is_out_of_range_naming_the_variable() {
+    // The documented >= 1 s bound, applied to the ENV path.
+    let temp_base = TempBase::new("t77");
+    let err = with_env(&[(DAGR_TEARDOWN_DEADLINE, "0")], || {
+        RunConfig::new(temp_base.as_str())
+            .teardown_deadline_from_env(None)
+            .expect_err("a zero DAGR_TEARDOWN_DEADLINE violates the 1 s bound")
+    });
+    assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
+    assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
+    assert!(
+        err.to_string().contains(DAGR_TEARDOWN_DEADLINE),
+        "names the variable: {err}"
+    );
+}
+
+#[test]
 fn unparseable_pool_env_is_invalid_usage_naming_the_variable() {
     let err = with_env(&[(DAGR_POOL_COMPUTE_THREADS, "lots")], || {
         resolve_pool_pins(PoolPinFlags::default()).expect_err("a bad pool env must fail loudly")
