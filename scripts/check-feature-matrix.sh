@@ -57,14 +57,14 @@ if [ -z "$core_nodefault" ]; then
   bad "no-default: cargo tree produced nothing for dagr-core — the assertion is vacuous"
 else
   offending=""
-  for forbidden in dagr-macros inventory libsql dagr-metastore; do
+  for forbidden in dagr-macros inventory libsql dagr-metastore toml; do
     if printf '%s\n' "$core_nodefault" | grep -qx "$forbidden"; then
       offending="$offending$forbidden
 "
     fi
   done
   if [ -z "$offending" ]; then
-    pass "no-default: dagr-core resolves with no dagr-macros / inventory / libsql / dagr-metastore edge"
+    pass "no-default: dagr-core resolves with no dagr-macros / inventory / libsql / dagr-metastore / toml edge"
   else
     bad "no-default: dagr-core resolved onto forbidden crates:"
     printf '%s' "$offending" | sed 's/^/        /'
@@ -108,7 +108,10 @@ if [ -z "$core_all" ]; then
   bad "all-features: cargo tree produced nothing for dagr-core — the assertion is vacuous"
 else
   offending=""
-  for forbidden in inventory libsql dagr-metastore tokio clap rayon; do
+  # `toml` joined the forbidden set with T115: ADR 128 §6 commits that
+  # dagr-core never reads the configuration file, and "cannot even link the
+  # parser" is the resolution-level form of that commitment.
+  for forbidden in inventory libsql dagr-metastore tokio clap rayon toml; do
     if printf '%s\n' "$core_all" | grep -qx "$forbidden"; then
       offending="$offending$forbidden
 "
@@ -147,6 +150,15 @@ else
     pass "default: dagr-cli reaches inventory (the default-on dag feature, ADR 092)"
   else
     bad "default: dagr-cli does not reach inventory — the default-on dag feature is not wired"
+  fi
+
+  # The T115 non-vacuity leg for the `toml` prohibition above: the parser DOES
+  # exist in the workspace — in dagr-cli, where ADR 128 §6 puts it — so its
+  # absence from dagr-core's resolutions is evidence, not a typo'd name.
+  if printf '%s\n' "$cli_default" | grep -qx 'toml'; then
+    pass "default: dagr-cli reaches toml (the ADR 128 dagr.toml loader lives in the cli)"
+  else
+    bad "default: dagr-cli does not reach toml — the config-file loader lost its parser"
   fi
 fi
 cli_nodefault=$(tree dagr-cli --no-default-features)
