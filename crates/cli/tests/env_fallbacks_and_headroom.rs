@@ -31,6 +31,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
+use dagr_cli::config_file::FileTier;
 use dagr_cli::config::{
     DAGR_FAILURE_MODE, DAGR_GRACE, DAGR_HEADROOM, DAGR_POOL_BLOCKING_THREADS,
     DAGR_POOL_COMPUTE_THREADS, DAGR_POOL_MEMORY, DAGR_TEARDOWN_DEADLINE, EnvParseErrorKind,
@@ -121,7 +122,7 @@ fn grace_flag_beats_env() {
     let temp_base = TempBase::new("t77");
     let cfg = with_env(&[(DAGR_GRACE, "30s")], || {
         RunConfig::new(temp_base.as_str())
-            .grace_from_env(Some(Duration::from_secs(5)))
+            .grace_from_env(Some(Duration::from_secs(5)), None)
             .expect("valid flag path never errors")
     });
     assert_eq!(
@@ -136,7 +137,7 @@ fn grace_env_used_when_no_flag() {
     let temp_base = TempBase::new("t77");
     let cfg = with_env(&[(DAGR_GRACE, "30s")], || {
         RunConfig::new(temp_base.as_str())
-            .grace_from_env(None)
+            .grace_from_env(None, None)
             .expect("a valid DAGR_GRACE parses")
     });
     assert_eq!(
@@ -151,7 +152,7 @@ fn grace_default_when_neither() {
     let temp_base = TempBase::new("t77");
     let cfg = with_clean_env(|| {
         RunConfig::new(temp_base.as_str())
-            .grace_from_env(None)
+            .grace_from_env(None, None)
             .expect("the default path never errors")
     });
     assert_eq!(
@@ -167,7 +168,7 @@ fn teardown_deadline_precedence() {
     // flag beats env
     let cfg = with_env(&[(DAGR_TEARDOWN_DEADLINE, "40s")], || {
         RunConfig::new(temp_base.as_str())
-            .teardown_deadline_from_env(Some(Duration::from_secs(7)))
+            .teardown_deadline_from_env(Some(Duration::from_secs(7)), None)
             .expect("flag path")
     });
     assert_eq!(cfg.effective_teardown_deadline(), Duration::from_secs(7));
@@ -175,7 +176,7 @@ fn teardown_deadline_precedence() {
     // env used when no flag
     let cfg = with_env(&[(DAGR_TEARDOWN_DEADLINE, "40s")], || {
         RunConfig::new(temp_base.as_str())
-            .teardown_deadline_from_env(None)
+            .teardown_deadline_from_env(None, None)
             .expect("env path")
     });
     assert_eq!(cfg.effective_teardown_deadline(), Duration::from_secs(40));
@@ -183,7 +184,7 @@ fn teardown_deadline_precedence() {
     // default when neither
     let cfg = with_clean_env(|| {
         RunConfig::new(temp_base.as_str())
-            .teardown_deadline_from_env(None)
+            .teardown_deadline_from_env(None, None)
             .expect("default path")
     });
     assert_eq!(cfg.effective_teardown_deadline(), DEFAULT_TEARDOWN_DEADLINE);
@@ -195,7 +196,7 @@ fn failure_mode_precedence() {
     // flag beats env
     let cfg = with_env(&[(DAGR_FAILURE_MODE, "stop-on-first-failure")], || {
         RunConfig::new(temp_base.as_str())
-            .failure_mode_from_env(Some(FailureMode::ContinueIndependent))
+            .failure_mode_from_env(Some(FailureMode::ContinueIndependent), None)
             .expect("flag path")
     });
     assert_eq!(
@@ -206,7 +207,7 @@ fn failure_mode_precedence() {
     // env used when no flag
     let cfg = with_env(&[(DAGR_FAILURE_MODE, "stop-on-first-failure")], || {
         RunConfig::new(temp_base.as_str())
-            .failure_mode_from_env(None)
+            .failure_mode_from_env(None, None)
             .expect("env path")
     });
     assert_eq!(
@@ -217,7 +218,7 @@ fn failure_mode_precedence() {
     // default when neither (continue-independent)
     let cfg = with_clean_env(|| {
         RunConfig::new(temp_base.as_str())
-            .failure_mode_from_env(None)
+            .failure_mode_from_env(None, None)
             .expect("default path")
     });
     assert_eq!(
@@ -238,7 +239,7 @@ fn pool_env_values_reflected_when_no_flag() {
             (DAGR_POOL_BLOCKING_THREADS, "5"),
             (DAGR_POOL_MEMORY, "4096"),
         ],
-        || resolve_pool_pins(PoolPinFlags::default()).expect("valid pool env parses"),
+        || resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("valid pool env parses"),
     );
     assert_eq!(pins.compute_threads_pin(), Some(3));
     assert_eq!(pins.blocking_threads_pin(), Some(5));
@@ -248,10 +249,13 @@ fn pool_env_values_reflected_when_no_flag() {
 #[test]
 fn pool_flag_beats_env() {
     let pins = with_env(&[(DAGR_POOL_COMPUTE_THREADS, "9")], || {
-        resolve_pool_pins(PoolPinFlags {
-            compute_threads: Some(2),
-            ..PoolPinFlags::default()
-        })
+        resolve_pool_pins(
+            PoolPinFlags {
+                compute_threads: Some(2),
+                ..PoolPinFlags::default()
+            },
+            &FileTier::empty(),
+        )
         .expect("flag path")
     });
     assert_eq!(
@@ -263,7 +267,7 @@ fn pool_flag_beats_env() {
 
 #[test]
 fn pool_unset_env_and_flag_yields_no_pin() {
-    let pins = with_clean_env(|| resolve_pool_pins(PoolPinFlags::default()).expect("no pins"));
+    let pins = with_clean_env(|| resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("no pins"));
     assert_eq!(pins.compute_threads_pin(), None);
     assert_eq!(pins.blocking_threads_pin(), None);
     assert_eq!(pins.memory_pin(), None);
@@ -275,7 +279,7 @@ fn pool_env_reaches_the_probe_derived_capacities() {
     // pin; dagr-core reads no environment. A pinned pool's total is the pin
     // verbatim, overriding detection/host-fallback.
     let pins = with_env(&[(DAGR_POOL_MEMORY, "2048")], || {
-        resolve_pool_pins(PoolPinFlags::default()).expect("env parses")
+        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("env parses")
     });
     let caps = ContainerLimitProbe::from_root("/nonexistent-root-for-t77")
         .with_host_cores(4)
@@ -295,7 +299,7 @@ fn pool_env_reaches_the_probe_derived_capacities() {
 
 #[test]
 fn headroom_default_is_twenty_percent() {
-    let h = with_clean_env(|| resolve_headroom(None).expect("default"));
+    let h = with_clean_env(|| resolve_headroom(None, &FileTier::empty()).expect("default"));
     assert!(
         (h - 0.20).abs() < f64::EPSILON,
         "default headroom is 0.20, got {h}"
@@ -305,7 +309,7 @@ fn headroom_default_is_twenty_percent() {
 #[test]
 fn headroom_env_used_when_no_flag() {
     let h = with_env(&[(DAGR_HEADROOM, "0.5")], || {
-        resolve_headroom(None).expect("valid env")
+        resolve_headroom(None, &FileTier::empty()).expect("valid env")
     });
     assert!(
         (h - 0.5).abs() < f64::EPSILON,
@@ -316,7 +320,7 @@ fn headroom_env_used_when_no_flag() {
 #[test]
 fn headroom_flag_beats_env() {
     let h = with_env(&[(DAGR_HEADROOM, "0.5")], || {
-        resolve_headroom(Some(0.1)).expect("flag path")
+        resolve_headroom(Some(0.1), &FileTier::empty()).expect("flag path")
     });
     assert!(
         (h - 0.1).abs() < f64::EPSILON,
@@ -330,7 +334,7 @@ fn headroom_env_of_half_sizes_pools_and_floors_at_one() {
     // half — and the at-least-one-unit floor still holds (a tiny total floors
     // to one, never zero).
     let h = with_env(&[(DAGR_HEADROOM, "0.5")], || {
-        resolve_headroom(None).expect("valid env")
+        resolve_headroom(None, &FileTier::empty()).expect("valid env")
     });
     let caps = ContainerLimitProbe::from_root("/nonexistent-root-for-t77")
         .with_host_cores(8)
@@ -359,7 +363,7 @@ fn headroom_env_of_half_sizes_pools_and_floors_at_one() {
 #[test]
 fn headroom_out_of_range_env_is_bootstrap_failure_naming_the_variable() {
     let err = with_env(&[(DAGR_HEADROOM, "1.5")], || {
-        resolve_headroom(None).expect_err("1.5 is out of 0.0..=1.0 and must fail loudly")
+        resolve_headroom(None, &FileTier::empty()).expect_err("1.5 is out of 0.0..=1.0 and must fail loudly")
     });
     assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
     assert_eq!(
@@ -382,7 +386,7 @@ fn unparseable_grace_env_is_invalid_usage_naming_the_variable() {
     let temp_base = TempBase::new("t77");
     let err = with_env(&[(DAGR_GRACE, "notaduration")], || {
         RunConfig::new(temp_base.as_str())
-            .grace_from_env(None)
+            .grace_from_env(None, None)
             .expect_err("a bad DAGR_GRACE must fail loudly")
     });
     assert_eq!(err.kind, EnvParseErrorKind::Parse);
@@ -397,7 +401,7 @@ fn zero_grace_flag_is_out_of_range_naming_the_flag() {
     let temp_base = TempBase::new("t77");
     let err = with_clean_env(|| {
         RunConfig::new(temp_base.as_str())
-            .grace_from_env(Some(Duration::ZERO))
+            .grace_from_env(Some(Duration::ZERO), None)
             .expect_err("a zero --grace violates the 1 ms bound")
     });
     assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
@@ -411,7 +415,7 @@ fn zero_teardown_deadline_env_is_out_of_range_naming_the_variable() {
     let temp_base = TempBase::new("t77");
     let err = with_env(&[(DAGR_TEARDOWN_DEADLINE, "0")], || {
         RunConfig::new(temp_base.as_str())
-            .teardown_deadline_from_env(None)
+            .teardown_deadline_from_env(None, None)
             .expect_err("a zero DAGR_TEARDOWN_DEADLINE violates the 1 s bound")
     });
     assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
@@ -425,7 +429,7 @@ fn zero_teardown_deadline_env_is_out_of_range_naming_the_variable() {
 #[test]
 fn unparseable_pool_env_is_invalid_usage_naming_the_variable() {
     let err = with_env(&[(DAGR_POOL_COMPUTE_THREADS, "lots")], || {
-        resolve_pool_pins(PoolPinFlags::default()).expect_err("a bad pool env must fail loudly")
+        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect_err("a bad pool env must fail loudly")
     });
     assert_eq!(err.kind, EnvParseErrorKind::Parse);
     assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -437,7 +441,7 @@ fn unparseable_headroom_env_is_invalid_usage() {
     // A value that is not a float at all is a *parse* failure (InvalidUsage),
     // distinct from an out-of-range float (BootstrapFailure).
     let err = with_env(&[(DAGR_HEADROOM, "half")], || {
-        resolve_headroom(None).expect_err("a non-float DAGR_HEADROOM must fail")
+        resolve_headroom(None, &FileTier::empty()).expect_err("a non-float DAGR_HEADROOM must fail")
     });
     assert_eq!(err.kind, EnvParseErrorKind::Parse);
     assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -547,12 +551,12 @@ impl MonotonicClock for TickClock {
 
 /// Build the run config for the **env** path: several `DAGR_*` set, no flags.
 fn config_via_env(base: &str) -> RunConfig {
-    let pins = resolve_pool_pins(PoolPinFlags::default()).expect("pool env parses");
+    let pins = resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("pool env parses");
     RunConfig::new(base)
         .run_id("t77-env")
-        .grace_from_env(None)
+        .grace_from_env(None, None)
         .expect("grace env")
-        .failure_mode_from_env(None)
+        .failure_mode_from_env(None, None)
         .expect("failure-mode env")
         .capacities(PoolCapacities::new().memory(pins.memory_pin().expect("memory pinned via env")))
 }
@@ -561,9 +565,9 @@ fn config_via_env(base: &str) -> RunConfig {
 fn config_via_flags(base: &str) -> RunConfig {
     RunConfig::new(base)
         .run_id("t77-flag")
-        .grace_from_env(Some(Duration::from_secs(20)))
+        .grace_from_env(Some(Duration::from_secs(20)), None)
         .expect("grace flag")
-        .failure_mode_from_env(Some(FailureMode::StopOnFirstFailure))
+        .failure_mode_from_env(Some(FailureMode::StopOnFirstFailure), None)
         .expect("failure-mode flag")
         .capacities(PoolCapacities::new().memory(1_000_000))
 }

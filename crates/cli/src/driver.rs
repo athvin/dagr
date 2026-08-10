@@ -647,98 +647,87 @@ impl RunConfig {
         self.executor
     }
 
-    /// Set the **grace period** from `flag > env > default`: the already-parsed
-    /// `--grace` flag `flag` if present, else the `DAGR_GRACE` environment variable,
-    /// else the [default](DEFAULT_GRACE) (10 s).
+    /// Set the **grace period** from `flag > env > file > default`: the
+    /// already-parsed `--grace` flag `flag` if present, else the `DAGR_GRACE`
+    /// environment variable, else the effective profile's `grace` key (`file`,
+    /// loaded at bootstrap by [`crate::config_file`]), else the
+    /// [default](DEFAULT_GRACE) (10 s).
     ///
-    /// This is one of the three opt-in, **fallible** env-fallback builders (grace,
+    /// This is one of the three opt-in, **fallible** fallback builders (grace,
     /// teardown-deadline, failure-mode). A binary that wants the standard
-    /// `flag > env > default` behaviour calls this instead of [`grace`](Self::grace);
-    /// [`RunConfig::new`](Self::new) stays infallible and env-free, and this method
-    /// is the *only* place `DAGR_GRACE` is read (in `dagr-cli`, never `dagr-core`).
+    /// four-tier behaviour calls this instead of [`grace`](Self::grace);
+    /// [`RunConfig::new`](Self::new) stays infallible, env-free, and file-free,
+    /// and this method is the *only* place `DAGR_GRACE` is read (in `dagr-cli`,
+    /// never `dagr-core`).
     ///
     /// # Errors
     ///
-    /// Two loud failures, each naming the offending source:
-    /// - an environment value that is not a duration → an
+    /// Two loud failures, each naming the offending source (a file value names
+    /// the file, the profile, and the key in the detail):
+    /// - a value that is not a duration → an
     ///   [`EnvParseError`](crate::config::EnvParseError) of kind `Parse` naming
     ///   `DAGR_GRACE` ([`InvalidUsage`](crate::contract::ExitCode::InvalidUsage));
     /// - a duration below the documented [`GRACE_MIN`](crate::config::GRACE_MIN)
-    ///   (1 ms) → kind `OutOfRange` naming `--grace` or `DAGR_GRACE`, whichever
-    ///   supplied it ([`BootstrapFailure`](crate::contract::ExitCode::BootstrapFailure)).
+    ///   (1 ms) → kind `OutOfRange` naming whichever source supplied it
+    ///   ([`BootstrapFailure`](crate::contract::ExitCode::BootstrapFailure)).
     ///   A zero grace would make the printed shutdown budget a lie — no drain
     ///   window at all — so it is refused rather than silently honoured.
     pub fn grace_from_env(
         self,
         flag: Option<Duration>,
+        file: Option<&crate::config_file::FileValue>,
     ) -> Result<Self, crate::config::EnvParseError> {
-        // Track which source supplied the value so the bound diagnostic names it
-        // (the flag path never reads the environment; the unset-env path resolves
-        // to the default, which satisfies the bound by construction).
-        let (source, resolved) = match flag {
-            Some(value) => (crate::config::GRACE_FLAG, value),
-            None => (
-                crate::config::DAGR_GRACE,
-                crate::config::resolve::<crate::config::EnvDuration>(
-                    None,
-                    crate::config::DAGR_GRACE,
-                    crate::config::EnvDuration(DEFAULT_GRACE),
-                )?
-                .into_inner(),
-            ),
-        };
-        let validated = crate::config::validate_duration_min(
-            source,
-            resolved,
+        let validated = crate::config::resolve_bounded_duration(
+            flag,
+            crate::config::GRACE_FLAG,
+            crate::config::DAGR_GRACE,
+            file,
+            DEFAULT_GRACE,
             crate::config::GRACE_MIN,
             "1 ms",
         )?;
         Ok(self.grace(validated))
     }
 
-    /// Set the **teardown deadline** from `flag > env > default`: the already-parsed
-    /// `--teardown-deadline` flag if present, else `DAGR_TEARDOWN_DEADLINE`, else the
-    /// [default](DEFAULT_TEARDOWN_DEADLINE) (15 s).
+    /// Set the **teardown deadline** from `flag > env > file > default`: the
+    /// already-parsed `--teardown-deadline` flag if present, else
+    /// `DAGR_TEARDOWN_DEADLINE`, else the effective profile's
+    /// `teardown-deadline` key, else the [default](DEFAULT_TEARDOWN_DEADLINE)
+    /// (15 s).
     ///
     /// # Errors
     ///
-    /// Two loud failures, each naming the offending source:
-    /// - an environment value that is not a duration → an
+    /// Two loud failures, each naming the offending source (a file value names
+    /// the file, the profile, and the key in the detail):
+    /// - a value that is not a duration → an
     ///   [`EnvParseError`](crate::config::EnvParseError) of kind `Parse` naming
     ///   `DAGR_TEARDOWN_DEADLINE` (`InvalidUsage`);
     /// - a duration below the documented
     ///   [`TEARDOWN_DEADLINE_MIN`](crate::config::TEARDOWN_DEADLINE_MIN) (1 s) →
-    ///   kind `OutOfRange` naming `--teardown-deadline` or
-    ///   `DAGR_TEARDOWN_DEADLINE`, whichever supplied it (`BootstrapFailure`).
-    ///   A zero deadline guarantees every teardown attempt is killed before it
-    ///   runs — cleanup that can never happen is a misconfiguration, not a choice.
+    ///   kind `OutOfRange` naming whichever source supplied it
+    ///   (`BootstrapFailure`). A zero deadline guarantees every teardown attempt
+    ///   is killed before it runs — cleanup that can never happen is a
+    ///   misconfiguration, not a choice.
     pub fn teardown_deadline_from_env(
         self,
         flag: Option<Duration>,
+        file: Option<&crate::config_file::FileValue>,
     ) -> Result<Self, crate::config::EnvParseError> {
-        let (source, resolved) = match flag {
-            Some(value) => (crate::config::TEARDOWN_DEADLINE_FLAG, value),
-            None => (
-                crate::config::DAGR_TEARDOWN_DEADLINE,
-                crate::config::resolve::<crate::config::EnvDuration>(
-                    None,
-                    crate::config::DAGR_TEARDOWN_DEADLINE,
-                    crate::config::EnvDuration(DEFAULT_TEARDOWN_DEADLINE),
-                )?
-                .into_inner(),
-            ),
-        };
-        let validated = crate::config::validate_duration_min(
-            source,
-            resolved,
+        let validated = crate::config::resolve_bounded_duration(
+            flag,
+            crate::config::TEARDOWN_DEADLINE_FLAG,
+            crate::config::DAGR_TEARDOWN_DEADLINE,
+            file,
+            DEFAULT_TEARDOWN_DEADLINE,
             crate::config::TEARDOWN_DEADLINE_MIN,
             "1 s",
         )?;
         Ok(self.teardown_deadline(validated))
     }
 
-    /// Set the run-level **failure mode** from `flag > env > default`: the
-    /// already-parsed `--failure-mode` flag if present, else `DAGR_FAILURE_MODE`,
+    /// Set the run-level **failure mode** from `flag > env > file > default`:
+    /// the already-parsed `--failure-mode` flag if present, else
+    /// `DAGR_FAILURE_MODE`, else the effective profile's `failure-mode` key,
     /// else the default
     /// ([`ContinueIndependent`](FailureMode::ContinueIndependent)).
     ///
@@ -746,14 +735,18 @@ impl RunConfig {
     ///
     /// Returns an [`EnvParseError`](crate::config::EnvParseError) naming
     /// `DAGR_FAILURE_MODE` (kind `Parse` → `InvalidUsage`) when the environment
-    /// value is neither `continue-independent` nor `stop-on-first-failure`.
+    /// (or file) value is neither `continue-independent` nor
+    /// `stop-on-first-failure`; a file value names the file, the profile, and
+    /// the key in the detail.
     pub fn failure_mode_from_env(
         self,
         flag: Option<FailureMode>,
+        file: Option<&crate::config_file::FileValue>,
     ) -> Result<Self, crate::config::EnvParseError> {
         let resolved = crate::config::resolve::<crate::config::EnvFailureMode>(
             flag.map(crate::config::EnvFailureMode),
             crate::config::DAGR_FAILURE_MODE,
+            file,
             crate::config::EnvFailureMode(FailureMode::default()),
         )?;
         Ok(self.failure_mode(resolved.into_inner()))

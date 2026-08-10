@@ -476,6 +476,11 @@ fn flag_takes_value(flag: &str) -> bool {
             | "dagr.blob.region"
             | "dagr.blob.prefix"
             | "reclaim-blobs"
+            // The ADR 128 configuration-file knobs (T115): both always take a
+            // value (a path, a profile name), so their value token is never
+            // mistaken for the flow-name positional.
+            | "dagr.config"
+            | "dagr.profile"
     )
 }
 
@@ -720,6 +725,12 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         // `prune`'s blob-reclaim mode (T110). Reserved rather than left to the
         // pipeline because it is the flag that authorizes a deletion.
         "reclaim-blobs",
+        // The ADR 128 configuration-file surface (T115): the explicit file path
+        // and the profile selector. Reserved on the same rule as every other
+        // knob — the file tier introduces no file-only knob, and a pipeline
+        // parameter can never shadow how configuration itself is located.
+        "dagr.config",
+        "dagr.profile",
         "data-interval",
         "force",
         "run",

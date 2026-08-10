@@ -513,13 +513,28 @@ fn run_selected_flow<W: Write>(
     // A fresh flow, built now (never reused — `run(self)` consumes it).
     let flow = factory();
 
-    // The local codec check (`--dagr.force-roundtrip` / `DAGR_FORCE_ROUNDTRIP`,
-    // default off). The factory built the flow without ever seeing this invocation,
-    // so the answer is applied here — the toggle cell is shared with the nodes
-    // already registered. Off, nothing about the run changes.
-    let force_roundtrip = match crate::config::parse_force_roundtrip_flag(argv)
-        .and_then(|flag| crate::config::resolve_force_roundtrip(flag).map_err(|e| e.to_string()))
-    {
+    // The `file` tier (ADR 128): discover and load `dagr.toml` FIRST — this is
+    // the bootstrap read, the one place the file is ever opened (the assembly
+    // verbs above never reach this function, so a config file can never touch
+    // assembly). An unusable file — a missing explicit path, malformed TOML, an
+    // unknown key or profile — refuses the run before anything is created.
+    let file = match crate::config_file::load_file_tier(argv) {
+        Ok(tier) => tier,
+        Err(e) => {
+            let _ = writeln!(out, "dagr run {name}: {e}");
+            return e.exit_code();
+        }
+    };
+
+    // The local codec check (`--dagr.force-roundtrip` / `DAGR_FORCE_ROUNDTRIP` /
+    // the `force-roundtrip` key, default off). The factory built the flow without
+    // ever seeing this invocation, so the answer is applied here — the toggle
+    // cell is shared with the nodes already registered. Off, nothing about the
+    // run changes.
+    let force_roundtrip = match crate::config::parse_force_roundtrip_flag(argv).and_then(|flag| {
+        crate::config::resolve_force_roundtrip(flag, file.get("force-roundtrip"))
+            .map_err(|e| e.to_string())
+    }) {
         Ok(on) => on,
         Err(detail) => {
             // A bad toggle value is invalid usage, never a silent "off".
@@ -529,24 +544,25 @@ fn run_selected_flow<W: Write>(
     };
     let flow = flow.force_roundtrip(force_roundtrip);
 
-    // Which executor runs this invocation (`--dagr.executor` / `DAGR_EXECUTOR`,
-    // default `local`), and the flat ceiling on concurrently-placed attempts
-    // (`--dagr.max-pods` / `DAGR_MAX_PODS`, default unconstrained). Both are
+    // Which executor runs this invocation (`--dagr.executor` / `DAGR_EXECUTOR` /
+    // the `executor` key, default `local`), and the flat ceiling on
+    // concurrently-placed attempts (`--dagr.max-pods` / `DAGR_MAX_PODS` / the
+    // `max-pods` key, default unconstrained). Both are
     // resolved before the store is opened: an invocation that cannot run should not
     // leave a run directory behind, and an unknown value is invalid usage rather
     // than a silent fallback.
-    let executor = match crate::config::parse_executor_flag(argv)
-        .and_then(|flag| crate::config::resolve_executor(flag).map_err(|e| e.to_string()))
-    {
+    let executor = match crate::config::parse_executor_flag(argv).and_then(|flag| {
+        crate::config::resolve_executor(flag, file.get("executor")).map_err(|e| e.to_string())
+    }) {
         Ok(kind) => kind,
         Err(detail) => {
             let _ = writeln!(out, "dagr run {name}: {detail}");
             return ExitCode::InvalidUsage;
         }
     };
-    let max_pods = match crate::config::parse_max_pods_flag(argv)
-        .and_then(|flag| crate::config::resolve_max_pods(flag).map_err(|e| e.to_string()))
-    {
+    let max_pods = match crate::config::parse_max_pods_flag(argv).and_then(|flag| {
+        crate::config::resolve_max_pods(flag, file.get("max-pods")).map_err(|e| e.to_string())
+    }) {
         Ok(slots) => slots,
         Err(detail) => {
             let _ = writeln!(out, "dagr run {name}: {detail}");
@@ -564,9 +580,10 @@ fn run_selected_flow<W: Write>(
 
     // The remaining runtime knobs the tables document — the store base, grace,
     // teardown deadline, failure mode, the three pool pins, and the headroom
-    // fraction — each resolved `flag > env > default` and validated BEFORE the
-    // store is opened: a bad value must not leave a run directory behind.
-    let (base, config) = match resolve_run_config(argv, executor, max_pods) {
+    // fraction — each resolved `flag > env > file(profile) > default` and
+    // validated BEFORE the store is opened: a bad value must not leave a run
+    // directory behind.
+    let (base, config) = match resolve_run_config(argv, executor, max_pods, &file) {
         Ok(resolved) => resolved,
         Err((code, detail)) => {
             let _ = writeln!(out, "dagr run {name}: {detail}");
@@ -590,7 +607,7 @@ fn run_selected_flow<W: Write>(
     // feature-disabled) it is the plain `FileSink` — byte-for-byte the historical
     // behavior, with NO `libsql` activity.
     #[cfg(feature = "metastore")]
-    let sink = match crate::metastore_tee::build_run_sink(&stream, &base, argv) {
+    let sink = match crate::metastore_tee::build_run_sink(&stream, &base, argv, &file) {
         Ok(sink) => sink,
         Err(err) => {
             // There is nowhere to write an artifact if the on-disk store or the live
@@ -638,12 +655,14 @@ fn run_selected_flow<W: Write>(
 
 /// Scan `argv` for the reserved runtime flags, resolve every knob that must be
 /// settled before the store is opened, and build the run's configuration:
-/// the store base (`--store` > `DAGR_STORE` > the default), grace, the teardown
-/// deadline, the failure mode (each `flag > env > default` through the
-/// `RunConfig` env-fallback builders — `RunConfig::new` itself stays infallible
-/// and environment-free), and the admission capacities. Capacities are
+/// the store base (`--store` > `DAGR_STORE` > the `store` key > the default),
+/// grace, the teardown deadline, the failure mode (each
+/// `flag > env > file(profile) > default` through the `RunConfig` fallback
+/// builders — `RunConfig::new` itself stays infallible, environment-free, and
+/// file-free), and the admission capacities. Capacities are
 /// probe-derived when a pool pin or an explicit headroom was supplied (pins
-/// verbatim, un-pinned pools detected with the resolved headroom) and the
+/// verbatim, un-pinned pools detected with the resolved headroom — a file pin
+/// counts exactly as a flag or env pin does) and the
 /// historical unconstrained set otherwise, plus the remote-slot ceiling, which
 /// has no machine to derive from and is pinned directly.
 ///
@@ -651,11 +670,14 @@ fn run_selected_flow<W: Write>(
 /// [`crate::config`]; this helper sequences them and maps each failure to its
 /// `(exit code, diagnostic)` pair — a malformed or valueless flag is invalid
 /// usage, a resolver error keeps its own parse/out-of-range split — so the
-/// diagnostic and the code both name the actual fault.
+/// diagnostic and the code both name the actual fault. `file` is the
+/// bootstrap-loaded tier ([`crate::config_file::load_file_tier`]); this helper
+/// only *reads* it — the file was opened once, before any knob resolved.
 fn resolve_run_config(
     argv: &[std::ffi::OsString],
     executor: crate::executor::ExecutorKind,
     max_pods: u32,
+    file: &crate::config_file::FileTier,
 ) -> Result<(String, crate::driver::RunConfig), (ExitCode, String)> {
     let invalid = |detail: String| (ExitCode::InvalidUsage, detail);
     let env_err = |e: crate::config::EnvParseError| (e.exit_code(), e.to_string());
@@ -667,8 +689,8 @@ fn resolve_run_config(
     let headroom = crate::config::parse_headroom_flag(argv).map_err(invalid)?;
     let store = crate::config::parse_store_flag(argv).map_err(invalid)?;
 
-    let base = crate::config::resolve_store_base(store).map_err(env_err)?;
-    let capacities = crate::config::resolve_pool_sizing(pool_flags, headroom)
+    let base = crate::config::resolve_store_base(store, file.get("store")).map_err(env_err)?;
+    let capacities = crate::config::resolve_pool_sizing(pool_flags, headroom, file)
         .map_err(env_err)?
         .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
         .map_err(|failure| (ExitCode::BootstrapFailure, failure.to_string()))?
@@ -678,9 +700,9 @@ fn resolve_run_config(
     let config = crate::driver::RunConfig::new(&base)
         .executor(executor)
         .capacities(capacities)
-        .grace_from_env(grace)
-        .and_then(|c| c.teardown_deadline_from_env(teardown_deadline))
-        .and_then(|c| c.failure_mode_from_env(failure_mode))
+        .grace_from_env(grace, file.get("grace"))
+        .and_then(|c| c.teardown_deadline_from_env(teardown_deadline, file.get("teardown-deadline")))
+        .and_then(|c| c.failure_mode_from_env(failure_mode, file.get("failure-mode")))
         .map_err(env_err)?;
 
     Ok((base, config))

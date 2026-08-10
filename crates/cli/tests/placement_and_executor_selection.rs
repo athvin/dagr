@@ -353,7 +353,7 @@ fn a_placement_change_is_visible_in_the_structure_diff() {
 /// so one binary is genuinely both and a placed pipeline still runs on a laptop.
 #[test]
 fn the_executor_defaults_to_local() {
-    let resolved = with_env(&[], || resolve_executor(None).expect("no knob set"));
+    let resolved = with_env(&[], || resolve_executor(None, None).expect("no knob set"));
     assert_eq!(resolved, ExecutorKind::Local);
 }
 
@@ -361,7 +361,7 @@ fn the_executor_defaults_to_local() {
 #[test]
 fn the_executor_flag_beats_the_env_var() {
     let resolved = with_env(&[(DAGR_EXECUTOR, "k8s")], || {
-        resolve_executor(Some(ExecutorKind::Local)).expect("the flag parses")
+        resolve_executor(Some(ExecutorKind::Local), None).expect("the flag parses")
     });
     assert_eq!(
         resolved,
@@ -374,7 +374,7 @@ fn the_executor_flag_beats_the_env_var() {
 #[test]
 fn the_executor_env_var_is_used_when_no_flag_is_given() {
     let resolved = with_env(&[(DAGR_EXECUTOR, "k8s")], || {
-        resolve_executor(None).expect("k8s is a recognized value")
+        resolve_executor(None, None).expect("k8s is a recognized value")
     });
     assert_eq!(resolved, ExecutorKind::Kubernetes);
 }
@@ -384,7 +384,7 @@ fn the_executor_env_var_is_used_when_no_flag_is_given() {
 #[test]
 fn an_unknown_executor_value_fails_loudly() {
     let err = with_env(&[(DAGR_EXECUTOR, "nomad")], || {
-        resolve_executor(None).expect_err("`nomad` is not a recognized executor")
+        resolve_executor(None, None).expect_err("`nomad` is not a recognized executor")
     });
     assert_eq!(err.variable, DAGR_EXECUTOR);
     assert_eq!(err.value, "nomad");
@@ -432,16 +432,16 @@ fn the_executor_flag_is_parsed_from_the_invocation() {
 #[test]
 fn the_max_pods_knob_follows_flag_env_default() {
     assert_eq!(
-        with_env(&[], || resolve_max_pods(None).expect("default")),
+        with_env(&[], || resolve_max_pods(None, None).expect("default")),
         MAX_PODS_DEFAULT
     );
     assert_eq!(
-        with_env(&[(DAGR_MAX_PODS, "8")], || resolve_max_pods(None)
+        with_env(&[(DAGR_MAX_PODS, "8")], || resolve_max_pods(None, None)
             .expect("env parses")),
         8
     );
     assert_eq!(
-        with_env(&[(DAGR_MAX_PODS, "8")], || resolve_max_pods(Some(2))
+        with_env(&[(DAGR_MAX_PODS, "8")], || resolve_max_pods(Some(2), None)
             .expect("flag wins")),
         2
     );
@@ -451,7 +451,7 @@ fn the_max_pods_knob_follows_flag_env_default() {
 #[test]
 fn a_bad_max_pods_value_fails_loudly() {
     let err = with_env(&[(DAGR_MAX_PODS, "lots")], || {
-        resolve_max_pods(None).expect_err("`lots` is not a pod count")
+        resolve_max_pods(None, None).expect_err("`lots` is not a pod count")
     });
     assert_eq!(err.variable, DAGR_MAX_PODS);
     assert_eq!(err.value, "lots");

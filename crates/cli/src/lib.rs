@@ -46,6 +46,7 @@ pub mod blob_gc;
 #[cfg(feature = "blob-s3")]
 pub mod blob_s3;
 pub mod config;
+pub mod config_file;
 pub mod contract;
 pub(crate) mod dispatch;
 pub mod driver;

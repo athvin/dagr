@@ -96,8 +96,11 @@ impl EventSink for RunSink {
 /// Build the run sink for a `run <flow>` invocation, honoring the metastore toggle.
 ///
 /// `stream_path` is the run's resolved `events.jsonl` path; `base` is the run-store
-/// base and `argv` the invocation's raw args (for the `--dagr.metastore` /
-/// `--dagr.metastore-store` flags). When the toggle is on, the live `MetastoreSink`
+/// base, `argv` the invocation's raw args (for the `--dagr.metastore` /
+/// `--dagr.metastore-store` flags), and `file` the bootstrap-loaded
+/// configuration tier (the `metastore` / `metastore-store` keys sit beneath the
+/// flag and `DAGR_METASTORE` in the standard order). When the toggle is on, the
+/// live `MetastoreSink`
 /// is opened at the resolved store path (default `<base>/metastore.db`) and teed
 /// with the `FileSink`; when off, a plain `FileSink` is returned and no `libsql`
 /// activity occurs.
@@ -113,30 +116,43 @@ pub fn build_run_sink(
     stream_path: &std::path::Path,
     base: &str,
     argv: &[OsString],
+    file: &crate::config_file::FileTier,
 ) -> io::Result<RunSink> {
-    let file = FileSink::create(stream_path)?;
+    let sink = FileSink::create(stream_path)?;
 
     let flag = parse_metastore_flag(argv)
         .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
-    let on = crate::config::resolve_metastore_toggle(flag)
+    let on = crate::config::resolve_metastore_toggle(flag, file.get("metastore"))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
     if !on {
-        return Ok(RunSink::File(file));
+        return Ok(RunSink::File(sink));
     }
 
-    let store_path = resolve_store_path(base, argv);
+    let store_path = resolve_store_path(base, argv, file);
     let events_path = stream_path.to_string_lossy().into_owned();
     let metastore = MetastoreSink::open(store_path, Some(events_path))
         .map_err(|e| io::Error::other(format!("cannot open the live metastore index: {e}")))?;
-    Ok(RunSink::Tee { file, metastore })
+    Ok(RunSink::Tee {
+        file: sink,
+        metastore,
+    })
 }
 
-/// The default metastore store path under a run store: `<base>/metastore.db` (so the
-/// index sits alongside the runs it indexes), matching
-/// [`crate::metastore::default_metastore_path`]'s convention.
-fn resolve_store_path(base: &str, argv: &[OsString]) -> PathBuf {
+/// The metastore store path for this invocation: `--dagr.metastore-store` when
+/// given, else the effective profile's `metastore-store` key, else
+/// `<base>/metastore.db` (so the index sits alongside the runs it indexes),
+/// matching [`crate::metastore::default_metastore_path`]'s convention. The flag
+/// has no environment variable, so the file key sits directly beneath it.
+fn resolve_store_path(
+    base: &str,
+    argv: &[OsString],
+    file: &crate::config_file::FileTier,
+) -> PathBuf {
     if let Some(path) = flag_value(argv, METASTORE_STORE_FLAG) {
         return PathBuf::from(path);
+    }
+    if let Some(value) = file.get("metastore-store") {
+        return PathBuf::from(value.raw());
     }
     PathBuf::from(base).join("metastore.db")
 }

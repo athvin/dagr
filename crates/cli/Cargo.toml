@@ -370,6 +370,25 @@ rayon = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "std"] }
 
+# toml — the ADR 128 (T113/T115) `dagr.toml` parser: the runtime-knob
+# configuration file with named profiles, read at BOOTSTRAP only and resolved as
+# the fourth precedence tier (`flag > env > file(profile) > default`,
+# `src/config_file.rs`). It is added to dagr-cli — the crate that already owns
+# every other config surface (flags, `DAGR_*`) — NEVER dagr-core, which reads no
+# file exactly as it reads no environment (ADR 128 §6); check-feature-matrix.sh
+# asserts `toml` is unreachable from dagr-core at every feature setting. Version
+# `1` is the same resolution `trybuild` (a dev-dependency of the trybuild
+# suites) already locked, so no second `toml` enters the graph.
+# `default-features = false` + `parse`/`serde`/`std` takes the deserializer half
+# only — `Table: FromStr` — and the loader then walks `toml::Value`s BY HAND for
+# loud unknown-key/wrong-type diagnostics: no serde *derive* is involved and the
+# `display` (writer) half stays out. The transitive addition (toml, toml_parser,
+# toml_datetime, serde_spanned, winnow; serde_core arrives with the serde
+# already in this tree) is `MIT OR Apache-2.0` throughout, resolved to MIT under
+# the MIT-only deny.toml — NO new licence id, NO deny.toml change; `cargo deny`/
+# `cargo audit` stay green.
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+
 # inventory — the M6 `dag`-feature link-time DAG registry (ADR 092, T79). `#[dag]`
 # (T80) emits an `inventory::submit!` of a `{ name, factory }` record and
 # `dagr_cli::run` iterates `inventory::iter` to build a `FlowRegistry`; T79 builds

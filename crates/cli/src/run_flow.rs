@@ -1239,19 +1239,22 @@ impl RunnableFlow {
     /// deterministic clock, or a tuned [`RunConfig`] keep using [`run`](Self::run); this
     /// wraps it and adds no execution logic of its own.
     ///
-    /// The environment tier is honoured here: grace, the teardown deadline, the
-    /// failure mode, the three pool pins, and the headroom fraction resolve
-    /// `env > default` through the same helpers the registry's `run <flow>` path
-    /// uses (there is no argv on this path, so the flag tier is empty), and a
+    /// The environment **and file** tiers are honoured here: grace, the teardown
+    /// deadline, the failure mode, the three pool pins, and the headroom
+    /// fraction resolve `env > file(profile) > default` through the same helpers
+    /// the registry's `run <flow>` path uses (there is no argv on this path, so
+    /// the flag tier is empty and discovery is `./dagr.toml` alone, with
+    /// `DAGR_PROFILE` selecting the profile), and a
     /// pool knob engages the container-limit probe exactly as it does there.
-    /// `RunConfig::new` itself stays infallible and environment-free — the
-    /// resolution is this call site's.
+    /// `RunConfig::new` itself stays infallible, environment-free, and file-free
+    /// — the resolution is this call site's, at bootstrap.
     ///
     /// # Errors
-    /// - [`RunToStoreError::Config`] if a `DAGR_*` value cannot be used (an
-    ///   unparseable or out-of-range knob) — surfaced **before** the store is
-    ///   opened, so a bad environment leaves no run directory behind, and naming
-    ///   the offending variable (a bad value is never silently ignored).
+    /// - [`RunToStoreError::Config`] if a `DAGR_*` or `dagr.toml` value cannot be
+    ///   used (an unparseable or out-of-range knob, a malformed or unknown-keyed
+    ///   file, an unknown `DAGR_PROFILE`) — surfaced **before** the store is
+    ///   opened, so a bad configuration leaves no run directory behind, and
+    ///   naming the offending source (a bad value is never silently ignored).
     /// - [`RunToStoreError::Store`] if the run store cannot be opened at `base` (an
     ///   unwritable or inaccessible directory) — surfaced **before** assembly, since
     ///   there is nowhere to record an artifact.
@@ -1266,10 +1269,15 @@ impl RunnableFlow {
         base: impl AsRef<str>,
     ) -> Result<RunReport, RunToStoreError> {
         let base = base.as_ref();
-        // Resolve the environment tier BEFORE the store is opened: a run that
-        // cannot be configured must not leave a run directory behind.
+        // Resolve the configuration BEFORE the store is opened: a run that
+        // cannot be configured must not leave a run directory behind. The file
+        // tier is read here — bootstrap — and never during the assembly `run`
+        // performs below; no argv exists on this path, so discovery has no
+        // explicit-path flag and selection has no profile flag.
+        let file = crate::config_file::load_file_tier_from(std::path::Path::new("."), None, None)
+            .map_err(RunToStoreError::Config)?;
         let sized =
-            crate::config::resolve_pool_sizing(crate::config::PoolPinFlags::default(), None)
+            crate::config::resolve_pool_sizing(crate::config::PoolPinFlags::default(), None, &file)
                 .map_err(RunToStoreError::Config)?
                 .capacities(dagr_core::limits::ContainerLimitProbe::from_host())
                 .map_err(|failure| {
@@ -1279,9 +1287,9 @@ impl RunnableFlow {
                     RunToStoreError::Store(std::io::Error::other(failure.to_string()))
                 })?;
         let config = RunConfig::new(base)
-            .grace_from_env(None)
-            .and_then(|c| c.teardown_deadline_from_env(None))
-            .and_then(|c| c.failure_mode_from_env(None))
+            .grace_from_env(None, file.get("grace"))
+            .and_then(|c| c.teardown_deadline_from_env(None, file.get("teardown-deadline")))
+            .and_then(|c| c.failure_mode_from_env(None, file.get("failure-mode")))
             .map_err(RunToStoreError::Config)?;
         let config = match sized {
             Some(capacities) => config.capacities(capacities),

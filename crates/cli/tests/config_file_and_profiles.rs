@@ -615,8 +615,9 @@ fn file_headroom_engages_and_env_beats_it() {
         .expect("engaged sizing yields capacities");
     assert_eq!(
         caps.total(dagr_core::admission::Pool::ComputeThreads),
-        2,
-        "DAGR_HEADROOM=0.25 beats the file's 0.5 (env > file)"
+        6,
+        "DAGR_HEADROOM=0.25 beats the file's 0.5 (env > file): 8 cores keep \
+         8 * (1 - 0.25) = 6, not the 4 the file's 0.5 would leave"
     );
 }
 
@@ -927,7 +928,7 @@ fn executor_and_max_pods_resolve_through_the_file_tier() {
     });
     assert_eq!(
         executor.expect("the file's executor resolves"),
-        ExecutorKind::K8s,
+        ExecutorKind::Kubernetes,
         "the file's executor key reaches selection"
     );
     assert_eq!(
