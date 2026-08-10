@@ -701,7 +701,9 @@ fn resolve_run_config(
         .executor(executor)
         .capacities(capacities)
         .grace_from_env(grace, file.get("grace"))
-        .and_then(|c| c.teardown_deadline_from_env(teardown_deadline, file.get("teardown-deadline")))
+        .and_then(|c| {
+            c.teardown_deadline_from_env(teardown_deadline, file.get("teardown-deadline"))
+        })
         .and_then(|c| c.failure_mode_from_env(failure_mode, file.get("failure-mode")))
         .map_err(env_err)?;
 

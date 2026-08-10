@@ -31,12 +31,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use dagr_artifact::event_stream::{EventSink, MonotonicClock, RunOutcome};
-use dagr_cli::config_file::FileTier;
 use dagr_cli::config::{
     DAGR_FAILURE_MODE, DAGR_GRACE, DAGR_HEADROOM, DAGR_POOL_BLOCKING_THREADS,
     DAGR_POOL_COMPUTE_THREADS, DAGR_POOL_MEMORY, DAGR_TEARDOWN_DEADLINE, EnvParseErrorKind,
     PoolPinFlags, resolve_headroom, resolve_pool_pins,
 };
+use dagr_cli::config_file::FileTier;
 use dagr_cli::contract::ExitCode;
 use dagr_cli::driver::{
     DEFAULT_GRACE, DEFAULT_TEARDOWN_DEADLINE, NodeRunner, RunConfig, RunPlan, drive,
@@ -239,7 +239,10 @@ fn pool_env_values_reflected_when_no_flag() {
             (DAGR_POOL_BLOCKING_THREADS, "5"),
             (DAGR_POOL_MEMORY, "4096"),
         ],
-        || resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("valid pool env parses"),
+        || {
+            resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty())
+                .expect("valid pool env parses")
+        },
     );
     assert_eq!(pins.compute_threads_pin(), Some(3));
     assert_eq!(pins.blocking_threads_pin(), Some(5));
@@ -267,7 +270,9 @@ fn pool_flag_beats_env() {
 
 #[test]
 fn pool_unset_env_and_flag_yields_no_pin() {
-    let pins = with_clean_env(|| resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("no pins"));
+    let pins = with_clean_env(|| {
+        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("no pins")
+    });
     assert_eq!(pins.compute_threads_pin(), None);
     assert_eq!(pins.blocking_threads_pin(), None);
     assert_eq!(pins.memory_pin(), None);
@@ -363,7 +368,8 @@ fn headroom_env_of_half_sizes_pools_and_floors_at_one() {
 #[test]
 fn headroom_out_of_range_env_is_bootstrap_failure_naming_the_variable() {
     let err = with_env(&[(DAGR_HEADROOM, "1.5")], || {
-        resolve_headroom(None, &FileTier::empty()).expect_err("1.5 is out of 0.0..=1.0 and must fail loudly")
+        resolve_headroom(None, &FileTier::empty())
+            .expect_err("1.5 is out of 0.0..=1.0 and must fail loudly")
     });
     assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
     assert_eq!(
@@ -429,7 +435,8 @@ fn zero_teardown_deadline_env_is_out_of_range_naming_the_variable() {
 #[test]
 fn unparseable_pool_env_is_invalid_usage_naming_the_variable() {
     let err = with_env(&[(DAGR_POOL_COMPUTE_THREADS, "lots")], || {
-        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect_err("a bad pool env must fail loudly")
+        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty())
+            .expect_err("a bad pool env must fail loudly")
     });
     assert_eq!(err.kind, EnvParseErrorKind::Parse);
     assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -551,7 +558,8 @@ impl MonotonicClock for TickClock {
 
 /// Build the run config for the **env** path: several `DAGR_*` set, no flags.
 fn config_via_env(base: &str) -> RunConfig {
-    let pins = resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("pool env parses");
+    let pins =
+        resolve_pool_pins(PoolPinFlags::default(), &FileTier::empty()).expect("pool env parses");
     RunConfig::new(base)
         .run_id("t77-env")
         .grace_from_env(None, None)

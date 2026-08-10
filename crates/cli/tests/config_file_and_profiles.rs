@@ -450,7 +450,11 @@ fn explicit_config_path_beats_cwd_discovery() {
     std::fs::create_dir_all(&cwd).expect("create the child working dir");
     std::fs::write(cwd.join(CONFIG_FILE_NAME), "[default]\ngrace = \"25s\"\n")
         .expect("write ./dagr.toml");
-    let explicit = write_file(base.as_str(), "explicit.toml", "[default]\ngrace = \"8s\"\n");
+    let explicit = write_file(
+        base.as_str(),
+        "explicit.toml",
+        "[default]\ngrace = \"8s\"\n",
+    );
     let run = run_one_dag_in(
         &cwd,
         &[],
@@ -593,7 +597,10 @@ fn file_headroom_engages_and_env_beats_it() {
         resolve_pool_sizing(PoolPinFlags::default(), None, &tier)
     })
     .expect("a file headroom resolves");
-    assert!(sizing.engaged(), "a file-supplied headroom engages the probe");
+    assert!(
+        sizing.engaged(),
+        "a file-supplied headroom engages the probe"
+    );
     let caps = sizing
         .capacities(ContainerLimitProbe::from_root("/nonexistent-root-for-t115").with_host_cores(8))
         .expect("sizing never fails")
@@ -956,7 +963,9 @@ fn metastore_toggle_resolves_through_the_file_tier() {
 
     let base = TempBase::new("t115-metastore-key");
     let tier = tier_from(&base, "[default]\nmetastore = true\n", None);
-    let on = with_env(&[], || resolve_metastore_toggle(None, tier.get("metastore")));
+    let on = with_env(&[], || {
+        resolve_metastore_toggle(None, tier.get("metastore"))
+    });
     assert!(
         on.expect("the file's metastore toggle resolves"),
         "the file's metastore key turns the toggle on"
@@ -1003,8 +1012,7 @@ fn scrubbed_registry_stream(base: &TempBase, args: &[&str]) -> String {
         .and_then(|n| n.to_str())
         .expect("the run directory is the run id")
         .to_string();
-    let stream =
-        std::fs::read_to_string(dir.join("events.jsonl")).expect("the event stream reads");
+    let stream = std::fs::read_to_string(dir.join("events.jsonl")).expect("the event stream reads");
     scrub_stream(&stream, &run_id)
 }
 

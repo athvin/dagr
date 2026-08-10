@@ -559,7 +559,10 @@ pub struct PoolPinFlags {
 /// [`ExitCode::InvalidUsage`]) naming the offending `DAGR_POOL_*` variable when
 /// its (or its file key's) value fails to parse as a non-negative integer — a
 /// bad value is **never** silently ignored or clamped.
-pub fn resolve_pool_pins(flags: PoolPinFlags, file: &FileTier) -> Result<PinnedPools, EnvParseError> {
+pub fn resolve_pool_pins(
+    flags: PoolPinFlags,
+    file: &FileTier,
+) -> Result<PinnedPools, EnvParseError> {
     let mut pins = PinnedPools::new();
     if let Some(compute) = resolve_opt::<u32>(
         flags.compute_threads,
@@ -811,8 +814,12 @@ pub fn resolve_force_roundtrip(
     flag: Option<bool>,
     file: Option<&FileValue>,
 ) -> Result<bool, EnvParseError> {
-    let resolved =
-        resolve::<EnvBool>(flag.map(EnvBool), DAGR_FORCE_ROUNDTRIP, file, EnvBool(false))?;
+    let resolved = resolve::<EnvBool>(
+        flag.map(EnvBool),
+        DAGR_FORCE_ROUNDTRIP,
+        file,
+        EnvBool(false),
+    )?;
     Ok(resolved.into_inner())
 }
 
@@ -911,7 +918,12 @@ pub fn resolve_executor(
     flag: Option<crate::executor::ExecutorKind>,
     file: Option<&FileValue>,
 ) -> Result<crate::executor::ExecutorKind, EnvParseError> {
-    resolve(flag, DAGR_EXECUTOR, file, crate::executor::ExecutorKind::Local)
+    resolve(
+        flag,
+        DAGR_EXECUTOR,
+        file,
+        crate::executor::ExecutorKind::Local,
+    )
 }
 
 /// Resolve the **remote-slot ceiling** by `flag > env > default` (default
@@ -972,7 +984,12 @@ pub fn parse_max_pods_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, S
 /// unknown-key failure rather than a recognized-but-inert key. The canonical
 /// knob↔key table (T117) owns extending the key set.
 pub fn resolve_pod_launch_retries(flag: Option<u32>) -> Result<u32, EnvParseError> {
-    resolve(flag, DAGR_POD_LAUNCH_RETRIES, None, POD_LAUNCH_RETRIES_DEFAULT)
+    resolve(
+        flag,
+        DAGR_POD_LAUNCH_RETRIES,
+        None,
+        POD_LAUNCH_RETRIES_DEFAULT,
+    )
 }
 
 /// Parse `--dagr.pod-launch-retries` out of a raw invocation, in the same two
@@ -1799,9 +1816,13 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_BAD";
         set_env(&g, key, "halt");
-        let err =
-            resolve::<EnvFailureMode>(None, key, None, EnvFailureMode(FailureMode::ContinueIndependent))
-                .expect_err("an unknown failure mode must error");
+        let err = resolve::<EnvFailureMode>(
+            None,
+            key,
+            None,
+            EnvFailureMode(FailureMode::ContinueIndependent),
+        )
+        .expect_err("an unknown failure mode must error");
         unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(key));
@@ -1812,9 +1833,13 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_OK";
         set_env(&g, key, "stop-on-first-failure");
-        let got =
-            resolve::<EnvFailureMode>(None, key, None, EnvFailureMode(FailureMode::ContinueIndependent))
-                .expect("valid failure mode");
+        let got = resolve::<EnvFailureMode>(
+            None,
+            key,
+            None,
+            EnvFailureMode(FailureMode::ContinueIndependent),
+        )
+        .expect("valid failure mode");
         unset_env(&g, key);
         assert_eq!(got.into_inner(), FailureMode::StopOnFirstFailure);
     }
@@ -1879,7 +1904,11 @@ mod tests {
     fn pool_pins_bad_env_is_invalid_usage_naming_the_variable() {
         let g = env_lock();
         set_env(&g, DAGR_POOL_MEMORY, "notanumber");
-        let err = resolve_pool_pins(PoolPinFlags::default(), &crate::config_file::FileTier::empty()).expect_err("bad pool env fails");
+        let err = resolve_pool_pins(
+            PoolPinFlags::default(),
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect_err("bad pool env fails");
         unset_env(&g, DAGR_POOL_MEMORY);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -1891,12 +1920,26 @@ mod tests {
         let g = env_lock();
         // default when neither
         unset_env(&g, DAGR_HEADROOM);
-        assert!((resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("default") - HEADROOM_DEFAULT).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("default")
+                - HEADROOM_DEFAULT)
+                .abs()
+                < f64::EPSILON
+        );
         // env used when no flag
         set_env(&g, DAGR_HEADROOM, "0.5");
-        assert!((resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("env") - 0.5).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("env") - 0.5)
+                .abs()
+                < f64::EPSILON
+        );
         // flag beats env
-        assert!((resolve_headroom(Some(0.1), &crate::config_file::FileTier::empty()).expect("flag") - 0.1).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(Some(0.1), &crate::config_file::FileTier::empty()).expect("flag")
+                - 0.1)
+                .abs()
+                < f64::EPSILON
+        );
         unset_env(&g, DAGR_HEADROOM);
     }
 
@@ -1904,7 +1947,8 @@ mod tests {
     fn headroom_out_of_range_is_bootstrap_failure() {
         let g = env_lock();
         set_env(&g, DAGR_HEADROOM, "1.5");
-        let err = resolve_headroom(None, &crate::config_file::FileTier::empty()).expect_err("1.5 is out of range");
+        let err = resolve_headroom(None, &crate::config_file::FileTier::empty())
+            .expect_err("1.5 is out of range");
         unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
@@ -1915,7 +1959,8 @@ mod tests {
     fn headroom_out_of_range_flag_is_bootstrap_failure_naming_the_flag() {
         let g = env_lock();
         unset_env(&g, DAGR_HEADROOM);
-        let err = resolve_headroom(Some(-0.5), &crate::config_file::FileTier::empty()).expect_err("negative headroom is out of range");
+        let err = resolve_headroom(Some(-0.5), &crate::config_file::FileTier::empty())
+            .expect_err("negative headroom is out of range");
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
         assert!(err.to_string().contains("--dagr.headroom-fraction"));
@@ -1925,7 +1970,8 @@ mod tests {
     fn headroom_non_float_env_is_parse_failure() {
         let g = env_lock();
         set_env(&g, DAGR_HEADROOM, "half");
-        let err = resolve_headroom(None, &crate::config_file::FileTier::empty()).expect_err("a non-float is a parse failure");
+        let err = resolve_headroom(None, &crate::config_file::FileTier::empty())
+            .expect_err("a non-float is a parse failure");
         unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -2071,8 +2117,12 @@ mod tests {
         ] {
             unset_env(&g, k);
         }
-        let sizing =
-            resolve_pool_sizing(PoolPinFlags::default(), None, &crate::config_file::FileTier::empty()).expect("nothing set resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("nothing set resolves");
         assert!(!sizing.engaged(), "no knob supplied → no probe");
         let caps = sizing
             .capacities(ContainerLimitProbe::from_root("/nonexistent-root-for-t114"))
@@ -2087,7 +2137,12 @@ mod tests {
         let g = env_lock();
         unset_env(&g, DAGR_HEADROOM);
         set_env(&g, DAGR_POOL_MEMORY, "2048");
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None, &crate::config_file::FileTier::empty()).expect("pin resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("pin resolves");
         unset_env(&g, DAGR_POOL_MEMORY);
         assert!(sizing.engaged(), "a supplied pin engages the probe");
         let caps = sizing
@@ -2122,7 +2177,12 @@ mod tests {
             unset_env(&g, k);
         }
         set_env(&g, DAGR_HEADROOM, "0.5");
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None, &crate::config_file::FileTier::empty()).expect("headroom resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("headroom resolves");
         unset_env(&g, DAGR_HEADROOM);
         assert!(
             sizing.engaged(),
@@ -2141,8 +2201,12 @@ mod tests {
         );
 
         // The flag spelling of the default value also engages sizing.
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), Some(HEADROOM_DEFAULT), &crate::config_file::FileTier::empty())
-            .expect("flag headroom resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            Some(HEADROOM_DEFAULT),
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("flag headroom resolves");
         assert!(
             sizing.engaged(),
             "a flag headroom equal to the default still engages"

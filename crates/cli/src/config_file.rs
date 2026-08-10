@@ -218,8 +218,8 @@ pub fn parse_profile_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>,
 /// — each naming the file, the profile, and the key involved. No file present
 /// (with no profile selected) is **not** an error.
 pub fn load_file_tier(argv: &[std::ffi::OsString]) -> Result<FileTier, EnvParseError> {
-    let explicit = parse_config_flag(argv)
-        .map_err(|detail| EnvParseError::parse(CONFIG_FLAG, "", detail))?;
+    let explicit =
+        parse_config_flag(argv).map_err(|detail| EnvParseError::parse(CONFIG_FLAG, "", detail))?;
     let profile = parse_profile_flag(argv)
         .map_err(|detail| EnvParseError::parse(PROFILE_FLAG, "", detail))?;
     load_file_tier_from(Path::new("."), explicit.as_deref(), profile.as_deref())
@@ -579,6 +579,10 @@ mod tests {
         let tier = load_file_tier_from(&dir, path.to_str(), None)
             .expect("a file with no [default] and no selection applies nothing");
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(tier, FileTier::empty(), "nothing selected → nothing applies");
+        assert_eq!(
+            tier,
+            FileTier::empty(),
+            "nothing selected → nothing applies"
+        );
     }
 }
