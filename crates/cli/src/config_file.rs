@@ -245,39 +245,9 @@ pub fn load_file_tier_from(
     explicit: Option<&str>,
     profile_flag: Option<&str>,
 ) -> Result<FileTier, EnvParseError> {
-    // Which profile is selected, and by which source (for the diagnostic). A
-    // present flag wins outright: DAGR_PROFILE is never read on the flag path.
-    let selection: Option<(&str, String)> = match profile_flag {
-        Some(name) => Some((PROFILE_FLAG, name.to_string())),
-        None => match std::env::var(DAGR_PROFILE) {
-            Ok(name) if !name.is_empty() => Some((DAGR_PROFILE, name)),
-            _ => None,
-        },
-    };
+    let selection = select_profile(profile_flag);
 
-    // Discovery: explicit path (missing => hard error) > ./dagr.toml > none.
-    let path: Option<PathBuf> = match explicit {
-        Some(p) => {
-            let path = PathBuf::from(p);
-            if !path.is_file() {
-                return Err(EnvParseError::parse(
-                    CONFIG_FLAG,
-                    p,
-                    format!(
-                        "the explicitly named configuration file `{p}` does not exist \
-                         (an explicit --dagr.config path is never silently skipped)"
-                    ),
-                ));
-            }
-            Some(path)
-        }
-        None => {
-            let conventional = dir.join(CONFIG_FILE_NAME);
-            conventional.is_file().then_some(conventional)
-        }
-    };
-
-    let Some(path) = path else {
+    let Some(path) = discover(dir, explicit)? else {
         // No file. Zero-configuration is the default — but a profile the
         // operator explicitly selected cannot be honoured, and silently
         // running without its values would drop that instruction on the floor.
@@ -302,61 +272,30 @@ pub fn load_file_tier_from(
             format!("cannot read config file `{shown}`: {e}"),
         )
     })?;
-    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
-        EnvParseError::parse(
-            &shown,
-            "",
-            format!("config file `{shown}` is not valid TOML: {e}"),
-        )
-    })?;
-
-    // Every top-level entry is a profile table; every profile's keys are
-    // flattened to dotted paths, checked against the closed key set, and
-    // canonicalized to scalar text. The WHOLE file is validated — a typo in an
-    // unselected profile is still a bootstrap failure, per the never-silent
-    // posture (a broken [prod] should not wait for the production run to
-    // surface).
-    let mut profiles: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for (name, value) in &table {
-        let toml::Value::Table(profile_table) = value else {
-            return Err(EnvParseError::parse(
-                &shown,
-                name,
-                format!(
-                    "top-level entry `{name}` in config file `{shown}` is not a profile \
-                     table; runtime keys live inside a profile (for example under \
-                     `[{DEFAULT_PROFILE}]`)"
-                ),
-            ));
-        };
-        let mut flat = BTreeMap::new();
-        flatten_profile(&shown, name, "", profile_table, &mut flat)?;
-        profiles.insert(name.clone(), flat);
-    }
+    let profiles = parse_profiles(&shown, &text)?;
 
     // Selection: an explicitly selected name must exist (even `default`);
     // implicit selection uses the default table when present, else nothing.
-    let selected: Option<&str> = match &selection {
-        Some((source, name)) => {
-            if !profiles.contains_key(name.as_str()) {
-                let available = profiles
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(EnvParseError::parse(
-                    *source,
-                    name,
-                    format!(
-                        "config file `{shown}` defines no profile `{name}` \
-                         (profiles: {available}) — an unknown profile never falls \
-                         back to `{DEFAULT_PROFILE}`"
-                    ),
-                ));
-            }
-            Some(name.as_str())
+    let selected: Option<&str> = if let Some((source, name)) = &selection {
+        if !profiles.contains_key(name.as_str()) {
+            let available = profiles
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(EnvParseError::parse(
+                *source,
+                name,
+                format!(
+                    "config file `{shown}` defines no profile `{name}` \
+                     (profiles: {available}) — an unknown profile never falls \
+                     back to `{DEFAULT_PROFILE}`"
+                ),
+            ));
         }
-        None => None,
+        Some(name.as_str())
+    } else {
+        None
     };
 
     // Layering: default first, then the selected profile key by key.
@@ -384,6 +323,78 @@ pub fn load_file_tier_from(
     }
 
     Ok(FileTier { values })
+}
+
+/// Which profile is selected, and by which source (for the diagnostic):
+/// `(source, name)` for a flag or a non-empty [`DAGR_PROFILE`], else [`None`]
+/// (the implicit `default`). A present flag wins outright — `DAGR_PROFILE` is
+/// **never read** on the flag path (the flag-wins property).
+fn select_profile(profile_flag: Option<&str>) -> Option<(&'static str, String)> {
+    if let Some(name) = profile_flag {
+        return Some((PROFILE_FLAG, name.to_string()));
+    }
+    match std::env::var(DAGR_PROFILE) {
+        Ok(name) if !name.is_empty() => Some((DAGR_PROFILE, name)),
+        _ => None,
+    }
+}
+
+/// Discovery: the explicit path when given (missing ⇒ hard error, never a
+/// silent fallback), else `<dir>/dagr.toml` when present, else [`None`].
+fn discover(dir: &Path, explicit: Option<&str>) -> Result<Option<PathBuf>, EnvParseError> {
+    if let Some(p) = explicit {
+        let path = PathBuf::from(p);
+        if !path.is_file() {
+            return Err(EnvParseError::parse(
+                CONFIG_FLAG,
+                p,
+                format!(
+                    "the explicitly named configuration file `{p}` does not exist \
+                     (an explicit --dagr.config path is never silently skipped)"
+                ),
+            ));
+        }
+        return Ok(Some(path));
+    }
+    let conventional = dir.join(CONFIG_FILE_NAME);
+    Ok(conventional.is_file().then_some(conventional))
+}
+
+/// Parse the file's text into its profiles: every top-level entry is a profile
+/// table; every profile's keys are flattened to dotted paths, checked against
+/// the closed key set, and canonicalized to scalar text. The **whole** file is
+/// validated — a typo in an unselected profile is still a bootstrap failure,
+/// per the never-silent posture (a broken `[prod]` should not wait for the
+/// production run to surface).
+fn parse_profiles(
+    shown: &str,
+    text: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, EnvParseError> {
+    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
+        EnvParseError::parse(
+            shown,
+            "",
+            format!("config file `{shown}` is not valid TOML: {e}"),
+        )
+    })?;
+    let mut profiles = BTreeMap::new();
+    for (name, value) in &table {
+        let toml::Value::Table(profile_table) = value else {
+            return Err(EnvParseError::parse(
+                shown,
+                name,
+                format!(
+                    "top-level entry `{name}` in config file `{shown}` is not a profile \
+                     table; runtime keys live inside a profile (for example under \
+                     `[{DEFAULT_PROFILE}]`)"
+                ),
+            ));
+        };
+        let mut flat = BTreeMap::new();
+        flatten_profile(shown, name, "", profile_table, &mut flat)?;
+        profiles.insert(name.clone(), flat);
+    }
+    Ok(profiles)
 }
 
 /// Flatten one profile table into dotted key paths, validating each key

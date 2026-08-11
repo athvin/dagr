@@ -11,7 +11,7 @@
 //! the assembly verbs never read the file, and a run with no file is
 //! byte-identical to one with an empty `[default]`.
 //!
-//! # Two spawn styles, and why (mirrors tests/wire_precedence_run_path.rs)
+//! # Two spawn styles, and why (mirrors `tests/wire_precedence_run_path.rs`)
 //!
 //! - **Subprocess tests** run the `one_dag` example (a real registry-routed leaf
 //!   binary) via `cargo run --example`, setting `DAGR_*` per-command and — for
@@ -525,7 +525,7 @@ fn tier_from(base: &TempBase, content: &str, profile: Option<&str>) -> FileTier 
 }
 
 /// A file that sets `pool.memory` but no thread pool pins the memory pool
-/// verbatim and leaves both thread pools **detected** — the resolve_opt
+/// verbatim and leaves both thread pools **detected** — the `resolve_opt`
 /// tri-state, preserved through the file tier.
 #[test]
 fn file_memory_pin_leaves_thread_pools_detected() {
@@ -661,11 +661,11 @@ fn build_quick_flow() -> RunnableFlow {
 /// returning the exit code and the captured diagnostics.
 fn registry_run(base: &TempBase, args: &[&str]) -> (ExitCode, String) {
     let registry = FlowRegistry::new().add("t115", build_quick_flow);
-    let mut argv: Vec<String> = vec!["dagr".into(), "run".into(), "t115".into()];
-    argv.extend(args.iter().map(ToString::to_string));
-    argv.extend(["--store".to_string(), base.as_str().to_string()]);
+    let mut invocation: Vec<String> = vec!["dagr".into(), "run".into(), "t115".into()];
+    invocation.extend(args.iter().map(ToString::to_string));
+    invocation.extend(["--store".to_string(), base.as_str().to_string()]);
     let mut out = Vec::new();
-    let exit = with_env(&[], || run_registry_to(&registry, argv, &mut out));
+    let exit = with_env(&[], || run_registry_to(&registry, invocation, &mut out));
     (exit, String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -1019,7 +1019,7 @@ fn scrubbed_registry_stream(base: &TempBase, args: &[&str]) -> String {
 /// A run with a config file whose selected profile sets nothing is
 /// **byte-identical** (run id and wall stamps scrubbed — they vary between any
 /// two runs) to a run with no file at all. Together with the standing
-/// pre-M11 byte-identity guard in tests/wire_precedence_run_path.rs, this pins
+/// pre-M11 byte-identity guard in `tests/wire_precedence_run_path.rs`, this pins
 /// "no file present changes nothing".
 #[test]
 fn empty_default_file_is_byte_identical_to_no_file() {
