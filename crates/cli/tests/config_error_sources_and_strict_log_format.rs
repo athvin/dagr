@@ -452,7 +452,11 @@ fn log_format_file_tier_applies_and_is_beaten_by_env_and_flag() {
 #[test]
 fn a_bad_log_format_file_value_fails_naming_file_profile_and_key() {
     let base = TempBase::new("t116-file-bad");
-    let cfg = write_file(base.as_str(), "cfg.toml", "[default]\nlog-format = \"humann\"\n");
+    let cfg = write_file(
+        base.as_str(),
+        "cfg.toml",
+        "[default]\nlog-format = \"humann\"\n",
+    );
     let run = run_one_dag(
         &[],
         &["run", "--dagr.config", &cfg, "--store", base.as_str()],

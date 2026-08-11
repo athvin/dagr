@@ -814,11 +814,7 @@ pub fn resolve_headroom(flag: Option<f64>, file: &FileTier) -> Result<f64, EnvPa
 /// Check `fraction` is in `0.0..=1.0`; otherwise an
 /// [`out_of_range_from`](EnvParseError::out_of_range_from) error naming the
 /// supplying `source` (`BootstrapFailure`).
-fn validate_headroom(
-    source: ConfigSource,
-    fraction: f64,
-    raw: &str,
-) -> Result<f64, EnvParseError> {
+fn validate_headroom(source: ConfigSource, fraction: f64, raw: &str) -> Result<f64, EnvParseError> {
     if (0.0..=1.0).contains(&fraction) {
         Ok(fraction)
     } else {

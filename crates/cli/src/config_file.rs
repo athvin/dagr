@@ -237,8 +237,9 @@ pub fn parse_profile_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>,
 pub fn load_file_tier(argv: &[std::ffi::OsString]) -> Result<FileTier, EnvParseError> {
     let explicit = parse_config_flag(argv)
         .map_err(|detail| EnvParseError::parse_from(ConfigSource::flag(CONFIG_FLAG), "", detail))?;
-    let profile = parse_profile_flag(argv)
-        .map_err(|detail| EnvParseError::parse_from(ConfigSource::flag(PROFILE_FLAG), "", detail))?;
+    let profile = parse_profile_flag(argv).map_err(|detail| {
+        EnvParseError::parse_from(ConfigSource::flag(PROFILE_FLAG), "", detail)
+    })?;
     load_file_tier_from(Path::new("."), explicit.as_deref(), profile.as_deref())
 }
 
