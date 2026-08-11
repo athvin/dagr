@@ -481,6 +481,10 @@ fn flag_takes_value(flag: &str) -> bool {
             // mistaken for the flow-name positional.
             | "dagr.config"
             | "dagr.profile"
+            // The log output mode (T116): always takes a value (`human` /
+            // `structured`), so `--dagr.log-format human only` runs the flow
+            // named `only`.
+            | "dagr.log-format"
     )
 }
 
@@ -731,6 +735,12 @@ pub fn reserved_flag_names() -> &'static [&'static str] {
         // parameter can never shadow how configuration itself is located.
         "dagr.config",
         "dagr.profile",
+        // The log output mode (T116, C25). Reserved on the same rule as every
+        // other knob: DAGR_LOG_FORMAT was the one env fallback with no flag at
+        // all — unreachable per-invocation and absent from this namespace —
+        // and the invariant is that every out-of-band knob has a reserved flag
+        // it cannot be shadowed by.
+        "dagr.log-format",
         "data-interval",
         "force",
         "run",

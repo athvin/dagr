@@ -579,10 +579,10 @@ fn run_selected_flow<W: Write>(
     }
 
     // The remaining runtime knobs the tables document — the store base, grace,
-    // teardown deadline, failure mode, the three pool pins, and the headroom
-    // fraction — each resolved `flag > env > file(profile) > default` and
-    // validated BEFORE the store is opened: a bad value must not leave a run
-    // directory behind.
+    // teardown deadline, failure mode, the three pool pins, the headroom
+    // fraction, and the log output mode — each resolved
+    // `flag > env > file(profile) > default` and validated BEFORE the store is
+    // opened: a bad value must not leave a run directory behind.
     let (base, config) = match resolve_run_config(argv, executor, max_pods, &file) {
         Ok(resolved) => resolved,
         Err((code, detail)) => {
@@ -656,7 +656,7 @@ fn run_selected_flow<W: Write>(
 /// Scan `argv` for the reserved runtime flags, resolve every knob that must be
 /// settled before the store is opened, and build the run's configuration:
 /// the store base (`--store` > `DAGR_STORE` > the `store` key > the default),
-/// grace, the teardown deadline, the failure mode (each
+/// grace, the teardown deadline, the failure mode, the log output mode (each
 /// `flag > env > file(profile) > default` through the `RunConfig` fallback
 /// builders — `RunConfig::new` itself stays infallible, environment-free, and
 /// file-free), and the admission capacities. Capacities are
@@ -688,6 +688,7 @@ fn resolve_run_config(
     let pool_flags = crate::config::parse_pool_pin_flags(argv).map_err(invalid)?;
     let headroom = crate::config::parse_headroom_flag(argv).map_err(invalid)?;
     let store = crate::config::parse_store_flag(argv).map_err(invalid)?;
+    let log_format = crate::config::parse_log_format_flag(argv).map_err(invalid)?;
 
     let base = crate::config::resolve_store_base(store, file.get("store")).map_err(env_err)?;
     let capacities = crate::config::resolve_pool_sizing(pool_flags, headroom, file)
@@ -705,6 +706,7 @@ fn resolve_run_config(
             c.teardown_deadline_from_env(teardown_deadline, file.get("teardown-deadline"))
         })
         .and_then(|c| c.failure_mode_from_env(failure_mode, file.get("failure-mode")))
+        .and_then(|c| c.log_format_from_env(log_format, file.get("log-format")))
         .map_err(env_err)?;
 
     Ok((base, config))

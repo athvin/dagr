@@ -225,29 +225,49 @@ fn retry_attempts_share_the_node_but_differ_by_attempt_number() {
 
 #[test]
 fn structured_is_the_default_when_no_mode_env_is_set() {
-    // An unset env var deterministically selects the documented default.
-    assert_eq!(OutputMode::from_env_value(None), OutputMode::Structured);
+    // An unset env var deterministically selects the documented default —
+    // absence is not an error, only a supplied bad value is.
+    assert_eq!(
+        OutputMode::from_env_value(None).expect("unset is the structured default"),
+        OutputMode::Structured
+    );
 }
 
 #[test]
-fn an_unrecognized_mode_falls_back_to_the_documented_default() {
+fn an_unrecognized_mode_is_a_loud_parse_failure() {
+    // The strict regime (T116): a supplied-but-unrecognized mode fails loudly,
+    // listing the accepted values — it is never silently resolved to the
+    // structured default (the pre-T116 exception arch.md had to record).
+    let err = OutputMode::from_env_value(Some("garbage"))
+        .expect_err("an unrecognized mode is a loud parse failure, never a silent default");
+    let text = err.to_string();
+    assert!(
+        text.contains("garbage") && text.contains("human") && text.contains("structured"),
+        "the diagnostic names the rejected value and lists the accepted set: {text}"
+    );
+    // An EMPTY value is absence, not a bad value: the structured default.
     assert_eq!(
-        OutputMode::from_env_value(Some("garbage")),
+        OutputMode::from_env_value(Some("")).expect("empty is treated as unset"),
         OutputMode::Structured
     );
-    assert_eq!(OutputMode::from_env_value(Some("")), OutputMode::Structured);
 }
 
 #[test]
 fn the_environment_variable_selects_human_readable_output() {
-    assert_eq!(OutputMode::from_env_value(Some("human")), OutputMode::Human);
+    assert_eq!(
+        OutputMode::from_env_value(Some("human")).expect("`human` is accepted"),
+        OutputMode::Human
+    );
     // Recognizing "structured" explicitly is also honored.
     assert_eq!(
-        OutputMode::from_env_value(Some("structured")),
+        OutputMode::from_env_value(Some("structured")).expect("`structured` is accepted"),
         OutputMode::Structured
     );
     // Selection is case-insensitive so an operator's casing does not surprise.
-    assert_eq!(OutputMode::from_env_value(Some("HUMAN")), OutputMode::Human);
+    assert_eq!(
+        OutputMode::from_env_value(Some("HUMAN")).expect("casing does not matter"),
+        OutputMode::Human
+    );
 }
 
 #[test]
@@ -389,9 +409,11 @@ fn a_task_authored_leak_is_outside_the_guarantee() {
 fn installing_the_global_subscriber_is_idempotent_and_coexists() {
     // Installing the process-global subscriber must not panic or error even when
     // the test harness's own subscriber/hook is present, and a repeat install is
-    // a no-op rather than a double-install error.
-    let first = dagr_cli::logging::init_tracing();
-    let second = dagr_cli::logging::init_tracing();
+    // a no-op rather than a double-install error. (`init_tracing` resolves
+    // DAGR_LOG_FORMAT strictly since T116; this suite's process does not set
+    // it, so the structured default applies and the resolution succeeds.)
+    let first = dagr_cli::logging::init_tracing().expect("an unset DAGR_LOG_FORMAT resolves");
+    let second = dagr_cli::logging::init_tracing().expect("an unset DAGR_LOG_FORMAT resolves");
     // At most one install per process: whether or not THIS test won the race
     // (another test may have installed first), a second call is never an install.
     assert!(

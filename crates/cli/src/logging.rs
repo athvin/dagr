@@ -20,10 +20,14 @@
 //!   default ([`OutputMode::Structured`]) is line-delimited JSON exposing
 //!   run/node/attempt as discrete, machine-queryable fields; the local-development
 //!   mode ([`OutputMode::Human`]) is the readable `fmt` format over the *same*
-//!   event data. Selection is by the [`LOG_FORMAT_ENV`] environment variable —
-//!   no code change and no recompile — and an unset or unrecognized value falls
-//!   back **deterministically** to the structured default (env-var selection only;
-//!   a library-owned CLI flag is a later addition).
+//!   event data. Selection is by the standard four-tier precedence — the
+//!   reserved `--dagr.log-format` flag, the [`LOG_FORMAT_ENV`] environment
+//!   variable, the `log-format` file key, then the structured default
+//!   ([`resolve_log_format`](crate::config::resolve_log_format)) — with no code
+//!   change and no recompile. An unset or empty value resolves to the
+//!   structured default; an **unrecognized value fails loudly** listing the
+//!   accepted set, exactly like every other knob (the never-silent rule,
+//!   arch.md C26 — this knob was its sole exception, and is no longer).
 //! - **Exactly one process-global subscriber is installed at bootstrap**
 //!   ([`init_tracing`]), installed **once**, coexisting with the test harness's
 //!   own subscriber and the panic hook, and never double-installing across
@@ -74,14 +78,18 @@ use dagr_core::context::LogSpan;
 use tracing::Level;
 use tracing_subscriber::fmt::MakeWriter;
 
-/// The environment variable that selects the log **output mode** at run time
-/// (env-var selection; a CLI flag is a later addition).
+/// The environment variable that selects the log **output mode** at run time,
+/// beneath the reserved
+/// [`--dagr.log-format`](crate::config::LOG_FORMAT_FLAG) flag and above the
+/// `log-format` file key in the standard `flag > env > file > default`
+/// precedence.
 ///
-/// Set it to `human` for the human-readable local-development format;
-/// `structured` (or leaving it unset, or any unrecognized value) selects the
-/// machine-queryable structured default. Selection is case-insensitive.
-/// Switching modes requires only this environment variable — no code change and
-/// no recompile of the same binary.
+/// Set it to `human` for the human-readable local-development format or
+/// `structured` for the machine-queryable structured default; leaving it unset
+/// or empty selects `structured`. Selection is case-insensitive. An
+/// **unrecognized value fails loudly** at bootstrap listing the accepted set —
+/// it is never silently resolved to a default. Switching modes requires no
+/// code change and no recompile of the same binary.
 pub const LOG_FORMAT_ENV: &str = "DAGR_LOG_FORMAT";
 
 /// The maximum trace level the framework subscriber records. `INFO` is the
@@ -94,8 +102,8 @@ const MAX_LEVEL: Level = Level::INFO;
 /// The framework log **output mode**: the *same* event data
 /// rendered either machine-queryably or human-readably.
 ///
-/// Two modes over one event stream, switchable with no code change via
-/// [`LOG_FORMAT_ENV`]:
+/// Two modes over one event stream, switchable with no code change via the
+/// four-tier precedence ([`resolve_log_format`](crate::config::resolve_log_format)):
 ///
 /// - [`Structured`](OutputMode::Structured) — the **default**. Line-delimited
 ///   JSON exposing run/node/attempt as discrete, queryable fields (not only free
@@ -103,8 +111,9 @@ const MAX_LEVEL: Level = Level::INFO;
 /// - [`Human`](OutputMode::Human) — the readable `fmt` format for local
 ///   development.
 ///
-/// An **unset or unrecognized** [`LOG_FORMAT_ENV`] value resolves to
-/// [`Structured`](OutputMode::Structured) **deterministically**
+/// An **unset or empty** [`LOG_FORMAT_ENV`] value resolves to
+/// [`Structured`](OutputMode::Structured); an unrecognized value is a loud
+/// [`LogFormatParseError`] listing the accepted set — never a silent fallback
 /// ([`from_env_value`](OutputMode::from_env_value)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
@@ -116,30 +125,78 @@ pub enum OutputMode {
 
 impl OutputMode {
     /// The mode selected by the process's [`LOG_FORMAT_ENV`] environment
-    /// variable, falling back to the documented [`Structured`](OutputMode::Structured)
-    /// default when the variable is unset or unrecognized.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self::from_env_value(std::env::var(LOG_FORMAT_ENV).ok().as_deref())
+    /// variable: [`Structured`](OutputMode::Structured) when it is unset or
+    /// empty, the named mode otherwise.
+    ///
+    /// # Errors
+    ///
+    /// An [`EnvParseError`](crate::config::EnvParseError) (kind `Parse` →
+    /// invalid usage) naming [`LOG_FORMAT_ENV`] and the accepted values when
+    /// the variable carries anything other than `human` or `structured` — a bad
+    /// mode is never silently resolved to the default.
+    pub fn from_env() -> Result<Self, crate::config::EnvParseError> {
+        crate::config::resolve_log_format(None, None)
     }
 
-    /// Resolve a raw [`LOG_FORMAT_ENV`] value (or its absence) to an [`OutputMode`]
-    /// **deterministically**: `human` → [`Human`](OutputMode::Human);
-    /// `structured` → [`Structured`](OutputMode::Structured); **anything else,
-    /// including [`None`] and an empty or unrecognized string → the documented
-    /// [`Structured`](OutputMode::Structured) default**. Matching is
-    /// case-insensitive and trims surrounding whitespace, so an operator's casing
-    /// or a stray space never silently changes the mode.
-    #[must_use]
-    pub fn from_env_value(value: Option<&str>) -> Self {
-        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-            Some("human") => OutputMode::Human,
-            // "structured", unset, empty, and every unrecognized value fall back
-            // to the structured default — deterministic, never a surprise.
-            _ => OutputMode::Structured,
+    /// Resolve a raw [`LOG_FORMAT_ENV`] value (or its absence) to an
+    /// [`OutputMode`]: `human` → [`Human`](OutputMode::Human); `structured` →
+    /// [`Structured`](OutputMode::Structured); [`None`], an empty, or a
+    /// whitespace-only string → the documented
+    /// [`Structured`](OutputMode::Structured) default (absence is not an
+    /// error). Matching is case-insensitive and trims surrounding whitespace,
+    /// so an operator's casing or a stray space never changes the mode.
+    ///
+    /// # Errors
+    ///
+    /// A [`LogFormatParseError`] listing the accepted values for any other
+    /// string — an unrecognized mode **fails loudly** instead of silently
+    /// producing structured logs (the never-silent rule, arch.md C26; this
+    /// knob was its sole exception until T116).
+    pub fn from_env_value(value: Option<&str>) -> Result<Self, LogFormatParseError> {
+        match value {
+            None => Ok(OutputMode::Structured),
+            Some(raw) if raw.trim().is_empty() => Ok(OutputMode::Structured),
+            Some(raw) => raw.parse(),
         }
     }
 }
+
+impl std::str::FromStr for OutputMode {
+    type Err = LogFormatParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "human" => Ok(OutputMode::Human),
+            "structured" => Ok(OutputMode::Structured),
+            _ => Err(LogFormatParseError {
+                input: s.to_string(),
+            }),
+        }
+    }
+}
+
+/// A string was not one of the accepted log formats (`human` / `structured`).
+/// Implements [`Display`](std::fmt::Display) so it flows through
+/// [`resolve`](crate::config::resolve) into an
+/// [`EnvParseError`](crate::config::EnvParseError) naming whichever source
+/// supplied the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogFormatParseError {
+    /// The offending input verbatim.
+    pub input: String,
+}
+
+impl std::fmt::Display for LogFormatParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` is not a log format — expected `human` or `structured`",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for LogFormatParseError {}
 
 /// A process-wide marker recording whether the framework's global tracing
 /// subscriber has been installed, so a repeat [`init_tracing`] is a no-op rather
@@ -148,29 +205,29 @@ static SUBSCRIBER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Install the framework's **single process-global** tracing subscriber at
 /// bootstrap, selecting the [output mode](OutputMode) from the
-/// [`LOG_FORMAT_ENV`] environment variable.
+/// [`LOG_FORMAT_ENV`] environment variable — **strictly**: an unrecognized
+/// value is a loud error, never a silent structured run.
 ///
-/// Returns `true` if **this** call installed the subscriber, `false` if a
-/// subscriber was already in place (a prior [`init_tracing`], or the test
-/// harness's own). It is **idempotent and coexistence-safe**:
+/// This is the convenience initializer for a **hand-wired** binary. The
+/// shipped run path does not call it: there the mode is resolved at bootstrap
+/// with the full `flag > env > file > default` precedence
+/// ([`resolve_log_format`](crate::config::resolve_log_format)), carried on the
+/// [`RunConfig`](crate::driver::RunConfig), and installed by the driver via
+/// [`init_tracing_with`] — so a bad value refuses the invocation before the
+/// run store is even opened.
 ///
-/// - It uses `try_init`, so when a global subscriber already exists (the test
-///   harness installs one) this **does not panic or error** — it returns `false`
-///   and leaves the existing subscriber untouched, exactly the "coexists with the
-///   test harness" requirement.
-/// - A repeat call in the same process is a **no-op**: at most one install per
-///   process, so it never double-installs across multiple runs in one process.
+/// Returns `Ok(true)` if **this** call installed the subscriber, `Ok(false)`
+/// if a subscriber was already in place (a prior init, or the test harness's
+/// own). It is **idempotent and coexistence-safe** — see [`init_tracing_with`].
 ///
-/// It coexists with the panic hook, which is installed on a separate seam
-/// ([`install_panic_hook`](dagr_core::execution::install_panic_hook)) and is
-/// orthogonal to the subscriber.
+/// # Errors
 ///
-/// The return value is informational; the bootstrap caller legitimately discards
-/// it (`let _ = init_tracing();`) since installing-or-coexisting is all it needs.
-#[must_use = "the return value reports whether THIS call installed the subscriber; \
-              a bootstrap caller may discard it with `let _ =`"]
-pub fn init_tracing() -> bool {
-    init_tracing_with(OutputMode::from_env())
+/// An [`EnvParseError`](crate::config::EnvParseError) (kind `Parse` → invalid
+/// usage) naming [`LOG_FORMAT_ENV`] and the accepted values when the variable
+/// carries anything other than `human` or `structured`; unset or empty is the
+/// structured default, not an error.
+pub fn init_tracing() -> Result<bool, crate::config::EnvParseError> {
+    Ok(init_tracing_with(OutputMode::from_env()?))
 }
 
 /// Install the global subscriber in an explicit [`OutputMode`] (the mode-agnostic
