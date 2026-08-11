@@ -49,14 +49,15 @@
 //! split applies (a malformed file, unknown key, wrong-typed value, or unknown
 //! profile → [`InvalidUsage`](crate::contract::ExitCode::InvalidUsage); an
 //! out-of-range *value* caught later at resolution →
-//! [`BootstrapFailure`](crate::contract::ExitCode::BootstrapFailure)). Until
-//! T116 adds a source discriminator to that type, a file-sourced diagnostic
-//! names the file, the profile, and the key in its **detail** text.
+//! [`BootstrapFailure`](crate::contract::ExitCode::BootstrapFailure)). Each
+//! failure carries its [`ConfigSource`]: a file-sourced diagnostic names the
+//! file, the profile, and the key structurally — the operator is pointed at
+//! the line they must edit, never at an environment variable.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::EnvParseError;
+use crate::config::{ConfigSource, EnvParseError};
 
 /// The library-owned flag naming an explicit configuration file
 /// (`--dagr.config <path>`). Reserved in
@@ -108,6 +109,7 @@ const FILE_KEYS: &[&str] = &[
     "force-roundtrip",
     "metastore",
     "metastore-store",
+    "log-format",
 ];
 
 /// The closed set of key paths a profile may set (see the module docs). A key
@@ -131,9 +133,13 @@ pub fn file_keys() -> &'static [&'static str] {
 pub struct FileValue {
     /// The canonicalized scalar text (what the knob's parser consumes).
     raw: String,
-    /// The provenance sentence: ``config file `<path>`, profile `<name>`, key
-    /// `<key>` `` — precomputed so every consumer names all three.
-    provenance: String,
+    /// The configuration file's path as the invocation named/discovered it.
+    path: String,
+    /// The profile that actually supplied the value (`default`, or the
+    /// selected profile that shadowed it).
+    profile: String,
+    /// The dotted key path (`pool.memory`).
+    key: String,
 }
 
 impl FileValue {
@@ -144,12 +150,23 @@ impl FileValue {
         &self.raw
     }
 
-    /// The provenance sentence naming the file, the supplying profile, and the
-    /// key — what a file-sourced diagnostic carries in its detail until T116's
-    /// source discriminator lands.
+    /// This value's [`ConfigSource`]: the file path, the supplying profile,
+    /// and the key — what a file-sourced diagnostic renders, so it points at
+    /// the line the operator must edit.
     #[must_use]
-    pub fn provenance(&self) -> &str {
-        &self.provenance
+    pub fn source(&self) -> ConfigSource {
+        ConfigSource::file(&self.path, &self.profile, &self.key)
+    }
+
+    /// The provenance sentence naming the file, the supplying profile, and the
+    /// key — the human-readable form of [`source`](Self::source), for callers
+    /// composing their own prose.
+    #[must_use]
+    pub fn provenance(&self) -> String {
+        format!(
+            "config file `{}`, profile `{}`, key `{}`",
+            self.path, self.profile, self.key
+        )
     }
 }
 
@@ -218,10 +235,10 @@ pub fn parse_profile_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>,
 /// — each naming the file, the profile, and the key involved. No file present
 /// (with no profile selected) is **not** an error.
 pub fn load_file_tier(argv: &[std::ffi::OsString]) -> Result<FileTier, EnvParseError> {
-    let explicit =
-        parse_config_flag(argv).map_err(|detail| EnvParseError::parse(CONFIG_FLAG, "", detail))?;
+    let explicit = parse_config_flag(argv)
+        .map_err(|detail| EnvParseError::parse_from(ConfigSource::flag(CONFIG_FLAG), "", detail))?;
     let profile = parse_profile_flag(argv)
-        .map_err(|detail| EnvParseError::parse(PROFILE_FLAG, "", detail))?;
+        .map_err(|detail| EnvParseError::parse_from(ConfigSource::flag(PROFILE_FLAG), "", detail))?;
     load_file_tier_from(Path::new("."), explicit.as_deref(), profile.as_deref())
 }
 
@@ -252,7 +269,7 @@ pub fn load_file_tier_from(
         // operator explicitly selected cannot be honoured, and silently
         // running without its values would drop that instruction on the floor.
         if let Some((source, name)) = selection {
-            return Err(EnvParseError::parse(
+            return Err(EnvParseError::parse_from(
                 source,
                 &name,
                 format!(
@@ -266,10 +283,14 @@ pub fn load_file_tier_from(
     let shown = path.display().to_string();
 
     let text = std::fs::read_to_string(&path).map_err(|e| {
-        EnvParseError::parse(
-            CONFIG_FLAG,
-            &shown,
-            format!("cannot read config file `{shown}`: {e}"),
+        EnvParseError::parse_from(
+            ConfigSource::File {
+                path: shown.clone(),
+                profile: None,
+                key: None,
+            },
+            "",
+            format!("the configuration file cannot be read: {e}"),
         )
     })?;
     let profiles = parse_profiles(&shown, &text)?;
@@ -283,8 +304,8 @@ pub fn load_file_tier_from(
                 .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(EnvParseError::parse(
-                *source,
+            return Err(EnvParseError::parse_from(
+                source.clone(),
                 name,
                 format!(
                     "config file `{shown}` defines no profile `{name}` \
@@ -307,9 +328,9 @@ pub fn load_file_tier_from(
                     key.clone(),
                     FileValue {
                         raw: raw.clone(),
-                        provenance: format!(
-                            "config file `{shown}`, profile `{profile_name}`, key `{key}`"
-                        ),
+                        path: shown.clone(),
+                        profile: profile_name.to_string(),
+                        key: key.clone(),
                     },
                 );
             }
@@ -325,16 +346,16 @@ pub fn load_file_tier_from(
     Ok(FileTier { values })
 }
 
-/// Which profile is selected, and by which source (for the diagnostic):
-/// `(source, name)` for a flag or a non-empty [`DAGR_PROFILE`], else [`None`]
-/// (the implicit `default`). A present flag wins outright — `DAGR_PROFILE` is
-/// **never read** on the flag path (the flag-wins property).
-fn select_profile(profile_flag: Option<&str>) -> Option<(&'static str, String)> {
+/// Which profile is selected, and by which [`ConfigSource`] (for the
+/// diagnostic): `(source, name)` for a flag or a non-empty [`DAGR_PROFILE`],
+/// else [`None`] (the implicit `default`). A present flag wins outright —
+/// `DAGR_PROFILE` is **never read** on the flag path (the flag-wins property).
+fn select_profile(profile_flag: Option<&str>) -> Option<(ConfigSource, String)> {
     if let Some(name) = profile_flag {
-        return Some((PROFILE_FLAG, name.to_string()));
+        return Some((ConfigSource::flag(PROFILE_FLAG), name.to_string()));
     }
     match std::env::var(DAGR_PROFILE) {
-        Ok(name) if !name.is_empty() => Some((DAGR_PROFILE, name)),
+        Ok(name) if !name.is_empty() => Some((ConfigSource::env(DAGR_PROFILE), name)),
         _ => None,
     }
 }
@@ -345,8 +366,8 @@ fn discover(dir: &Path, explicit: Option<&str>) -> Result<Option<PathBuf>, EnvPa
     if let Some(p) = explicit {
         let path = PathBuf::from(p);
         if !path.is_file() {
-            return Err(EnvParseError::parse(
-                CONFIG_FLAG,
+            return Err(EnvParseError::parse_from(
+                ConfigSource::flag(CONFIG_FLAG),
                 p,
                 format!(
                     "the explicitly named configuration file `{p}` does not exist \
@@ -371,22 +392,29 @@ fn parse_profiles(
     text: &str,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, EnvParseError> {
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
-        EnvParseError::parse(
-            shown,
+        EnvParseError::parse_from(
+            ConfigSource::File {
+                path: shown.to_string(),
+                profile: None,
+                key: None,
+            },
             "",
-            format!("config file `{shown}` is not valid TOML: {e}"),
+            format!("not valid TOML: {e}"),
         )
     })?;
     let mut profiles = BTreeMap::new();
     for (name, value) in &table {
         let toml::Value::Table(profile_table) = value else {
-            return Err(EnvParseError::parse(
-                shown,
-                name,
+            return Err(EnvParseError::parse_from(
+                ConfigSource::File {
+                    path: shown.to_string(),
+                    profile: None,
+                    key: Some(name.clone()),
+                },
+                "",
                 format!(
-                    "top-level entry `{name}` in config file `{shown}` is not a profile \
-                     table; runtime keys live inside a profile (for example under \
-                     `[{DEFAULT_PROFILE}]`)"
+                    "top-level entry `{name}` is not a profile table; runtime keys live \
+                     inside a profile (for example under `[{DEFAULT_PROFILE}]`)"
                 ),
             ));
         };
@@ -434,13 +462,12 @@ fn flatten_profile(
             // A date-time or an array is no knob's grammar; rejecting the
             // SHAPE here (rather than failing the parse later) names the kind.
             toml::Value::Datetime(_) | toml::Value::Array(_) => {
-                return Err(EnvParseError::parse(
-                    shown_path,
-                    &key,
+                return Err(EnvParseError::parse_from(
+                    ConfigSource::file(shown_path, profile, &key),
+                    "",
                     format!(
-                        "key `{key}` in profile `{profile}` of config file \
-                         `{shown_path}` must be a scalar (a string, integer, float, \
-                         or boolean) — got {}",
+                        "the value must be a scalar (a string, integer, float, or \
+                         boolean) — got {}",
                         kind_of(value)
                     ),
                 ));
@@ -460,12 +487,11 @@ fn insert_known(
     out: &mut BTreeMap<String, String>,
 ) -> Result<(), EnvParseError> {
     if !FILE_KEYS.contains(&key) {
-        return Err(EnvParseError::parse(
-            shown_path,
-            key,
+        return Err(EnvParseError::parse_from(
+            ConfigSource::file(shown_path, profile, key),
+            "",
             format!(
-                "unknown key `{key}` in profile `{profile}` of config file \
-                 `{shown_path}` (known keys: {}) — an unrecognized key is never \
+                "unknown key `{key}` (known keys: {}) — an unrecognized key is never \
                  silently ignored, and no key can select a flow or describe the graph",
                 FILE_KEYS.join(", ")
             ),

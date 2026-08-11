@@ -27,10 +27,11 @@
 //!   `stop-on-first-failure`. [`EnvDuration`] / [`EnvFailureMode`] wrap each so it
 //!   composes with the generic [`resolve`].
 //! - [`EnvParseError`] — a strict, never-silent error that carries the offending
-//!   variable name and maps to an exit code: a **parse failure** →
-//!   [`ExitCode::InvalidUsage`], an **out-of-range** value →
-//!   [`ExitCode::BootstrapFailure`] (reusing the exit-code table from
-//!   [`crate::contract`]).
+//!   [source](ConfigSource) (a flag by its `--flag` spelling, an environment
+//!   variable by its name, a file value by path, profile, and key) and maps to
+//!   an exit code: a **parse failure** → [`ExitCode::InvalidUsage`], an
+//!   **out-of-range** value → [`ExitCode::BootstrapFailure`] (reusing the
+//!   exit-code table from [`crate::contract`]).
 //! - the `DAGR_*` env-name constants ([`DAGR_GRACE`], …) for every knob, alongside
 //!   the existing [`DAGR_NO_BANNER`](crate::contract::NO_BANNER_ENV).
 //!
@@ -162,9 +163,10 @@ pub const DAGR_BLOB_PREFIX: &str = "DAGR_BLOB_PREFIX";
 // The strict, never-silent parse error
 // ===========================================================================
 
-/// The kind of failure an [`EnvParseError`] records — the crux of "bad env values
-/// fail loudly": a syntactic parse failure and a semantic (validated) out-of-range
-/// value are **distinct causes** with distinct exit codes.
+/// The kind of failure an [`EnvParseError`] records — the crux of "bad
+/// configuration values fail loudly": a syntactic parse failure and a semantic
+/// (validated) out-of-range value are **distinct causes** with distinct exit
+/// codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvParseErrorKind {
     /// The value could not be parsed into the target type (a syntactic failure) —
@@ -176,14 +178,101 @@ pub enum EnvParseErrorKind {
     OutOfRange,
 }
 
-/// A `DAGR_*` environment variable carried a value that could not be used. It
-/// **names the offending variable** so the diagnostic is actionable and maps to a
-/// specific exit code by [kind](EnvParseErrorKind) — an env value is **never
-/// silently ignored or clamped**.
+/// **Where a rejected configuration value came from** — the discriminator an
+/// [`EnvParseError`] carries so its diagnostic points the operator at the thing
+/// they must actually edit. A configuration error's whole job is to say where
+/// the bad value came from; with three tiers supplying values (flag, env,
+/// file — ADR 128), a diagnostic that always said "environment variable" would
+/// be factually wrong for two of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// A reserved command-line flag, by its `--flag` spelling
+    /// (e.g. `--dagr.headroom-fraction`).
+    Flag {
+        /// The flag spelling, leading dashes included.
+        name: String,
+    },
+    /// A `DAGR_*` environment variable, by its name (e.g. `DAGR_GRACE`).
+    Env {
+        /// The environment variable's name.
+        name: String,
+    },
+    /// A `dagr.toml` value: the file path, the profile that supplied the value,
+    /// and the dotted key path — the line the operator must edit. The profile
+    /// and key are absent only for a failure of the file *itself* (unreadable,
+    /// malformed TOML), where no profile or key exists to name.
+    File {
+        /// The configuration file's path as the invocation named/discovered it.
+        path: String,
+        /// The profile that supplied the value, when one did.
+        profile: Option<String>,
+        /// The dotted key path (e.g. `pool.headroom-fraction`), when one exists.
+        key: Option<String>,
+    },
+}
+
+impl ConfigSource {
+    /// A **flag** source, by its `--flag` spelling.
+    #[must_use]
+    pub fn flag(name: impl Into<String>) -> Self {
+        Self::Flag { name: name.into() }
+    }
+
+    /// An **environment-variable** source, by its `DAGR_*` name.
+    #[must_use]
+    pub fn env(name: impl Into<String>) -> Self {
+        Self::Env { name: name.into() }
+    }
+
+    /// A fully-located **file** source: path, supplying profile, and key.
+    #[must_use]
+    pub fn file(
+        path: impl Into<String>,
+        profile: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
+        Self::File {
+            path: path.into(),
+            profile: Some(profile.into()),
+            key: Some(key.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Flag { name } => write!(f, "flag `{name}`"),
+            Self::Env { name } => write!(f, "environment variable `{name}`"),
+            Self::File { path, profile, key } => {
+                write!(f, "config file `{path}`")?;
+                if let Some(profile) = profile {
+                    write!(f, ", profile `{profile}`")?;
+                }
+                if let Some(key) = key {
+                    write!(f, ", key `{key}`")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A configuration source supplied a value that could not be used. It **names
+/// the offending source** — a flag by its `--flag` spelling, an environment
+/// variable by its name, a file value by path, profile, and key
+/// ([`ConfigSource`]) — so the diagnostic is actionable, and maps to a specific
+/// exit code by [kind](EnvParseErrorKind). A supplied value is **never silently
+/// ignored or clamped**, whichever tier supplied it.
+///
+/// The name predates the file and flag tiers (it was env-only when ADR 089
+/// landed); it is kept because the type's contract — the kind split and the
+/// exit-code mapping — is unchanged, and the widening is source coverage, not a
+/// redesign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvParseError {
-    /// The offending environment variable's name (e.g. `DAGR_GRACE`).
-    pub variable: String,
+    /// Where the rejected value came from (flag / env / file).
+    pub source: ConfigSource,
     /// The rejected value verbatim (for the diagnostic).
     pub value: String,
     /// Whether this was a syntactic parse failure or a semantic out-of-range
@@ -195,33 +284,58 @@ pub struct EnvParseError {
 }
 
 impl EnvParseError {
-    /// A **parse failure** for `variable` carrying `value` and a `detail` message
-    /// — maps to [`ExitCode::InvalidUsage`].
+    /// A **parse failure** for the environment variable `variable`, carrying
+    /// `value` and a `detail` message — maps to [`ExitCode::InvalidUsage`]. The
+    /// env-source shorthand of [`parse_from`](Self::parse_from).
     #[must_use]
     pub fn parse(
         variable: impl Into<String>,
         value: impl Into<String>,
         detail: impl Into<String>,
     ) -> Self {
-        Self {
-            variable: variable.into(),
-            value: value.into(),
-            kind: EnvParseErrorKind::Parse,
-            detail: detail.into(),
-        }
+        Self::parse_from(ConfigSource::env(variable), value, detail)
     }
 
-    /// An **out-of-range** failure for `variable` carrying `value` and a `detail`
-    /// naming the violated bound — maps to [`ExitCode::BootstrapFailure`]. Callers
-    /// that apply a semantic bound to an already-parsed value produce this.
+    /// An **out-of-range** failure for the environment variable `variable`,
+    /// carrying `value` and a `detail` naming the violated bound — maps to
+    /// [`ExitCode::BootstrapFailure`]. The env-source shorthand of
+    /// [`out_of_range_from`](Self::out_of_range_from).
     #[must_use]
     pub fn out_of_range(
         variable: impl Into<String>,
         value: impl Into<String>,
         detail: impl Into<String>,
     ) -> Self {
+        Self::out_of_range_from(ConfigSource::env(variable), value, detail)
+    }
+
+    /// A **parse failure** from an explicit [`ConfigSource`] — maps to
+    /// [`ExitCode::InvalidUsage`].
+    #[must_use]
+    pub fn parse_from(
+        source: ConfigSource,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
-            variable: variable.into(),
+            source,
+            value: value.into(),
+            kind: EnvParseErrorKind::Parse,
+            detail: detail.into(),
+        }
+    }
+
+    /// An **out-of-range** failure from an explicit [`ConfigSource`] — maps to
+    /// [`ExitCode::BootstrapFailure`]. Callers that apply a semantic bound to an
+    /// already-parsed value produce this.
+    #[must_use]
+    pub fn out_of_range_from(
+        source: ConfigSource,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
             value: value.into(),
             kind: EnvParseErrorKind::OutOfRange,
             detail: detail.into(),
@@ -232,7 +346,9 @@ impl EnvParseError {
     /// [`crate::contract`]): a [parse failure](EnvParseErrorKind::Parse) →
     /// [`ExitCode::InvalidUsage`], an
     /// [out-of-range](EnvParseErrorKind::OutOfRange) value →
-    /// [`ExitCode::BootstrapFailure`].
+    /// [`ExitCode::BootstrapFailure`]. The split is per **kind**, never per
+    /// source — a file value that is out of range exits exactly as an env value
+    /// that is out of range does.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         match self.kind {
@@ -248,12 +364,28 @@ impl std::fmt::Display for EnvParseError {
             EnvParseErrorKind::Parse => "could not be parsed",
             EnvParseErrorKind::OutOfRange => "is out of range",
         };
-        write!(
-            f,
-            "environment variable `{}` = `{}` {}: {} (arch.md C26 / ADR 089 — bad env \
-             values fail loudly and are never silently ignored)",
-            self.variable, self.value, cause, self.detail
-        )
+        // The env rendering (source, value, cause, detail, rationale) is a
+        // stable operator contract — byte-identical to the pre-discriminator
+        // wording; the flag/file renderings differ only in the source sentence
+        // and the rationale's citation. A structural failure with no value to
+        // quote (an unreadable file) omits the empty ``= ` ` `` segment.
+        write!(f, "{}", self.source)?;
+        if !self.value.is_empty() {
+            write!(f, " = `{}`", self.value)?;
+        }
+        let rationale = match &self.source {
+            ConfigSource::Flag { .. } => {
+                "arch.md C26 — bad flag values fail loudly and are never silently ignored"
+            }
+            ConfigSource::Env { .. } => {
+                "arch.md C26 / ADR 089 — bad env values fail loudly and are never silently ignored"
+            }
+            ConfigSource::File { .. } => {
+                "arch.md C26 / ADR 128 — bad configuration-file values fail loudly and are \
+                 never silently ignored"
+            }
+        };
+        write!(f, " {cause}: {} ({rationale})", self.detail)
     }
 }
 
@@ -293,10 +425,12 @@ impl std::error::Error for EnvParseError {}
 /// # Errors
 ///
 /// Returns [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse), mapping to
-/// [`ExitCode::InvalidUsage`]) naming `env_key` when the no-flag env value — or,
-/// beneath it, the file value — fails `T::from_str`; a file-sourced failure
-/// carries the file/profile/key provenance in its detail. Semantic bounds are the
-/// caller's to apply against the parsed value via [`EnvParseError::out_of_range`].
+/// [`ExitCode::InvalidUsage`]) when the no-flag env value — or, beneath it, the
+/// file value — fails `T::from_str`, each naming its own [source](ConfigSource):
+/// the env variable by name, a file value by file, profile, and key. Semantic
+/// bounds are the caller's to apply against the parsed value via
+/// [`EnvParseError::out_of_range`] (or [`out_of_range_from`](EnvParseError::out_of_range_from)
+/// with the supplying source).
 pub fn resolve<T>(
     flag: Option<T>,
     env_key: &str,
@@ -319,30 +453,23 @@ where
             T::from_str(&raw).map_err(|e| EnvParseError::parse(env_key, raw, e.to_string()))
         }
         _ => match file {
-            Some(value) => parse_file_value(env_key, value),
+            Some(value) => parse_file_value(value),
             None => Ok(default),
         },
     }
 }
 
-/// Parse a bootstrap-loaded [`FileValue`] with the knob's own grammar, naming
-/// the file, the profile, and the key in the diagnostic's detail on failure.
-///
-/// The error's `variable` field carries the knob's canonical `DAGR_*` spelling
-/// (`env_key`) as its anchor; the factually precise source sentence lives in
-/// the detail until T116's source discriminator reworks the type's `Display`.
-fn parse_file_value<T>(env_key: &str, value: &FileValue) -> Result<T, EnvParseError>
+/// Parse a bootstrap-loaded [`FileValue`] with the knob's own grammar. A
+/// failure carries the value's own [file source](FileValue::source) — path,
+/// profile, and key — so the diagnostic points at the line the operator must
+/// edit, never at an environment variable that may not even be set.
+fn parse_file_value<T>(value: &FileValue) -> Result<T, EnvParseError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
 {
-    T::from_str(value.raw()).map_err(|e| {
-        EnvParseError::parse(
-            env_key,
-            value.raw(),
-            format!("{e} (from {})", value.provenance()),
-        )
-    })
+    T::from_str(value.raw())
+        .map_err(|e| EnvParseError::parse_from(value.source(), value.raw(), e.to_string()))
 }
 
 // ===========================================================================
@@ -613,7 +740,7 @@ where
             .map(Some)
             .map_err(|e| EnvParseError::parse(env_key, raw, e.to_string())),
         _ => match file {
-            Some(value) => parse_file_value(env_key, value).map(Some),
+            Some(value) => parse_file_value(value).map(Some),
             None => Ok(None),
         },
     }
@@ -645,8 +772,9 @@ pub const HEADROOM_DEFAULT: f64 = 0.20;
 ///
 /// # Errors
 ///
-/// Two **distinct** loud failures, each naming the offending source (and, for a
-/// file value, the file/profile/key in the detail):
+/// Two **distinct** loud failures, each naming the [source](ConfigSource) that
+/// supplied the value (the flag spelling, the `DAGR_HEADROOM` variable, or the
+/// file/profile/key):
 /// - a value that is not a float → an [`EnvParseError`] of kind
 ///   [`Parse`](EnvParseErrorKind::Parse), mapping to [`ExitCode::InvalidUsage`];
 /// - a float **outside `0.0..=1.0`** → an [`EnvParseError`] of kind
@@ -658,39 +786,43 @@ pub const HEADROOM_DEFAULT: f64 = 0.20;
 pub fn resolve_headroom(flag: Option<f64>, file: &FileTier) -> Result<f64, EnvParseError> {
     // A present flag wins outright; validate its range against the same bound.
     if let Some(fraction) = flag {
-        return validate_headroom("--dagr.headroom-fraction", fraction, &fraction.to_string());
+        return validate_headroom(
+            ConfigSource::flag(HEADROOM_FLAG),
+            fraction,
+            &fraction.to_string(),
+        );
     }
     // No flag: fall back to DAGR_HEADROOM (unset/empty → the file, then the
-    // default), validating whichever source supplied the value.
+    // default), validating whichever source supplied the value — and naming it.
     match std::env::var(DAGR_HEADROOM) {
         Ok(raw) if !raw.is_empty() => {
             let parsed: f64 = raw.parse().map_err(|e: std::num::ParseFloatError| {
                 EnvParseError::parse(DAGR_HEADROOM, &raw, e.to_string())
             })?;
-            validate_headroom(DAGR_HEADROOM, parsed, &raw)
+            validate_headroom(ConfigSource::env(DAGR_HEADROOM), parsed, &raw)
         }
         _ => match file.get("pool.headroom-fraction") {
             Some(value) => {
-                let parsed: f64 = parse_file_value(DAGR_HEADROOM, value)?;
-                validate_headroom(DAGR_HEADROOM, parsed, value.raw()).map_err(|mut e| {
-                    // The range check names the canonical variable; a
-                    // file-sourced value additionally names its provenance.
-                    e.detail = format!("{} (from {})", e.detail, value.provenance());
-                    e
-                })
+                let parsed: f64 = parse_file_value(value)?;
+                validate_headroom(value.source(), parsed, value.raw())
             }
             None => Ok(HEADROOM_DEFAULT),
         },
     }
 }
 
-/// Check `fraction` is in `0.0..=1.0`; otherwise an [`out_of_range`](EnvParseError::out_of_range)
-/// error naming `source` (`BootstrapFailure`).
-fn validate_headroom(source: &str, fraction: f64, raw: &str) -> Result<f64, EnvParseError> {
+/// Check `fraction` is in `0.0..=1.0`; otherwise an
+/// [`out_of_range_from`](EnvParseError::out_of_range_from) error naming the
+/// supplying `source` (`BootstrapFailure`).
+fn validate_headroom(
+    source: ConfigSource,
+    fraction: f64,
+    raw: &str,
+) -> Result<f64, EnvParseError> {
     if (0.0..=1.0).contains(&fraction) {
         Ok(fraction)
     } else {
-        Err(EnvParseError::out_of_range(
+        Err(EnvParseError::out_of_range_from(
             source,
             raw,
             "expected a fraction in 0.0..=1.0",
@@ -1246,12 +1378,12 @@ pub const GRACE_MIN: Duration = Duration::from_millis(1);
 pub const TEARDOWN_DEADLINE_MIN: Duration = Duration::from_secs(1);
 
 /// Check a resolved duration against its knob's documented minimum; below it,
-/// an [`out_of_range`](EnvParseError::out_of_range) error naming `source` (the
-/// flag or the environment variable, whichever supplied the value) and the
-/// violated bound — mapping to [`ExitCode::BootstrapFailure`], exactly like the
-/// headroom range check.
+/// an [`out_of_range_from`](EnvParseError::out_of_range_from) error naming the
+/// supplying `source` (the flag, the environment variable, or the
+/// file/profile/key) and the violated bound — mapping to
+/// [`ExitCode::BootstrapFailure`], exactly like the headroom range check.
 pub(crate) fn validate_duration_min(
-    source: &str,
+    source: ConfigSource,
     value: Duration,
     min: Duration,
     bound: &str,
@@ -1259,7 +1391,7 @@ pub(crate) fn validate_duration_min(
     if value >= min {
         Ok(value)
     } else {
-        Err(EnvParseError::out_of_range(
+        Err(EnvParseError::out_of_range_from(
             source,
             format!("{}ms", value.as_millis()),
             format!("expected a duration of at least {bound}"),
@@ -1268,9 +1400,9 @@ pub(crate) fn validate_duration_min(
 }
 
 /// Resolve a **bounded duration knob** by `flag > env > file > default` and
-/// validate it against the knob's documented minimum, naming whichever source
-/// supplied the value (the flag spelling, the `DAGR_*` variable, or — in the
-/// detail — the file/profile/key). The shared body of the two `RunConfig`
+/// validate it against the knob's documented minimum, naming whichever
+/// [source](ConfigSource) supplied the value (the flag spelling, the `DAGR_*`
+/// variable, or the file/profile/key). The shared body of the two `RunConfig`
 /// duration builders (grace, teardown deadline), so the four-tier order and the
 /// bound diagnostics cannot drift apart between them.
 pub(crate) fn resolve_bounded_duration(
@@ -1285,31 +1417,25 @@ pub(crate) fn resolve_bounded_duration(
     // Track which source supplied the value so the bound diagnostic names it
     // (the flag path never reads the environment or parses the file; the
     // all-unset path resolves to the default, which satisfies the bound by
-    // construction). `provenance` is set only on the file path, so the bound
-    // error can carry the file/profile/key sentence in its detail.
-    let (source, provenance, resolved) = match flag {
-        Some(value) => (flag_label, None, value),
+    // construction and whose source sentence is therefore never rendered).
+    let (source, resolved) = match flag {
+        Some(value) => (ConfigSource::flag(flag_label), value),
         None => match std::env::var(env_key) {
             Ok(raw) if !raw.is_empty() => {
                 let parsed = EnvDuration::from_str(&raw)
                     .map_err(|e| EnvParseError::parse(env_key, raw, e.to_string()))?;
-                (env_key, None, parsed.into_inner())
+                (ConfigSource::env(env_key), parsed.into_inner())
             }
             _ => match file {
                 Some(value) => {
-                    let parsed: EnvDuration = parse_file_value(env_key, value)?;
-                    (env_key, Some(value.provenance()), parsed.into_inner())
+                    let parsed: EnvDuration = parse_file_value(value)?;
+                    (value.source(), parsed.into_inner())
                 }
-                None => (env_key, None, default),
+                None => (ConfigSource::env(env_key), default),
             },
         },
     };
-    validate_duration_min(source, resolved, min, bound).map_err(|mut e| {
-        if let Some(provenance) = provenance {
-            e.detail = format!("{} (from {provenance})", e.detail);
-        }
-        e
-    })
+    validate_duration_min(source, resolved, min, bound)
 }
 
 /// Parse `--grace` out of a raw invocation (`--grace 5s` / `--grace=5s`).
@@ -1407,6 +1533,62 @@ pub fn resolve_store_base(
         file,
         crate::run_store::DEFAULT_STORE_BASE.to_string(),
     )
+}
+
+// ===========================================================================
+// The log output mode — --dagr.log-format / DAGR_LOG_FORMAT / `log-format`
+// ===========================================================================
+
+/// The library-owned flag selecting the log **output mode**
+/// (`--dagr.log-format`). Reserved in
+/// [`reserved_flag_names`](crate::contract::reserved_flag_names), so a pipeline
+/// parameter can never shadow it — this was the one knob with no flag at all
+/// (env-only), which made it unreachable per-invocation and inconsistent with
+/// the invariant that every out-of-band knob has a reserved flag.
+pub const LOG_FORMAT_FLAG: &str = "--dagr.log-format";
+
+/// Resolve the log **output mode** by `flag > env > file(profile) > default`
+/// (default [`Structured`](crate::logging::OutputMode::Structured)): a present
+/// `--dagr.log-format` flag wins outright (the env is never read and the file
+/// value is never parsed); with no flag,
+/// [`DAGR_LOG_FORMAT`](crate::logging::LOG_FORMAT_ENV) is read and parsed; with
+/// neither, the effective profile's `log-format` key applies; with none of the
+/// three (or an unset/empty variable), output stays structured — unchanged.
+///
+/// This is the knob's **strict** resolution: an unrecognized value is a loud
+/// failure listing the accepted set, exactly like every other enum knob. It was
+/// the sole knob outside that regime (anything unrecognized silently resolved
+/// to `structured`), an exception `arch.md` had to record; the exception is
+/// gone and the never-silent rule is unconditional again.
+///
+/// # Errors
+/// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
+/// [`ExitCode::InvalidUsage`]) naming the supplying source when its value is
+/// neither `human` nor `structured`.
+pub fn resolve_log_format(
+    flag: Option<crate::logging::OutputMode>,
+    file: Option<&FileValue>,
+) -> Result<crate::logging::OutputMode, EnvParseError> {
+    resolve(
+        flag,
+        crate::logging::LOG_FORMAT_ENV,
+        file,
+        crate::logging::OutputMode::Structured,
+    )
+}
+
+/// Parse `--dagr.log-format` out of a raw invocation, in the same two grammars
+/// as [`parse_executor_flag`]. Absent → [`None`] (fall through to the env, the
+/// file, then the structured default).
+///
+/// # Errors
+/// Returns the diagnostic message when the value is neither `human` nor
+/// `structured`, or the flag is present with no value — a bad mode fails
+/// loudly, never silently structured.
+pub fn parse_log_format_flag(
+    argv: &[std::ffi::OsString],
+) -> Result<Option<crate::logging::OutputMode>, String> {
+    parse_valued_flag(argv, LOG_FORMAT_FLAG)
 }
 
 /// The resolved pool-sizing knobs: the three pins, the headroom fraction, and
@@ -1871,6 +2053,10 @@ mod tests {
         // The T115 profile selector lives beside the loader it steers; its
         // documented spelling is pinned here with every other knob's.
         assert_eq!(crate::config_file::DAGR_PROFILE, "DAGR_PROFILE");
+        // The T116 log-format knob resolves through this module but its env
+        // name lives beside the subscriber it selects; pinned here with every
+        // other knob's spelling.
+        assert_eq!(crate::logging::LOG_FORMAT_ENV, "DAGR_LOG_FORMAT");
     }
 
     // --- Pool pins + headroom resolvers ----------------------------------
@@ -2080,20 +2266,26 @@ mod tests {
     /// out-of-range bootstrap failure naming the source and the bound.
     #[test]
     fn duration_bound_below_minimum_is_out_of_range() {
-        let err = validate_duration_min(DAGR_GRACE, Duration::ZERO, GRACE_MIN, "1 ms")
-            .expect_err("zero grace violates the bound");
+        let err = validate_duration_min(
+            ConfigSource::env(DAGR_GRACE),
+            Duration::ZERO,
+            GRACE_MIN,
+            "1 ms",
+        )
+        .expect_err("zero grace violates the bound");
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
         assert!(err.to_string().contains(DAGR_GRACE));
         assert!(err.to_string().contains("1 ms"));
         // At the bound is accepted — the minimum itself is legal.
         assert_eq!(
-            validate_duration_min(GRACE_FLAG, GRACE_MIN, GRACE_MIN, "1 ms").expect("at the bound"),
+            validate_duration_min(ConfigSource::flag(GRACE_FLAG), GRACE_MIN, GRACE_MIN, "1 ms")
+                .expect("at the bound"),
             GRACE_MIN
         );
         assert_eq!(
             validate_duration_min(
-                DAGR_TEARDOWN_DEADLINE,
+                ConfigSource::env(DAGR_TEARDOWN_DEADLINE),
                 Duration::from_millis(999),
                 TEARDOWN_DEADLINE_MIN,
                 "1 s",
