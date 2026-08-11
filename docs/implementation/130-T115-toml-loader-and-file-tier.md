@@ -133,11 +133,54 @@ Add the loader, the profile model, and the tier.
   on my machine" bugs. The default answer is **no user-level path in the first cut**
   (working directory or explicit flag only); if it is added, it must be inert during
   assembly and recorded in-PR with the reproducibility trade-off stated.
+  - **RESOLVED (this PR): no user-level path.** Discovery is exactly
+    `--dagr.config <path>` (missing ⇒ hard error) > `./dagr.toml` > none, and the
+    `config_file` module docs state the reproducibility rationale. Adding a
+    user-level tier later is its own recorded decision.
 - **Does discovery walk parent directories?** Cargo-style upward search is familiar but
   makes the effective configuration depend on where the binary was invoked from. Default
   answer: no walk. Recorded in-PR.
+  - **RESOLVED (this PR): no walk.** The conventional path is the invocation's
+    working directory only; the loader takes the directory explicitly
+    (`load_file_tier_from`), so the tests prove nothing above it is consulted.
 - **Which TOML crate?** Decided in-PR against the dependency and licence budget, noting
   whether it pulls `serde` derive.
+  - **RESOLVED (this PR): `toml` v1 (toml-rs), `default-features = false` with
+    `parse`/`serde`/`std` only** — the same version `trybuild` (an existing
+    dev-dependency) already locked, so no second `toml` enters the graph. It pulls
+    **no `serde` derive**: the loader parses `toml::Table` and walks `Value`s by
+    hand for loud unknown-key/wrong-type diagnostics. The transitive tree (toml,
+    toml_parser, toml_datetime, serde_spanned, winnow, serde_core) is
+    `MIT OR Apache-2.0` throughout and resolves to MIT under the existing
+    deny.toml allow-list — no new licence id, no `deny.toml` edit;
+    `cargo deny check licenses` passes.
+- **Further decisions made and recorded here (this PR), each a defensible default
+  rather than a contested call:**
+  - **The file key set in this cut is the `dagr run` bootstrap's knobs** (13 keys:
+    `store`, `grace`, `teardown-deadline`, `failure-mode`, `pool.compute-threads`,
+    `pool.blocking-threads`, `pool.memory`, `pool.headroom-fraction`, `executor`,
+    `max-pods`, `force-roundtrip`, `metastore`, `metastore-store`). The
+    `dagr.blob.*` and `dagr.pod-launch-retries` knobs have **no file key yet** —
+    their resolution sites are not on the run bootstrap, and a recognized-but-unwired
+    key would be silently inert, the exact failure ADR 128's loud posture forbids;
+    writing one is an unknown-key failure naming the key. T117's canonical
+    knob↔key table owns extending the set.
+  - **File values use each knob's existing grammar** (TOML scalars canonicalized to
+    strings, parsed by the same parser the knob's env var uses). ADR 128 §3's
+    `memory = "8GiB"` sample is illustrative; no new unit grammar is introduced.
+  - **A selected profile with no file discovered is a loud `InvalidUsage`** (flag
+    or `DAGR_PROFILE` alike), never silently inert — the operator asked for a named
+    value set and did not get it. Absent any selection, no file is (still) not an
+    error.
+  - **Shadowed tiers are not parsed**: as a flag wins without reading the env, an
+    env value shadows the file value without parsing it. The whole file is still
+    *structurally* validated at load (profiles are tables, keys known, values
+    scalars) across **all** profiles, selected or not.
+  - **The pod-side `exec-node` verb does not load the file**: knob resolution is
+    the orchestrator's (ADR 115); the pod re-executes exactly what it is told.
+  - **`docs/tasks.md` carries no T115 entry** (the tasks file ends at the original
+    M0–M4 set; M9–M11 tickets exist only as ticket files), so there are no `Q:`
+    items beyond the ones above.
 
 ## Out of scope
 

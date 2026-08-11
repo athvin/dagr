@@ -18,6 +18,7 @@
 #![cfg(feature = "metastore")]
 
 use dagr_artifact::event_stream::read_records;
+use dagr_cli::config_file::FileTier;
 use dagr_cli::driver::{RunConfig, ShutdownExit};
 use dagr_cli::metastore_tee::{RunSink, build_run_sink, stream_path};
 use dagr_cli::run_flow::RunnableFlow;
@@ -137,7 +138,8 @@ fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_o
     let off_base_str = off_base.as_str().to_owned();
     let off_run_id = "run-off";
     let off_stream = stream_path(&off_base_str, "pipe", off_run_id);
-    let off_sink = build_run_sink(&off_stream, &off_base_str, &[]).expect("off sink builds");
+    let off_sink = build_run_sink(&off_stream, &off_base_str, &[], &FileTier::empty())
+        .expect("off sink builds");
     assert!(
         matches!(off_sink, RunSink::File(_)),
         "the default (no toggle) run sink is a plain FileSink"
@@ -160,7 +162,8 @@ fn toggle_on_stream_is_byte_identical_to_toggle_off_and_metastore_only_appears_o
     let on_run_id = "run-off"; // same id so the stream bytes match byte-for-byte
     let on_stream = stream_path(&on_base_str, "pipe", on_run_id);
     let argv = vec![std::ffi::OsString::from("--dagr.metastore")];
-    let on_sink = build_run_sink(&on_stream, &on_base_str, &argv).expect("on sink builds");
+    let on_sink = build_run_sink(&on_stream, &on_base_str, &argv, &FileTier::empty())
+        .expect("on sink builds");
     assert!(
         matches!(on_sink, RunSink::Tee { .. }),
         "with the toggle on, the run sink is a tee of FileSink + MetastoreSink"
@@ -301,7 +304,8 @@ fn default_off_builds_a_plain_file_sink_and_opens_no_store() {
     // whole window, and this is the only test in the suite that touches the
     // variable; the prior value is restored so the process is left as it was found.
     unsafe { std::env::remove_var("DAGR_METASTORE") };
-    let sink = build_run_sink(&stream, &base_str, &[]).expect("default sink builds");
+    let sink =
+        build_run_sink(&stream, &base_str, &[], &FileTier::empty()).expect("default sink builds");
     if let Some(v) = prior {
         // SAFETY: still inside the same `_guard` window as the removal above.
         unsafe { std::env::set_var("DAGR_METASTORE", v) };
@@ -335,7 +339,7 @@ fn live_projection_through_the_tee_matches_the_folded_stream() {
     let run_id = "run-live";
     let stream = stream_path(&base_str, "pipe", run_id);
     let argv = vec![std::ffi::OsString::from("--dagr.metastore=true")];
-    let sink = build_run_sink(&stream, &base_str, &argv).expect("tee builds");
+    let sink = build_run_sink(&stream, &base_str, &argv, &FileTier::empty()).expect("tee builds");
 
     let config = RunConfig::new(&base_str).run_id(run_id);
     let _report = two_node_flow()

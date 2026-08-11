@@ -572,6 +572,91 @@ fn no_parameter_value_is_reachable_during_assembly() {
 }
 
 // ===========================================================================
+// 7. Assembly is unaffected by a `dagr.toml` PRESENT in the working directory.
+// ===========================================================================
+//
+// ADR 128 (T113/T115) permits a runtime-knob configuration file read at
+// BOOTSTRAP — and never during assembly. The scrubbed-empty-dir tests above
+// prove assembly succeeds with no configuration present; this one proves the
+// complementary half the file tier makes newly breakable: a `dagr.toml`
+// sitting in the working directory changes NOTHING about assembly. The graph
+// artifact stays byte-identical and both fingerprints (structural and policy)
+// are unchanged — the file cannot reach graph identity or any node's policy
+// hash. A loader that searched for `dagr.toml` from the current directory
+// during assembly would fail this test.
+
+/// Child role: assemble with the cwd empty, then write a realistic `dagr.toml`
+/// beside itself and assemble again; exit 0 iff the masked bytes and both
+/// fingerprints are identical.
+const ROLE_CONFIG_FILE: &str = "config-file";
+
+/// A realistic runtime-knob configuration file (the ADR 128 §3 worked example's
+/// shape): profiles, pool pins, an executor. None of it may reach assembly.
+const CONFIG_FILE_CONTENT: &str = "\
+[default]
+grace = \"25s\"
+
+[default.pool]
+memory = 2048
+headroom-fraction = 0.5
+
+[prod]
+executor = \"k8s\"
+max-pods = 50
+";
+
+/// **Assembly is unaffected by a config file in the working directory.** Inside
+/// a scrubbed child (cleared env), assemble with the cwd empty, write a
+/// `dagr.toml` into the cwd, and assemble again: masked bytes, the structural
+/// fingerprint, and the policy fingerprint are all identical. The file cannot
+/// reach graph identity — C20's criterion survives the file's existence, not
+/// just its absence.
+#[test]
+fn assembly_is_unaffected_by_a_config_file_in_the_cwd() {
+    // Child leg for this scenario.
+    if let Ok(role) = std::env::var(CHILD_ROLE_VAR) {
+        if role == ROLE_CONFIG_FILE {
+            let before = assemble_fixture();
+            std::fs::write("dagr.toml", CONFIG_FILE_CONTENT)
+                .expect("the child writes dagr.toml into its cwd");
+            let after = assemble_fixture();
+            let identical = mask_generation_time(&before) == mask_generation_time(&after)
+                && before.fingerprint().structural() == after.fingerprint().structural()
+                && before.fingerprint().policy() == after.fingerprint().policy();
+            std::process::exit(i32::from(!identical));
+        }
+    }
+
+    // Parent leg: spawn the scrubbed child in a fresh empty dir.
+    let dir = fresh_empty_dir("config-file");
+    let exe = std::env::current_exe().expect("current test executable path");
+    let status = Command::new(exe)
+        .arg("--exact")
+        .arg("assembly_is_unaffected_by_a_config_file_in_the_cwd")
+        .env_clear()
+        .env(CHILD_ROLE_VAR, ROLE_CONFIG_FILE)
+        .current_dir(&dir)
+        .status()
+        .expect("spawn scrubbed config-file child");
+    let listing: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read the child cwd")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        status.success(),
+        "assembly must be byte-identical (artifact and both fingerprints) \
+         whether or not a dagr.toml exists in the working directory"
+    );
+    assert_eq!(
+        listing,
+        vec!["dagr.toml".to_string()],
+        "assembly wrote nothing to the working directory beside the control's own file"
+    );
+}
+
+// ===========================================================================
 // 8. Empty-environment determinism, combined.
 // ===========================================================================
 //

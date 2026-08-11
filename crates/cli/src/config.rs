@@ -1,20 +1,26 @@
-//! **Runtime-knob precedence** — the `flag > env > default` resolver,
-//! the parsers it needs, a strict never-silent error type, the `DAGR_*` env-name
-//! constants, and the extended reserved-flag namespace.
+//! **Runtime-knob precedence** — the `flag > env > file(profile) > default`
+//! resolver, the parsers it needs, a strict never-silent error type, the
+//! `DAGR_*` env-name constants, and the extended reserved-flag namespace.
 //!
 //! # What this module owns
 //!
-//! The `flag > env > default` story applies to every runtime knob. There is no
-//! single flag-parsing choke point: [`parse_cli`](crate::contract::parse_cli)
+//! The `flag > env > file(profile) > default` story (ADR 089, grown one tier by
+//! ADR 128) applies to every runtime knob. There is no single flag-parsing
+//! choke point: [`parse_cli`](crate::contract::parse_cli)
 //! returns only the verb, runtime-flag parsing is ad-hoc per pipeline binary,
 //! `RunConfig::new()` is infallible and env-free, and `dagr_core::limits`
 //! deliberately reads no environment. The answer is **reusable cli-level pieces
-//! wired at the binary layer**, keeping `dagr-core` environment-free. This module
+//! wired at the binary layer**, keeping `dagr-core` environment-free (and
+//! file-free — the [`dagr.toml` loader](crate::config_file) also lives here in
+//! `dagr-cli`, read at bootstrap only). This module
 //! ships the isolated building blocks of that answer:
 //!
-//! - [`resolve`] — the `flag > env > default` resolver over any [`FromStr`] type:
-//!   a present flag wins outright (the environment is never read); with no flag,
-//!   the env var is read and parsed; with neither, the `default` is returned.
+//! - [`resolve`] — the `flag > env > file > default` resolver over any
+//!   [`FromStr`] type: a present flag wins outright (the environment is never
+//!   read and the file value is never parsed); with no flag, the env var is
+//!   read and parsed; with neither, a supplied [`FileValue`] (the effective
+//!   profile's entry for the knob) is parsed by the **same** grammar; with none
+//!   of the three, the `default` is returned.
 //! - [`parse_duration`] — a parser for the bare `10` / `10s` / `10ms` forms (no
 //!   [`FromStr`] exists for [`Duration`] on these); and
 //!   [`parse_failure_mode`] — a parser for `continue-independent` /
@@ -45,6 +51,7 @@ use std::time::Duration;
 use dagr_core::flow::FailureMode;
 use dagr_core::limits::PinnedPools;
 
+use crate::config_file::{FileTier, FileValue};
 use crate::contract::ExitCode;
 
 // ===========================================================================
@@ -256,47 +263,86 @@ impl std::error::Error for EnvParseError {}
 // The flag > env > default resolver
 // ===========================================================================
 
-/// Resolve a runtime knob by the precedence **`flag > env > default`**.
+/// Resolve a runtime knob by the precedence
+/// **`flag > env > file(profile) > default`** (ADR 089, grown one tier by
+/// ADR 128).
 ///
-/// - A **present flag** wins outright — the environment is **never read**
-///   (`env_key` is ignored entirely).
+/// - A **present flag** wins outright — the environment is **never read** and
+///   the file value is **never parsed** (`env_key` and `file` are ignored
+///   entirely).
 /// - With **no flag**, the environment variable `env_key` is read and, if present
 ///   and non-empty, parsed via [`T::from_str`](FromStr::from_str); a value that
 ///   fails to parse yields an [`EnvParseError`] (a parse failure →
-///   [`ExitCode::InvalidUsage`]) naming `env_key`.
+///   [`ExitCode::InvalidUsage`]) naming `env_key`. A present env value shadows
+///   the file entirely — the file value is not parsed.
 /// - With **neither** a flag nor the env var (or the env var set to an empty
-///   string), the supplied `default` is returned unchanged.
+///   string), a supplied `file` value — the effective profile's entry for this
+///   knob, loaded at bootstrap by [`crate::config_file`] — is parsed by the
+///   **same** `T::from_str` grammar (the file introduces no second value
+///   grammar); a failure names the file, the profile, and the key in the
+///   diagnostic's detail.
+/// - With **none of the three**, the supplied `default` is returned unchanged.
 ///
 /// The environment is read (via [`std::env::var`]) only on the no-flag path, so a
 /// binary that already has a flag value never touches the process environment.
-/// This is a **cli-level** helper: `dagr-core` never reads the environment; a
-/// pipeline binary parses its flag as it does today, then calls this to fold in the
-/// env fallback before constructing `RunConfig` / pool pins.
+/// This is a **cli-level** helper: `dagr-core` never reads the environment (nor
+/// the file); a pipeline binary parses its flag as it does today, then calls this
+/// to fold in the env and file fallbacks before constructing `RunConfig` / pool
+/// pins.
 ///
 /// # Errors
 ///
 /// Returns [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse), mapping to
-/// [`ExitCode::InvalidUsage`]) naming `env_key` when the no-flag env value fails
-/// `T::from_str`. Semantic bounds are the caller's to apply against the parsed value
-/// via [`EnvParseError::out_of_range`].
-pub fn resolve<T>(flag: Option<T>, env_key: &str, default: T) -> Result<T, EnvParseError>
+/// [`ExitCode::InvalidUsage`]) naming `env_key` when the no-flag env value — or,
+/// beneath it, the file value — fails `T::from_str`; a file-sourced failure
+/// carries the file/profile/key provenance in its detail. Semantic bounds are the
+/// caller's to apply against the parsed value via [`EnvParseError::out_of_range`].
+pub fn resolve<T>(
+    flag: Option<T>,
+    env_key: &str,
+    file: Option<&FileValue>,
+    default: T,
+) -> Result<T, EnvParseError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
 {
-    // Flag wins outright: never consult the environment.
+    // Flag wins outright: never consult the environment or the file.
     if let Some(value) = flag {
         return Ok(value);
     }
     // No flag: fall back to the environment. An unset OR empty variable is "not
-    // supplied" and yields the default (an empty string parses to nothing useful
-    // and would only produce a confusing error).
+    // supplied" (an empty string parses to nothing useful and would only produce
+    // a confusing error) and falls through to the file tier, then the default.
     match std::env::var(env_key) {
         Ok(raw) if !raw.is_empty() => {
             T::from_str(&raw).map_err(|e| EnvParseError::parse(env_key, raw, e.to_string()))
         }
-        _ => Ok(default),
+        _ => match file {
+            Some(value) => parse_file_value(env_key, value),
+            None => Ok(default),
+        },
     }
+}
+
+/// Parse a bootstrap-loaded [`FileValue`] with the knob's own grammar, naming
+/// the file, the profile, and the key in the diagnostic's detail on failure.
+///
+/// The error's `variable` field carries the knob's canonical `DAGR_*` spelling
+/// (`env_key`) as its anchor; the factually precise source sentence lives in
+/// the detail until T116's source discriminator reworks the type's `Display`.
+fn parse_file_value<T>(env_key: &str, value: &FileValue) -> Result<T, EnvParseError>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    T::from_str(value.raw()).map_err(|e| {
+        EnvParseError::parse(
+            env_key,
+            value.raw(),
+            format!("{e} (from {})", value.provenance()),
+        )
+    })
 }
 
 // ===========================================================================
@@ -492,46 +538,69 @@ pub struct PoolPinFlags {
 }
 
 /// Resolve the three `DAGR_POOL_*` pins by the precedence
-/// **`flag > env > default`** and fold them into a core [`PinnedPools`].
+/// **`flag > env > file(profile) > default`** and fold them into a core
+/// [`PinnedPools`].
 ///
 /// For each pool: a present flag wins outright (the env is never read); with no
 /// flag, `DAGR_POOL_COMPUTE_THREADS` / `DAGR_POOL_BLOCKING_THREADS` /
-/// `DAGR_POOL_MEMORY` is read and parsed; with neither, the pool is left un-pinned
-/// (it will derive from the [`ContainerLimitProbe`](dagr_core::limits::ContainerLimitProbe)).
-/// The environment is resolved **here in `dagr-cli`** and handed to the core
-/// [`PinnedPools`] as parsed pins — `dagr-core` reads no environment (a load-bearing
-/// boundary).
+/// `DAGR_POOL_MEMORY` is read and parsed; with neither, the effective profile's
+/// `pool.compute-threads` / `pool.blocking-threads` / `pool.memory` key applies;
+/// with **none of the three, the pool is left un-pinned** (it will derive from
+/// the [`ContainerLimitProbe`](dagr_core::limits::ContainerLimitProbe)). This is
+/// the ADR 128 §2 **tri-state**, preserved through the file tier: a file that
+/// mentions no pool leaves it *detected*, never pinned to a default. The
+/// environment and the file are resolved **here in `dagr-cli`** and handed to
+/// the core [`PinnedPools`] as parsed pins — `dagr-core` reads no environment
+/// and no file (a load-bearing boundary).
 ///
 /// # Errors
 ///
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
-/// [`ExitCode::InvalidUsage`]) naming the offending `DAGR_POOL_*` variable when its
-/// value fails to parse as a non-negative integer — a bad env value is **never**
-/// silently ignored or clamped.
-pub fn resolve_pool_pins(flags: PoolPinFlags) -> Result<PinnedPools, EnvParseError> {
+/// [`ExitCode::InvalidUsage`]) naming the offending `DAGR_POOL_*` variable when
+/// its (or its file key's) value fails to parse as a non-negative integer — a
+/// bad value is **never** silently ignored or clamped.
+pub fn resolve_pool_pins(
+    flags: PoolPinFlags,
+    file: &FileTier,
+) -> Result<PinnedPools, EnvParseError> {
     let mut pins = PinnedPools::new();
-    if let Some(compute) = resolve_opt::<u32>(flags.compute_threads, DAGR_POOL_COMPUTE_THREADS)? {
+    if let Some(compute) = resolve_opt::<u32>(
+        flags.compute_threads,
+        DAGR_POOL_COMPUTE_THREADS,
+        file.get("pool.compute-threads"),
+    )? {
         pins = pins.compute_threads(compute);
     }
-    if let Some(blocking) = resolve_opt::<u32>(flags.blocking_threads, DAGR_POOL_BLOCKING_THREADS)?
-    {
+    if let Some(blocking) = resolve_opt::<u32>(
+        flags.blocking_threads,
+        DAGR_POOL_BLOCKING_THREADS,
+        file.get("pool.blocking-threads"),
+    )? {
         pins = pins.blocking_threads(blocking);
     }
-    if let Some(memory) = resolve_opt::<u64>(flags.memory, DAGR_POOL_MEMORY)? {
+    if let Some(memory) =
+        resolve_opt::<u64>(flags.memory, DAGR_POOL_MEMORY, file.get("pool.memory"))?
+    {
         pins = pins.memory(memory);
     }
     Ok(pins)
 }
 
-/// Resolve an **optional** knob by `flag > env > (nothing)`: a present flag wins
-/// outright; with no flag the env var `env_key` is read and parsed (an unset or
-/// empty variable is "not supplied" → [`None`], so the caller leaves the pool
-/// un-pinned); a value that fails to parse is a loud [`EnvParseError`].
+/// Resolve an **optional** knob by `flag > env > file > (nothing)`: a present
+/// flag wins outright; with no flag the env var `env_key` is read and parsed (an
+/// unset or empty variable is "not supplied"); with neither, a supplied file
+/// value is parsed by the same grammar; with none of the three → [`None`], so
+/// the caller leaves the pool un-pinned. A value that fails to parse is a loud
+/// [`EnvParseError`].
 ///
-/// This is the "no default" sibling of [`resolve`]: a pool with neither a flag nor
-/// an env value has *no* pin (it derives from detection), which a plain
-/// `resolve(_, _, default)` cannot express.
-fn resolve_opt<T>(flag: Option<T>, env_key: &str) -> Result<Option<T>, EnvParseError>
+/// This is the "no default" sibling of [`resolve`]: a pool with no flag, env
+/// value, or file key has *no* pin (it derives from detection), which a plain
+/// `resolve(_, _, _, default)` cannot express — the ADR 128 §2 tri-state.
+fn resolve_opt<T>(
+    flag: Option<T>,
+    env_key: &str,
+    file: Option<&FileValue>,
+) -> Result<Option<T>, EnvParseError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
@@ -543,7 +612,10 @@ where
         Ok(raw) if !raw.is_empty() => T::from_str(&raw)
             .map(Some)
             .map_err(|e| EnvParseError::parse(env_key, raw, e.to_string())),
-        _ => Ok(None),
+        _ => match file {
+            Some(value) => parse_file_value(env_key, value).map(Some),
+            None => Ok(None),
+        },
     }
 }
 
@@ -557,19 +629,24 @@ where
 /// when no knob is set.
 pub const HEADROOM_DEFAULT: f64 = 0.20;
 
-/// Resolve the admission **headroom fraction** by `flag > env > default` and
-/// **validate it to `0.0..=1.0`**. The resolved value is handed to
+/// Resolve the admission **headroom fraction** by
+/// `flag > env > file(profile) > default` and **validate it to `0.0..=1.0`**.
+/// The resolved value is handed to
 /// [`ContainerLimitProbe::with_headroom`](dagr_core::limits::ContainerLimitProbe::with_headroom);
 /// the existing at-least-one-unit floor is unchanged, so even a `1.0` headroom
 /// still yields one unit per pool.
 ///
-/// - A present `flag` wins outright (the env is never read).
+/// - A present `flag` wins outright (the env is never read, the file never
+///   parsed).
 /// - With no flag, `DAGR_HEADROOM` is read and parsed as an `f64`.
-/// - With neither, the [`HEADROOM_DEFAULT`] (0.20) is returned.
+/// - With neither, the effective profile's `pool.headroom-fraction` key is
+///   parsed by the same grammar.
+/// - With none of the three, the [`HEADROOM_DEFAULT`] (0.20) is returned.
 ///
 /// # Errors
 ///
-/// Two **distinct** loud failures, each naming `DAGR_HEADROOM`:
+/// Two **distinct** loud failures, each naming the offending source (and, for a
+/// file value, the file/profile/key in the detail):
 /// - a value that is not a float → an [`EnvParseError`] of kind
 ///   [`Parse`](EnvParseErrorKind::Parse), mapping to [`ExitCode::InvalidUsage`];
 /// - a float **outside `0.0..=1.0`** → an [`EnvParseError`] of kind
@@ -577,13 +654,14 @@ pub const HEADROOM_DEFAULT: f64 = 0.20;
 ///   [`ExitCode::BootstrapFailure`] — the value is never silently clamped.
 ///
 /// A bad **flag** value is validated the same way (out-of-range → an
-/// `OutOfRange` error naming `--dagr.headroom-fraction`), so the two paths agree.
-pub fn resolve_headroom(flag: Option<f64>) -> Result<f64, EnvParseError> {
+/// `OutOfRange` error naming `--dagr.headroom-fraction`), so all paths agree.
+pub fn resolve_headroom(flag: Option<f64>, file: &FileTier) -> Result<f64, EnvParseError> {
     // A present flag wins outright; validate its range against the same bound.
     if let Some(fraction) = flag {
         return validate_headroom("--dagr.headroom-fraction", fraction, &fraction.to_string());
     }
-    // No flag: fall back to DAGR_HEADROOM (unset/empty → the default).
+    // No flag: fall back to DAGR_HEADROOM (unset/empty → the file, then the
+    // default), validating whichever source supplied the value.
     match std::env::var(DAGR_HEADROOM) {
         Ok(raw) if !raw.is_empty() => {
             let parsed: f64 = raw.parse().map_err(|e: std::num::ParseFloatError| {
@@ -591,7 +669,18 @@ pub fn resolve_headroom(flag: Option<f64>) -> Result<f64, EnvParseError> {
             })?;
             validate_headroom(DAGR_HEADROOM, parsed, &raw)
         }
-        _ => Ok(HEADROOM_DEFAULT),
+        _ => match file.get("pool.headroom-fraction") {
+            Some(value) => {
+                let parsed: f64 = parse_file_value(DAGR_HEADROOM, value)?;
+                validate_headroom(DAGR_HEADROOM, parsed, value.raw()).map_err(|mut e| {
+                    // The range check names the canonical variable; a
+                    // file-sourced value additionally names its provenance.
+                    e.detail = format!("{} (from {})", e.detail, value.provenance());
+                    e
+                })
+            }
+            None => Ok(HEADROOM_DEFAULT),
+        },
     }
 }
 
@@ -674,11 +763,12 @@ impl std::fmt::Display for BoolParseError {
 
 impl std::error::Error for BoolParseError {}
 
-/// Resolve the **metastore live-tee toggle** by `flag > env > default` (default
-/// **off**): a present `--dagr.metastore` flag wins outright (the env is never
-/// read); with no flag, `DAGR_METASTORE` is read and parsed as a boolean; with
-/// neither, the toggle is off. A bad env value fails loudly (never silently
-/// treated as off).
+/// Resolve the **metastore live-tee toggle** by `flag > env > file > default`
+/// (default **off**): a present `--dagr.metastore` flag wins outright (the env
+/// is never read); with no flag, `DAGR_METASTORE` is read and parsed as a
+/// boolean; with neither, the effective profile's `metastore` key applies; with
+/// none of the three, the toggle is off. A bad value fails loudly (never
+/// silently treated as off).
 ///
 /// This resolves the *toggle*; the store path is resolved separately (default
 /// under the run store), and the whole wiring is behind the default-off
@@ -686,10 +776,13 @@ impl std::error::Error for BoolParseError {}
 ///
 /// # Errors
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
-/// [`ExitCode::InvalidUsage`]) naming `DAGR_METASTORE` when its value is not a
-/// recognized boolean token.
-pub fn resolve_metastore_toggle(flag: Option<bool>) -> Result<bool, EnvParseError> {
-    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_METASTORE, EnvBool(false))?;
+/// [`ExitCode::InvalidUsage`]) naming `DAGR_METASTORE` when its (or its file
+/// key's) value is not a recognized boolean token.
+pub fn resolve_metastore_toggle(
+    flag: Option<bool>,
+    file: Option<&FileValue>,
+) -> Result<bool, EnvParseError> {
+    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_METASTORE, file, EnvBool(false))?;
     Ok(resolved.into_inner())
 }
 
@@ -715,10 +808,18 @@ pub const FORCE_ROUNDTRIP_FLAG: &str = "--dagr.force-roundtrip";
 ///
 /// # Errors
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
-/// [`ExitCode::InvalidUsage`]) naming [`DAGR_FORCE_ROUNDTRIP`] when its value is not a
-/// recognized boolean token.
-pub fn resolve_force_roundtrip(flag: Option<bool>) -> Result<bool, EnvParseError> {
-    let resolved = resolve::<EnvBool>(flag.map(EnvBool), DAGR_FORCE_ROUNDTRIP, EnvBool(false))?;
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_FORCE_ROUNDTRIP`] when its (or its
+/// `force-roundtrip` file key's) value is not a recognized boolean token.
+pub fn resolve_force_roundtrip(
+    flag: Option<bool>,
+    file: Option<&FileValue>,
+) -> Result<bool, EnvParseError> {
+    let resolved = resolve::<EnvBool>(
+        flag.map(EnvBool),
+        DAGR_FORCE_ROUNDTRIP,
+        file,
+        EnvBool(false),
+    )?;
     Ok(resolved.into_inner())
 }
 
@@ -811,12 +912,18 @@ pub const POD_LAUNCH_RETRIES_DEFAULT: u32 = 2;
 ///
 /// # Errors
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
-/// [`ExitCode::InvalidUsage`]) naming [`DAGR_EXECUTOR`] when its value is not a
-/// recognized executor name.
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_EXECUTOR`] when its (or its
+/// `executor` file key's) value is not a recognized executor name.
 pub fn resolve_executor(
     flag: Option<crate::executor::ExecutorKind>,
+    file: Option<&FileValue>,
 ) -> Result<crate::executor::ExecutorKind, EnvParseError> {
-    resolve(flag, DAGR_EXECUTOR, crate::executor::ExecutorKind::Local)
+    resolve(
+        flag,
+        DAGR_EXECUTOR,
+        file,
+        crate::executor::ExecutorKind::Local,
+    )
 }
 
 /// Resolve the **remote-slot ceiling** by `flag > env > default` (default
@@ -830,10 +937,10 @@ pub fn resolve_executor(
 ///
 /// # Errors
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
-/// [`ExitCode::InvalidUsage`]) naming [`DAGR_MAX_PODS`] when its value is not a
-/// non-negative integer.
-pub fn resolve_max_pods(flag: Option<u32>) -> Result<u32, EnvParseError> {
-    resolve(flag, DAGR_MAX_PODS, MAX_PODS_DEFAULT)
+/// [`ExitCode::InvalidUsage`]) naming [`DAGR_MAX_PODS`] when its (or its
+/// `max-pods` file key's) value is not a non-negative integer.
+pub fn resolve_max_pods(flag: Option<u32>, file: Option<&FileValue>) -> Result<u32, EnvParseError> {
+    resolve(flag, DAGR_MAX_PODS, file, MAX_PODS_DEFAULT)
 }
 
 /// Parse `--dagr.executor` out of a raw invocation. Absent → [`None`] (fall
@@ -871,8 +978,18 @@ pub fn parse_max_pods_flag(argv: &[std::ffi::OsString]) -> Result<Option<u32>, S
 /// Returns an [`EnvParseError`] (kind [`Parse`](EnvParseErrorKind::Parse) →
 /// [`ExitCode::InvalidUsage`]) naming [`DAGR_POD_LAUNCH_RETRIES`] when its value is
 /// not a non-negative integer.
+///
+/// This knob has **no file key in the first cut** (its resolution site is not
+/// on the `dagr run` bootstrap path); writing one in a `dagr.toml` is a loud
+/// unknown-key failure rather than a recognized-but-inert key. The canonical
+/// knob↔key table (T117) owns extending the key set.
 pub fn resolve_pod_launch_retries(flag: Option<u32>) -> Result<u32, EnvParseError> {
-    resolve(flag, DAGR_POD_LAUNCH_RETRIES, POD_LAUNCH_RETRIES_DEFAULT)
+    resolve(
+        flag,
+        DAGR_POD_LAUNCH_RETRIES,
+        None,
+        POD_LAUNCH_RETRIES_DEFAULT,
+    )
 }
 
 /// Parse `--dagr.pod-launch-retries` out of a raw invocation, in the same two
@@ -1150,6 +1267,51 @@ pub(crate) fn validate_duration_min(
     }
 }
 
+/// Resolve a **bounded duration knob** by `flag > env > file > default` and
+/// validate it against the knob's documented minimum, naming whichever source
+/// supplied the value (the flag spelling, the `DAGR_*` variable, or — in the
+/// detail — the file/profile/key). The shared body of the two `RunConfig`
+/// duration builders (grace, teardown deadline), so the four-tier order and the
+/// bound diagnostics cannot drift apart between them.
+pub(crate) fn resolve_bounded_duration(
+    flag: Option<Duration>,
+    flag_label: &str,
+    env_key: &str,
+    file: Option<&FileValue>,
+    default: Duration,
+    min: Duration,
+    bound: &str,
+) -> Result<Duration, EnvParseError> {
+    // Track which source supplied the value so the bound diagnostic names it
+    // (the flag path never reads the environment or parses the file; the
+    // all-unset path resolves to the default, which satisfies the bound by
+    // construction). `provenance` is set only on the file path, so the bound
+    // error can carry the file/profile/key sentence in its detail.
+    let (source, provenance, resolved) = match flag {
+        Some(value) => (flag_label, None, value),
+        None => match std::env::var(env_key) {
+            Ok(raw) if !raw.is_empty() => {
+                let parsed = EnvDuration::from_str(&raw)
+                    .map_err(|e| EnvParseError::parse(env_key, raw, e.to_string()))?;
+                (env_key, None, parsed.into_inner())
+            }
+            _ => match file {
+                Some(value) => {
+                    let parsed: EnvDuration = parse_file_value(env_key, value)?;
+                    (env_key, Some(value.provenance()), parsed.into_inner())
+                }
+                None => (env_key, None, default),
+            },
+        },
+    };
+    validate_duration_min(source, resolved, min, bound).map_err(|mut e| {
+        if let Some(provenance) = provenance {
+            e.detail = format!("{} (from {provenance})", e.detail);
+        }
+        e
+    })
+}
+
 /// Parse `--grace` out of a raw invocation (`--grace 5s` / `--grace=5s`).
 /// Absent → [`None`] (fall through to `DAGR_GRACE` / the default).
 ///
@@ -1224,8 +1386,9 @@ pub fn parse_store_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, S
     parse_valued_flag::<String>(argv, STORE_FLAG)
 }
 
-/// Resolve the **run-store base** by `flag > env > default`: the `--store` value
-/// if present (the env is never read), else [`DAGR_STORE`], else
+/// Resolve the **run-store base** by `flag > env > file > default`: the
+/// `--store` value if present (the env is never read), else [`DAGR_STORE`],
+/// else the effective profile's `store` key, else
 /// [`DEFAULT_STORE_BASE`](crate::run_store::DEFAULT_STORE_BASE).
 ///
 /// # Errors
@@ -1234,10 +1397,14 @@ pub fn parse_store_flag(argv: &[std::ffi::OsString]) -> Result<Option<String>, S
 /// through the same fallible [`resolve`] helper as every other knob, and the
 /// fallible signature is kept so a validation rule (as other knobs grew) is not
 /// a breaking change.
-pub fn resolve_store_base(flag: Option<String>) -> Result<String, EnvParseError> {
+pub fn resolve_store_base(
+    flag: Option<String>,
+    file: Option<&FileValue>,
+) -> Result<String, EnvParseError> {
     resolve::<String>(
         flag,
         DAGR_STORE,
+        file,
         crate::run_store::DEFAULT_STORE_BASE.to_string(),
     )
 }
@@ -1312,29 +1479,34 @@ impl PoolSizing {
     }
 }
 
-/// Resolve the pool pins and the headroom fraction by `flag > env > default`
-/// and record whether **any** of them was supplied — see [`PoolSizing`] for why
-/// that bit is load-bearing.
+/// Resolve the pool pins and the headroom fraction by
+/// `flag > env > file(profile) > default` and record whether **any** of them
+/// was supplied — see [`PoolSizing`] for why that bit is load-bearing. A
+/// file-supplied pin or headroom engages the probe exactly as a flag or env
+/// value does; a file that sets **no** pool key leaves sizing disengaged, so
+/// its admission ledger is identical to a run with no file at all.
 ///
 /// # Errors
 ///
 /// Returns the [`EnvParseError`] of whichever knob failed: an unparseable
-/// `DAGR_POOL_*` / `DAGR_HEADROOM` value (kind
+/// `DAGR_POOL_*` / `DAGR_HEADROOM` (or matching file-key) value (kind
 /// [`Parse`](EnvParseErrorKind::Parse) → [`ExitCode::InvalidUsage`]) or an
 /// out-of-range headroom (kind [`OutOfRange`](EnvParseErrorKind::OutOfRange) →
 /// [`ExitCode::BootstrapFailure`]), each naming the offending source.
 pub fn resolve_pool_sizing(
     flags: PoolPinFlags,
     headroom_flag: Option<f64>,
+    file: &FileTier,
 ) -> Result<PoolSizing, EnvParseError> {
     // Whether the headroom knob was *supplied* is decided before resolution:
-    // `resolve_headroom(None)` returns the same 0.20 for "unset" and for an
+    // `resolve_headroom(None, …)` returns the same 0.20 for "unset" and for an
     // explicit `DAGR_HEADROOM=0.2`, and only the supplied case may engage the
-    // probe.
-    let headroom_supplied =
-        headroom_flag.is_some() || std::env::var(DAGR_HEADROOM).is_ok_and(|v| !v.is_empty());
-    let pins = resolve_pool_pins(flags)?;
-    let headroom = resolve_headroom(headroom_flag)?;
+    // probe. A file-supplied headroom counts as supplied on the same rule.
+    let headroom_supplied = headroom_flag.is_some()
+        || std::env::var(DAGR_HEADROOM).is_ok_and(|v| !v.is_empty())
+        || file.get("pool.headroom-fraction").is_some();
+    let pins = resolve_pool_pins(flags, file)?;
+    let headroom = resolve_headroom(headroom_flag, file)?;
     let engaged = headroom_supplied
         || pins.memory_pin().is_some()
         || pins.compute_threads_pin().is_some()
@@ -1353,7 +1525,12 @@ pub fn resolve_pool_sizing(
 /// flags have no meaningful "present means on" form, so a flag with **no** value is
 /// itself an error rather than a default — silently ignoring `--dagr.executor` with
 /// a missing value would drop an operator's instruction on the floor.
-fn parse_valued_flag<T>(argv: &[std::ffi::OsString], flag: &str) -> Result<Option<T>, String>
+/// `pub(crate)` so the [`config_file`](crate::config_file) loader's
+/// `--dagr.config` / `--dagr.profile` scanners share the exact grammar.
+pub(crate) fn parse_valued_flag<T>(
+    argv: &[std::ffi::OsString],
+    flag: &str,
+) -> Result<Option<T>, String>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
@@ -1457,7 +1634,7 @@ mod tests {
         let key = "DAGR_TEST_FLAG_WINS";
         set_env(&g, key, "999");
         // Flag present → the env value (999) must be ignored entirely.
-        let got = resolve::<u32>(Some(7), key, 0).expect("flag path never errors");
+        let got = resolve::<u32>(Some(7), key, None, 0).expect("flag path never errors");
         unset_env(&g, key);
         assert_eq!(got, 7, "a present flag must win outright over the env var");
     }
@@ -1467,7 +1644,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_ENV_USED";
         set_env(&g, key, "42");
-        let got = resolve::<u32>(None, key, 0).expect("a valid env value parses");
+        let got = resolve::<u32>(None, key, None, 0).expect("a valid env value parses");
         unset_env(&g, key);
         assert_eq!(
             got, 42,
@@ -1480,7 +1657,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_DEFAULT_UNSET";
         unset_env(&g, key); // ensure unset
-        let got = resolve::<u32>(None, key, 13).expect("the default path never errors");
+        let got = resolve::<u32>(None, key, None, 13).expect("the default path never errors");
         assert_eq!(
             got, 13,
             "with neither flag nor env, the default is returned"
@@ -1533,7 +1710,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_EMPTY_ENV";
         set_env(&g, key, "");
-        let got = resolve::<u32>(None, key, 5).expect("an empty env var is not-supplied");
+        let got = resolve::<u32>(None, key, None, 5).expect("an empty env var is not-supplied");
         unset_env(&g, key);
         assert_eq!(got, 5, "an empty env var behaves as unset → default");
     }
@@ -1545,7 +1722,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_BAD_PARSE";
         set_env(&g, key, "not-a-number");
-        let err = resolve::<u32>(None, key, 0).expect_err("a bad env value must error");
+        let err = resolve::<u32>(None, key, None, 0).expect_err("a bad env value must error");
         unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(
@@ -1598,7 +1775,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_DURATION";
         set_env(&g, key, "250ms");
-        let got = resolve::<EnvDuration>(None, key, EnvDuration(Duration::from_secs(1)))
+        let got = resolve::<EnvDuration>(None, key, None, EnvDuration(Duration::from_secs(1)))
             .expect("valid duration");
         unset_env(&g, key);
         assert_eq!(got.into_inner(), Duration::from_millis(250));
@@ -1609,7 +1786,7 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_DURATION_BAD";
         set_env(&g, key, "notaduration");
-        let err = resolve::<EnvDuration>(None, key, EnvDuration(Duration::from_secs(1)))
+        let err = resolve::<EnvDuration>(None, key, None, EnvDuration(Duration::from_secs(1)))
             .expect_err("a bad duration must error");
         unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -1639,9 +1816,13 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_BAD";
         set_env(&g, key, "halt");
-        let err =
-            resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
-                .expect_err("an unknown failure mode must error");
+        let err = resolve::<EnvFailureMode>(
+            None,
+            key,
+            None,
+            EnvFailureMode(FailureMode::ContinueIndependent),
+        )
+        .expect_err("an unknown failure mode must error");
         unset_env(&g, key);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(key));
@@ -1652,9 +1833,13 @@ mod tests {
         let g = env_lock();
         let key = "DAGR_TEST_FAILURE_MODE_OK";
         set_env(&g, key, "stop-on-first-failure");
-        let got =
-            resolve::<EnvFailureMode>(None, key, EnvFailureMode(FailureMode::ContinueIndependent))
-                .expect("valid failure mode");
+        let got = resolve::<EnvFailureMode>(
+            None,
+            key,
+            None,
+            EnvFailureMode(FailureMode::ContinueIndependent),
+        )
+        .expect("valid failure mode");
         unset_env(&g, key);
         assert_eq!(got.into_inner(), FailureMode::StopOnFirstFailure);
     }
@@ -1683,6 +1868,9 @@ mod tests {
         assert_eq!(DAGR_BLOB_BUCKET, "DAGR_BLOB_BUCKET");
         assert_eq!(DAGR_BLOB_REGION, "DAGR_BLOB_REGION");
         assert_eq!(DAGR_BLOB_PREFIX, "DAGR_BLOB_PREFIX");
+        // The T115 profile selector lives beside the loader it steers; its
+        // documented spelling is pinned here with every other knob's.
+        assert_eq!(crate::config_file::DAGR_PROFILE, "DAGR_PROFILE");
     }
 
     // --- Pool pins + headroom resolvers ----------------------------------
@@ -1697,10 +1885,13 @@ mod tests {
         set_env(&g, DAGR_POOL_COMPUTE_THREADS, "9");
         set_env(&g, DAGR_POOL_MEMORY, "4096");
         unset_env(&g, DAGR_POOL_BLOCKING_THREADS);
-        let pins = resolve_pool_pins(PoolPinFlags {
-            compute_threads: Some(2),
-            ..PoolPinFlags::default()
-        })
+        let pins = resolve_pool_pins(
+            PoolPinFlags {
+                compute_threads: Some(2),
+                ..PoolPinFlags::default()
+            },
+            &crate::config_file::FileTier::empty(),
+        )
         .expect("valid pins");
         unset_env(&g, DAGR_POOL_COMPUTE_THREADS);
         unset_env(&g, DAGR_POOL_MEMORY);
@@ -1713,7 +1904,11 @@ mod tests {
     fn pool_pins_bad_env_is_invalid_usage_naming_the_variable() {
         let g = env_lock();
         set_env(&g, DAGR_POOL_MEMORY, "notanumber");
-        let err = resolve_pool_pins(PoolPinFlags::default()).expect_err("bad pool env fails");
+        let err = resolve_pool_pins(
+            PoolPinFlags::default(),
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect_err("bad pool env fails");
         unset_env(&g, DAGR_POOL_MEMORY);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -1725,12 +1920,26 @@ mod tests {
         let g = env_lock();
         // default when neither
         unset_env(&g, DAGR_HEADROOM);
-        assert!((resolve_headroom(None).expect("default") - HEADROOM_DEFAULT).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("default")
+                - HEADROOM_DEFAULT)
+                .abs()
+                < f64::EPSILON
+        );
         // env used when no flag
         set_env(&g, DAGR_HEADROOM, "0.5");
-        assert!((resolve_headroom(None).expect("env") - 0.5).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(None, &crate::config_file::FileTier::empty()).expect("env") - 0.5)
+                .abs()
+                < f64::EPSILON
+        );
         // flag beats env
-        assert!((resolve_headroom(Some(0.1)).expect("flag") - 0.1).abs() < f64::EPSILON);
+        assert!(
+            (resolve_headroom(Some(0.1), &crate::config_file::FileTier::empty()).expect("flag")
+                - 0.1)
+                .abs()
+                < f64::EPSILON
+        );
         unset_env(&g, DAGR_HEADROOM);
     }
 
@@ -1738,7 +1947,8 @@ mod tests {
     fn headroom_out_of_range_is_bootstrap_failure() {
         let g = env_lock();
         set_env(&g, DAGR_HEADROOM, "1.5");
-        let err = resolve_headroom(None).expect_err("1.5 is out of range");
+        let err = resolve_headroom(None, &crate::config_file::FileTier::empty())
+            .expect_err("1.5 is out of range");
         unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
@@ -1749,7 +1959,8 @@ mod tests {
     fn headroom_out_of_range_flag_is_bootstrap_failure_naming_the_flag() {
         let g = env_lock();
         unset_env(&g, DAGR_HEADROOM);
-        let err = resolve_headroom(Some(-0.5)).expect_err("negative headroom is out of range");
+        let err = resolve_headroom(Some(-0.5), &crate::config_file::FileTier::empty())
+            .expect_err("negative headroom is out of range");
         assert_eq!(err.kind, EnvParseErrorKind::OutOfRange);
         assert_eq!(err.exit_code(), ExitCode::BootstrapFailure);
         assert!(err.to_string().contains("--dagr.headroom-fraction"));
@@ -1759,7 +1970,8 @@ mod tests {
     fn headroom_non_float_env_is_parse_failure() {
         let g = env_lock();
         set_env(&g, DAGR_HEADROOM, "half");
-        let err = resolve_headroom(None).expect_err("a non-float is a parse failure");
+        let err = resolve_headroom(None, &crate::config_file::FileTier::empty())
+            .expect_err("a non-float is a parse failure");
         unset_env(&g, DAGR_HEADROOM);
         assert_eq!(err.kind, EnvParseErrorKind::Parse);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
@@ -1851,10 +2063,10 @@ mod tests {
     fn store_base_flag_env_default_precedence() {
         let g = env_lock();
         set_env(&g, DAGR_STORE, "/env-store");
-        let flag_wins = resolve_store_base(Some("/flag-store".into())).expect("flag path");
-        let env_used = resolve_store_base(None).expect("env path");
+        let flag_wins = resolve_store_base(Some("/flag-store".into()), None).expect("flag path");
+        let env_used = resolve_store_base(None, None).expect("env path");
         unset_env(&g, DAGR_STORE);
-        let default = resolve_store_base(None).expect("default path");
+        let default = resolve_store_base(None, None).expect("default path");
         assert_eq!(flag_wins, "/flag-store", "a present --store wins outright");
         assert_eq!(env_used, "/env-store", "with no flag, DAGR_STORE is used");
         assert_eq!(
@@ -1905,8 +2117,12 @@ mod tests {
         ] {
             unset_env(&g, k);
         }
-        let sizing =
-            resolve_pool_sizing(PoolPinFlags::default(), None).expect("nothing set resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("nothing set resolves");
         assert!(!sizing.engaged(), "no knob supplied → no probe");
         let caps = sizing
             .capacities(ContainerLimitProbe::from_root("/nonexistent-root-for-t114"))
@@ -1921,7 +2137,12 @@ mod tests {
         let g = env_lock();
         unset_env(&g, DAGR_HEADROOM);
         set_env(&g, DAGR_POOL_MEMORY, "2048");
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("pin resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("pin resolves");
         unset_env(&g, DAGR_POOL_MEMORY);
         assert!(sizing.engaged(), "a supplied pin engages the probe");
         let caps = sizing
@@ -1956,7 +2177,12 @@ mod tests {
             unset_env(&g, k);
         }
         set_env(&g, DAGR_HEADROOM, "0.5");
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), None).expect("headroom resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            None,
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("headroom resolves");
         unset_env(&g, DAGR_HEADROOM);
         assert!(
             sizing.engaged(),
@@ -1975,8 +2201,12 @@ mod tests {
         );
 
         // The flag spelling of the default value also engages sizing.
-        let sizing = resolve_pool_sizing(PoolPinFlags::default(), Some(HEADROOM_DEFAULT))
-            .expect("flag headroom resolves");
+        let sizing = resolve_pool_sizing(
+            PoolPinFlags::default(),
+            Some(HEADROOM_DEFAULT),
+            &crate::config_file::FileTier::empty(),
+        )
+        .expect("flag headroom resolves");
         assert!(
             sizing.engaged(),
             "a flag headroom equal to the default still engages"
@@ -2004,7 +2234,7 @@ mod tests {
         let g = env_lock();
         unset_env(&g, DAGR_METASTORE);
         assert!(
-            !resolve_metastore_toggle(None).expect("default off"),
+            !resolve_metastore_toggle(None, None).expect("default off"),
             "the toggle defaults OFF (no flag, no env)"
         );
     }
@@ -2013,7 +2243,7 @@ mod tests {
     fn metastore_toggle_env_used_when_no_flag() {
         let g = env_lock();
         set_env(&g, DAGR_METASTORE, "1");
-        let on = resolve_metastore_toggle(None).expect("env used");
+        let on = resolve_metastore_toggle(None, None).expect("env used");
         unset_env(&g, DAGR_METASTORE);
         assert!(on, "with no flag, the env value turns the toggle on");
     }
@@ -2024,7 +2254,7 @@ mod tests {
         // Env says ON, flag says OFF — the flag must win (env never read on the
         // flag path).
         set_env(&g, DAGR_METASTORE, "1");
-        let resolved = resolve_metastore_toggle(Some(false)).expect("flag wins");
+        let resolved = resolve_metastore_toggle(Some(false), None).expect("flag wins");
         unset_env(&g, DAGR_METASTORE);
         assert!(!resolved, "a present flag wins outright over the env var");
     }
@@ -2033,7 +2263,7 @@ mod tests {
     fn metastore_toggle_bad_env_is_invalid_usage_naming_the_variable() {
         let g = env_lock();
         set_env(&g, DAGR_METASTORE, "notabool");
-        let err = resolve_metastore_toggle(None).expect_err("a bad env value fails loudly");
+        let err = resolve_metastore_toggle(None, None).expect_err("a bad env value fails loudly");
         unset_env(&g, DAGR_METASTORE);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(err.to_string().contains(DAGR_METASTORE));
@@ -2050,7 +2280,7 @@ mod tests {
         let g = env_lock();
         unset_env(&g, DAGR_FORCE_ROUNDTRIP);
         assert!(
-            !resolve_force_roundtrip(None).expect("default off"),
+            !resolve_force_roundtrip(None, None).expect("default off"),
             "the toggle defaults OFF (no flag, no env) — the fast path is untouched"
         );
     }
@@ -2059,7 +2289,7 @@ mod tests {
     fn force_roundtrip_env_used_when_no_flag() {
         let g = env_lock();
         set_env(&g, DAGR_FORCE_ROUNDTRIP, "1");
-        let on = resolve_force_roundtrip(None).expect("env used");
+        let on = resolve_force_roundtrip(None, None).expect("env used");
         unset_env(&g, DAGR_FORCE_ROUNDTRIP);
         assert!(on, "with no flag, the env value turns the toggle on");
     }
@@ -2069,7 +2299,7 @@ mod tests {
         let g = env_lock();
         // Env says ON, flag says OFF — the flag wins outright (env never read).
         set_env(&g, DAGR_FORCE_ROUNDTRIP, "1");
-        let resolved = resolve_force_roundtrip(Some(false)).expect("flag wins");
+        let resolved = resolve_force_roundtrip(Some(false), None).expect("flag wins");
         unset_env(&g, DAGR_FORCE_ROUNDTRIP);
         assert!(!resolved, "a present flag wins outright over the env var");
     }
@@ -2078,7 +2308,7 @@ mod tests {
     fn force_roundtrip_bad_env_is_invalid_usage_naming_the_variable() {
         let g = env_lock();
         set_env(&g, DAGR_FORCE_ROUNDTRIP, "sometimes");
-        let err = resolve_force_roundtrip(None).expect_err("a bad env value fails loudly");
+        let err = resolve_force_roundtrip(None, None).expect_err("a bad env value fails loudly");
         unset_env(&g, DAGR_FORCE_ROUNDTRIP);
         assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
         assert!(
