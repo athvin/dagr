@@ -114,10 +114,39 @@ strict regime.
   change for a pre-1.0 crate — cheap now, and the alternative is a permanently misnamed
   type. Default: widen in place and keep the name this ticket, with the rename recorded
   as a follow-up if the inaccuracy grates; decided in-PR.
+  - **RESOLVED (this PR): widened in place, name kept.** The type's contract —
+    the `Parse`/`OutOfRange` kind split and its exit-code mapping — is
+    unchanged; only source coverage grew, and the rustdoc on `EnvParseError`
+    records why the name predates the flag/file tiers. A rename (e.g.
+    `ConfigValueError`) remains a possible follow-up; nothing in this ticket
+    depends on it.
 - **Does making `DAGR_LOG_FORMAT` strict break anyone?** It converts a silently-ignored
   typo into a startup failure — which is the point, and matches every other knob. Any
   CI or deployment currently passing a bad value would begin failing loudly, which is
   the correct outcome; called out in the PR body as a behaviour change.
+  - **RESOLVED (this PR): strict, and called out as a deliberate behaviour
+    change in the PR body.** A supplied-but-unrecognized value now exits
+    `InvalidUsage` naming the source and listing `human`/`structured`; unset or
+    empty still resolves to `structured`, so the zero-configuration path is
+    byte-identical (guarded by
+    `wire_precedence_run_path.rs::empty_environment_streams_are_byte_identical`
+    and this ticket's clean-run test).
+- **Further decisions made and recorded here (this PR), each a defensible
+  default rather than a contested call:**
+  - **The driver no longer reads `DAGR_LOG_FORMAT`.** The mode is resolved at
+    bootstrap by the standard entrypoints (`--dagr.log-format` > env >
+    `log-format` file key > `structured`), carried on `RunConfig`
+    (`log_format` / `log_format_from_env` / `output_mode`), and `drive()`
+    installs the subscriber from it — matching how every other knob keeps
+    `RunConfig::new` infallible and resolution at the entrypoints.
+    `logging::init_tracing()` stays as the hand-wired convenience initializer
+    and is now fallible-strict, so no read of the variable is lenient anywhere.
+  - **`ConfigSource::File` carries `Option`al profile/key** so failures of the
+    file *itself* (unreadable, malformed TOML) name the path without inventing
+    a profile or key; every knob-value diagnostic has all three.
+  - **`docs/tasks.md` carries no T116 entry** (the tasks file ends at the
+    original M0–M4 set; M9–M11 tickets exist only as ticket files), so there
+    are no `Q:` items beyond the ones above.
 
 ## Out of scope
 
