@@ -1240,8 +1240,8 @@ impl RunnableFlow {
     /// wraps it and adds no execution logic of its own.
     ///
     /// The environment **and file** tiers are honoured here: grace, the teardown
-    /// deadline, the failure mode, the three pool pins, and the headroom
-    /// fraction resolve `env > file(profile) > default` through the same helpers
+    /// deadline, the failure mode, the log output mode, the three pool pins,
+    /// and the headroom fraction resolve `env > file(profile) > default` through the same helpers
     /// the registry's `run <flow>` path uses (there is no argv on this path, so
     /// the flag tier is empty and discovery is `./dagr.toml` alone, with
     /// `DAGR_PROFILE` selecting the profile), and a
@@ -1290,6 +1290,7 @@ impl RunnableFlow {
             .grace_from_env(None, file.get("grace"))
             .and_then(|c| c.teardown_deadline_from_env(None, file.get("teardown-deadline")))
             .and_then(|c| c.failure_mode_from_env(None, file.get("failure-mode")))
+            .and_then(|c| c.log_format_from_env(None, file.get("log-format")))
             .map_err(RunToStoreError::Config)?;
         let config = match sized {
             Some(capacities) => config.capacities(capacities),

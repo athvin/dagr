@@ -446,6 +446,12 @@ pub struct RunConfig {
     capacities: PoolCapacities,
     failure_mode: FailureMode,
     executor: ExecutorKind,
+    // The log output mode the driver installs the tracing subscriber with
+    // (C25). Resolved at bootstrap by the standard entrypoints
+    // (`flag > env > file > default`); the driver itself reads no environment
+    // for it, so a hand-wired caller that sets nothing gets the structured
+    // default — exactly the pre-T116 zero-config behaviour.
+    output_mode: crate::logging::OutputMode,
     // The programmatic cancellation trigger: a shared request channel a caller (a
     // test, or an OS-signal handler) fires and the run loop observes. Cloned into
     // the loop; a `CancelHandle` handed out by `cancel_handle` shares the same
@@ -481,6 +487,9 @@ impl RunConfig {
             // A node's placement is then recorded and ignored, which is what lets one
             // binary be both a laptop run and a placed one.
             executor: ExecutorKind::Local,
+            // Structured logs unless a knob says otherwise — the documented
+            // zero-configuration default (C25), unchanged.
+            output_mode: crate::logging::OutputMode::Structured,
             // A fresh, un-fired cancellation trigger. Unless a caller fires the
             // handle (or stop-on-first-failure routes through the core), the run is
             // never cancelled and its behaviour is unchanged.
@@ -750,6 +759,50 @@ impl RunConfig {
             crate::config::EnvFailureMode(FailureMode::default()),
         )?;
         Ok(self.failure_mode(resolved.into_inner()))
+    }
+
+    /// Set the log **output mode** directly (C25) — the mode the driver
+    /// installs the process-global tracing subscriber with at the start of
+    /// [`drive`]. The infallible sibling of
+    /// [`log_format_from_env`](Self::log_format_from_env), for a caller that
+    /// resolved (or chose) the mode itself.
+    #[must_use]
+    pub fn log_format(mut self, mode: crate::logging::OutputMode) -> Self {
+        self.output_mode = mode;
+        self
+    }
+
+    /// Set the log **output mode** from `flag > env > file > default`: the
+    /// already-parsed `--dagr.log-format` flag if present, else
+    /// `DAGR_LOG_FORMAT`, else the effective profile's `log-format` key, else
+    /// the [`Structured`](crate::logging::OutputMode::Structured) default —
+    /// resolved **strictly**, like every other knob (this one was the last
+    /// outside the strict regime).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EnvParseError`](crate::config::EnvParseError) (kind
+    /// `Parse` →
+    /// [`InvalidUsage`](crate::contract::ExitCode::InvalidUsage)) naming the
+    /// supplying source and listing the accepted values (`human` /
+    /// `structured`) when the environment or file value is unrecognized; a
+    /// file value names the file, the profile, and the key. Unset or empty is
+    /// the structured default, never an error.
+    pub fn log_format_from_env(
+        self,
+        flag: Option<crate::logging::OutputMode>,
+        file: Option<&crate::config_file::FileValue>,
+    ) -> Result<Self, crate::config::EnvParseError> {
+        let resolved = crate::config::resolve_log_format(flag, file)?;
+        Ok(self.log_format(resolved))
+    }
+
+    /// The log **output mode** this run installs its tracing subscriber with —
+    /// the [`Structured`](crate::logging::OutputMode::Structured) default
+    /// unless a builder set it.
+    #[must_use]
+    pub fn output_mode(&self) -> crate::logging::OutputMode {
+        self.output_mode
     }
 
     /// The resolved run identity: the operator override verbatim if present, else
@@ -1333,10 +1386,13 @@ where
     // before anything runs, so every framework/attempt line beneath it is
     // formatted and attributable. Idempotent and coexistence-safe: a repeat call
     // or a pre-existing subscriber (e.g. a test harness's) is a no-op, never a
-    // panic. The output mode (structured default / human) is read from the
-    // DAGR_LOG_FORMAT env var. This is the developer/operator observability layer,
-    // distinct from the event stream opened just below.
-    let _ = crate::logging::init_tracing();
+    // panic. The output mode (structured default / human) is carried on the
+    // RunConfig — resolved strictly at bootstrap by the standard entrypoints
+    // (`--dagr.log-format` > DAGR_LOG_FORMAT > the `log-format` file key >
+    // structured), so a bad value refused the invocation before this point and
+    // the driver itself reads no environment. This is the developer/operator
+    // observability layer, distinct from the event stream opened just below.
+    let _ = crate::logging::init_tracing_with(config.output_mode);
 
     // --- Bootstrap: mint identity, open the stream BEFORE assembly is acted on.
     let run_id = config.resolve_run_id();

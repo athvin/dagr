@@ -386,7 +386,11 @@ fn an_unknown_executor_value_fails_loudly() {
     let err = with_env(&[(DAGR_EXECUTOR, "nomad")], || {
         resolve_executor(None, None).expect_err("`nomad` is not a recognized executor")
     });
-    assert_eq!(err.variable, DAGR_EXECUTOR);
+    assert_eq!(
+        err.source,
+        dagr_cli::config::ConfigSource::env(DAGR_EXECUTOR),
+        "the discriminator records the env var that supplied the value"
+    );
     assert_eq!(err.value, "nomad");
     assert_eq!(
         err.exit_code(),
@@ -453,7 +457,11 @@ fn a_bad_max_pods_value_fails_loudly() {
     let err = with_env(&[(DAGR_MAX_PODS, "lots")], || {
         resolve_max_pods(None, None).expect_err("`lots` is not a pod count")
     });
-    assert_eq!(err.variable, DAGR_MAX_PODS);
+    assert_eq!(
+        err.source,
+        dagr_cli::config::ConfigSource::env(DAGR_MAX_PODS),
+        "the discriminator records the env var that supplied the value"
+    );
     assert_eq!(err.value, "lots");
     assert_eq!(err.exit_code(), ExitCode::InvalidUsage);
 
