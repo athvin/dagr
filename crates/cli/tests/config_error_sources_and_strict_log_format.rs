@@ -240,10 +240,12 @@ fn a_flag_sourced_error_names_the_flag_and_not_an_env_var() {
 /// key.
 #[test]
 fn each_source_keeps_the_exit_code_split_and_renders_itself() {
+    // The file path here is an illustrative constructor input (nothing touches
+    // the filesystem), spelled relative so it is visibly not a shared temp base.
     let sources = [
         ConfigSource::flag("--dagr.headroom-fraction"),
         ConfigSource::env("DAGR_HEADROOM"),
-        ConfigSource::file("/tmp/dagr.toml", "prod", "pool.headroom-fraction"),
+        ConfigSource::file("./conf/dagr.toml", "prod", "pool.headroom-fraction"),
     ];
     for source in sources {
         let parse = EnvParseError::parse_from(source.clone(), "bad", "why");
@@ -262,13 +264,13 @@ fn each_source_keeps_the_exit_code_split_and_renders_itself() {
     );
 
     let file = EnvParseError::parse_from(
-        ConfigSource::file("/tmp/dagr.toml", "prod", "grace"),
+        ConfigSource::file("./conf/dagr.toml", "prod", "grace"),
         "soon",
         "why",
     )
     .to_string();
     assert!(
-        file.contains("/tmp/dagr.toml") && file.contains("prod") && file.contains("grace"),
+        file.contains("./conf/dagr.toml") && file.contains("prod") && file.contains("grace"),
         "a file source names path, profile, and key: {file}"
     );
     assert!(
