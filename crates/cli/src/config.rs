@@ -198,17 +198,26 @@ pub enum ConfigSource {
         name: String,
     },
     /// A `dagr.toml` value: the file path, the profile that supplied the value,
-    /// and the dotted key path — the line the operator must edit. The profile
-    /// and key are absent only for a failure of the file *itself* (unreadable,
-    /// malformed TOML), where no profile or key exists to name.
-    File {
-        /// The configuration file's path as the invocation named/discovered it.
-        path: String,
-        /// The profile that supplied the value, when one did.
-        profile: Option<String>,
-        /// The dotted key path (e.g. `pool.headroom-fraction`), when one exists.
-        key: Option<String>,
-    },
+    /// and the dotted key path — the line the operator must edit. Boxed
+    /// because the provenance is three strings wide and this error rides in
+    /// the `Err` variant of every resolver's `Result`; boxing keeps that
+    /// variant small (`clippy::result_large_err`).
+    File(Box<FileSource>),
+}
+
+/// The provenance of a [`ConfigSource::File`]: the file path, and — when the
+/// failure is about a *value* rather than the file itself — the profile that
+/// supplied it and the dotted key path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSource {
+    /// The configuration file's path as the invocation named/discovered it.
+    pub path: String,
+    /// The profile that supplied the value, when one did. Absent only for a
+    /// failure of the file *itself* (unreadable, malformed TOML), where no
+    /// profile exists to name.
+    pub profile: Option<String>,
+    /// The dotted key path (e.g. `pool.headroom-fraction`), when one exists.
+    pub key: Option<String>,
 }
 
 impl ConfigSource {
@@ -231,11 +240,22 @@ impl ConfigSource {
         profile: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
-        Self::File {
+        Self::File(Box::new(FileSource {
             path: path.into(),
             profile: Some(profile.into()),
             key: Some(key.into()),
-        }
+        }))
+    }
+
+    /// A failure of the configuration file **itself** (unreadable, malformed
+    /// TOML), where no profile or key exists to name.
+    #[must_use]
+    pub fn whole_file(path: impl Into<String>) -> Self {
+        Self::File(Box::new(FileSource {
+            path: path.into(),
+            profile: None,
+            key: None,
+        }))
     }
 }
 
@@ -244,12 +264,12 @@ impl std::fmt::Display for ConfigSource {
         match self {
             Self::Flag { name } => write!(f, "flag `{name}`"),
             Self::Env { name } => write!(f, "environment variable `{name}`"),
-            Self::File { path, profile, key } => {
-                write!(f, "config file `{path}`")?;
-                if let Some(profile) = profile {
+            Self::File(source) => {
+                write!(f, "config file `{}`", source.path)?;
+                if let Some(profile) = &source.profile {
                     write!(f, ", profile `{profile}`")?;
                 }
-                if let Some(key) = key {
+                if let Some(key) = &source.key {
                     write!(f, ", key `{key}`")?;
                 }
                 Ok(())
@@ -380,7 +400,7 @@ impl std::fmt::Display for EnvParseError {
             ConfigSource::Env { .. } => {
                 "arch.md C26 / ADR 089 — bad env values fail loudly and are never silently ignored"
             }
-            ConfigSource::File { .. } => {
+            ConfigSource::File(_) => {
                 "arch.md C26 / ADR 128 — bad configuration-file values fail loudly and are \
                  never silently ignored"
             }

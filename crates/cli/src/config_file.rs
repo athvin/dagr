@@ -285,11 +285,7 @@ pub fn load_file_tier_from(
 
     let text = std::fs::read_to_string(&path).map_err(|e| {
         EnvParseError::parse_from(
-            ConfigSource::File {
-                path: shown.clone(),
-                profile: None,
-                key: None,
-            },
+            ConfigSource::whole_file(&shown),
             "",
             format!("the configuration file cannot be read: {e}"),
         )
@@ -394,11 +390,7 @@ fn parse_profiles(
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, EnvParseError> {
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
         EnvParseError::parse_from(
-            ConfigSource::File {
-                path: shown.to_string(),
-                profile: None,
-                key: None,
-            },
+            ConfigSource::whole_file(shown),
             "",
             format!("not valid TOML: {e}"),
         )
@@ -407,11 +399,11 @@ fn parse_profiles(
     for (name, value) in &table {
         let toml::Value::Table(profile_table) = value else {
             return Err(EnvParseError::parse_from(
-                ConfigSource::File {
+                ConfigSource::File(Box::new(crate::config::FileSource {
                     path: shown.to_string(),
                     profile: None,
                     key: Some(name.clone()),
-                },
+                })),
                 "",
                 format!(
                     "top-level entry `{name}` is not a profile table; runtime keys live \
