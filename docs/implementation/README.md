@@ -207,7 +207,7 @@ Work in order: the ADR (T113), wiring the existing precedence (T114), the loader
 
 - [x] **128** · [T113 — ADR: named-profile configuration file and the `file` precedence tier](128-T113-profiles-config-file-adr.md) · S · decision
 - [x] **129** · [T114 — wire the existing precedence into the run path](129-T114-wire-precedence-into-the-run-path.md) · M · feature — after T113
-- [ ] **130** · [T115 — the TOML loader, profile layering, and the `file` precedence tier](130-T115-toml-loader-and-file-tier.md) · M · feature — after T114
+- [x] **130** · [T115 — the TOML loader, profile layering, and the `file` precedence tier](130-T115-toml-loader-and-file-tier.md) · M · feature — after T114
 - [ ] **131** · [T116 — a source discriminator for config errors, and strict `DAGR_LOG_FORMAT`](131-T116-error-source-discriminator-and-strict-log-format.md) · M · feature — after T115
 - [ ] **132** · [T117 — the knob mapping table and its totality assertion](132-T117-knob-mapping-table.md) · S · feature (tests) — after T115
 - [ ] **133** · [T118 — M11 acceptance gate: purity, zero-dep core, and graph-is-code](133-T118-m11-acceptance-gate.md) · M · feature (gate) — after T113–T117
